@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
-    "test": "vitest"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src/ --max-warnings 0",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "grammy": "^1.41.0",
@@ -14,6 +17,7 @@
   },
   "devDependencies": {
     "typescript": "^5.9.2",
+    "typescript-eslint": "^8.0.0",
     "vitest": "^2.1.8",
     "@types/bun": "latest"
   }

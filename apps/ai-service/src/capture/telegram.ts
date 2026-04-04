@@ -55,7 +55,7 @@ export function extractVoiceTranscript(ctx: Context, transcript: string): Captur
       chatId: msg.chat.id,
       messageId: msg.message_id,
       from: msg.from?.username ?? msg.from?.first_name,
-      duration: (msg as any).voice?.duration,
+      duration: (msg as unknown as { voice?: { duration?: number } }).voice?.duration,
     },
   }
 }

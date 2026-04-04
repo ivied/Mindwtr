@@ -184,11 +184,11 @@ jobs:
         timeout-minutes: 20
         run: cd apps/desktop && cargo tauri build --debug --no-bundle
 
-  # Mobile app validation
-  mobile:
+  # AI Service tests
+  ai-service:
     runs-on: ubuntu-latest
-    name: Mobile App
-    timeout-minutes: 30
+    name: AI Service
+    timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -210,28 +210,24 @@ jobs:
         run: bun install
 
       - name: TypeScript check
-        run: cd apps/mobile && bunx tsc --noEmit
+        run: cd apps/ai-service && bun run typecheck
 
-      - name: Expo Doctor check
-        run: cd apps/mobile && bunx expo-doctor
-        continue-on-error: true
+      - name: Run unit tests
+        run: bun run --filter ai-service test -- --coverage
 
-      - name: Mobile tests
-        run: bun run --filter mobile test -- --coverage
-
-      - name: Mobile coverage summary
+      - name: AI Service coverage summary
         if: always()
         run: |
           node <<'NODE'
           const fs = require('fs');
-          const path = 'apps/mobile/coverage/coverage-summary.json';
+          const path = 'apps/ai-service/coverage/coverage-summary.json';
           if (!fs.existsSync(path)) {
             console.log(`No coverage summary found at ${path}`);
             process.exit(0);
           }
           const total = JSON.parse(fs.readFileSync(path, 'utf8')).total;
           const lines = [
-            '### Mobile Coverage',
+            '### AI Service Coverage',
             '',
             '| Metric | Percent | Covered / Total |',
             '| --- | ---: | ---: |',
@@ -244,12 +240,12 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join('\n')}\n`);
           NODE
 
-      - name: Upload mobile coverage artifact
+      - name: Upload AI Service coverage artifact
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: mobile-coverage
-          path: apps/mobile/coverage
+          name: ai-service-coverage
+          path: apps/ai-service/coverage
           if-no-files-found: ignore
 
   e2e:
@@ -332,5 +328,5 @@ jobs:
       - name: Check for lint errors (desktop)
         run: cd apps/desktop && bun run lint
 
-      - name: Check for lint errors (mobile)
-        run: cd apps/mobile && bun run lint
+      - name: Check for lint errors (ai-service)
+        run: cd apps/ai-service && bun run lint
