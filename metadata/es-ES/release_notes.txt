@@ -1,4 +1,0 @@
-- Agregamos restauracion de copias e importacion de Todoist para mover datos dentro y fuera de Mindwtr con mas facilidad.
-- Mejoramos el arranque de iCloud sync al activar CloudKit solo en el primer sync y manejar con mas seguridad los tipos de registro ausentes.
-- El sync movil ahora captura el estado de la app, evita alertas de conflicto repetidas y cancela el guardado pendiente de checklist al borrar.
-- Ahora se pueden restaurar proyectos y areas, y la edicion del color del area vuelve a ser fiable.

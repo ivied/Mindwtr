@@ -1,4 +1,0 @@
-- Improved Android task workflows with bulk-action progress/restore and better keyboard-safe editing.
-- Increased list performance via task layout optimization and memoized heavy task-edit modal paths.
-- Hardened sync/cloud security with safer attachment handling, stricter token checks, and race-condition fixes.
-- Expanded GTD usability with richer markdown task rendering and better inbox/waiting flows.

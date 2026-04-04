@@ -1,4 +1,0 @@
-- 修复移动端误显示“Conflicts resolved”同步横幅的问题。
-- 更新 Android 沉浸式边到边适配，并移除已弃用的状态栏/导航栏颜色覆盖。
-- 移除未使用的 FOREGROUND_SERVICE_MEDIA_PLAYBACK 权限。
-- 改进正式构建的心跳端点配置，同时保持用户侧静默体验。

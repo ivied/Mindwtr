@@ -1,4 +1,0 @@
-- Anadimos opciones de formato de fecha y hora en Configuracion.
-- Mejoramos la fiabilidad del sync movil con una senal de actividad mas clara y un manejo mas solido del enfriamiento de WebDAV.
-- Mejoramos la edicion de tareas y el flujo de bandeja de entrada, con una confirmacion de cierre mas segura y mejor recuperacion del estado de pestanas.
-- Reforzamos los recordatorios locales Android y la recuperacion ante alarmas duplicadas.

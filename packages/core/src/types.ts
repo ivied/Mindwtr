@@ -171,6 +171,7 @@ export interface Task {
     purgedAt?: string; // Permanently removed from trash, kept for sync tombstone
     order?: number; // Manual ordering within a project (for sequential projects)
     orderNum?: number; // Legacy alias kept for backward compatibility with older payloads
+    metadata?: Record<string, unknown>; // AI metadata: confidence_score, trust_level, source_channel, etc.
 }
 
 export interface SavedSearch {

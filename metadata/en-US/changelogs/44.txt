@@ -1,4 +1,0 @@
-- Improved Android sync reliability and reduced false conflict prompts.
-- Added safer cleanup handling for stale attachment/orphan sync metadata.
-- Improved mobile performance by virtualizing large project/context picker lists.
-- Updated Android widget theme updates to better follow native color-scheme changes.

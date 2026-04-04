@@ -1,4 +1,0 @@
-- Mejoramos el sync de adjuntos Android para archivos `content://` de proveedores como Downloads.
-- Reforzamos los recordatorios locales Android y la recuperacion ante alarmas duplicadas.
-- Anadimos confirmacion antes de enviar una tarea a la papelera al deslizar para borrar.
-- Mejoramos la accesibilidad de los selectores y el filtrado de proyectos por area.

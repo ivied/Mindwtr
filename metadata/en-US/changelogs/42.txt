@@ -1,4 +1,0 @@
-- Android widget now adapts task count to widget size while keeping task rows readable.
-- Improved Android startup transition to remove brief route flash on launch.
-- Added sync reliability safeguards (pending-write retry and attachment validation).
-- Hardened cloud auth handling and failed-auth throttling.

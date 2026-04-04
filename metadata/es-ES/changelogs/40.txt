@@ -1,3 +1,0 @@
-- Corregimos errores intermitentes de inicio relacionados con la inicializacion en mobile.
-- Reforzamos keep-awake y la programacion de widgets durante el arranque.
-- Mejoras de estabilidad y fiabilidad.

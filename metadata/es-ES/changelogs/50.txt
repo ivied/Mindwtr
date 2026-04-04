@@ -1,4 +1,0 @@
-- Alineamos mas ajustes de bandeja de entrada y del editor de tareas con escritorio, manteniendo el flujo por tarjetas en movil.
-- Simplificamos los ajustes del editor de tareas en movil con preajustes, secciones plegables y acciones de campo mas claras.
-- Mejoramos las interacciones de bandeja/lista y mostramos mejor los fallos de auto-sync.
-- Reforzamos la fiabilidad del sync con un manejo mas seguro de refrescos y validacion mas estricta de tareas y proyectos.

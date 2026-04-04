@@ -1,4 +1,0 @@
-- Mejoramos la fiabilidad de sincronizacion en Android y reducimos conflictos falsos.
-- Anadimos limpieza mas segura para metadatos antiguos de adjuntos/huerfanos.
-- Mejoramos el rendimiento movil con listas virtualizadas en selectores grandes.
-- Ajustamos el tema del widget Android para seguir mejor el esquema nativo.

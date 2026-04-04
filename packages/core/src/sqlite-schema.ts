@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL,
   deletedAt TEXT,
-  purgedAt TEXT
+  purgedAt TEXT,
+  metadata TEXT
 );
 
 CREATE TABLE IF NOT EXISTS projects (

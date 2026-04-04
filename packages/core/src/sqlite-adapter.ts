@@ -347,6 +347,7 @@ export class SqliteAdapter {
             { name: 'updatedAt', sql: 'ALTER TABLE tasks ADD COLUMN updatedAt TEXT' },
             { name: 'deletedAt', sql: 'ALTER TABLE tasks ADD COLUMN deletedAt TEXT' },
             { name: 'purgedAt', sql: 'ALTER TABLE tasks ADD COLUMN purgedAt TEXT' },
+            { name: 'metadata', sql: 'ALTER TABLE tasks ADD COLUMN metadata TEXT' },
         ];
         for (const definition of definitions) {
             if (!names.has(definition.name)) {

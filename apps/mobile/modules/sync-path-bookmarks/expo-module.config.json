@@ -1,8 +1,0 @@
-{
-  "platforms": ["ios"],
-  "ios": {
-    "podspecPath": "ios/SyncPathBookmarks.podspec",
-    "swiftModuleName": "SyncPathBookmarks",
-    "modules": ["SyncPathBookmarksModule"]
-  }
-}

@@ -1,4 +1,0 @@
-- Added a global area switcher and time estimate filters on mobile.
-- Added focus toggles in daily review.
-- Improved offline/background sync and external calendar loading reliability.
-- Hardened sync merge handling and cloud server validation.

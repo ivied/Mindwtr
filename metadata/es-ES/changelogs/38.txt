@@ -1,4 +1,0 @@
-- Corregimos el banner de sync “Conflicts resolved” que aparecia de forma incorrecta en mobile.
-- Actualizamos el manejo edge-to-edge en Android y quitamos overrides de color obsoletos para barra de estado/navegacion.
-- Eliminamos el permiso no usado FOREGROUND_SERVICE_MEDIA_PLAYBACK.
-- Mejoramos la configuracion del endpoint de heartbeat en builds oficiales manteniendo un comportamiento silencioso para el usuario.

@@ -1,4 +1,0 @@
-- Added date and time format overrides in Settings.
-- Improved mobile sync reliability with clearer activity feedback and stronger WebDAV cooldown handling.
-- Improved task editing and inbox processing flows, including safer close confirmation and better tab-state recovery.
-- Hardened Android local reminders and duplicate-alarm recovery.

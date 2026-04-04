@@ -1,4 +1,0 @@
-- Mejoramos los flujos de tareas en Android con progreso/restauracion en acciones masivas y mejor edicion segura con teclado.
-- Aumentamos el rendimiento de listas con optimizacion de layout y memoizacion de rutas pesadas del modal de edicion.
-- Reforzamos la seguridad de sync/nube con manejo de adjuntos mas seguro, validacion de token mas estricta y correcciones de carrera.
-- Ampliamos la usabilidad GTD con mejor renderizado Markdown y mejores flujos de bandeja/espera.

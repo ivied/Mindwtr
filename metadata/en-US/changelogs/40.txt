@@ -1,3 +1,0 @@
-- Fixed intermittent mobile startup errors related to startup initialization.
-- Hardened keep-awake activation and widget scheduling during app launch.
-- Stability and reliability improvements.

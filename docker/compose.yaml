@@ -19,6 +19,7 @@ services:
       - 8787:8787
     environment:
       - MINDWTR_CLOUD_AUTH_TOKENS=${MINDWTR_CLOUD_AUTH_TOKENS:?MINDWTR_CLOUD_AUTH_TOKENS must be set}
+      - MINDWTR_CLOUD_ALLOW_ANY_TOKEN=${MINDWTR_CLOUD_ALLOW_ANY_TOKEN:-false}
     volumes:
       - ./data:/app/cloud_data
 
@@ -34,3 +35,20 @@ services:
     mem_limit: 512m
     ports:
       - 5173:5173
+
+  ai-service:
+    build:
+      context: ..
+      dockerfile: docker/ai-service/Dockerfile
+    container_name: ai-service
+    hostname: ai-service
+    restart: always
+    cpus: "1.0"
+    mem_limit: 512m
+    depends_on:
+      mindwtr-cloud:
+        condition: service_healthy
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN must be set}
+      - MINDWTR_CLOUD_URL=http://mindwtr-cloud:8787
+      - MINDWTR_AUTH_TOKEN=${MINDWTR_CLOUD_AUTH_TOKENS}

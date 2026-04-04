@@ -1,4 +1,0 @@
-- Fixed stale “Conflicts resolved” sync banner showing on mobile.
-- Updated Android edge-to-edge handling and removed deprecated status/navigation color overrides.
-- Removed unused FOREGROUND_SERVICE_MEDIA_PLAYBACK permission.
-- Improved official-build heartbeat endpoint wiring while keeping heartbeat behavior silent for users.

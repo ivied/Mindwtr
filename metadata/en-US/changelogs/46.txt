@@ -1,4 +1,0 @@
-- Improved Android attachment sync for `content://` files from providers like Downloads.
-- Hardened Android local reminders and duplicate-alarm recovery.
-- Added confirmation before swipe-to-trash deletes a task.
-- Improved pickers with better accessibility and area-aware project filtering.
