@@ -95,3 +95,6 @@ Mindwtr.wiki/
 
 # Local workspace configuration
 pnpm-workspace.yaml
+
+# Docker local data
+docker/data/
