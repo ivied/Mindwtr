@@ -52,3 +52,6 @@ services:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN must be set}
       - MINDWTR_CLOUD_URL=http://mindwtr-cloud:8787
       - MINDWTR_AUTH_TOKEN=${MINDWTR_CLOUD_AUTH_TOKENS}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-cc/claude-opus-4-6}

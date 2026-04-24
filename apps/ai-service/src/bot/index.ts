@@ -1,11 +1,16 @@
 import { Bot } from 'grammy'
 import type { MindwtrClient } from '../api/mindwtr-client'
+import type { ClassificationQueue } from '../ai/queue'
 import { handleStart } from './handlers/start'
 import { createCaptureHandlers } from './handlers/capture'
 
-export function createBot(token: string, mindwtr: MindwtrClient) {
+export function createBot(
+  token: string,
+  mindwtr: MindwtrClient,
+  queue: ClassificationQueue | null
+) {
   const bot = new Bot(token)
-  const capture = createCaptureHandlers(mindwtr)
+  const capture = createCaptureHandlers(mindwtr, queue)
 
   bot.command('start', handleStart)
   bot.command('help', handleStart)

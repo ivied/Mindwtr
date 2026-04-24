@@ -63,7 +63,8 @@ export class MindwtrClient {
       body: JSON.stringify(params),
     })
     if (!res.ok) throw new Error(`createTask failed: ${res.status} ${await res.text()}`)
-    return res.json()
+    const data = (await res.json()) as Task | { task: Task }
+    return 'task' in data ? data.task : data
   }
 
   async listTasks(params: ListTasksParams = {}): Promise<Task[]> {
@@ -84,7 +85,8 @@ export class MindwtrClient {
       headers: this.headers,
     })
     if (!res.ok) throw new Error(`getTask failed: ${res.status} ${await res.text()}`)
-    return res.json()
+    const data = (await res.json()) as Task | { task: Task }
+    return 'task' in data ? data.task : data
   }
 
   async updateTask(id: string, updates: Partial<CreateTaskParams>): Promise<Task> {
@@ -94,7 +96,8 @@ export class MindwtrClient {
       body: JSON.stringify(updates),
     })
     if (!res.ok) throw new Error(`updateTask failed: ${res.status} ${await res.text()}`)
-    return res.json()
+    const data = (await res.json()) as Task | { task: Task }
+    return 'task' in data ? data.task : data
   }
 
   async completeTask(id: string): Promise<Task> {
@@ -103,7 +106,8 @@ export class MindwtrClient {
       headers: this.headers,
     })
     if (!res.ok) throw new Error(`completeTask failed: ${res.status} ${await res.text()}`)
-    return res.json()
+    const data = (await res.json()) as Task | { task: Task }
+    return 'task' in data ? data.task : data
   }
 
   async search(query: string): Promise<{ tasks: Task[]; projects: unknown[] }> {
