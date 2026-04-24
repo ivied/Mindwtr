@@ -20,7 +20,7 @@ services:
     environment:
       - MINDWTR_CLOUD_AUTH_TOKENS=${MINDWTR_CLOUD_AUTH_TOKENS:?MINDWTR_CLOUD_AUTH_TOKENS must be set}
       - MINDWTR_CLOUD_ALLOW_ANY_TOKEN=${MINDWTR_CLOUD_ALLOW_ANY_TOKEN:-false}
-      - MINDWTR_CLOUD_CORS_ORIGIN=${MINDWTR_CLOUD_CORS_ORIGIN:-*}
+      - MINDWTR_CLOUD_CORS_ORIGIN=${MINDWTR_CLOUD_CORS_ORIGIN:-http://localhost:5173}
     volumes:
       - ./data:/app/cloud_data
 
