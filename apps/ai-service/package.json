@@ -12,6 +12,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@notionhq/client": "^2.2.16",
+    "@slack/socket-mode": "^2.0.3",
+    "@slack/web-api": "^7.10.0",
     "grammy": "^1.41.0",
     "hono": "^4.12.8"
   },

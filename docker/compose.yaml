@@ -59,3 +59,11 @@ services:
       - LLM_BASE_URL=${LLM_BASE_URL:-}
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-cc/claude-opus-4-6}
+      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      - NOTION_API_KEY=${NOTION_API_KEY:-}
+      - NOTION_DATABASE_ID=${NOTION_DATABASE_ID:-}
+      - NOTION_POLL_INTERVAL_MS=${NOTION_POLL_INTERVAL_MS:-300000}
+      - DATA_DIR=/app/data
+    volumes:
+      - ./ai-service-data:/app/data

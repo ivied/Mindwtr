@@ -7,9 +7,16 @@ export interface CapturedItem {
   /** Raw text content (or transcript for voice) */
   text: string
   /** Source channel identifier */
-  sourceChannel: 'telegram_dm' | 'telegram_forward' | 'telegram_voice' | 'slack' | 'notion' | 'screen_capture'
+  sourceChannel:
+    | 'telegram_dm'
+    | 'telegram_forward'
+    | 'telegram_voice'
+    | 'slack_dm'
+    | 'slack_channel'
+    | 'notion_page'
+    | 'screen_capture'
   /** Original message type */
-  type: 'text' | 'voice' | 'forward' | 'photo' | 'document'
+  type: 'text' | 'voice' | 'forward' | 'photo' | 'document' | 'page'
   /** ISO timestamp of the original message */
   timestamp: string
   /** Channel-specific metadata */

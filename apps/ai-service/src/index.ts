@@ -3,6 +3,11 @@ import { LLMClient } from './ai/client'
 import { Classifier } from './ai/classifier'
 import { ClassificationQueue } from './ai/queue'
 import { createBot } from './bot'
+import { createCaptureSink } from './capture/sink'
+import type { Channel } from './channels/types'
+import { SlackChannel } from './channels/slack'
+import { NotionChannel } from './channels/notion'
+import { FileStateStore, channelStateFile } from './channels/state-store'
 
 const MINDWTR_CLOUD_URL = process.env.MINDWTR_CLOUD_URL ?? 'http://localhost:8787'
 const MINDWTR_AUTH_TOKEN = process.env.MINDWTR_AUTH_TOKEN ?? ''
@@ -11,6 +16,15 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? ''
 const LLM_BASE_URL = process.env.LLM_BASE_URL ?? ''
 const LLM_API_KEY = process.env.LLM_API_KEY ?? ''
 const LLM_MODEL = process.env.LLM_MODEL ?? 'cc/claude-opus-4-6'
+
+const SLACK_APP_TOKEN = process.env.SLACK_APP_TOKEN ?? ''
+const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN ?? ''
+
+const NOTION_API_KEY = process.env.NOTION_API_KEY ?? ''
+const NOTION_DATABASE_ID = process.env.NOTION_DATABASE_ID ?? ''
+const NOTION_POLL_INTERVAL_MS = Number(process.env.NOTION_POLL_INTERVAL_MS ?? 5 * 60 * 1000)
+
+const DATA_DIR = process.env.DATA_DIR ?? '/app/data'
 
 if (!TELEGRAM_BOT_TOKEN) {
   console.error('TELEGRAM_BOT_TOKEN is required')
@@ -37,6 +51,36 @@ if (LLM_BASE_URL && LLM_API_KEY) {
   console.warn('⚠️ LLM_BASE_URL or LLM_API_KEY not set — classification disabled')
 }
 
+const capture = createCaptureSink(mindwtr, queue)
+
+function buildChannels(): Channel[] {
+  const channels: Channel[] = []
+
+  if (SLACK_APP_TOKEN && SLACK_BOT_TOKEN) {
+    channels.push(
+      new SlackChannel(
+        { appToken: SLACK_APP_TOKEN, botToken: SLACK_BOT_TOKEN },
+        (item) => capture(item)
+      )
+    )
+    console.log('💬 Slack channel enabled')
+  }
+
+  if (NOTION_API_KEY && NOTION_DATABASE_ID) {
+    const state = new FileStateStore(channelStateFile(DATA_DIR), 'notion')
+    channels.push(
+      new NotionChannel(
+        { apiKey: NOTION_API_KEY, databaseId: NOTION_DATABASE_ID, pollIntervalMs: NOTION_POLL_INTERVAL_MS },
+        (item) => capture(item),
+        state
+      )
+    )
+    console.log(`📝 Notion channel enabled (poll every ${NOTION_POLL_INTERVAL_MS}ms)`)
+  }
+
+  return channels
+}
+
 async function main() {
   // Wait for Mindwtr Cloud to be ready
   let retries = 10
@@ -60,7 +104,34 @@ async function main() {
     console.log('🔄 Classification queue started')
   }
 
-  const bot = createBot(TELEGRAM_BOT_TOKEN, mindwtr, queue)
+  // Start additional channels
+  const channels = buildChannels()
+  for (const ch of channels) {
+    try {
+      await ch.start()
+      console.log(`✅ ${ch.name} channel started`)
+    } catch (err) {
+      console.error(`Failed to start ${ch.name}:`, err)
+    }
+  }
+
+  const bot = createBot(TELEGRAM_BOT_TOKEN, capture)
+
+  const shutdown = async () => {
+    console.log('🛑 Shutting down...')
+    for (const ch of channels) {
+      try {
+        await ch.stop()
+      } catch (err) {
+        console.error(`Failed to stop ${ch.name}:`, err)
+      }
+    }
+    if (queue) await queue.stop()
+    await bot.stop()
+    process.exit(0)
+  }
+  process.on('SIGTERM', shutdown)
+  process.on('SIGINT', shutdown)
 
   console.log('🤖 AI Service starting...')
   await bot.start({

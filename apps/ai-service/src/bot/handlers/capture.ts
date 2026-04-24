@@ -1,9 +1,8 @@
 import type { Context } from 'grammy'
-import type { MindwtrClient } from '../../api/mindwtr-client'
-import type { ClassificationQueue } from '../../ai/queue'
+import type { CaptureFn } from '../../capture/sink'
 import type { ClassificationResult } from '../../ai/types'
 import { extractTextMessage, extractForward, extractPhotoCaption } from '../../capture/telegram'
-import { toTaskSuggestion, type CapturedItem } from '../../capture/normalizer'
+import type { CapturedItem } from '../../capture/normalizer'
 
 const CATEGORY_EMOJI: Record<string, string> = {
   next: '⚡',
@@ -13,41 +12,24 @@ const CATEGORY_EMOJI: Record<string, string> = {
   two_minute: '⏱',
 }
 
-export function createCaptureHandlers(
-  mindwtr: MindwtrClient,
-  queue: ClassificationQueue | null
-) {
-  async function captureAndEnqueue(
+export function createCaptureHandlers(capture: CaptureFn) {
+  async function captureAndNotify(
     ctx: Context,
     item: CapturedItem,
     extraTags: string[] = []
   ): Promise<void> {
-    const suggestion = toTaskSuggestion(item)
     try {
-      const task = await mindwtr.createTask({
-        title: suggestion.title,
-        status: 'inbox',
-        description: suggestion.description,
-        tags: extraTags,
+      await capture(item, {
+        extraTags,
+        onTaskCreated: async (_taskId, title) => {
+          await ctx.reply(`📥 Captured → inbox\n"${title}"`, {
+            reply_parameters: { message_id: ctx.message!.message_id },
+          })
+        },
+        onClassified: async (_taskId, result) => {
+          await notifyClassification(ctx, result)
+        },
       })
-
-      await ctx.reply(`📥 Captured → inbox\n"${task.title}"`, {
-        reply_parameters: { message_id: ctx.message!.message_id },
-      })
-
-      if (queue) {
-        queue.enqueue({
-          taskId: task.id,
-          input: {
-            text: item.text,
-            sourceChannel: item.sourceChannel,
-            capturedAt: item.timestamp,
-          },
-          onComplete: async (result: ClassificationResult) => {
-            await notifyClassification(ctx, result)
-          },
-        })
-      }
     } catch (err) {
       console.error('Capture failed:', err)
       await ctx.reply('❌ Не удалось сохранить. Попробуй ещё раз.')
@@ -83,13 +65,13 @@ export function createCaptureHandlers(
   async function handleTextMessage(ctx: Context) {
     const item = extractTextMessage(ctx)
     if (!item) return
-    await captureAndEnqueue(ctx, item)
+    await captureAndNotify(ctx, item)
   }
 
   async function handleForward(ctx: Context) {
     const item = extractForward(ctx)
     if (!item) return
-    await captureAndEnqueue(ctx, item, ['forwarded'])
+    await captureAndNotify(ctx, item, ['forwarded'])
   }
 
   async function handlePhoto(ctx: Context) {
@@ -98,7 +80,7 @@ export function createCaptureHandlers(
       await ctx.reply('📷 Фото получено, но без подписи — добавь текст для capture.')
       return
     }
-    await captureAndEnqueue(ctx, item)
+    await captureAndNotify(ctx, item)
   }
 
   return { handleTextMessage, handleForward, handlePhoto }

@@ -103,3 +103,4 @@ pnpm-workspace.yaml
 
 # Docker local data
 docker/data/
+docker/ai-service-data/

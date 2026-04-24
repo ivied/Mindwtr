@@ -1,25 +1,19 @@
 import { Bot } from 'grammy'
-import type { MindwtrClient } from '../api/mindwtr-client'
-import type { ClassificationQueue } from '../ai/queue'
+import type { CaptureFn } from '../capture/sink'
 import { handleStart } from './handlers/start'
 import { createCaptureHandlers } from './handlers/capture'
 
-export function createBot(
-  token: string,
-  mindwtr: MindwtrClient,
-  queue: ClassificationQueue | null
-) {
+export function createBot(token: string, capture: CaptureFn) {
   const bot = new Bot(token)
-  const capture = createCaptureHandlers(mindwtr, queue)
+  const handlers = createCaptureHandlers(capture)
 
   bot.command('start', handleStart)
   bot.command('help', handleStart)
 
   // Capture handlers — order matters
-  // Forwards first (have forward_origin), then specific types, then text fallback
-  bot.on('message:forward_origin', capture.handleForward)
-  bot.on('message:photo', capture.handlePhoto)
-  bot.on('message:text', capture.handleTextMessage)
+  bot.on('message:forward_origin', handlers.handleForward)
+  bot.on('message:photo', handlers.handlePhoto)
+  bot.on('message:text', handlers.handleTextMessage)
 
   bot.catch((err) => {
     console.error('Bot error:', err)
