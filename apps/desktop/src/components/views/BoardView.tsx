@@ -13,7 +13,7 @@ import {
 } from '@dnd-kit/core';
 import { TaskItem } from '../TaskItem';
 import { ErrorBoundary } from '../ErrorBoundary';
-import { shallow, useTaskStore, sortTasksBy, safeParseDate } from '@mindwtr/core';
+import { shallow, useTaskStore, sortTasksBy, safeParseDate, translateWithFallback } from '@mindwtr/core';
 import type { Task, TaskStatus } from '@mindwtr/core';
 import type { TaskSortBy } from '@mindwtr/core';
 import { useLanguage } from '../../contexts/language-context';
@@ -182,7 +182,7 @@ export function BoardView() {
     const COLUMNS = getColumns(t);
     const NO_PROJECT_FILTER = '__no_project__';
     const hasProjectFilters = boardFilters.selectedProjectIds.length > 0;
-    const showFiltersPanel = boardFilters.open || hasProjectFilters;
+    const showFiltersPanel = boardFilters.open;
     const areaById = React.useMemo(() => new Map(areas.map((area) => [area.id, area])), [areas]);
     const projectMap = React.useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
     const resolvedAreaFilter = React.useMemo(
@@ -371,8 +371,7 @@ export function BoardView() {
     }, [computeSequential, filteredTasks, projectMap, sequentialProjectFirstTasks, sortBy, sortByProjectOrder]);
 
     const resolveText = React.useCallback((key: string, fallback: string) => {
-        const value = t(key);
-        return value === key ? fallback : value;
+        return translateWithFallback(t, key, fallback);
     }, [t]);
 
     const openQuickAdd = (status: TaskStatus) => {

@@ -4,9 +4,9 @@ import { shallow, useTaskStore, sortTasksBy, safeFormatDate } from '@mindwtr/cor
 import type { TaskSortBy } from '@mindwtr/core';
 import { Undo2, Trash2 } from 'lucide-react';
 import { useLanguage } from '../../contexts/language-context';
-import { isTauriRuntime } from '../../lib/runtime';
 import { usePerformanceMonitor } from '../../hooks/usePerformanceMonitor';
 import { checkBudget } from '../../config/performanceBudgets';
+import { useConfirmDialog } from '../../hooks/useConfirmDialog';
 
 export function TrashView() {
     const perf = usePerformanceMonitor('TrashView');
@@ -21,6 +21,7 @@ export function TrashView() {
         shallow
     );
     const { t } = useLanguage();
+    const { requestConfirmation, confirmModal } = useConfirmDialog();
     const [searchQuery, setSearchQuery] = useState('');
     const sortBy = (settings?.taskSortBy ?? 'default') as TaskSortBy;
 
@@ -42,17 +43,27 @@ export function TrashView() {
 
     const handleClearTrash = async () => {
         if (trashedTasks.length === 0) return;
-        const confirmMessage = `${t('trash.clearAllConfirm')}\n${t('trash.clearAllConfirmBody')}`;
-        const confirmed = isTauriRuntime()
-            ? await import('@tauri-apps/plugin-dialog').then(({ confirm }) =>
-                confirm(confirmMessage, {
-                    title: t('trash.title'),
-                    kind: 'warning',
-                }),
-            )
-            : window.confirm(confirmMessage);
+        const confirmed = await requestConfirmation({
+            title: t('trash.clearAllConfirm'),
+            description: t('trash.clearAllConfirmBody'),
+            confirmLabel: t('trash.clearAll'),
+            cancelLabel: t('common.cancel') || 'Cancel',
+        });
         if (!confirmed) return;
         purgeDeletedTasks();
+    };
+
+    const handlePurgeTask = async (taskId: string) => {
+        const task = _allTasks.find((item) => item.id === taskId);
+        if (!task) return;
+        const confirmed = await requestConfirmation({
+            title: task.title,
+            description: t('trash.deleteConfirmBody'),
+            confirmLabel: t('common.delete'),
+            cancelLabel: t('common.cancel') || 'Cancel',
+        });
+        if (!confirmed) return;
+        purgeTask(taskId);
     };
 
     return (
@@ -111,7 +122,9 @@ export function TrashView() {
                                     <Undo2 className="w-4 h-4" />
                                 </button>
                                 <button
-                                    onClick={() => purgeTask(task.id)}
+                                    onClick={() => {
+                                        void handlePurgeTask(task.id);
+                                    }}
                                     className="p-2 hover:bg-destructive/10 rounded-md text-muted-foreground hover:text-destructive transition-colors"
                                     title={t('trash.deletePermanently')}
                                 >
@@ -123,6 +136,7 @@ export function TrashView() {
                 )}
             </div>
             </div>
+            {confirmModal}
         </ErrorBoundary>
     );
 }

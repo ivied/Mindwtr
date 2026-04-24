@@ -8,6 +8,12 @@ This page is an operations-focused companion to [[Cloud Sync]]. It covers how to
 - It is best for single-tenant or small trusted deployments.
 - You should run it behind HTTPS reverse proxying and standard server hardening controls.
 
+Client compatibility note:
+
+- Mindwtr Cloud clients require **HTTPS** for normal device URLs.
+- `http://localhost` is allowed for development, but `http://192.168.x.x` or other private-LAN HTTP URLs are not accepted by the Cloud sync client.
+- If you want LAN-only deployment, add TLS at the reverse proxy layer. If you need plain HTTP on a private LAN, use WebDAV instead.
+
 ## Deployment Topology
 
 Recommended layout:
@@ -44,7 +50,9 @@ Optional but useful:
 | Variable | Purpose | Notes |
 | --- | --- | --- |
 | `MINDWTR_CLOUD_AUTH_TOKENS` | Comma-separated allowlist of bearer tokens. | Recommended setting for production. |
+| `MINDWTR_CLOUD_AUTH_TOKENS_FILE` | Path to a file containing bearer tokens. | Useful for Docker secrets; file contents may match `MINDWTR_CLOUD_AUTH_TOKENS`. |
 | `MINDWTR_CLOUD_TOKEN` | Legacy single-token alias. | Still supported for backward compatibility, but deprecated. |
+| `MINDWTR_CLOUD_TOKEN_FILE` | Path to a file containing the legacy single token. | Still supported for backward compatibility, but deprecated. |
 | `MINDWTR_CLOUD_ALLOW_ANY_TOKEN` | Allows any syntactically valid bearer token. | Explicit opt-in only. Best avoided outside controlled environments. |
 
 ### Networking and storage
@@ -99,7 +107,7 @@ services:
   mindwtr-cloud:
     image: oven/bun:1.3
     working_dir: /app
-    command: ["bun", "run", "src/server.ts", "--host", "0.0.0.0", "--port", "8787"]
+    command: ["bun", "run", "--filter", "mindwtr-cloud", "start", "--", "--host", "0.0.0.0", "--port", "8787"]
     environment:
       MINDWTR_CLOUD_DATA_DIR: /data
       MINDWTR_CLOUD_AUTH_TOKENS: ${MINDWTR_CLOUD_AUTH_TOKENS}
@@ -117,6 +125,7 @@ Operational notes:
 - Pin the Bun image tag instead of floating latest for stable upgrades.
 - Mount `/data` on durable disk, not ephemeral container FS.
 - Keep tokens in secrets manager or `.env` outside git.
+- For Docker secrets, use `MINDWTR_CLOUD_AUTH_TOKENS_FILE` instead of inlining the token in compose.
 - The same deployed container serves both sync and REST API traffic on the same host/port.
 
 ## Reverse Proxy Checklist

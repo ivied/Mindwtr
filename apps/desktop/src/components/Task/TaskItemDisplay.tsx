@@ -1,15 +1,16 @@
-import { Calendar as CalendarIcon, Tag, Trash2, ArrowRight, Repeat, Check, Clock, Timer, Paperclip, RotateCcw, Copy, MapPin, Hourglass, BookOpen, PauseCircle, Star } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { Calendar as CalendarIcon, Tag, Trash2, ArrowRight, Repeat, Check, Clock, Timer, Paperclip, RotateCcw, Copy, MapPin, Hourglass, BookOpen, PauseCircle, Star, Zap } from 'lucide-react';
 import type { Area, Attachment, Project, Task, TaskStatus, RecurrenceRule, RecurrenceStrategy, Language } from '@mindwtr/core';
-import { DEFAULT_AREA_COLOR, getChecklistProgress, getTaskAgeLabel, getTaskStaleness, getTaskUrgency, hasTimeComponent, safeFormatDate, resolveTaskTextDirection } from '@mindwtr/core';
+import { DEFAULT_AREA_COLOR, getChecklistProgress, getRecurrenceCountValue, getRecurrenceUntilValue, getTaskAgeLabel, getTaskStaleness, getTaskUrgency, hasTimeComponent, safeFormatDate, resolveTaskTextDirection } from '@mindwtr/core';
 import { cn } from '../../lib/utils';
 import { getAttachmentDisplayTitle } from '../../lib/attachment-utils';
 import { getContextColor } from '../../lib/context-color';
 import { MetadataBadge } from '../ui/MetadataBadge';
 import { AttachmentProgressIndicator } from '../AttachmentProgressIndicator';
+import { RichMarkdown } from '../RichMarkdown';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { useEffect, useRef } from 'react';
+import { isImageAttachment } from './task-item-attachment-utils';
+import { AttachmentImage } from './AttachmentImage';
 
 interface TaskItemDisplayActions {
     onToggleSelect?: () => void;
@@ -117,6 +118,15 @@ export function TaskItemDisplay({
         focusToggle,
     } = actions;
     const checklistProgress = getChecklistProgress(task);
+    const recurrenceCount = getRecurrenceCountValue(task.recurrence);
+    const recurrenceUntil = getRecurrenceUntilValue(task.recurrence);
+    const recurrenceLabel = recurrenceRule
+        ? [
+            `${t(`recurrence.${recurrenceRule}`)}${recurrenceStrategy === 'fluid' ? ` · ${t('recurrence.afterCompletionShort')}` : ''}`,
+            recurrenceUntil ? `${t('recurrence.endsOnDate')} ${safeFormatDate(recurrenceUntil, 'P')}` : undefined,
+            recurrenceCount ? `${t('recurrence.endsAfterCount')} ${recurrenceCount} ${t('recurrence.occurrenceUnit')}` : undefined,
+        ].filter(Boolean).join(' · ')
+        : '';
     const ageLabel = getTaskAgeLabel(task.createdAt, language);
     const showCompactMeta = compactMetaEnabled && !isViewOpen;
     const showAgeBadge = task.status !== 'done' && Boolean(ageLabel);
@@ -128,6 +138,8 @@ export function TaskItemDisplay({
         || task.location
         || recurrenceRule
         || (prioritiesEnabled && task.priority)
+        || (task.status !== 'reference' && task.energyLevel)
+        || task.assignedTo
         || (task.contexts?.length ?? 0) > 0
         || task.tags.length > 0
         || checklistProgress
@@ -148,6 +160,12 @@ export function TaskItemDisplay({
         const label = t('task.moveToWaitingWithDue');
         return label === 'task.moveToWaitingWithDue' ? 'Move to Waiting and set due date' : label;
     })();
+    const imageAttachments = visibleAttachments.filter((attachment) => {
+        if (!isImageAttachment(attachment)) return false;
+        if (!attachment.uri) return false;
+        return attachment.localStatus !== 'missing';
+    });
+    const otherAttachments = visibleAttachments.filter((attachment) => !imageAttachments.includes(attachment));
     const clickTimerRef = useRef<number | null>(null);
     const clearClickTimer = () => {
         if (clickTimerRef.current !== null) {
@@ -277,13 +295,26 @@ export function TaskItemDisplay({
                 <MetadataBadge
                     variant="info"
                     icon={Repeat}
-                    label={`${t(`recurrence.${recurrenceRule}`)}${recurrenceStrategy === 'fluid' ? ` · ${t('recurrence.afterCompletionShort')}` : ''}`}
+                    label={recurrenceLabel}
                 />
             )}
             {prioritiesEnabled && task.priority && (
                 <MetadataBadge
                     variant="priority"
                     label={t(`priority.${task.priority}`)}
+                />
+            )}
+            {task.status !== 'reference' && task.energyLevel && (
+                <MetadataBadge
+                    variant="info"
+                    icon={Zap}
+                    label={t(`energyLevel.${task.energyLevel}`)}
+                />
+            )}
+            {task.assignedTo && (
+                <MetadataBadge
+                    variant="info"
+                    label={`${t('taskEdit.assignedTo')}: ${task.assignedTo}`}
                 />
             )}
             {task.contexts?.length > 0 && (
@@ -460,70 +491,52 @@ export function TaskItemDisplay({
                                     )}
                                     dir={resolvedDirection}
                                 >
-                                    <ReactMarkdown
-                                        remarkPlugins={[remarkGfm]}
-                                        disallowedElements={['img']}
-                                        components={{
-                                            a: ({ className, ...props }: any) => (
-                                                <a
-                                                    className={cn("text-primary underline hover:text-primary/80", className)}
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
-                                                    {...props}
-                                                />
-                                            ),
-                                            ul: ({ className, ...props }: any) => (
-                                                <ul className={cn("list-disc pl-4 py-1 space-y-0.5", className)} {...props} />
-                                            ),
-                                            ol: ({ className, ...props }: any) => (
-                                                <ol className={cn("list-decimal pl-4 py-1 space-y-0.5", className)} {...props} />
-                                            ),
-                                            li: ({ className, ...props }: any) => (
-                                                <li className={cn("pl-1", className)} {...props} />
-                                            ),
-                                            p: ({ className, children, ...props }: any) => (
-                                                <p className={cn("mb-1 last:mb-0 leading-relaxed", className)} {...props}>
-                                                    {children}
-                                                </p>
-                                            ),
-                                            code: ({ className, ...props }: any) => (
-                                                <code className={cn("bg-muted px-1 py-0.5 rounded text-[0.9em] font-mono", className)} {...props} />
-                                            ),
-                                            pre: ({ className, ...props }: any) => (
-                                                <pre className={cn("bg-muted p-2 rounded-md overflow-x-auto my-1", className)} {...props} />
-                                            ),
-                                            blockquote: ({ className, ...props }: any) => (
-                                                <blockquote className={cn("border-l-2 border-primary/50 pl-3 italic my-1 text-muted-foreground/80", className)} {...props} />
-                                            ),
-                                            table: ({ className, ...props }: any) => (
-                                                <div className="overflow-x-auto my-2">
-                                                    <table className={cn("min-w-full divide-y divide-border", className)} {...props} />
-                                                </div>
-                                            ),
-                                            th: ({ className, ...props }: any) => (
-                                                <th className={cn("px-2 py-1 text-left text-xs font-medium text-muted-foreground uppercase tracking-wider bg-muted/50", className)} {...props} />
-                                            ),
-                                            td: ({ className, ...props }: any) => (
-                                                <td className={cn("px-2 py-1 text-sm border-b border-border/50", className)} {...props} />
-                                            ),
-                                            // Handle task lists (GFM)
-                                            input: ({ type, ...props }: any) => {
-                                                if (type === 'checkbox') {
-                                                    return <input type="checkbox" className="mr-2 accent-primary" {...props} />;
-                                                }
-                                                return <input type={type} {...props} />;
-                                            }
-                                        }}
-                                    >
-                                        {task.description}
-                                    </ReactMarkdown>
+                                    <RichMarkdown markdown={task.description} />
                                 </div>
                             )}
                             {visibleAttachments.length > 0 && (
-                                <div className="flex flex-wrap items-center gap-2 mt-2 text-xs text-muted-foreground">
+                                <div className="mt-2 space-y-2 text-xs text-muted-foreground">
                                     <Paperclip className="w-3 h-3" aria-hidden="true" />
                                     <span className="sr-only">{t('attachments.title') || 'Attachments'}</span>
-                                    {visibleAttachments.map((attachment) => {
+                                    {imageAttachments.length > 0 ? (
+                                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                                            {imageAttachments.map((attachment) => {
+                                                const displayTitle = getAttachmentDisplayTitle(attachment);
+                                                const fullTitle = attachment.kind === 'link' ? attachment.uri : attachment.title;
+                                                const isDownloading = attachment.localStatus === 'downloading';
+                                                return (
+                                                    <button
+                                                        key={attachment.id}
+                                                        type="button"
+                                                        onClick={(e) => {
+                                                            e.preventDefault();
+                                                            e.stopPropagation();
+                                                            openAttachment(attachment);
+                                                        }}
+                                                        className="group rounded-lg border border-border bg-card overflow-hidden text-left hover:border-primary/40 hover:bg-muted/20 transition-colors"
+                                                        title={fullTitle || displayTitle}
+                                                        aria-label={`${t('attachments.open') || 'Open'}: ${displayTitle}`}
+                                                    >
+                                                        <AttachmentImage
+                                                            attachment={attachment}
+                                                            alt={displayTitle}
+                                                            className="block h-28 w-full object-cover bg-muted/30"
+                                                        />
+                                                        <div className="flex items-start justify-between gap-2 px-2 py-1.5">
+                                                            <div className="min-w-0">
+                                                                <div className="truncate text-foreground">{displayTitle}</div>
+                                                                {isDownloading ? (
+                                                                    <div className="text-[11px] text-muted-foreground">{t('common.loading')}</div>
+                                                                ) : null}
+                                                            </div>
+                                                            <AttachmentProgressIndicator attachmentId={attachment.id} />
+                                                        </div>
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    ) : null}
+                                    {otherAttachments.map((attachment) => {
                                         const displayTitle = getAttachmentDisplayTitle(attachment);
                                         const fullTitle = attachment.kind === 'link' ? attachment.uri : attachment.title;
                                         return (

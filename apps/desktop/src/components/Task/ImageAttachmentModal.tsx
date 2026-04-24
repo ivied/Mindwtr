@@ -1,4 +1,5 @@
 import type { Attachment } from '@mindwtr/core';
+import { AttachmentImage } from './AttachmentImage';
 
 type ImageAttachmentModalProps = {
     attachment: Attachment | null;
@@ -10,12 +11,12 @@ type ImageAttachmentModalProps = {
 
 export function ImageAttachmentModal({
     attachment,
-    imageSource,
+    imageSource: _imageSource,
     onClose,
     onOpenExternally,
     t,
 }: ImageAttachmentModalProps) {
-    if (!attachment || !imageSource) return null;
+    if (!attachment) return null;
     return (
         <div
             className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
@@ -56,7 +57,11 @@ export function ImageAttachmentModal({
                     </div>
                 </div>
                 <div className="max-h-[70vh] overflow-auto rounded-lg border border-border bg-muted/30">
-                    <img src={imageSource} alt={attachment.title} className="block max-w-full h-auto mx-auto" />
+                    <AttachmentImage
+                        attachment={attachment}
+                        alt={attachment.title || t('attachments.title')}
+                        className="block max-w-full h-auto mx-auto"
+                    />
                 </div>
             </div>
         </div>

@@ -12,6 +12,7 @@ const translations: Record<string, string> = {
     'projects.duplicate': 'Duplicate',
     'projects.noActiveTasks': 'No active tasks',
     'projects.parallel': 'Parallel',
+    'projects.reviewAt': 'Review Date',
     'projects.reactivate': 'Reactivate',
     'projects.sequential': 'Sequential',
     'projects.title': 'Project title',
@@ -20,6 +21,7 @@ const translations: Record<string, string> = {
     'status.done': 'Done',
     'status.waiting': 'Waiting',
     'taskEdit.details': 'Details',
+    'taskEdit.dueDateLabel': 'Due Date',
 };
 
 const t = (key: string) => translations[key] ?? key;
@@ -44,6 +46,7 @@ describe('ProjectDetailsHeader', () => {
         const project = buildProject({
             status: 'waiting',
             tagIds: ['#client'],
+            dueDate: '2026-03-28',
             reviewAt: '2026-03-30T09:00:00',
         });
 
@@ -53,6 +56,7 @@ describe('ProjectDetailsHeader', () => {
                 projectColor="#2563eb"
                 areaLabel="Ops"
                 isSequential
+                dueDate={project.dueDate}
                 reviewAt={project.reviewAt}
                 editTitle={project.title}
                 onEditTitleChange={vi.fn()}
@@ -73,7 +77,8 @@ describe('ProjectDetailsHeader', () => {
         screen.getByText('Waiting');
         screen.getByText('Ops');
         screen.getByText('Sequential');
-        screen.getByText('Mar 30');
+        screen.getByText('Due Date: Mar 28');
+        screen.getByText('Review Date: Mar 30');
         screen.getByText('#client');
 
         fireEvent.click(screen.getByRole('button', { name: /details/i }));
@@ -88,6 +93,7 @@ describe('ProjectDetailsHeader', () => {
                 project={project}
                 projectColor="#2563eb"
                 isSequential={false}
+                dueDate={project.dueDate}
                 editTitle={project.title}
                 onEditTitleChange={vi.fn()}
                 onCommitTitle={vi.fn()}
@@ -106,6 +112,7 @@ describe('ProjectDetailsHeader', () => {
         screen.getByText('Active');
         screen.getByText('Parallel');
         expect(screen.queryByText('Ops')).not.toBeInTheDocument();
-        expect(screen.queryByText('Mar 30')).not.toBeInTheDocument();
+        expect(screen.queryByText(/Due Date:/i)).not.toBeInTheDocument();
+        expect(screen.queryByText(/Review Date:/i)).not.toBeInTheDocument();
     });
 });

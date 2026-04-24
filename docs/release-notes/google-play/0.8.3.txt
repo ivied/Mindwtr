@@ -1,0 +1,15 @@
+<en-US>
+Added DGT GTD import plus task and project links in Markdown notes.
+Mobile Markdown editing is better with expanded editors, a toolbar, and automatic list continuation.
+Review notifications and reminder snooze actions work again, Today waits for local data, and Android widgets now default to a better 2x2 size.
+</en-US>
+<zh-CN>
+新增 DGT GTD 导入，以及 Markdown 备注中的任务和项目内部链接。
+移动端 Markdown 编辑更完善，加入扩展编辑器、工具栏和自动续写列表。
+复盘通知与提醒稍后处理已恢复正常，Today 会等待本地数据后再加载，Android 小组件默认改为更合适的 2x2 尺寸。
+</zh-CN>
+<es-ES>
+Agregamos importacion DGT GTD y enlaces a tareas y proyectos dentro de notas Markdown.
+La edicion Markdown movil mejora con editor ampliado, barra de herramientas y continuacion automatica de listas.
+Las notificaciones de revision y posponer recordatorios vuelven a funcionar, Hoy espera datos locales y el widget Android ahora usa 2x2 por defecto.
+</es-ES>

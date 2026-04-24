@@ -1,6 +1,10 @@
 import { useEffect, useMemo, type MutableRefObject } from 'react';
 import type { Task } from '@mindwtr/core';
 
+export const LIST_VIRTUALIZATION_THRESHOLD = 25;
+export const LIST_VIRTUAL_ROW_ESTIMATE = 120;
+export const LIST_VIRTUAL_OVERSCAN = 600;
+
 interface VirtualListOptions {
     tasks: Task[];
     shouldVirtualize: boolean;

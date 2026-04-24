@@ -15,20 +15,22 @@ import {
     Tags,
 } from 'lucide-react';
 
-import { DEFAULT_TASKNOTES_FOLDER, safeFormatDate, type ObsidianTask } from '@mindwtr/core';
+import { DEFAULT_TASKNOTES_FOLDER, safeFormatDate, translateWithFallback, type ObsidianTask } from '@mindwtr/core';
 
 import { ObsidianService } from '../../lib/obsidian-service';
+import { dispatchNavigateEvent } from '../../lib/navigation-events';
 import { cn } from '../../lib/utils';
 import { useLanguage } from '../../contexts/language-context';
 import { useObsidianStore } from '../../store/obsidian-store';
 import { useUiStore } from '../../store/ui-store';
 
 const navigateToSettings = () => {
-    window.dispatchEvent(new CustomEvent('mindwtr:navigate', { detail: { view: 'settings' } }));
+    dispatchNavigateEvent('settings');
 };
 
 const pageShellClassName = 'h-full px-4 py-3';
 const pageContentClassName = 'mx-auto w-full max-w-[84rem] min-w-0 2xl:max-w-[88rem]';
+const MAX_TASKNOTES_DETECTED_PATHS = 6;
 
 const resolveTaskNotesCreationFolder = (tasks: ObsidianTask[]): string => {
     const folders = tasks
@@ -64,6 +66,7 @@ export function ObsidianView() {
     const config = useObsidianStore((state) => state.config);
     const tasks = useObsidianStore((state) => state.tasks);
     const scannedFileCount = useObsidianStore((state) => state.scannedFileCount);
+    const taskNotesDetectedPaths = useObsidianStore((state) => state.taskNotesDetectedPaths);
     const importMode = useObsidianStore((state) => state.importMode);
     const hasScannedThisSession = useObsidianStore((state) => state.hasScannedThisSession);
     const isInitialized = useObsidianStore((state) => state.isInitialized);
@@ -78,13 +81,17 @@ export function ObsidianView() {
     const [newTaskText, setNewTaskText] = useState('');
     const [isCreatingTask, setIsCreatingTask] = useState(false);
     const [pendingTaskIds, setPendingTaskIds] = useState<Record<string, true>>({});
+    const [showCompleted, setShowCompleted] = useState(false);
 
     const effectiveNewTaskFormat = config.newTaskFormat === 'auto' ? importMode : config.newTaskFormat;
     const taskNotesCreationFolder = resolveTaskNotesCreationFolder(tasks);
+    const visibleTasks = showCompleted ? tasks : tasks.filter((task) => !task.completed);
+    const visibleTaskNotesDetectedPaths = taskNotesDetectedPaths.slice(0, MAX_TASKNOTES_DETECTED_PATHS);
+    const hiddenTaskNotesDetectedCount = Math.max(0, taskNotesDetectedPaths.length - visibleTaskNotesDetectedPaths.length);
+    const hiddenCompletedCount = Math.max(0, tasks.length - visibleTasks.length);
 
     const resolveText = useCallback((key: string, fallback: string) => {
-        const value = t(key);
-        return value === key ? fallback : value;
+        return translateWithFallback(t, key, fallback);
     }, [t]);
 
     useEffect(() => {
@@ -270,8 +277,13 @@ export function ObsidianView() {
                                     {resolveText('obsidian.notesCount', 'Notes scanned')}: {scannedFileCount}
                                 </span>
                                 <span className="rounded-full bg-muted px-3 py-1.5">
-                                    {resolveText('obsidian.tasksCount', 'Imported tasks')}: {tasks.length}
+                                    {resolveText('obsidian.tasksCount', 'Imported tasks')}: {visibleTasks.length}
                                 </span>
+                                {!showCompleted && hiddenCompletedCount > 0 && (
+                                    <span className="rounded-full bg-muted px-3 py-1.5">
+                                        {resolveText('obsidian.completedHidden', 'Completed hidden')}: {hiddenCompletedCount}
+                                    </span>
+                                )}
                                 <span className="rounded-full bg-muted px-3 py-1.5">
                                     {resolveText('obsidian.lastScanned', 'Last scanned')}:{' '}
                                     {config.lastScannedAt
@@ -332,6 +344,26 @@ export function ObsidianView() {
                                 ? resolveText('obsidian.rescanning', 'Scanning...')
                                 : resolveText('obsidian.rescan', 'Rescan vault')}
                         </button>
+                        {tasks.length > 0 && (
+                            <button
+                                type="button"
+                                aria-label={showCompleted
+                                    ? resolveText('obsidian.hideCompleted', 'Hide completed')
+                                    : resolveText('obsidian.showCompleted', 'Show completed')}
+                                aria-pressed={showCompleted}
+                                onClick={() => setShowCompleted((current) => !current)}
+                                className="inline-flex items-center gap-2 rounded-xl border border-border bg-background px-4 py-2 text-sm font-medium transition-colors hover:bg-accent"
+                            >
+                                {showCompleted
+                                    ? resolveText('obsidian.hideCompleted', 'Hide completed')
+                                    : resolveText('obsidian.showCompleted', 'Show completed')}
+                                {!showCompleted && hiddenCompletedCount > 0 && (
+                                    <span aria-hidden="true" className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                                        {hiddenCompletedCount}
+                                    </span>
+                                )}
+                            </button>
+                        )}
                     </div>
                     </div>
                 </section>
@@ -397,6 +429,45 @@ export function ObsidianView() {
                     </section>
                 )}
 
+                {canScan && importMode === 'tasknotes' && taskNotesDetectedPaths.length > 0 && (
+                    <section className="rounded-2xl border border-sky-200 bg-sky-50/70 p-5 shadow-sm">
+                        <div className="space-y-3">
+                            <div>
+                                <h2 className="text-sm font-semibold text-sky-900">
+                                    {resolveText('obsidian.taskNotesDetectedTitle', 'TaskNotes mode is active')}
+                                </h2>
+                                <p className="mt-1 text-sm text-sky-900/85">
+                                    {resolveText(
+                                        'obsidian.taskNotesDetectedBody',
+                                        'Mindwtr detected TaskNotes-style frontmatter in these files, so inline checklist tasks from other notes are ignored.'
+                                    )}
+                                </p>
+                                <p className="mt-2 text-xs text-sky-900/70">
+                                    {resolveText(
+                                        'obsidian.taskNotesDetectedHint',
+                                        'Look for a status field plus TaskNotes metadata like tags: [task], due, scheduled, contexts, projects, timeEstimate, recurrence, or completedDate.'
+                                    )}
+                                </p>
+                            </div>
+                            <div className="space-y-2">
+                                {visibleTaskNotesDetectedPaths.map((path) => (
+                                    <div
+                                        key={path}
+                                        className="rounded-xl border border-sky-200/80 bg-white/70 px-3 py-2 text-sm text-sky-950"
+                                    >
+                                        <span className="font-mono">{path}</span>
+                                    </div>
+                                ))}
+                                {hiddenTaskNotesDetectedCount > 0 && (
+                                    <p className="text-xs text-sky-900/70">
+                                        +{hiddenTaskNotesDetectedCount} {resolveText('obsidian.taskNotesDetectedMore', 'more matching files')}
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+                    </section>
+                )}
+
                 {!hasVault && (
                     <section className="rounded-2xl border border-dashed border-border bg-card p-8">
                         <h2 className="text-lg font-semibold">{resolveText('obsidian.setupTitle', 'Set up an Obsidian vault')}</h2>
@@ -429,6 +500,20 @@ export function ObsidianView() {
                     </section>
                 )}
 
+                {canScan && visibleTasks.length === 0 && tasks.length > 0 && hiddenCompletedCount > 0 && hasCompletedScan && !isScanning && (
+                    <section className="rounded-2xl border border-border bg-card p-8">
+                        <h2 className="text-lg font-semibold">
+                            {resolveText('obsidian.completedOnlyTitle', 'Only completed tasks are hidden')}
+                        </h2>
+                        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+                            {resolveText(
+                                'obsidian.completedOnlyBody',
+                                'This vault only has completed imported tasks right now. Turn on Show completed to inspect or reopen them.'
+                            )}
+                        </p>
+                    </section>
+                )}
+
                 {canScan && tasks.length === 0 && hasCompletedScan && !isScanning && (
                     <section className="rounded-2xl border border-border bg-card p-8">
                         <h2 className="text-lg font-semibold">{resolveText('obsidian.emptyTitle', 'No tasks found')}</h2>
@@ -441,9 +526,9 @@ export function ObsidianView() {
                     </section>
                 )}
 
-                {tasks.length > 0 && (
+                {visibleTasks.length > 0 && (
                     <section className="space-y-3">
-                        {tasks.map((task) => {
+                        {visibleTasks.map((task) => {
                             const isPending = Boolean(pendingTaskIds[task.id]);
                             const taskNotesData = task.taskNotesData;
                             const dueLabel = formatTaskNotesDate(taskNotesData?.dueDate);

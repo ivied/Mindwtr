@@ -34,7 +34,10 @@ type ParsedRRule = {
     interval: number;
     until?: Date;
     count?: number;
-    byDay?: number[]; // 0=Sun..6=Sat
+    byDay?: Array<{
+        weekday: number; // 0=Sun..6=Sat
+        ordinal?: number;
+    }>;
     byMonthDay?: number[];
 };
 
@@ -220,12 +223,17 @@ function parseRRule(raw: string): ParsedRRule | null {
         ? map.BYDAY
             .split(',')
             .map((token) => token.trim().toUpperCase())
-            .map((token) => token.slice(-2))
             .map((token) => {
+                const match = /^([+-]?\d{1,2})?(SU|MO|TU|WE|TH|FR|SA)$/.exec(token);
+                if (!match) return null;
                 const days: Record<string, number> = { SU: 0, MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6 };
-                return days[token];
+                const weekday = days[match[2]];
+                if (weekday === undefined) return null;
+                const ordinal = match[1] ? parseInt(match[1], 10) : undefined;
+                if (ordinal !== undefined && (!Number.isFinite(ordinal) || ordinal === 0)) return null;
+                return ordinal === undefined ? { weekday } : { weekday, ordinal };
             })
-            .filter((d) => typeof d === 'number')
+            .filter((token): token is NonNullable<typeof token> => Boolean(token))
         : undefined;
 
     const byMonthDay = map.BYMONTHDAY
@@ -240,9 +248,75 @@ function parseRRule(raw: string): ParsedRRule | null {
         interval,
         until,
         count: count && Number.isFinite(count) ? count : undefined,
-        byDay: byDay && byDay.length > 0 ? Array.from(new Set(byDay)) : undefined,
+        byDay: byDay && byDay.length > 0
+            ? Array.from(new Map(byDay.map((token) => [`${token.ordinal ?? ''}:${token.weekday}`, token])).values())
+            : undefined,
         byMonthDay: byMonthDay && byMonthDay.length > 0 ? Array.from(new Set(byMonthDay)) : undefined,
     };
+}
+
+function getNthWeekdayOfMonth(year: number, month: number, weekday: number, ordinal: number): Date | null {
+    if (!Number.isFinite(ordinal) || ordinal === 0) return null;
+
+    if (ordinal > 0) {
+        const firstOfMonth = new Date(year, month, 1);
+        const offset = (weekday - firstOfMonth.getDay() + 7) % 7;
+        const day = 1 + offset + (ordinal - 1) * 7;
+        const candidate = new Date(year, month, day);
+        return candidate.getMonth() === month ? candidate : null;
+    }
+
+    const lastOfMonth = new Date(year, month + 1, 0);
+    const offset = (lastOfMonth.getDay() - weekday + 7) % 7;
+    const lastMatchingDay = lastOfMonth.getDate() - offset;
+    const day = lastMatchingDay + (ordinal + 1) * 7;
+    const candidate = new Date(year, month, day);
+    return candidate.getMonth() === month ? candidate : null;
+}
+
+function getMonthlyCandidates(
+    monthCursor: Date,
+    rule: ParsedRRule,
+    eventTime: { h: number; m: number; s: number; ms: number },
+    fallbackMonthDay: number
+): Date[] {
+    const year = monthCursor.getFullYear();
+    const month = monthCursor.getMonth();
+
+    if (rule.byMonthDay && rule.byMonthDay.length > 0) {
+        return rule.byMonthDay
+            .map((monthDay) => new Date(year, month, monthDay, eventTime.h, eventTime.m, eventTime.s, eventTime.ms))
+            .filter((candidate) => candidate.getMonth() === month)
+            .sort((a, b) => a.getTime() - b.getTime());
+    }
+
+    if (rule.byDay && rule.byDay.length > 0) {
+        const candidates = new Map<number, Date>();
+        for (const token of rule.byDay) {
+            if (typeof token.ordinal === 'number') {
+                const nth = getNthWeekdayOfMonth(year, month, token.weekday, token.ordinal);
+                if (!nth) continue;
+                const candidate = new Date(year, month, nth.getDate(), eventTime.h, eventTime.m, eventTime.s, eventTime.ms);
+                candidates.set(candidate.getTime(), candidate);
+                continue;
+            }
+
+            const firstOfMonth = new Date(year, month, 1);
+            const offset = (token.weekday - firstOfMonth.getDay() + 7) % 7;
+            let day = 1 + offset;
+            while (true) {
+                const candidate = new Date(year, month, day, eventTime.h, eventTime.m, eventTime.s, eventTime.ms);
+                if (candidate.getMonth() !== month) break;
+                candidates.set(candidate.getTime(), candidate);
+                day += 7;
+            }
+        }
+
+        return Array.from(candidates.values()).sort((a, b) => a.getTime() - b.getTime());
+    }
+
+    return [new Date(year, month, fallbackMonthDay, eventTime.h, eventTime.m, eventTime.s, eventTime.ms)]
+        .filter((candidate) => candidate.getMonth() === month);
 }
 
 function intersectsRange(start: Date, end: Date, rangeStart: Date, rangeEnd: Date): boolean {
@@ -310,7 +384,9 @@ function expandRecurringEvent(event: ParsedVEvent, options: ParseIcsOptions): Ex
         }
 
         if (rule.freq === 'WEEKLY') {
-            const byDays = rule.byDay && rule.byDay.length > 0 ? rule.byDay : [event.start.getDay()];
+            const byDays = rule.byDay && rule.byDay.length > 0
+                ? Array.from(new Set(rule.byDay.map((token) => token.weekday)))
+                : [event.start.getDay()];
             const eventTime = { h: event.start.getHours(), m: event.start.getMinutes(), s: event.start.getSeconds(), ms: event.start.getMilliseconds() };
 
             const baseWeekStart = startOfWeek(event.start, { weekStartsOn: 1 });
@@ -336,14 +412,11 @@ function expandRecurringEvent(event: ParsedVEvent, options: ParseIcsOptions): Ex
         }
 
         // MONTHLY
-        const byMonthDays = rule.byMonthDay && rule.byMonthDay.length > 0 ? rule.byMonthDay : [event.start.getDate()];
         const eventTime = { h: event.start.getHours(), m: event.start.getMinutes(), s: event.start.getSeconds(), ms: event.start.getMilliseconds() };
 
         let monthCursor = new Date(event.start.getFullYear(), event.start.getMonth(), 1, 0, 0, 0, 0);
         while (monthCursor.getTime() <= windowEnd.getTime() && generated < maxPerEvent) {
-            for (const monthDay of byMonthDays) {
-                const candidate = new Date(monthCursor.getFullYear(), monthCursor.getMonth(), monthDay, eventTime.h, eventTime.m, eventTime.s, eventTime.ms);
-                if (candidate.getMonth() !== monthCursor.getMonth()) continue;
+            for (const candidate of getMonthlyCandidates(monthCursor, rule, eventTime, event.start.getDate())) {
                 if (candidate.getTime() < event.start.getTime()) continue;
                 if (candidate.getTime() > windowEnd.getTime()) return out;
                 if (shouldStop(candidate)) return out;
@@ -381,7 +454,9 @@ function expandRecurringEvent(event: ParsedVEvent, options: ParseIcsOptions): Ex
     }
 
     if (rule.freq === 'WEEKLY') {
-        const byDays = rule.byDay && rule.byDay.length > 0 ? rule.byDay : [event.start.getDay()];
+        const byDays = rule.byDay && rule.byDay.length > 0
+            ? Array.from(new Set(rule.byDay.map((token) => token.weekday)))
+            : [event.start.getDay()];
         const eventTime = { h: event.start.getHours(), m: event.start.getMinutes(), s: event.start.getSeconds(), ms: event.start.getMilliseconds() };
 
         const baseWeekStart = startOfWeek(event.start, { weekStartsOn: 1 });
@@ -417,7 +492,6 @@ function expandRecurringEvent(event: ParsedVEvent, options: ParseIcsOptions): Ex
     }
 
     // MONTHLY
-    const byMonthDays = rule.byMonthDay && rule.byMonthDay.length > 0 ? rule.byMonthDay : [event.start.getDate()];
     const eventTime = { h: event.start.getHours(), m: event.start.getMinutes(), s: event.start.getSeconds(), ms: event.start.getMilliseconds() };
 
     let monthCursor = new Date(event.start.getFullYear(), event.start.getMonth(), 1, 0, 0, 0, 0);
@@ -431,10 +505,7 @@ function expandRecurringEvent(event: ParsedVEvent, options: ParseIcsOptions): Ex
     }
 
     while (monthCursor.getTime() <= windowEnd.getTime() && generated < maxPerEvent) {
-        for (const monthDay of byMonthDays) {
-            const candidate = new Date(monthCursor.getFullYear(), monthCursor.getMonth(), monthDay, eventTime.h, eventTime.m, eventTime.s, eventTime.ms);
-            // Skip invalid days (e.g. Feb 30).
-            if (candidate.getMonth() !== monthCursor.getMonth()) continue;
+        for (const candidate of getMonthlyCandidates(monthCursor, rule, eventTime, event.start.getDate())) {
             if (candidate.getTime() < event.start.getTime()) continue;
             if (candidate.getTime() > windowEnd.getTime()) continue;
             if (shouldStop(candidate)) return out;

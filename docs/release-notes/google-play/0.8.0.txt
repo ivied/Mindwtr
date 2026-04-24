@@ -1,0 +1,15 @@
+<en-US>
+- Added optional project due dates for clearer planning across your lists.
+- Android home screen widgets now use actual widget height so task counts fit each widget size more reliably.
+- Mobile sync handling is more reliable, with safer merge recovery and more consistent visible-task filtering.
+</en-US>
+<zh-CN>
+- 新增项目可选截止日期，让列表规划更清晰。
+- Android 主屏小组件现在会按实际高度调整任务数量，显示更稳定。
+- 移动端同步更可靠，合并恢复更安全，可见任务过滤也更一致。
+</zh-CN>
+<es-ES>
+- Agregamos fechas objetivo opcionales para proyectos y asi planificar mejor tus listas.
+- Los widgets de Android ahora usan la altura real del widget para ajustar mejor la cantidad de tareas.
+- El sync movil es mas fiable, con recuperacion mas segura y filtros mas consistentes para las tareas visibles.
+</es-ES>

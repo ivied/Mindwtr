@@ -126,4 +126,60 @@ describe('ics', () => {
 
         expect(events).toHaveLength(0);
     });
+
+    it('expands monthly recurrence with ordinal BYDAY', () => {
+        const ics = [
+            'BEGIN:VCALENDAR',
+            'VERSION:2.0',
+            'BEGIN:VEVENT',
+            'UID:event-6',
+            'SUMMARY:First Monday',
+            'DTSTART:20250106T090000Z',
+            'DTEND:20250106T100000Z',
+            'RRULE:FREQ=MONTHLY;BYDAY=1MO',
+            'END:VEVENT',
+            'END:VCALENDAR',
+        ].join('\n');
+
+        const events = parseIcs(ics, {
+            sourceId: 'cal',
+            rangeStart: new Date('2025-01-01T00:00:00Z'),
+            rangeEnd: new Date('2025-05-01T00:00:00Z'),
+        });
+
+        expect(events.map((event) => event.start.slice(0, 10))).toEqual([
+            '2025-01-06',
+            '2025-02-03',
+            '2025-03-03',
+            '2025-04-07',
+        ]);
+    });
+
+    it('expands COUNT-limited monthly recurrence with ordinal BYDAY', () => {
+        const ics = [
+            'BEGIN:VCALENDAR',
+            'VERSION:2.0',
+            'BEGIN:VEVENT',
+            'UID:event-7',
+            'SUMMARY:Last Friday',
+            'DTSTART:20250131T090000Z',
+            'DTEND:20250131T100000Z',
+            'RRULE:FREQ=MONTHLY;BYDAY=-1FR;COUNT=4',
+            'END:VEVENT',
+            'END:VCALENDAR',
+        ].join('\n');
+
+        const events = parseIcs(ics, {
+            sourceId: 'cal',
+            rangeStart: new Date('2025-01-01T00:00:00Z'),
+            rangeEnd: new Date('2025-05-01T00:00:00Z'),
+        });
+
+        expect(events.map((event) => event.start.slice(0, 10))).toEqual([
+            '2025-01-31',
+            '2025-02-28',
+            '2025-03-28',
+            '2025-04-25',
+        ]);
+    });
 });

@@ -2,8 +2,8 @@
  * Utility functions for task operations
  */
 
-import { Task, TaskStatus, TaskSortBy, Project } from './types';
-import { safeParseDueDate } from './date';
+import { Task, TaskStatus, TaskSortBy, TaskPriority, Project, AppData } from './types';
+import { safeParseDate, safeParseDueDate } from './date';
 import { TASK_STATUS_ORDER } from './task-status';
 import type { Language } from './i18n/i18n-types';
 
@@ -16,13 +16,22 @@ import type { Language } from './i18n/i18n-types';
  */
 export const STATUS_COLORS: Record<TaskStatus, { bg: string; text: string; border: string }> = {
     'inbox': { bg: '#6B728020', text: '#6B7280', border: '#6B7280' },
-    'next': { bg: '#10B98120', text: '#10B981', border: '#10B981' },
+    'next': { bg: '#3B82F620', text: '#2563EB', border: '#2563EB' },
     'waiting': { bg: '#F59E0B20', text: '#F59E0B', border: '#F59E0B' },
     'someday': { bg: '#8B5CF620', text: '#8B5CF6', border: '#8B5CF6' },
     'reference': { bg: '#0EA5E920', text: '#0EA5E9', border: '#0EA5E9' },
     'done': { bg: '#22C55E20', text: '#22C55E', border: '#22C55E' },
     'archived': { bg: '#6B728020', text: '#6B7280', border: '#6B7280' },
 };
+
+const TASK_PRIORITY_SORT_RANK: Record<TaskPriority, number> = {
+    low: 1,
+    medium: 2,
+    high: 3,
+    urgent: 4,
+};
+
+export const FOCUS_NEXT_DUE_SOON_WINDOW_DAYS = 30;
 
 const safeTime = (value: string | undefined, fallback: number): number => {
     if (!value) return fallback;
@@ -46,6 +55,23 @@ const shouldIncrementPushCount = (oldDueDate?: string, newDueDate?: string): boo
 
 const WAITING_FOR_LINE_REGEX = /^\s*waiting\s+for\s*[:：]\s*(.+?)\s*$/i;
 
+type SortFocusNextActionsOptions = {
+    now?: Date;
+    dueSoonWindowDays?: number;
+    prioritizeByPriority?: boolean;
+};
+
+function getFocusNextActionBucket(
+    task: Pick<Task, 'dueDate'>,
+    nowMs: number,
+    dueSoonWindowMs: number,
+): number {
+    const dueMs = safeDueTime(task.dueDate, Number.NaN);
+    if (!Number.isFinite(dueMs)) return 1;
+    if (dueMs <= nowMs + dueSoonWindowMs) return 0;
+    return 2;
+}
+
 export function rescheduleTask(task: Task, newDueDate?: string): Task {
     const next: Task = { ...task, dueDate: newDueDate };
     if (shouldIncrementPushCount(task.dueDate, newDueDate)) {
@@ -66,6 +92,12 @@ export function extractWaitingPerson(description?: string): string | null {
         if (person) return person;
     }
     return null;
+}
+
+export function getWaitingPerson(task: Pick<Task, 'assignedTo' | 'description'>): string | null {
+    const assignedTo = task.assignedTo?.trim();
+    if (assignedTo) return assignedTo;
+    return extractWaitingPerson(task.description);
 }
 
 /**
@@ -147,6 +179,45 @@ export function sortTasksBy(tasks: Task[], sortBy: TaskSortBy = 'default'): Task
         default:
             return sortTasks(tasks);
     }
+}
+
+export function sortFocusNextActions(tasks: Task[], options: SortFocusNextActionsOptions = {}): Task[] {
+    const nowMs = (options.now ?? new Date()).getTime();
+    const dueSoonWindowDays = Number.isFinite(options.dueSoonWindowDays)
+        ? Math.max(0, Math.floor(options.dueSoonWindowDays as number))
+        : FOCUS_NEXT_DUE_SOON_WINDOW_DAYS;
+    const dueSoonWindowMs = dueSoonWindowDays * 24 * 60 * 60 * 1000;
+    const prioritizeByPriority = options.prioritizeByPriority === true;
+
+    return [...tasks].sort((a, b) => {
+        const bucketA = getFocusNextActionBucket(a, nowMs, dueSoonWindowMs);
+        const bucketB = getFocusNextActionBucket(b, nowMs, dueSoonWindowMs);
+        if (bucketA !== bucketB) return bucketA - bucketB;
+
+        if (bucketA !== 1) {
+            const dueA = safeDueTime(a.dueDate, Number.POSITIVE_INFINITY);
+            const dueB = safeDueTime(b.dueDate, Number.POSITIVE_INFINITY);
+            if (dueA !== dueB) return dueA - dueB;
+        }
+
+        if (prioritizeByPriority) {
+            const priorityDiff = (TASK_PRIORITY_SORT_RANK[b.priority as TaskPriority] || 0)
+                - (TASK_PRIORITY_SORT_RANK[a.priority as TaskPriority] || 0);
+            if (priorityDiff !== 0) return priorityDiff;
+        }
+
+        const startA = safeTime(a.startTime, Number.POSITIVE_INFINITY);
+        const startB = safeTime(b.startTime, Number.POSITIVE_INFINITY);
+        if (startA !== startB) return startA - startB;
+
+        const createdDiff = safeTime(a.createdAt, 0) - safeTime(b.createdAt, 0);
+        if (createdDiff !== 0) return createdDiff;
+
+        const titleDiff = a.title.localeCompare(b.title);
+        if (titleDiff !== 0) return titleDiff;
+
+        return a.id.localeCompare(b.id);
+    });
 }
 
 /**
@@ -233,6 +304,109 @@ export function getTaskAreaId(
         if (project?.areaId) return project.areaId;
     }
     return task.areaId;
+}
+
+export type SpeechResultLike = {
+    transcript?: string | null;
+    title?: string | null;
+    description?: string | null;
+    dueDate?: string | null;
+    startTime?: string | null;
+    tags?: string[] | null;
+    contexts?: string[] | null;
+    projectTitle?: string | null;
+};
+
+export type SpeechUpdatePlan = {
+    updates: Partial<Task>;
+    suggestedProjectTitle?: string;
+};
+
+export function buildTaskUpdatesFromSpeechResult(
+    existing: Pick<Task, 'title' | 'description' | 'dueDate' | 'startTime' | 'tags' | 'contexts' | 'projectId'>,
+    result: SpeechResultLike,
+    settings?: AppData['settings'],
+): SpeechUpdatePlan {
+    const updates: Partial<Task> = {};
+    const mode = settings?.ai?.speechToText?.mode ?? 'smart_parse';
+    const fieldStrategy = settings?.ai?.speechToText?.fieldStrategy ?? 'smart';
+    const transcript = result.transcript?.trim();
+
+    if (mode === 'transcribe_only') {
+        if (transcript) {
+            if (fieldStrategy === 'description_only') {
+                updates.description = transcript;
+            } else if (fieldStrategy === 'title_only') {
+                updates.title = transcript;
+            } else {
+                const wordCount = transcript.split(/\s+/).filter(Boolean).length;
+                if (wordCount <= 15) {
+                    updates.title = transcript;
+                } else {
+                    updates.description = transcript;
+                }
+            }
+        }
+    } else {
+        if (result.title && result.title.trim()) updates.title = result.title.trim();
+        if (result.description !== undefined && result.description !== null) {
+            const description = result.description.trim();
+            updates.description = description ? description : undefined;
+        }
+        if (!updates.title && transcript) {
+            if (fieldStrategy === 'description_only') {
+                updates.description = transcript;
+            } else if (fieldStrategy === 'title_only') {
+                updates.title = transcript;
+            } else {
+                const wordCount = transcript.split(/\s+/).filter(Boolean).length;
+                if (wordCount <= 15) {
+                    updates.title = transcript;
+                } else {
+                    const words = transcript.split(/\s+/).filter(Boolean);
+                    updates.title = `${words.slice(0, 7).join(' ')}...`;
+                    if (!updates.description) {
+                        updates.description = transcript;
+                    }
+                }
+            }
+        }
+    }
+
+    if (result.dueDate) {
+        const parsed = safeParseDate(result.dueDate);
+        if (parsed) updates.dueDate = parsed.toISOString();
+    }
+    if (result.startTime) {
+        const parsed = safeParseDate(result.startTime);
+        if (parsed) updates.startTime = parsed.toISOString();
+    }
+
+    const normalizeList = (items: string[] | null | undefined, prefix: string) => {
+        if (!Array.isArray(items)) return [];
+        return items
+            .map((item) => item.trim())
+            .filter(Boolean)
+            .map((item) => (item.startsWith(prefix) ? item : `${prefix}${item}`));
+    };
+
+    const nextTags = normalizeList(result.tags ?? [], '#');
+    const nextContexts = normalizeList(result.contexts ?? [], '@');
+    if (nextTags.length) {
+        updates.tags = Array.from(new Set([...(existing.tags ?? []), ...nextTags]));
+    }
+    if (nextContexts.length) {
+        updates.contexts = Array.from(new Set([...(existing.contexts ?? []), ...nextContexts]));
+    }
+
+    const suggestedProjectTitle = result.projectTitle && !existing.projectId
+        ? result.projectTitle.trim()
+        : '';
+
+    return {
+        updates,
+        suggestedProjectTitle: suggestedProjectTitle || undefined,
+    };
 }
 
 /**

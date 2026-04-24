@@ -135,6 +135,7 @@ const DROPBOX_SCOPES: &str = "files.content.read files.content.write files.metad
 const DROPBOX_OAUTH_TIMEOUT_SECS: u64 = 180;
 const DROPBOX_TOKEN_REFRESH_SKEW_MS: i64 = 60_000;
 const DROPBOX_DEFAULT_TOKEN_LIFETIME_SECS: i64 = 4 * 60 * 60;
+const QUICK_ADD_CLI_FLAG: &str = "--quick-add";
 const GLOBAL_QUICK_ADD_SHORTCUT_DEFAULT: &str = "Control+Alt+M";
 const GLOBAL_QUICK_ADD_SHORTCUT_ALTERNATE_N: &str = "Control+Alt+N";
 const GLOBAL_QUICK_ADD_SHORTCUT_ALTERNATE_Q: &str = "Control+Alt+Q";
@@ -156,6 +157,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   title TEXT NOT NULL,
   status TEXT NOT NULL,
   priority TEXT,
+  energyLevel TEXT,
+  assignedTo TEXT,
   taskMode TEXT,
   startTime TEXT,
   dueDate TEXT,
@@ -205,6 +208,7 @@ CREATE TABLE IF NOT EXISTS projects (
   isFocused INTEGER,
   supportNotes TEXT,
   attachments TEXT,
+  dueDate TEXT,
   reviewAt TEXT,
   areaId TEXT,
   areaTitle TEXT,
@@ -523,9 +527,27 @@ fn default_global_quick_add_shortcut() -> &'static str {
     }
 }
 
+fn launch_requests_quick_add<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter()
+        .any(|arg| arg.as_ref().eq_ignore_ascii_case(QUICK_ADD_CLI_FLAG))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let initial_launch_requests_quick_add = launch_requests_quick_add(env::args());
+
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if launch_requests_quick_add(args.iter()) {
+                show_main_and_emit(app);
+            } else {
+                show_main(app);
+            }
+        }))
         .manage(QuickAddPending(AtomicBool::new(false)))
         .manage(CloseRequestHandled(AtomicBool::new(false)))
         .manage(GlobalQuickAddShortcutState(Mutex::new(None)))
@@ -605,7 +627,7 @@ pub fn run() {
                 }
             }
         })
-        .setup(|app| {
+        .setup(move |app| {
             ensure_data_file(&app.handle()).ok();
 
             {
@@ -622,6 +644,23 @@ pub fn run() {
                     let p = PathBuf::from(sp);
                     if p.exists() {
                         expand_tauri_fs_scope(&app.handle(), &p);
+                    }
+                }
+
+                // Also expand scope for the Obsidian vault path, which may be
+                // inside iCloud Drive or another location not covered at runtime.
+                if let Some(ref raw_obsidian) = config.obsidian_config {
+                    #[derive(serde::Deserialize, Default)]
+                    struct VaultPathOnly {
+                        vault_path: Option<String>,
+                    }
+                    if let Ok(parsed) = serde_json::from_str::<VaultPathOnly>(raw_obsidian) {
+                        if let Some(vp) = parsed.vault_path {
+                            let p = PathBuf::from(vp.trim());
+                            if p.exists() {
+                                expand_tauri_fs_scope(&app.handle(), &p);
+                            }
+                        }
                     }
                 }
             }
@@ -718,6 +757,12 @@ pub fn run() {
                 Some(default_global_quick_add_shortcut()),
             ) {
                 log::warn!("Failed to register global quick add shortcut: {error}");
+            }
+
+            if initial_launch_requests_quick_add {
+                app.state::<QuickAddPending>()
+                    .0
+                    .store(true, Ordering::SeqCst);
             }
 
             if cfg!(debug_assertions) || diagnostics_enabled {
@@ -870,5 +915,13 @@ arch=x86_64
             parse_flatpak_install_channel(contents).as_deref(),
             Some("stable")
         );
+    }
+
+    #[test]
+    fn launch_requests_quick_add_matches_flag() {
+        assert!(launch_requests_quick_add(["mindwtr", "--quick-add"]));
+        assert!(launch_requests_quick_add(["mindwtr", "--QUICK-ADD"]));
+        assert!(!launch_requests_quick_add(["mindwtr"]));
+        assert!(!launch_requests_quick_add(["mindwtr", "--foo"]));
     }
 }

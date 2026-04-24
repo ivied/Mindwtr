@@ -10,6 +10,9 @@ This folder contains small, focused decision documents that explain **why** we m
 - [ADR 0004: SQLite WAL and FTS5 as the default local persistence stack](0004-sqlite-wal-fts5.md)
 - [ADR 0005: Tombstone retention and purge policy](0005-tombstone-retention-policy.md)
 - [ADR 0006: Zustand as the primary shared state model](0006-zustand-shared-state-model.md)
+- [ADR 0007: Prefer live data in ambiguous delete-vs-live merges](0007-live-wins-in-ambiguous-delete-merge.md)
+- [ADR 0008: Snapshot sync without a delta log](0008-snapshot-sync-without-delta-log.md)
+- [ADR 0009: SQLite as primary store, JSON as sync snapshot bridge](0009-sqlite-json-sync-bridge.md)
 
 ## Template
 

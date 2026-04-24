@@ -221,6 +221,26 @@ Commit style:
   - `feat(core): add date format normalization`
   - `docs: clarify sync troubleshooting`
 
+## Contributor License Agreement
+
+Before we can merge your pull request, you'll need to sign our
+[Contributor License Agreement (CLA)](https://gist.github.com/dongdongbh/0446c35e1d5c1a73c344b16cba4aeeaa).
+
+This is a one-time process — CLA Assistant will automatically check
+when you open a PR and prompt you if needed. Signing takes about
+30 seconds via your GitHub account.
+
+### Why a CLA?
+
+Mindwtr is free, open-source, and licensed under AGPL-3.0. The CLA
+ensures the project has the flexibility to explore sustainability
+options (like dual licensing) in the future, so we can keep the
+project alive long-term. You retain full ownership of your
+contributions — the CLA just grants the project a license to use them.
+
+The core of Mindwtr will always remain available under an
+OSI-approved open-source license.
+
 ## Documentation contributions
 
 Documentation updates are welcome in `wiki/`, `docs/`, `README.md`, and `README_zh.md`.

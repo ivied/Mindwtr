@@ -1,0 +1,3 @@
+- Clarified the shipped mobile calendar sync behavior in the docs.
+- Documented the SQLite-to-JSON sync bridge and local-only sync diagnostics more clearly.
+- Added sync regression coverage so device-local history does not trigger unnecessary remote writes.

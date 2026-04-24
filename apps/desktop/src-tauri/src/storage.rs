@@ -1,6 +1,48 @@
 use crate::*;
 
+const PORTABLE_MARKER_FILE_NAME: &str = "portable.txt";
+const PORTABLE_PROFILE_DIR_NAME: &str = "profile";
+const PORTABLE_CONFIG_DIR_NAME: &str = "config";
+const PORTABLE_DATA_DIR_NAME: &str = "data";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StorageMode {
+    Standard,
+    Portable { profile_root: PathBuf },
+}
+
+fn portable_profile_root_for_exe_dir(exe_dir: &Path) -> PathBuf {
+    exe_dir.join(PORTABLE_PROFILE_DIR_NAME)
+}
+
+fn detect_storage_mode_from_exe_dir(exe_dir: Option<&Path>) -> StorageMode {
+    let Some(exe_dir) = exe_dir else {
+        return StorageMode::Standard;
+    };
+    let marker_path = exe_dir.join(PORTABLE_MARKER_FILE_NAME);
+    if marker_path.exists() {
+        return StorageMode::Portable {
+            profile_root: portable_profile_root_for_exe_dir(exe_dir),
+        };
+    }
+    StorageMode::Standard
+}
+
+fn detect_storage_mode() -> StorageMode {
+    let exe_dir = env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf));
+    detect_storage_mode_from_exe_dir(exe_dir.as_deref())
+}
+
+pub(crate) fn is_portable_mode() -> bool {
+    matches!(detect_storage_mode(), StorageMode::Portable { .. })
+}
+
 pub(crate) fn get_config_dir(app: &tauri::AppHandle) -> PathBuf {
+    if let StorageMode::Portable { profile_root } = detect_storage_mode() {
+        return profile_root.join(PORTABLE_CONFIG_DIR_NAME);
+    }
     app.path()
         .resolve(APP_NAME, BaseDirectory::Config)
         .unwrap_or_else(|_| {
@@ -11,6 +53,9 @@ pub(crate) fn get_config_dir(app: &tauri::AppHandle) -> PathBuf {
 }
 
 pub(crate) fn get_data_dir(app: &tauri::AppHandle) -> PathBuf {
+    if let StorageMode::Portable { profile_root } = detect_storage_mode() {
+        return profile_root.join(PORTABLE_DATA_DIR_NAME);
+    }
     app.path()
         .resolve(APP_NAME, BaseDirectory::Data)
         .unwrap_or_else(|_| {
@@ -45,11 +90,15 @@ pub(crate) fn open_sqlite(app: &tauri::AppHandle) -> Result<Connection, String> 
         .map_err(|e| e.to_string())?;
     conn.execute_batch(SQLITE_SCHEMA)
         .map_err(|e| e.to_string())?;
+    ensure_column(&conn, "tasks", "energyLevel", "TEXT")?;
+    ensure_column(&conn, "tasks", "assignedTo", "TEXT")?;
     ensure_tasks_purged_at_column(&conn)?;
     ensure_tasks_order_column(&conn)?;
     ensure_tasks_area_column(&conn)?;
     ensure_tasks_section_column(&conn)?;
+    ensure_tasks_organization_indexes(&conn)?;
     ensure_projects_order_column(&conn)?;
+    ensure_projects_due_date_column(&conn)?;
     ensure_projects_area_order_index(&conn)?;
     ensure_sync_revision_columns(&conn)?;
     ensure_fts_triggers(&conn)?;
@@ -65,15 +114,39 @@ fn is_retryable_storage_error(message: &str) -> bool {
         || normalized.contains("temporarily unavailable")
 }
 
+fn data_json_backup_path(data_path: &Path) -> PathBuf {
+    data_path.with_extension("json.bak")
+}
+
+fn data_json_tmp_path(data_path: &Path) -> PathBuf {
+    data_path.with_extension("json.tmp")
+}
+
+fn cleanup_stale_data_json_backup(data_path: &Path) -> Result<(), String> {
+    if !cfg!(windows) {
+        return Ok(());
+    }
+    let backup_path = data_json_backup_path(data_path);
+    if !backup_path.exists() {
+        return Ok(());
+    }
+    if data_path.exists() {
+        fs::remove_file(&backup_path)
+            .map_err(|e| format!("Failed to remove stale backup file: {e}"))?;
+        return Ok(());
+    }
+    fs::rename(&backup_path, data_path)
+        .map_err(|e| format!("Failed to restore data file from backup: {e}"))?;
+    Ok(())
+}
+
 fn write_data_json_file(data_path: &Path, data: &Value) -> Result<(), String> {
     if let Some(parent) = data_path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let backup_path = data_path.with_extension("json.bak");
-    if data_path.exists() {
-        let _ = fs::copy(data_path, &backup_path);
-    }
-    let tmp_path = data_path.with_extension("json.tmp");
+    cleanup_stale_data_json_backup(data_path)?;
+    let backup_path = data_json_backup_path(data_path);
+    let tmp_path = data_json_tmp_path(data_path);
     let content = serde_json::to_string_pretty(data).map_err(|e| e.to_string())?;
     {
         let mut file = File::create(&tmp_path).map_err(|e| e.to_string())?;
@@ -81,9 +154,28 @@ fn write_data_json_file(data_path: &Path, data: &Value) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
         file.sync_all().map_err(|e| e.to_string())?;
     }
+
     if cfg!(windows) && data_path.exists() {
-        fs::remove_file(data_path).map_err(|e| e.to_string())?;
+        fs::rename(data_path, &backup_path).map_err(|e| e.to_string())?;
+        match fs::rename(&tmp_path, data_path) {
+            Ok(()) => {
+                let _ = fs::remove_file(&backup_path);
+                return Ok(());
+            }
+            Err(rename_err) => {
+                let restore_err = fs::rename(&backup_path, data_path).err();
+                let _ = fs::remove_file(&tmp_path);
+                return match restore_err {
+                    Some(error) => Err(format!(
+                        "Failed to replace data file: {rename_err}; original data kept at {} but restore also failed: {error}",
+                        backup_path.display()
+                    )),
+                    None => Err(format!("Failed to replace data file: {rename_err}")),
+                };
+            }
+        }
     }
+
     fs::rename(&tmp_path, data_path).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -242,6 +334,20 @@ fn ensure_tasks_section_column(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+fn ensure_tasks_organization_indexes(conn: &Connection) -> Result<(), String> {
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_energyLevel ON tasks(energyLevel)",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_assignedTo ON tasks(assignedTo)",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 fn ensure_projects_order_column(conn: &Connection) -> Result<(), String> {
     let mut stmt = conn
         .prepare("PRAGMA table_info(projects)")
@@ -256,6 +362,16 @@ fn ensure_projects_order_column(conn: &Connection) -> Result<(), String> {
     }
     conn.execute("ALTER TABLE projects ADD COLUMN orderNum INTEGER", [])
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn ensure_projects_due_date_column(conn: &Connection) -> Result<(), String> {
+    ensure_column(conn, "projects", "dueDate", "TEXT")?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_projects_dueDate ON projects(dueDate)",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -489,6 +605,16 @@ fn row_to_task_value(row: &rusqlite::Row<'_>) -> Result<Value, rusqlite::Error> 
             map.insert("priority".to_string(), Value::String(v));
         }
     }
+    if let Ok(val) = row.get::<_, Option<String>>("energyLevel") {
+        if let Some(v) = val {
+            map.insert("energyLevel".to_string(), Value::String(v));
+        }
+    }
+    if let Ok(val) = row.get::<_, Option<String>>("assignedTo") {
+        if let Some(v) = val {
+            map.insert("assignedTo".to_string(), Value::String(v));
+        }
+    }
     if let Ok(val) = row.get::<_, Option<String>>("taskMode") {
         if let Some(v) = val {
             map.insert("taskMode".to_string(), Value::String(v));
@@ -651,6 +777,11 @@ fn row_to_project_value(row: &rusqlite::Row<'_>) -> Result<Value, rusqlite::Erro
     if !attachments_val.is_null() {
         map.insert("attachments".to_string(), attachments_val);
     }
+    if let Ok(val) = row.get::<_, Option<String>>("dueDate") {
+        if let Some(v) = val {
+            map.insert("dueDate".to_string(), Value::String(v));
+        }
+    }
     if let Ok(val) = row.get::<_, Option<String>>("reviewAt") {
         if let Some(v) = val {
             map.insert("reviewAt".to_string(), Value::String(v));
@@ -769,12 +900,14 @@ fn migrate_json_to_sqlite(conn: &mut Connection, data: &Value) -> Result<(), Str
         let checklist_json = json_str(task.get("checklist"));
         let attachments_json = json_str(task.get("attachments"));
         tx.execute(
-            "INSERT OR REPLACE INTO tasks (id, title, status, priority, taskMode, startTime, dueDate, recurrence, pushCount, tags, contexts, checklist, description, attachments, location, projectId, sectionId, areaId, orderNum, isFocusedToday, timeEstimate, reviewAt, completedAt, rev, revBy, createdAt, updatedAt, deletedAt, purgedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29)",
+            "INSERT OR REPLACE INTO tasks (id, title, status, priority, energyLevel, assignedTo, taskMode, startTime, dueDate, recurrence, pushCount, tags, contexts, checklist, description, attachments, location, projectId, sectionId, areaId, orderNum, isFocusedToday, timeEstimate, reviewAt, completedAt, rev, revBy, createdAt, updatedAt, deletedAt, purgedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)",
             params![
                 task.get("id").and_then(|v| v.as_str()).unwrap_or_default(),
                 task.get("title").and_then(|v| v.as_str()).unwrap_or_default(),
                 task.get("status").and_then(|v| v.as_str()).unwrap_or("inbox"),
                 task.get("priority").and_then(|v| v.as_str()),
+                task.get("energyLevel").and_then(|v| v.as_str()),
+                task.get("assignedTo").and_then(|v| v.as_str()),
                 task.get("taskMode").and_then(|v| v.as_str()),
                 task.get("startTime").and_then(|v| v.as_str()),
                 task.get("dueDate").and_then(|v| v.as_str()),
@@ -814,7 +947,7 @@ fn migrate_json_to_sqlite(conn: &mut Connection, data: &Value) -> Result<(), Str
         let tag_ids_json = json_str_or_default(project.get("tagIds"), "[]");
         let attachments_json = json_str(project.get("attachments"));
         tx.execute(
-            "INSERT OR REPLACE INTO projects (id, title, status, color, orderNum, tagIds, isSequential, isFocused, supportNotes, attachments, reviewAt, areaId, areaTitle, rev, revBy, createdAt, updatedAt, deletedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            "INSERT OR REPLACE INTO projects (id, title, status, color, orderNum, tagIds, isSequential, isFocused, supportNotes, attachments, dueDate, reviewAt, areaId, areaTitle, rev, revBy, createdAt, updatedAt, deletedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 project.get("id").and_then(|v| v.as_str()).unwrap_or_default(),
                 project.get("title").and_then(|v| v.as_str()).unwrap_or_default(),
@@ -826,6 +959,7 @@ fn migrate_json_to_sqlite(conn: &mut Connection, data: &Value) -> Result<(), Str
                 project.get("isFocused").and_then(|v| v.as_bool()).unwrap_or(false) as i32,
                 project.get("supportNotes").and_then(|v| v.as_str()),
                 attachments_json,
+                project.get("dueDate").and_then(|v| v.as_str()),
                 project.get("reviewAt").and_then(|v| v.as_str()),
                 project.get("areaId").and_then(|v| v.as_str()),
                 project.get("areaTitle").and_then(|v| v.as_str()),
@@ -1054,6 +1188,7 @@ fn bootstrap_storage_layout(app: &tauri::AppHandle) -> Result<(), String> {
     }
 
     let data_path = get_data_path(app);
+    cleanup_stale_data_json_backup(&data_path)?;
     if !data_path.exists() {
         if let Some(custom_path) = legacy_config.data_file_path.as_ref() {
             let custom_path = PathBuf::from(custom_path);
@@ -1099,7 +1234,7 @@ pub(crate) async fn get_data(app: tauri::AppHandle) -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
         ensure_data_file(&app)?;
         let data_path = get_data_path(&app);
-        let backup_path = data_path.with_extension("json.bak");
+        let backup_path = data_json_backup_path(&data_path);
         let mut conn = open_sqlite(&app)?;
 
         if !sqlite_has_any_data(&conn)? && data_path.exists() {
@@ -1158,6 +1293,7 @@ pub(crate) async fn get_data(app: tauri::AppHandle) -> Result<Value, String> {
 pub(crate) async fn read_data_json(app: tauri::AppHandle) -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let data_path = get_data_path(&app);
+        cleanup_stale_data_json_backup(&data_path)?;
         read_json_with_retries(&data_path, 2).map_err(|e| e.to_string())
     })
     .await
@@ -1518,6 +1654,115 @@ fn parse_json_relaxed(raw: &str) -> Result<Value, serde_json::Error> {
     let start = sanitized.find(|c| c == '{' || c == '[').unwrap_or(0);
     let mut de = serde_json::Deserializer::from_str(&sanitized[start..]);
     Value::deserialize(&mut de)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[test]
+    fn detect_storage_mode_returns_standard_without_marker() {
+        let exe_dir = std::env::temp_dir().join("mindwtr-portable-mode-without-marker");
+
+        let mode = detect_storage_mode_from_exe_dir(Some(&exe_dir));
+
+        assert_eq!(mode, StorageMode::Standard);
+    }
+
+    #[test]
+    fn detect_storage_mode_returns_portable_when_marker_exists() {
+        let exe_dir = tempfile::tempdir().expect("should create temp exe dir");
+        let marker_path = exe_dir.path().join(PORTABLE_MARKER_FILE_NAME);
+        fs::write(&marker_path, b"portable").expect("should write portable marker");
+
+        let mode = detect_storage_mode_from_exe_dir(Some(exe_dir.path()));
+
+        assert_eq!(
+            mode,
+            StorageMode::Portable {
+                profile_root: exe_dir.path().join(PORTABLE_PROFILE_DIR_NAME),
+            }
+        );
+    }
+
+    #[test]
+    fn portable_profile_root_is_nested_under_executable_dir() {
+        let exe_dir = std::env::temp_dir().join("mindwtr-portable");
+
+        assert_eq!(
+            portable_profile_root_for_exe_dir(&exe_dir),
+            exe_dir.join(PORTABLE_PROFILE_DIR_NAME)
+        );
+    }
+
+    #[test]
+    fn ensure_projects_due_date_column_migrates_legacy_schema_before_indexing() {
+        let conn = Connection::open_in_memory().expect("should open in-memory db");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE projects (
+              id TEXT PRIMARY KEY,
+              title TEXT NOT NULL,
+              status TEXT NOT NULL,
+              color TEXT NOT NULL
+            );
+            "#,
+        )
+        .expect("should create legacy projects table");
+
+        ensure_projects_due_date_column(&conn).expect("should add dueDate column and index");
+
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(projects)")
+            .expect("should inspect project columns");
+        let column_names: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("should read project columns")
+            .map(|row| row.expect("column row"))
+            .collect();
+        assert!(column_names.iter().any(|name| name == "dueDate"));
+
+        let mut idx_stmt = conn
+            .prepare("PRAGMA index_list(projects)")
+            .expect("should inspect project indexes");
+        let index_names: Vec<String> = idx_stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("should read project indexes")
+            .map(|row| row.expect("index row"))
+            .collect();
+        assert!(index_names.iter().any(|name| name == "idx_projects_dueDate"));
+    }
+
+    #[test]
+    fn ensure_tasks_organization_indexes_create_energy_and_assignee_indexes() {
+        let conn = Connection::open_in_memory().expect("should open in-memory db");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE tasks (
+              id TEXT PRIMARY KEY,
+              title TEXT NOT NULL,
+              status TEXT NOT NULL,
+              energyLevel TEXT,
+              assignedTo TEXT
+            );
+            "#,
+        )
+        .expect("should create tasks table");
+
+        ensure_tasks_organization_indexes(&conn).expect("should create task organization indexes");
+
+        let mut stmt = conn
+            .prepare("PRAGMA index_list(tasks)")
+            .expect("should inspect task indexes");
+        let index_names: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("should read task indexes")
+            .map(|row| row.expect("index row"))
+            .collect();
+        assert!(index_names.iter().any(|name| name == "idx_tasks_energyLevel"));
+        assert!(index_names.iter().any(|name| name == "idx_tasks_assignedTo"));
+    }
 }
 
 fn normalize_sync_value(value: Value) -> Value {

@@ -82,6 +82,9 @@ jobs:
       - name: Cloud app tests
         run: bun run --filter mindwtr-cloud test
 
+      - name: MCP server tests
+        run: bun run --filter mindwtr-mcp-server test
+
   # Desktop app build and tests (Tauri)
   desktop:
     runs-on: ubuntu-latest
@@ -213,32 +216,7 @@ jobs:
         run: cd apps/ai-service && bun run typecheck
 
       - name: Run unit tests
-        run: bun run --filter ai-service test -- --coverage
-
-      - name: AI Service coverage summary
-        if: always()
-        run: |
-          node <<'NODE'
-          const fs = require('fs');
-          const path = 'apps/ai-service/coverage/coverage-summary.json';
-          if (!fs.existsSync(path)) {
-            console.log(`No coverage summary found at ${path}`);
-            process.exit(0);
-          }
-          const total = JSON.parse(fs.readFileSync(path, 'utf8')).total;
-          const lines = [
-            '### AI Service Coverage',
-            '',
-            '| Metric | Percent | Covered / Total |',
-            '| --- | ---: | ---: |',
-            `| Lines | ${total.lines.pct}% | ${total.lines.covered} / ${total.lines.total} |`,
-            `| Statements | ${total.statements.pct}% | ${total.statements.covered} / ${total.statements.total} |`,
-            `| Functions | ${total.functions.pct}% | ${total.functions.covered} / ${total.functions.total} |`,
-            `| Branches | ${total.branches.pct}% | ${total.branches.covered} / ${total.branches.total} |`,
-            '',
-          ];
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join('\n')}\n`);
-          NODE
+        run: bun run --filter ai-service test
 
       - name: Upload AI Service coverage artifact
         if: always()

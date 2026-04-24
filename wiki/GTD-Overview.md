@@ -92,6 +92,13 @@ Mindwtr uses a flexible "container" model so you can organize without friction:
 
 This lets you keep long‑running responsibilities in Areas while still capturing quick tasks without forcing a folder choice.
 
+Rule of thumb:
+
+- **Areas** answer: *"What part of my life or work is this responsibility connected to?"*
+- **Contexts** answer: *"What can I do right now, given where I am and what I have?"*
+
+For example, if you work for multiple clients as a contractor, using an **Area** for each client can be a good fit. A task might belong to **Area: Client A**, **Project: Website Refresh**, and **Context: @computer** at the same time.
+
 ### The 2-Minute Rule
 
 If an action takes less than 2 minutes, **do it immediately** during processing.
@@ -102,6 +109,8 @@ Tags that indicate where or with what you can do something:
 - `@home`, `@work`, `@errands`
 - `@computer`, `@phone`
 - `#focused`, `#lowenergy`
+
+See also: [[Contexts and Tags]]
 
 ---
 

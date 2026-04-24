@@ -1,20 +1,24 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ErrorBoundary } from '../ErrorBoundary';
-import { shallow, useTaskStore, TaskPriority, TimeEstimate, getUsedTaskTokens, matchesHierarchicalToken, safeFormatDate, safeParseDate, safeParseDueDate, isDueForReview, isTaskInActiveProject } from '@mindwtr/core';
-import type { Task, Project } from '@mindwtr/core';
+import { shallow, useTaskStore, TaskPriority, TimeEstimate, getUsedTaskTokens, matchesHierarchicalToken, safeParseDate, safeParseDueDate, isDueForReview, isTaskInActiveProject, sortFocusNextActions, translateWithFallback } from '@mindwtr/core';
+import type { Task, TaskEnergyLevel } from '@mindwtr/core';
 import { useLanguage } from '../../contexts/language-context';
 import { cn } from '../../lib/utils';
 import { useUiStore } from '../../store/ui-store';
-import { Clock, Star, Calendar, ArrowRight, Filter, Folder, List, ChevronDown, type LucideIcon } from 'lucide-react';
+import { Clock, Star, ArrowRight, Folder, CheckCircle2 } from 'lucide-react';
 import { usePerformanceMonitor } from '../../hooks/usePerformanceMonitor';
 import { checkBudget } from '../../config/performanceBudgets';
-import { TaskItem } from '../TaskItem';
 import { projectMatchesAreaFilter, resolveAreaFilter, taskMatchesAreaFilter } from '../../lib/area-filter';
 import { PomodoroPanel } from './PomodoroPanel';
-import { groupTasksByArea, groupTasksByContext, type NextGroupBy, type TaskGroup } from './list/next-grouping';
+import { AgendaFiltersPanel, type AgendaActiveFilterChip, type AgendaProjectFilterOption } from './agenda/AgendaFiltersPanel';
+import { AgendaHeader } from './agenda/AgendaHeader';
+import { AgendaCollapsibleSection, AgendaProjectSection } from './agenda/AgendaSections';
+import { StoreTaskItem } from './list/StoreTaskItem';
+import { groupTasksByArea, groupTasksByContext, groupTasksByProject, type TaskGroup } from './list/next-grouping';
 
 const AGENDA_VIRTUALIZATION_THRESHOLD = 25;
+const NO_PROJECT_FILTER_ID = '__no_project__';
 
 function getAgendaScrollElement(containerElement: HTMLDivElement | null): HTMLElement | null {
     if (containerElement) {
@@ -33,13 +37,11 @@ function getAgendaScrollMargin(containerElement: HTMLDivElement, scrollElement: 
 
 function AgendaTaskList({
     tasks,
-    projectMap,
     buildFocusToggle,
     showListDetails,
     highlightTaskId,
 }: {
     tasks: Task[];
-    projectMap: Map<string, Project>;
     buildFocusToggle: (task: Task) => {
         isFocused: boolean;
         canToggle: boolean;
@@ -96,11 +98,10 @@ function AgendaTaskList({
         return (
             <div className="divide-y divide-border/30">
                 {tasks.map((task) => (
-                    <TaskItem
+                    <StoreTaskItem
                         key={task.id}
-                        task={task}
-                        project={task.projectId ? projectMap.get(task.projectId) : undefined}
-                        focusToggle={buildFocusToggle(task)}
+                        taskId={task.id}
+                        buildFocusToggle={buildFocusToggle}
                         showProjectBadgeInActions={false}
                         compactMetaEnabled={showListDetails}
                         enableDoubleClickEdit
@@ -135,10 +136,9 @@ function AgendaTaskList({
                             transform: `translateY(${virtualRow.start - scrollMargin}px)`,
                         }}
                     >
-                        <TaskItem
-                            task={task}
-                            project={task.projectId ? projectMap.get(task.projectId) : undefined}
-                            focusToggle={buildFocusToggle(task)}
+                        <StoreTaskItem
+                            taskId={task.id}
+                            buildFocusToggle={buildFocusToggle}
                             showProjectBadgeInActions={false}
                             compactMetaEnabled={showListDetails}
                             enableDoubleClickEdit
@@ -167,19 +167,27 @@ export function AgendaView() {
     const getDerivedState = useTaskStore((state) => state.getDerivedState);
     const { projectMap, sequentialProjectIds } = getDerivedState();
     const { t } = useLanguage();
-    const { showListDetails, nextGroupBy, setListOptions } = useUiStore((state) => ({
+    const { showListDetails, nextGroupBy, setListOptions, collapseAllTaskDetails } = useUiStore((state) => ({
         showListDetails: state.listOptions.showDetails,
         nextGroupBy: state.listOptions.nextGroupBy,
         setListOptions: state.setListOptions,
+        collapseAllTaskDetails: state.collapseAllTaskDetails,
     }));
     const [selectedTokens, setSelectedTokens] = useState<string[]>([]);
     const [selectedPriorities, setSelectedPriorities] = useState<TaskPriority[]>([]);
+    const [selectedEnergyLevels, setSelectedEnergyLevels] = useState<TaskEnergyLevel[]>([]);
     const [selectedTimeEstimates, setSelectedTimeEstimates] = useState<TimeEstimate[]>([]);
+    const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
     const [searchQuery, setSearchQuery] = useState('');
     const [filtersOpen, setFiltersOpen] = useState(false);
     const [top3Only, setTop3Only] = useState(false);
-    const prioritiesEnabled = settings?.features?.priorities === true;
-    const timeEstimatesEnabled = settings?.features?.timeEstimates === true;
+    const [expandedSections, setExpandedSections] = useState({
+        schedule: true,
+        nextActions: true,
+        reviewDue: true,
+    });
+    const prioritiesEnabled = settings?.features?.priorities !== false;
+    const timeEstimatesEnabled = settings?.features?.timeEstimates !== false;
     const pomodoroEnabled = settings?.features?.pomodoro === true;
     const activePriorities = prioritiesEnabled ? selectedPriorities : [];
     const activeTimeEstimates = timeEstimatesEnabled ? selectedTimeEstimates : [];
@@ -212,7 +220,32 @@ export function AgendaView() {
         };
     }, [tasks, projectMap, resolvedAreaFilter, areaById]);
     const priorityOptions: TaskPriority[] = ['low', 'medium', 'high', 'urgent'];
+    const energyLevelOptions: TaskEnergyLevel[] = ['low', 'medium', 'high'];
     const timeEstimateOptions: TimeEstimate[] = ['5min', '10min', '15min', '30min', '1hr', '2hr', '3hr', '4hr', '4hr+'];
+    const projectOptions = useMemo<AgendaProjectFilterOption[]>(() => {
+        const activeProjectIds = new Set(
+            activeTasks
+                .map((task) => task.projectId)
+                .filter((projectId): projectId is string => Boolean(projectId))
+        );
+        return [...projects]
+            .filter((project) => !project.deletedAt && project.status !== 'archived' && activeProjectIds.has(project.id))
+            .sort((a, b) => {
+                const aOrder = Number.isFinite(a.order) ? (a.order as number) : Number.POSITIVE_INFINITY;
+                const bOrder = Number.isFinite(b.order) ? (b.order as number) : Number.POSITIVE_INFINITY;
+                if (aOrder !== bOrder) return aOrder - bOrder;
+                return a.title.localeCompare(b.title);
+            })
+            .map((project) => ({
+                id: project.id,
+                title: project.title,
+                dotColor: (project.areaId ? areaById.get(project.areaId)?.color : undefined) || project.color || undefined,
+            }));
+    }, [activeTasks, areaById, projects]);
+    const showNoProjectOption = useMemo(
+        () => activeTasks.some((task) => !task.projectId),
+        [activeTasks]
+    );
     const formatEstimate = (estimate: TimeEstimate) => {
         if (estimate.endsWith('min')) return estimate.replace('min', 'm');
         if (estimate.endsWith('hr+')) return estimate.replace('hr+', 'h+');
@@ -227,19 +260,82 @@ export function AgendaView() {
             );
             if (!matchesAll) return false;
         }
+        if (selectedProjects.length > 0) {
+            const matchesProject = selectedProjects.some((selectedProjectId) => (
+                selectedProjectId === NO_PROJECT_FILTER_ID
+                    ? !task.projectId
+                    : task.projectId === selectedProjectId
+            ));
+            if (!matchesProject) return false;
+        }
         if (activePriorities.length > 0 && (!task.priority || !activePriorities.includes(task.priority))) return false;
+        if (selectedEnergyLevels.length > 0 && (!task.energyLevel || !selectedEnergyLevels.includes(task.energyLevel))) return false;
         if (activeTimeEstimates.length > 0 && (!task.timeEstimate || !activeTimeEstimates.includes(task.timeEstimate))) return false;
         return true;
-    }, [selectedTokens, activePriorities, activeTimeEstimates]);
+    }, [selectedProjects, selectedTokens, activePriorities, selectedEnergyLevels, activeTimeEstimates]);
     const normalizedSearchQuery = searchQuery.trim().toLowerCase();
     const matchesSearchQuery = useCallback((title: string) => {
         if (!normalizedSearchQuery) return true;
         return title.toLowerCase().includes(normalizedSearchQuery);
     }, [normalizedSearchQuery]);
     const resolveText = useCallback((key: string, fallback: string) => {
-        const value = t(key);
-        return value === key ? fallback : value;
+        return translateWithFallback(t, key, fallback);
     }, [t]);
+    const activeFilterChips = useMemo<AgendaActiveFilterChip[]>(() => {
+        const chips: AgendaActiveFilterChip[] = [];
+        selectedTokens.forEach((token) => {
+            chips.push({
+                id: `token:${token}`,
+                label: token,
+            });
+        });
+        selectedProjects.forEach((projectId) => {
+            if (projectId === NO_PROJECT_FILTER_ID) {
+                chips.push({
+                    id: `project:${projectId}`,
+                    label: resolveText('taskEdit.noProjectOption', 'No project'),
+                });
+                return;
+            }
+            const project = projectMap.get(projectId);
+            if (!project) return;
+            chips.push({
+                id: `project:${project.id}`,
+                label: project.title,
+                dotColor: (project.areaId ? areaById.get(project.areaId)?.color : undefined) || project.color || undefined,
+            });
+        });
+        activePriorities.forEach((priority) => {
+            chips.push({
+                id: `priority:${priority}`,
+                label: t(`priority.${priority}`),
+            });
+        });
+        selectedEnergyLevels.forEach((energyLevel) => {
+            chips.push({
+                id: `energy:${energyLevel}`,
+                label: t(`energyLevel.${energyLevel}`),
+            });
+        });
+        activeTimeEstimates.forEach((estimate) => {
+            chips.push({
+                id: `time:${estimate}`,
+                label: formatEstimate(estimate),
+            });
+        });
+        return chips;
+    }, [
+        activePriorities,
+        activeTimeEstimates,
+        areaById,
+        formatEstimate,
+        projectMap,
+        resolveText,
+        selectedEnergyLevels,
+        selectedProjects,
+        selectedTokens,
+        t,
+    ]);
 
     const { filteredActiveTasks, reviewDueCandidates } = useMemo(() => {
         const now = new Date();
@@ -282,9 +378,15 @@ export function AgendaView() {
                 return a.title.localeCompare(b.title);
             });
     }, [projects, matchesSearchQuery, resolvedAreaFilter, areaById]);
-    const hasFilters = selectedTokens.length > 0 || activePriorities.length > 0 || activeTimeEstimates.length > 0;
+    const hasFilters = (
+        selectedTokens.length > 0
+        || selectedProjects.length > 0
+        || activePriorities.length > 0
+        || selectedEnergyLevels.length > 0
+        || activeTimeEstimates.length > 0
+    );
     const hasTaskFilters = hasFilters || Boolean(normalizedSearchQuery);
-    const showFiltersPanel = filtersOpen || hasFilters;
+    const showFiltersPanel = filtersOpen;
     const toggleTokenFilter = (token: string) => {
         setSelectedTokens((prev) =>
             prev.includes(token) ? prev.filter((item) => item !== token) : [...prev, token]
@@ -295,6 +397,16 @@ export function AgendaView() {
             prev.includes(priority) ? prev.filter((item) => item !== priority) : [...prev, priority]
         );
     };
+    const toggleProjectFilter = (projectId: string) => {
+        setSelectedProjects((prev) =>
+            prev.includes(projectId) ? prev.filter((item) => item !== projectId) : [...prev, projectId]
+        );
+    };
+    const toggleEnergyFilter = (energyLevel: TaskEnergyLevel) => {
+        setSelectedEnergyLevels((prev) =>
+            prev.includes(energyLevel) ? prev.filter((item) => item !== energyLevel) : [...prev, energyLevel]
+        );
+    };
     const toggleTimeFilter = (estimate: TimeEstimate) => {
         setSelectedTimeEstimates((prev) =>
             prev.includes(estimate) ? prev.filter((item) => item !== estimate) : [...prev, estimate]
@@ -302,7 +414,9 @@ export function AgendaView() {
     };
     const clearFilters = () => {
         setSelectedTokens([]);
+        setSelectedProjects([]);
         setSelectedPriorities([]);
+        setSelectedEnergyLevels([]);
         setSelectedTimeEstimates([]);
     };
     useEffect(() => {
@@ -329,45 +443,10 @@ export function AgendaView() {
         [filteredActiveTasks]
     );
 
-    const projectOrderMap = useMemo(() => {
-        const sorted = [...projects]
-            .filter((project) => !project.deletedAt)
-            .sort((a, b) => {
-                const aOrder = Number.isFinite(a.order) ? (a.order as number) : Number.POSITIVE_INFINITY;
-                const bOrder = Number.isFinite(b.order) ? (b.order as number) : Number.POSITIVE_INFINITY;
-                if (aOrder !== bOrder) return aOrder - bOrder;
-                return a.title.localeCompare(b.title);
-            });
-        const map = new Map<string, number>();
-        sorted.forEach((project, index) => map.set(project.id, index));
-        return map;
-    }, [projects]);
-
-    const sortByProjectOrder = useCallback((items: Task[]) => {
-        return [...items].sort((a, b) => {
-            const aProjectOrder = a.projectId ? (projectOrderMap.get(a.projectId) ?? Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY;
-            const bProjectOrder = b.projectId ? (projectOrderMap.get(b.projectId) ?? Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY;
-            if (aProjectOrder !== bProjectOrder) return aProjectOrder - bProjectOrder;
-            const aOrder = Number.isFinite(a.order)
-                ? (a.order as number)
-                : Number.isFinite(a.orderNum)
-                    ? (a.orderNum as number)
-                    : Number.POSITIVE_INFINITY;
-            const bOrder = Number.isFinite(b.order)
-                ? (b.order as number)
-                : Number.isFinite(b.orderNum)
-                    ? (b.orderNum as number)
-                    : Number.POSITIVE_INFINITY;
-            if (aOrder !== bOrder) return aOrder - bOrder;
-            const aCreated = safeParseDate(a.createdAt)?.getTime() ?? 0;
-            const bCreated = safeParseDate(b.createdAt)?.getTime() ?? 0;
-            return aCreated - bCreated;
-        });
-    }, [projectOrderMap]);
-
     // Categorize tasks
     const sections = useMemo(() => {
         const now = new Date();
+        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
         const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
         const isDeferred = (task: Task) => {
             const start = safeParseDate(task.startTime);
@@ -428,13 +507,17 @@ export function AgendaView() {
         };
         const schedule = filteredActiveTasks.filter((task) => {
             if (task.isFocusedToday) return false;
-            if (task.status === 'waiting') return false;
+            if (task.status !== 'next') return false;
             if (isSequentialBlocked(task)) return false;
             const dueDate = safeParseDueDate(task.dueDate);
             const startDate = safeParseDate(task.startTime);
-            const startReady = !startDate || startDate <= endOfToday;
-            return Boolean(startReady && dueDate && dueDate <= endOfToday)
-                || Boolean(startReady && startDate && startDate <= endOfToday);
+            const startsToday = Boolean(
+                startDate
+                && startDate >= startOfToday
+                && startDate <= endOfToday
+            );
+            return Boolean(dueDate && dueDate <= endOfToday)
+                || startsToday;
         });
         const scheduleIds = new Set(schedule.map((task) => task.id));
         const nextActions = filteredActiveTasks.filter((task) => {
@@ -455,10 +538,13 @@ export function AgendaView() {
 
         return {
             schedule: sortWith(schedule, scheduleSortTime),
-            nextActions: sortByProjectOrder(nextActions),
+            nextActions: sortFocusNextActions(nextActions, {
+                now,
+                prioritizeByPriority: prioritiesEnabled,
+            }),
             reviewDue: sortWith(reviewDue, (task) => safeParseDate(task.reviewAt)?.getTime() ?? Number.POSITIVE_INFINITY),
         };
-    }, [filteredActiveTasks, reviewDueCandidates, prioritiesEnabled, sortByProjectOrder, sequentialProjectIds]);
+    }, [filteredActiveTasks, reviewDueCandidates, prioritiesEnabled, sequentialProjectIds]);
     const nextActionGroups = useMemo(() => {
         if (nextGroupBy === 'none') return [] as TaskGroup[];
         if (nextGroupBy === 'area') {
@@ -467,6 +553,13 @@ export function AgendaView() {
                 tasks: sections.nextActions,
                 projectMap,
                 generalLabel: resolveText('settings.general', 'General'),
+            });
+        }
+        if (nextGroupBy === 'project') {
+            return groupTasksByProject({
+                tasks: sections.nextActions,
+                projectMap,
+                noProjectLabel: resolveText('taskEdit.noProjectOption', 'No project'),
             });
         }
         return groupTasksByContext({
@@ -542,71 +635,12 @@ export function AgendaView() {
         };
     }, [focusedCount, handleToggleFocus, t]);
 
-    const Section = ({ title, icon: Icon, tasks, color }: {
-        title: string;
-        icon: LucideIcon;
-        tasks: Task[];
-        color: string;
-    }) => {
-        if (tasks.length === 0) return null;
-
-        return (
-            <div className="space-y-3">
-                <h3 className={cn("font-semibold flex items-center gap-2", color)}>
-                    <Icon className="w-5 h-5" />
-                    {title}
-                    <span className="text-muted-foreground font-normal">({tasks.length})</span>
-                </h3>
-                <AgendaTaskList
-                    tasks={tasks}
-                    projectMap={projectMap}
-                    buildFocusToggle={buildFocusToggle}
-                    showListDetails={showListDetails}
-                    highlightTaskId={highlightTaskId}
-                />
-            </div>
-        );
-    };
-
-    const ProjectSection = ({ title, icon: Icon, projects, color }: {
-        title: string;
-        icon: LucideIcon;
-        projects: Project[];
-        color: string;
-    }) => {
-        if (projects.length === 0) return null;
-
-        return (
-            <div className="space-y-3">
-                <h3 className={cn("font-semibold flex items-center gap-2", color)}>
-                    <Icon className="w-5 h-5" />
-                    {title}
-                    <span className="text-muted-foreground font-normal">({projects.length})</span>
-                </h3>
-                <div className="space-y-2">
-                    {projects.map((project) => (
-                        <div
-                            key={project.id}
-                            className="flex items-center justify-between rounded-lg border border-border bg-card/80 px-3 py-2"
-                        >
-                            <div className="flex items-center gap-2">
-                                <Folder className="w-4 h-4" style={{ color: project.color }} />
-                                <span className="text-sm font-medium text-foreground">{project.title}</span>
-                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
-                                    {t(`status.${project.status}`)}
-                                </span>
-                            </div>
-                            {project.reviewAt && (
-                                <span className="text-xs text-muted-foreground">
-                                    {safeFormatDate(project.reviewAt, 'P')}
-                                </span>
-                            )}
-                        </div>
-                    ))}
-                </div>
-            </div>
-        );
-    };
+    const toggleSection = useCallback((sectionKey: keyof typeof expandedSections) => {
+        setExpandedSections((current) => ({
+            ...current,
+            [sectionKey]: !current[sectionKey],
+        }));
+    }, []);
 
     const visibleActive = filteredActiveTasks.length;
     const nextActionsCount = sections.nextActions.length;
@@ -624,200 +658,72 @@ export function AgendaView() {
         });
         return Array.from(byId.values());
     }, [focusedTasks, sections]);
+    const handleToggleDetails = useCallback(() => {
+        if (showListDetails) {
+            collapseAllTaskDetails();
+            setListOptions({ showDetails: false });
+            return;
+        }
+        setListOptions({ showDetails: true });
+    }, [collapseAllTaskDetails, setListOptions, showListDetails]);
 
     return (
         <ErrorBoundary>
             <div className="space-y-6 w-full">
-            <header className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                    <h2 className="text-3xl font-bold tracking-tight flex items-center gap-2">
-                        <Calendar className="w-8 h-8" />
-                        {t('agenda.title')}
-                    </h2>
-                    <p className="text-muted-foreground">
-                        {nextActionsCount} {t('list.next') || t('agenda.nextActions')}
-                    </p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                    <button
-                        type="button"
-                        onClick={() => setTop3Only((prev) => !prev)}
-                        className={cn(
-                            "inline-flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border transition-colors",
-                            top3Only
-                                ? "bg-primary text-primary-foreground border-primary"
-                                : "bg-muted/50 text-muted-foreground border-border hover:bg-muted"
-                        )}
-                    >
-                        {t('agenda.top3Only')}
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => setListOptions({ showDetails: !showListDetails })}
-                        aria-pressed={showListDetails}
-                        className={cn(
-                            "text-xs px-3 py-1.5 rounded-full border transition-colors inline-flex items-center gap-1.5",
-                            showListDetails
-                                ? "bg-primary/10 text-primary border-primary"
-                                : "bg-muted/50 text-muted-foreground border-border hover:bg-muted hover:text-foreground"
-                        )}
-                        title={showListDetails ? (t('list.details') || 'Details on') : (t('list.detailsOff') || 'Details off')}
-                    >
-                        <List className="w-3.5 h-3.5" />
-                        {showListDetails ? (t('list.details') || 'Details') : (t('list.detailsOff') || 'Details off')}
-                    </button>
-                    <div className="relative">
-                        <select
-                            value={nextGroupBy}
-                            onChange={(event) => setListOptions({ nextGroupBy: event.target.value as NextGroupBy })}
-                            aria-label={resolveText('list.groupBy', 'Group')}
-                            className={cn(
-                                "min-w-[136px] appearance-none text-xs leading-none rounded-full border pl-3 pr-8 py-1.5 transition-colors",
-                                "bg-muted/50 text-muted-foreground border-border hover:bg-muted hover:text-foreground",
-                                "focus:outline-none focus:ring-2 focus:ring-primary/40"
-                            )}
-                        >
-                            <option value="none">{resolveText('list.groupByNone', 'No grouping')}</option>
-                            <option value="context">{resolveText('list.groupByContext', 'Context')}</option>
-                            <option value="area">{resolveText('list.groupByArea', 'Area')}</option>
-                        </select>
-                        <ChevronDown
-                            className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
-                            aria-hidden="true"
-                        />
-                    </div>
-                </div>
-            </header>
+            <AgendaHeader
+                nextActionsCount={nextActionsCount}
+                nextGroupBy={nextGroupBy}
+                onChangeGroupBy={(value) => setListOptions({ nextGroupBy: value })}
+                onToggleDetails={handleToggleDetails}
+                onToggleTop3={() => setTop3Only((prev) => !prev)}
+                resolveText={resolveText}
+                showListDetails={showListDetails}
+                t={t}
+                top3Only={top3Only}
+            />
 
             {pomodoroEnabled && <PomodoroPanel tasks={pomodoroTasks} />}
 
-            <div className="bg-card border border-border rounded-lg p-3 space-y-3">
-                <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                        <Filter className="w-4 h-4" />
-                        {t('filters.label')}
-                    </div>
-                    <div className="flex items-center gap-2">
-                        {hasFilters && (
-                            <button
-                                type="button"
-                                onClick={clearFilters}
-                                className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                            >
-                                {t('filters.clear')}
-                            </button>
-                        )}
-                        <button
-                            type="button"
-                            onClick={() => setFiltersOpen((prev) => !prev)}
-                            aria-expanded={showFiltersPanel}
-                            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                            {showFiltersPanel ? t('filters.hide') : t('filters.show')}
-                        </button>
-                    </div>
-                </div>
-                <input
-                    type="text"
-                    data-view-filter-input
-                    placeholder={t('common.search')}
-                    value={searchQuery}
-                    onChange={(event) => setSearchQuery(event.target.value)}
-                    className="w-full text-sm px-3 py-2 rounded border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
-                />
-                {showFiltersPanel && (
-                    <div className="space-y-4">
-                        <div className="space-y-2">
-                            <div className="text-xs text-muted-foreground uppercase tracking-wide">{t('filters.contexts')}</div>
-                            <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
-                                {allTokens.map((token) => {
-                                    const isActive = selectedTokens.includes(token);
-                                    return (
-                                        <button
-                                            key={token}
-                                            type="button"
-                                            onClick={() => toggleTokenFilter(token)}
-                                            aria-pressed={isActive}
-                                            className={cn(
-                                                "px-3 py-1.5 rounded-full text-xs font-medium transition-colors",
-                                                isActive
-                                                    ? "bg-primary text-primary-foreground"
-                                                    : "bg-muted hover:bg-muted/80 text-muted-foreground"
-                                            )}
-                                        >
-                                            {token}
-                                        </button>
-                                    );
-                                })}
-                            </div>
-                        </div>
-                        {prioritiesEnabled && (
-                            <div className="space-y-2">
-                                <div className="text-xs text-muted-foreground uppercase tracking-wide">{t('filters.priority')}</div>
-                                <div className="flex flex-wrap gap-2">
-                                    {priorityOptions.map((priority) => {
-                                        const isActive = selectedPriorities.includes(priority);
-                                        return (
-                                            <button
-                                                key={priority}
-                                                type="button"
-                                                onClick={() => togglePriorityFilter(priority)}
-                                                aria-pressed={isActive}
-                                                className={cn(
-                                                    "px-3 py-1.5 rounded-full text-xs font-medium transition-colors",
-                                                    isActive
-                                                        ? "bg-primary text-primary-foreground"
-                                                        : "bg-muted hover:bg-muted/80 text-muted-foreground"
-                                                )}
-                                            >
-                                                {t(`priority.${priority}`)}
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                        )}
-                        {timeEstimatesEnabled && (
-                            <div className="space-y-2">
-                                <div className="text-xs text-muted-foreground uppercase tracking-wide">{t('filters.timeEstimate')}</div>
-                                <div className="flex flex-wrap gap-2">
-                                    {timeEstimateOptions.map((estimate) => {
-                                        const isActive = selectedTimeEstimates.includes(estimate);
-                                        return (
-                                            <button
-                                                key={estimate}
-                                                type="button"
-                                                onClick={() => toggleTimeFilter(estimate)}
-                                                aria-pressed={isActive}
-                                                className={cn(
-                                                    "px-3 py-1.5 rounded-full text-xs font-medium transition-colors",
-                                                    isActive
-                                                        ? "bg-primary text-primary-foreground"
-                                                        : "bg-muted hover:bg-muted/80 text-muted-foreground"
-                                                )}
-                                            >
-                                                {formatEstimate(estimate)}
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                )}
-            </div>
+            <AgendaFiltersPanel
+                allTokens={allTokens}
+                activeFilterChips={activeFilterChips}
+                energyLevelOptions={energyLevelOptions}
+                formatEstimate={formatEstimate}
+                hasFilters={hasFilters}
+                onClearFilters={clearFilters}
+                onSearchChange={setSearchQuery}
+                onToggleEnergy={toggleEnergyFilter}
+                onToggleFiltersOpen={() => setFiltersOpen((prev) => !prev)}
+                onToggleProject={toggleProjectFilter}
+                onTogglePriority={togglePriorityFilter}
+                onToggleTime={toggleTimeFilter}
+                onToggleToken={toggleTokenFilter}
+                prioritiesEnabled={prioritiesEnabled}
+                projectOptions={projectOptions}
+                priorityOptions={priorityOptions}
+                searchQuery={searchQuery}
+                selectedEnergyLevels={selectedEnergyLevels}
+                selectedProjects={selectedProjects}
+                selectedPriorities={selectedPriorities}
+                selectedTimeEstimates={selectedTimeEstimates}
+                selectedTokens={selectedTokens}
+                showNoProjectOption={showNoProjectOption}
+                showFiltersPanel={showFiltersPanel}
+                t={t}
+                timeEstimateOptions={timeEstimateOptions}
+                timeEstimatesEnabled={timeEstimatesEnabled}
+            />
 
             {top3Only ? (
                 <div className="space-y-4">
                     <div className="space-y-2">
                         <h3 className="font-semibold">{t('agenda.top3Title')}</h3>
-                        {top3Tasks.length > 0 ? (
+                                {top3Tasks.length > 0 ? (
                             <div className="divide-y divide-border/30">
                                 {top3Tasks.map(task => (
-                                    <TaskItem
+                                    <StoreTaskItem
                                         key={task.id}
-                                        task={task}
-                                        project={task.projectId ? projectMap.get(task.projectId) : undefined}
+                                        taskId={task.id}
                                         showProjectBadgeInActions={false}
                                         compactMetaEnabled={showListDetails}
                                         enableDoubleClickEdit
@@ -852,11 +758,10 @@ export function AgendaView() {
 
                             <div className="divide-y divide-border/30">
                                 {focusedTasks.map(task => (
-                                    <TaskItem
+                                    <StoreTaskItem
                                         key={task.id}
-                                        task={task}
-                                        project={task.projectId ? projectMap.get(task.projectId) : undefined}
-                                        focusToggle={buildFocusToggle(task)}
+                                        taskId={task.id}
+                                        buildFocusToggle={buildFocusToggle}
                                         showProjectBadgeInActions={false}
                                         compactMetaEnabled={showListDetails}
                                         enableDoubleClickEdit
@@ -868,77 +773,118 @@ export function AgendaView() {
 
                     {/* Other Sections */}
                     <div className="space-y-6">
-                        <Section
-                            title={t('focus.schedule') || t('agenda.dueToday')}
-                            icon={Calendar}
-                            tasks={sections.schedule}
-                            color="text-yellow-600"
-                        />
-
-                        {nextGroupBy === 'none' ? (
-                            <Section
-                                title={t('agenda.nextActions')}
-                                icon={ArrowRight}
-                                tasks={sections.nextActions}
-                                color="text-blue-600"
-                            />
-                        ) : (
-                            <div className="space-y-3">
-                                <h3 className="font-semibold flex items-center gap-2 text-blue-600">
-                                    <ArrowRight className="w-5 h-5" />
-                                    {t('agenda.nextActions')}
-                                    <span className="text-muted-foreground font-normal">({sections.nextActions.length})</span>
-                                </h3>
-                                <div className="space-y-2">
-                                    {nextActionGroups.map((group) => (
-                                        <div key={group.id} className="rounded-md border border-border/40 bg-card/30">
-                                            <div className={cn(
-                                                'px-3 py-2 text-xs font-semibold uppercase tracking-wide border-b border-border/30',
-                                                group.muted ? 'text-muted-foreground' : 'text-foreground/90',
-                                            )}>
-                                                <span className="inline-flex items-center gap-1.5">
-                                                    {group.dotColor && (
-                                                        <span className="h-2 w-2 rounded-full" style={{ backgroundColor: group.dotColor }} aria-hidden="true" />
-                                                    )}
-                                                    <span>{group.title}</span>
-                                                </span>
-                                                <span className="ml-2 text-muted-foreground">{group.tasks.length}</span>
-                                            </div>
-                                            <AgendaTaskList
-                                                tasks={group.tasks}
-                                                projectMap={projectMap}
-                                                buildFocusToggle={buildFocusToggle}
-                                                showListDetails={showListDetails}
-                                                highlightTaskId={highlightTaskId}
-                                            />
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
+                        {sections.schedule.length > 0 && (
+                            <AgendaCollapsibleSection
+                                title={t('focus.schedule') || t('agenda.dueToday')}
+                                icon={Clock}
+                                color="text-yellow-600"
+                                count={sections.schedule.length}
+                                expanded={expandedSections.schedule}
+                                onToggle={() => toggleSection('schedule')}
+                                controlsId="agenda-section-schedule"
+                            >
+                                <AgendaTaskList
+                                    tasks={sections.schedule}
+                                    buildFocusToggle={buildFocusToggle}
+                                    showListDetails={showListDetails}
+                                    highlightTaskId={highlightTaskId}
+                                />
+                            </AgendaCollapsibleSection>
                         )}
 
-                        <Section
-                            title={t('agenda.reviewDue') || 'Review Due'}
-                            icon={Clock}
-                            tasks={sections.reviewDue}
-                            color="text-purple-600"
-                        />
+                        {nextGroupBy === 'none' ? (
+                            sections.nextActions.length > 0 && (
+                                <AgendaCollapsibleSection
+                                    title={t('agenda.nextActions')}
+                                    icon={ArrowRight}
+                                    color="text-blue-600"
+                                    count={sections.nextActions.length}
+                                    expanded={expandedSections.nextActions}
+                                    onToggle={() => toggleSection('nextActions')}
+                                    controlsId="agenda-section-nextActions"
+                                >
+                                    <AgendaTaskList
+                                        tasks={sections.nextActions}
+                                        buildFocusToggle={buildFocusToggle}
+                                        showListDetails={showListDetails}
+                                        highlightTaskId={highlightTaskId}
+                                    />
+                                </AgendaCollapsibleSection>
+                            )
+                        ) : (
+                            sections.nextActions.length > 0 && (
+                                <AgendaCollapsibleSection
+                                    title={t('agenda.nextActions')}
+                                    icon={ArrowRight}
+                                    color="text-blue-600"
+                                    count={sections.nextActions.length}
+                                    expanded={expandedSections.nextActions}
+                                    onToggle={() => toggleSection('nextActions')}
+                                    controlsId="agenda-section-nextActions"
+                                >
+                                    <div className="space-y-2">
+                                        {nextActionGroups.map((group) => (
+                                            <div key={group.id} className="rounded-md border border-border/40 bg-card/30">
+                                                <div className={cn(
+                                                    'border-b border-border/30 px-3 py-2 text-xs font-semibold uppercase tracking-wide',
+                                                    group.muted ? 'text-muted-foreground' : 'text-foreground/90',
+                                                )}>
+                                                    <span className="inline-flex items-center gap-1.5">
+                                                        {group.dotColor && (
+                                                            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: group.dotColor }} aria-hidden="true" />
+                                                        )}
+                                                        <span>{group.title}</span>
+                                                    </span>
+                                                    <span className="ml-2 text-muted-foreground">{group.tasks.length}</span>
+                                                </div>
+                                                <AgendaTaskList
+                                                    tasks={group.tasks}
+                                                    buildFocusToggle={buildFocusToggle}
+                                                    showListDetails={showListDetails}
+                                                    highlightTaskId={highlightTaskId}
+                                                />
+                                            </div>
+                                        ))}
+                                    </div>
+                                </AgendaCollapsibleSection>
+                            )
+                        )}
 
-                        <ProjectSection
+                        {sections.reviewDue.length > 0 && (
+                            <AgendaCollapsibleSection
+                                title={t('agenda.reviewDue') || 'Review Due'}
+                                icon={Clock}
+                                color="text-purple-600"
+                                count={sections.reviewDue.length}
+                                expanded={expandedSections.reviewDue}
+                                onToggle={() => toggleSection('reviewDue')}
+                                controlsId="agenda-section-reviewDue"
+                            >
+                                <AgendaTaskList
+                                    tasks={sections.reviewDue}
+                                    buildFocusToggle={buildFocusToggle}
+                                    showListDetails={showListDetails}
+                                    highlightTaskId={highlightTaskId}
+                                />
+                            </AgendaCollapsibleSection>
+                        )}
+
+                        <AgendaProjectSection
                             title={t('agenda.reviewDueProjects') || 'Projects to review'}
                             icon={Folder}
                             projects={reviewDueProjects}
                             color="text-indigo-600"
+                            t={t}
                         />
                     </div>
                 </>
             )}
 
             {visibleActive === 0 && (
-                <div className="text-center py-12 text-muted-foreground">
-                    <p className="text-4xl mb-4">✨</p>
-                    <p className="text-lg font-medium">{t('agenda.allClear')}</p>
-                    <p>{hasTaskFilters ? t('filters.noMatch') : t('agenda.noTasks')}</p>
+                <div className="text-center py-12 text-muted-foreground flex flex-col items-center gap-2">
+                    <CheckCircle2 className="w-10 h-10 text-emerald-500/80" aria-hidden="true" strokeWidth={1.5} />
+                    <p className="text-lg font-medium text-foreground">{t('agenda.allClear')}</p>
+                    <p className="text-sm">{hasTaskFilters ? t('filters.noMatch') : t('agenda.noTasks')}</p>
                 </div>
             )}
             </div>

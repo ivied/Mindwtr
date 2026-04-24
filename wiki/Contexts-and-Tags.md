@@ -10,6 +10,34 @@ In GTD, a context is a condition required to complete a task—typically a locat
 
 When you filter by context, you see only tasks you can actually do in your current situation.
 
+## Contexts vs. Areas
+
+This is one of the easiest GTD concepts to mix up at first.
+
+| Concept     | Question it answers                                 | Changes often? | Examples                      |
+| ----------- | --------------------------------------------------- | -------------- | ----------------------------- |
+| **Context** | What can I do right now, where I am, with what I have? | Yes            | `@computer`, `@phone`, `@home` |
+| **Area**    | What ongoing responsibility is this part of?        | No             | Work, Home, Health, Finances  |
+
+The key difference:
+
+- **Contexts** are about *execution constraints*. They change throughout the day.
+- **Areas** are about *responsibility buckets*. They stay around as long as that part of your life or work exists.
+
+### Example: contractor or client work
+
+If you work with multiple clients, using an **Area** for each client can be completely reasonable.
+
+- **Area:** Client A
+- **Project:** Backend migration
+- **Task:** Review API spec
+- **Context:** `@computer`
+
+That lets you answer two different questions:
+
+- Filter by **Area** when you want to see everything related to one client.
+- Filter by **Context** when you want to see what you can do right now, regardless of client.
+
 ---
 
 ## Location Contexts (@)

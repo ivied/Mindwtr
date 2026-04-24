@@ -1,0 +1,3 @@
+- Added DGT GTD import plus task and project links in Markdown notes.
+- Mobile Markdown editing is better with expanded editors, a toolbar, and automatic list continuation.
+- Review notifications and reminder snooze actions work again, Today waits for local data, and Android widgets now default to a better 2x2 size.

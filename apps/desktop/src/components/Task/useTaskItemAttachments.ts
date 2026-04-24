@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Attachment, generateUUID, validateAttachmentForUpload, type Task } from '@mindwtr/core';
+import { Attachment, DEFAULT_PROJECT_COLOR, buildTaskUpdatesFromSpeechResult, generateUUID, translateWithFallback, useTaskStore, validateAttachmentForUpload, type Task } from '@mindwtr/core';
 import { invoke } from '@tauri-apps/api/core';
 import { dataDir } from '@tauri-apps/api/path';
 import { BaseDirectory, readFile, readTextFile, size } from '@tauri-apps/plugin-fs';
+import { loadAIKey } from '../../lib/ai-config';
+import { normalizeAttachmentPathForUrl, resolveAttachmentOpenTarget, toAttachmentBrowserUrl } from '../../lib/attachment-paths';
 import { normalizeAttachmentInput } from '../../lib/attachment-utils';
 import { isTauriRuntime } from '../../lib/runtime';
 import { logWarn } from '../../lib/app-log';
+import { processAudioCapture } from '../../lib/speech-to-text';
+import { DEFAULT_WHISPER_MODEL } from '../../lib/speech-models';
 import {
     isAudioAttachment,
     isImageAttachment,
@@ -24,6 +28,8 @@ export function useTaskItemAttachments({ task, t }: UseTaskItemAttachmentsProps)
     const [audioAttachment, setAudioAttachment] = useState<Attachment | null>(null);
     const [audioSource, setAudioSource] = useState<string | null>(null);
     const [audioError, setAudioError] = useState<string | null>(null);
+    const [audioTranscribing, setAudioTranscribing] = useState(false);
+    const [audioTranscriptionError, setAudioTranscriptionError] = useState<string | null>(null);
     const [imageAttachment, setImageAttachment] = useState<Attachment | null>(null);
     const [imageSource, setImageSource] = useState<string | null>(null);
     const [textAttachment, setTextAttachment] = useState<Attachment | null>(null);
@@ -40,14 +46,19 @@ export function useTaskItemAttachments({ task, t }: UseTaskItemAttachmentsProps)
         if (error === 'mime_type_blocked' || error === 'mime_type_not_allowed') return t('attachments.invalidFileType');
         return t('attachments.fileNotSupported');
     }, [t]);
+    const resolveText = useCallback((key: string, fallback: string) => {
+        return translateWithFallback(t, key, fallback);
+    }, [t]);
 
     const resolveAudioBlobSource = useCallback(async (attachment: Attachment) => {
         if (!isTauriRuntime()) return null;
-        const uri = attachment.uri.replace(/^file:\/\//i, '');
+        const uri = resolveAttachmentOpenTarget(attachment.uri);
         try {
             const baseDir = await dataDir();
-            if (!uri.startsWith(baseDir)) return null;
-            const relative = uri.slice(baseDir.length).replace(/^[\\/]/, '');
+            const normalizedUri = normalizeAttachmentPathForUrl(uri);
+            const normalizedBaseDir = normalizeAttachmentPathForUrl(baseDir);
+            if (!normalizedUri.startsWith(normalizedBaseDir)) return null;
+            const relative = normalizedUri.slice(normalizedBaseDir.length).replace(/^[\\/]/, '');
             const bytes = await readFile(relative, { baseDir: BaseDirectory.Data });
             const buffer = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
             const mimeType = attachment.mimeType || 'audio/wav';
@@ -62,17 +73,45 @@ export function useTaskItemAttachments({ task, t }: UseTaskItemAttachmentsProps)
         }
     }, []);
 
+    const readAttachmentBytes = useCallback(async (attachment: Attachment) => {
+        if (!isTauriRuntime()) {
+            throw new Error(resolveText('attachments.fileNotSupported', 'File not supported.'));
+        }
+        const uri = resolveAttachmentOpenTarget(attachment.uri);
+        if (/^https?:\/\//i.test(uri)) {
+            throw new Error(resolveText('attachments.fileNotSupported', 'File not supported.'));
+        }
+        const base = await dataDir();
+        const normalizedUri = normalizeAttachmentPathForUrl(uri);
+        const normalizedBase = normalizeAttachmentPathForUrl(base);
+        if (normalizedUri.startsWith(normalizedBase)) {
+            const relative = normalizedUri.slice(normalizedBase.length).replace(/^[\\/]/, '');
+            const bytes = await readFile(relative, { baseDir: BaseDirectory.Data });
+            return {
+                bytes: bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
+                path: uri,
+            };
+        }
+        const bytes = await readFile(uri);
+        return {
+            bytes: bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
+            path: uri,
+        };
+    }, [resolveText]);
+
     const loadTextAttachment = useCallback(async (attachment: Attachment) => {
         if (!isTauriRuntime()) {
             throw new Error(t('attachments.fileNotSupported'));
         }
-        const uri = attachment.uri.replace(/^file:\/\//i, '');
+        const uri = resolveAttachmentOpenTarget(attachment.uri);
         if (/^https?:\/\//i.test(uri)) {
             throw new Error(t('attachments.fileNotSupported'));
         }
         const base = await dataDir();
-        if (uri.startsWith(base)) {
-            const relative = uri.slice(base.length).replace(/^[\\/]/, '');
+        const normalizedUri = normalizeAttachmentPathForUrl(uri);
+        const normalizedBase = normalizeAttachmentPathForUrl(base);
+        if (normalizedUri.startsWith(normalizedBase)) {
+            const relative = normalizedUri.slice(normalizedBase.length).replace(/^[\\/]/, '');
             return await readTextFile(relative, { baseDir: BaseDirectory.Data });
         }
         return await readTextFile(uri);
@@ -80,11 +119,11 @@ export function useTaskItemAttachments({ task, t }: UseTaskItemAttachmentsProps)
 
     const openExternal = useCallback(async (uri: string) => {
         setAttachmentError(null);
-        const hasScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(uri);
-        const normalized = hasScheme ? uri : `file://${uri}`;
+        const normalized = toAttachmentBrowserUrl(uri);
+        const openTarget = resolveAttachmentOpenTarget(uri);
         if (isTauriRuntime()) {
             try {
-                await invoke('open_path', { path: uri });
+                await invoke('open_path', { path: openTarget });
                 return;
             } catch (error) {
                 void logWarn('Failed to open attachment', {
@@ -107,6 +146,8 @@ export function useTaskItemAttachments({ task, t }: UseTaskItemAttachmentsProps)
         setAudioAttachment(null);
         setAudioSource(null);
         setAudioError(null);
+        setAudioTranscribing(false);
+        setAudioTranscriptionError(null);
         if (audioObjectUrlRef.current) {
             URL.revokeObjectURL(audioObjectUrlRef.current);
             audioObjectUrlRef.current = null;
@@ -144,6 +185,94 @@ export function useTaskItemAttachments({ task, t }: UseTaskItemAttachmentsProps)
         setAudioError(message);
     }, []);
 
+    const retryAudioTranscription = useCallback(async () => {
+        const currentAttachment = audioAttachment;
+        if (!currentAttachment || audioTranscribing) return;
+
+        setAudioTranscribing(true);
+        setAudioTranscriptionError(null);
+        try {
+            const {
+                tasks: currentTasks,
+                projects: currentProjects,
+                addProject: addProjectNow,
+                updateTask: updateTaskNow,
+                settings: currentSettings,
+            } = useTaskStore.getState();
+            const existing = currentTasks.find((item) => item.id === task.id);
+            if (!existing) {
+                throw new Error(resolveText('attachments.transcriptionFailed', 'Transcription failed. Please try again.'));
+            }
+
+            const speech = currentSettings.ai?.speechToText;
+            if (!speech?.enabled) {
+                throw new Error(resolveText('attachments.transcriptionUnavailable', 'Speech-to-text is not ready. Check your AI settings and try again.'));
+            }
+
+            const provider = speech.provider ?? 'gemini';
+            const model = speech.model ?? (
+                provider === 'openai' ? 'gpt-4o-transcribe'
+                    : provider === 'gemini' ? 'gemini-2.5-flash'
+                        : DEFAULT_WHISPER_MODEL
+            );
+            const apiKey = provider === 'whisper' ? '' : await loadAIKey(provider).catch(() => '');
+            const modelPath = provider === 'whisper' ? speech.offlineModelPath : undefined;
+            const speechReady = provider === 'whisper' ? Boolean(modelPath) : Boolean(apiKey);
+            if (!speechReady) {
+                throw new Error(resolveText('attachments.transcriptionUnavailable', 'Speech-to-text is not ready. Check your AI settings and try again.'));
+            }
+
+            const { bytes, path } = await readAttachmentBytes(currentAttachment);
+            const timeZone = typeof Intl === 'object' && typeof Intl.DateTimeFormat === 'function'
+                ? Intl.DateTimeFormat().resolvedOptions().timeZone
+                : undefined;
+            const result = await processAudioCapture(
+                {
+                    bytes,
+                    mimeType: currentAttachment.mimeType || 'audio/wav',
+                    name: currentAttachment.title || 'audio.wav',
+                    path,
+                },
+                {
+                    provider,
+                    apiKey,
+                    model,
+                    modelPath,
+                    language: speech.language,
+                    mode: speech.mode ?? 'smart_parse',
+                    fieldStrategy: speech.fieldStrategy ?? 'smart',
+                    parseModel: provider === 'openai' && currentSettings.ai?.provider === 'openai' ? currentSettings.ai?.model : undefined,
+                    now: new Date(),
+                    timeZone,
+                },
+            );
+
+            const { updates, suggestedProjectTitle } = buildTaskUpdatesFromSpeechResult(existing, result, currentSettings);
+            if (suggestedProjectTitle && !existing.projectId) {
+                const match = currentProjects.find((project) => project.title.toLowerCase() === suggestedProjectTitle.toLowerCase());
+                if (match) {
+                    updates.projectId = match.id;
+                } else {
+                    const created = await addProjectNow(suggestedProjectTitle, DEFAULT_PROJECT_COLOR);
+                    if (!created) {
+                        throw new Error(resolveText('attachments.transcriptionFailed', 'Transcription failed. Please try again.'));
+                    }
+                    updates.projectId = created.id;
+                }
+            }
+
+            if (Object.keys(updates).length > 0) {
+                await updateTaskNow(task.id, updates);
+            }
+            closeAudio();
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            setAudioTranscriptionError(message || resolveText('attachments.transcriptionFailed', 'Transcription failed. Please try again.'));
+        } finally {
+            setAudioTranscribing(false);
+        }
+    }, [audioAttachment, audioTranscribing, closeAudio, readAttachmentBytes, resolveText, task.id]);
+
     const openTextExternally = useCallback(() => {
         if (!textAttachment) return;
         void openExternal(textAttachment.uri);
@@ -175,6 +304,7 @@ export function useTaskItemAttachments({ task, t }: UseTaskItemAttachmentsProps)
             audioLoadRequestRef.current = requestId;
             setAudioAttachment(attachment);
             setAudioError(null);
+            setAudioTranscriptionError(null);
             void resolveAudioBlobSource(attachment).then((blobUrl) => {
                 if (audioLoadRequestRef.current !== requestId) {
                     if (blobUrl) URL.revokeObjectURL(blobUrl);
@@ -337,9 +467,12 @@ export function useTaskItemAttachments({ task, t }: UseTaskItemAttachmentsProps)
         audioAttachment,
         audioSource,
         audioError,
+        audioTranscribing,
+        audioTranscriptionError,
         audioRef,
         openAudioExternally,
         handleAudioError,
+        retryAudioTranscription,
         closeAudio,
         imageAttachment,
         imageSource,

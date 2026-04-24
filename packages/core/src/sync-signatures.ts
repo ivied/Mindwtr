@@ -1,4 +1,4 @@
-import type { Project, Section, Task } from './types';
+import type { Attachment, Project, Section, Task } from './types';
 
 const CONTENT_DIFF_IGNORED_KEYS = new Set([
     'rev',
@@ -14,13 +14,45 @@ const CONTENT_DIFF_IGNORED_KEYS = new Set([
 const normalizeOptionalArrayForComparison = <T>(value: T[] | undefined): T[] | undefined =>
     Array.isArray(value) && value.length > 0 ? value : undefined;
 
+const normalizeAttachmentForContentComparison = (attachment: Attachment): Record<string, unknown> => {
+    if (attachment.kind === 'link') {
+        return {
+            id: attachment.id,
+            kind: attachment.kind,
+            title: attachment.title,
+            uri: attachment.uri,
+            deletedAt: attachment.deletedAt,
+        };
+    }
+
+    return {
+        id: attachment.id,
+        kind: attachment.kind,
+        title: attachment.title,
+        deletedAt: attachment.deletedAt,
+    };
+};
+
+const normalizeAttachmentsForContentComparison = (
+    attachments: Attachment[] | undefined
+): Record<string, unknown>[] | undefined => {
+    if (!Array.isArray(attachments) || attachments.length === 0) {
+        return undefined;
+    }
+    return [...attachments]
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map((attachment) => normalizeAttachmentForContentComparison(attachment));
+};
+
 export const normalizeTaskForContentComparison = (task: Task): Record<string, unknown> => {
     const comparable: Record<string, unknown> = {
         ...task,
         tags: normalizeOptionalArrayForComparison(task.tags),
         contexts: normalizeOptionalArrayForComparison(task.contexts),
         checklist: normalizeOptionalArrayForComparison(task.checklist),
-        attachments: normalizeOptionalArrayForComparison(task.attachments),
+        // Attachment entities merge independently. Ignore file transport/runtime fields here
+        // so task conflicts only reflect meaningful task-level attachment changes.
+        attachments: normalizeAttachmentsForContentComparison(task.attachments),
         isFocusedToday: task.isFocusedToday ? true : undefined,
         pushCount: task.pushCount === 0 ? undefined : task.pushCount,
     };
@@ -32,7 +64,7 @@ export const normalizeProjectForContentComparison = (project: Project): Record<s
     const comparable: Record<string, unknown> = {
         ...project,
         tagIds: normalizeOptionalArrayForComparison(project.tagIds),
-        attachments: normalizeOptionalArrayForComparison(project.attachments),
+        attachments: normalizeAttachmentsForContentComparison(project.attachments),
         isSequential: project.isSequential ? true : undefined,
         isFocused: project.isFocused ? true : undefined,
     };
@@ -57,7 +89,9 @@ export const toComparableValue = (value: unknown, options?: { includeIgnoredKeys
         for (const key of Object.keys(record).sort()) {
             if (!includeIgnoredKeys && CONTENT_DIFF_IGNORED_KEYS.has(key)) continue;
             if (!includeIgnoredKeys && key === 'uri' && record.kind === 'file') continue;
-            comparable[key] = toComparableValue(record[key], options);
+            const comparableValue = toComparableValue(record[key], options);
+            if (comparableValue === undefined || comparableValue === null) continue;
+            comparable[key] = comparableValue;
         }
         return comparable;
     }

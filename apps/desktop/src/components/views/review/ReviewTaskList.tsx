@@ -1,11 +1,11 @@
 import { useEffect, useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { Project, Task } from '@mindwtr/core';
-import { TaskItem } from '../../TaskItem';
+import type { Task } from '@mindwtr/core';
+import { StoreTaskItem } from '../list/StoreTaskItem';
 
 type ReviewTaskListProps = {
     tasks: Task[];
-    projectMap: Record<string, Project>;
+    showListDetails: boolean;
     selectionMode: boolean;
     multiSelectedIds: Set<string>;
     highlightTaskId?: string | null;
@@ -16,7 +16,7 @@ type ReviewTaskListProps = {
 
 export function ReviewTaskList({
     tasks,
-    projectMap,
+    showListDetails,
     selectionMode,
     multiSelectedIds,
     highlightTaskId,
@@ -29,7 +29,7 @@ export function ReviewTaskList({
     const rowVirtualizer = useVirtualizer({
         count: shouldVirtualize ? tasks.length : 0,
         getScrollElement: () => parentRef.current,
-        estimateSize: () => 120,
+        estimateSize: () => (showListDetails ? 120 : 104),
         overscan: 6,
     });
 
@@ -71,14 +71,14 @@ export function ReviewTaskList({
         return (
             <div className="divide-y divide-border/30">
                 {tasks.map((task) => (
-                    <TaskItem
+                    <StoreTaskItem
                         key={task.id}
-                        task={task}
-                        project={task.projectId ? projectMap[task.projectId] : undefined}
+                        taskId={task.id}
+                        compactMetaEnabled={showListDetails}
                         showProjectBadgeInActions={false}
                         selectionMode={selectionMode}
                         isMultiSelected={multiSelectedIds.has(task.id)}
-                        onToggleSelect={() => onToggleSelect(task.id)}
+                        onToggleSelectId={onToggleSelect}
                     />
                 ))}
             </div>
@@ -105,13 +105,13 @@ export function ReviewTaskList({
                             }}
                         >
                             <div className="pb-1.5">
-                                <TaskItem
-                                    task={task}
-                                    project={task.projectId ? projectMap[task.projectId] : undefined}
+                                <StoreTaskItem
+                                    taskId={task.id}
+                                    compactMetaEnabled={showListDetails}
                                     showProjectBadgeInActions={false}
                                     selectionMode={selectionMode}
                                     isMultiSelected={multiSelectedIds.has(task.id)}
-                                    onToggleSelect={() => onToggleSelect(task.id)}
+                                    onToggleSelectId={onToggleSelect}
                                 />
                                 <div className="mx-3 mt-1 h-px bg-border/30" />
                             </div>

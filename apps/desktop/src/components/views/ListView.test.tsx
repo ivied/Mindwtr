@@ -1,4 +1,4 @@
-import { act, render, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, waitFor } from '@testing-library/react';
 import type { Task } from '@mindwtr/core';
 import { useTaskStore } from '@mindwtr/core';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -6,7 +6,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LanguageProvider } from '../../contexts/language-context';
 import { KeybindingProvider } from '../../contexts/keybinding-context';
 import { useUiStore } from '../../store/ui-store';
-import { ListView, reportArchivedTaskQueryFailure, restoreDeletedTasksWithFeedback } from './ListView';
+import { restoreDeletedTasksWithFeedback } from './list/useListSelection';
+import { ListView, reportArchivedTaskQueryFailure } from './ListView';
 
 const reportErrorMock = vi.hoisted(() => vi.fn());
 
@@ -38,7 +39,7 @@ const renderStaticListView = (statusFilter: 'inbox' | 'done', title: string) =>
     </LanguageProvider>
   );
 
-const renderListView = (statusFilter: 'next' | 'done' | 'archived' = 'next', title = 'Next') =>
+const renderListView = (statusFilter: 'inbox' | 'next' | 'done' | 'archived' = 'next', title = 'Next') =>
   render(
     <LanguageProvider>
       <KeybindingProvider currentView={statusFilter} onNavigate={() => {}}>
@@ -117,6 +118,38 @@ describe('ListView', () => {
     });
   });
 
+  it('collapses expanded task details when page details are turned off', async () => {
+    const expandedTask = makeTask('1', {
+      title: 'Expanded task',
+      description: 'Expanded task note',
+    });
+    useTaskStore.setState({
+      tasks: [expandedTask],
+      _allTasks: [expandedTask],
+      lastDataChangeAt: 1,
+    });
+    useUiStore.setState((state) => ({
+      ...state,
+      listOptions: {
+        ...state.listOptions,
+        showDetails: true,
+      },
+      expandedTaskIds: { '1': true },
+    }));
+
+    const { getByRole, queryByText } = renderListView();
+
+    expect(queryByText('Expanded task note')).toBeInTheDocument();
+
+    fireEvent.click(getByRole('button', { name: /^details$/i }));
+
+    await waitFor(() => {
+      expect(queryByText('Expanded task note')).not.toBeInTheDocument();
+      expect(useUiStore.getState().listOptions.showDetails).toBe(false);
+      expect(useUiStore.getState().expandedTaskIds).toEqual({});
+    });
+  });
+
   it('applies token filters from the UI store', async () => {
     useTaskStore.setState({
       tasks: [
@@ -136,6 +169,40 @@ describe('ListView', () => {
       expect(queryByText('Work task')).toBeInTheDocument();
       expect(queryByText('Home task')).not.toBeInTheDocument();
     });
+  });
+
+  it('does not scroll back to the selected row after a background refresh', async () => {
+    const scrollIntoViewMock = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoViewMock,
+    });
+
+    useTaskStore.setState({
+      tasks: [makeTask('1'), makeTask('2')],
+      lastDataChangeAt: 1,
+    });
+
+    const { queryByText } = renderListView();
+
+    await waitFor(() => {
+      expect(queryByText('Task 2')).toBeInTheDocument();
+    });
+
+    scrollIntoViewMock.mockClear();
+
+    act(() => {
+      useTaskStore.setState({
+        tasks: [makeTask('1'), makeTask('2'), makeTask('3')],
+        lastDataChangeAt: 2,
+      });
+    });
+
+    await waitFor(() => {
+      expect(queryByText('Task 3')).toBeInTheDocument();
+    });
+
+    expect(scrollIntoViewMock).not.toHaveBeenCalled();
   });
 
   it('shows an error toast when loading archived tasks fails', () => {
@@ -173,5 +240,38 @@ describe('ListView', () => {
 
     expect(reportErrorMock).not.toHaveBeenCalled();
     expect(showToast).not.toHaveBeenCalled();
+  });
+
+  it('applies trailing date NLP in the desktop inline inbox quick add', async () => {
+    const addTask = vi.fn().mockResolvedValue({ success: true });
+    const now = new Date('2026-04-16T10:00:00Z');
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(now);
+
+      useTaskStore.setState({
+        addTask,
+      });
+
+      const { container, getByRole } = renderListView('inbox', 'Inbox');
+
+      const input = getByRole('combobox', { name: '' });
+      await act(async () => {
+        fireEvent.change(input, { target: { value: 'Tax deadline — April 15' } });
+      });
+
+      const form = container.querySelector('form');
+      expect(form).not.toBeNull();
+      await act(async () => {
+        fireEvent.submit(form!);
+      });
+
+      expect(addTask).toHaveBeenCalledWith('Tax deadline', expect.objectContaining({
+        dueDate: '2027-04-15T10:00:00.000Z',
+        status: 'inbox',
+      }));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

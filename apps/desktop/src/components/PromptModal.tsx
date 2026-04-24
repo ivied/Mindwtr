@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from 'react';
 import { useLanguage } from '../contexts/language-context';
+import { Button } from './ui/Button';
 
 interface PromptModalProps {
     isOpen: boolean;
@@ -8,6 +9,7 @@ interface PromptModalProps {
     placeholder?: string;
     defaultValue?: string;
     inputType?: 'text' | 'date' | 'datetime-local';
+    allowEmptyConfirm?: boolean;
     secondaryLabel?: string;
     onSecondary?: () => void;
     confirmLabel: string;
@@ -23,6 +25,7 @@ export function PromptModal({
     placeholder,
     defaultValue,
     inputType = 'text',
+    allowEmptyConfirm = false,
     secondaryLabel,
     onSecondary,
     confirmLabel,
@@ -43,8 +46,8 @@ export function PromptModal({
             setHasInteracted(false);
         }
     }, [isOpen, defaultValue]);
-    const canConfirm = value.trim().length > 0;
-    const showValidation = hasInteracted && !canConfirm;
+    const canConfirm = allowEmptyConfirm || value.trim().length > 0;
+    const showValidation = !allowEmptyConfirm && hasInteracted && !canConfirm;
 
     if (!isOpen) return null;
 
@@ -107,23 +110,14 @@ export function PromptModal({
                     )}
                     <div className="flex justify-end gap-2">
                         {secondaryLabel && onSecondary && (
-                            <button
-                                type="button"
-                                onClick={onSecondary}
-                                className="px-3 py-1.5 rounded-md text-sm bg-muted hover:bg-muted/80"
-                            >
+                            <Button variant="secondary" onClick={onSecondary}>
                                 {secondaryLabel}
-                            </button>
+                            </Button>
                         )}
-                        <button
-                            type="button"
-                            onClick={onCancel}
-                            className="px-3 py-1.5 rounded-md text-sm bg-muted hover:bg-muted/80"
-                        >
+                        <Button variant="secondary" onClick={onCancel}>
                             {cancelLabel}
-                        </button>
-                        <button
-                            type="button"
+                        </Button>
+                        <Button
                             onClick={() => {
                                 if (canConfirm) {
                                     onConfirm(value);
@@ -132,10 +126,9 @@ export function PromptModal({
                                 }
                             }}
                             disabled={!canConfirm}
-                            className="px-3 py-1.5 rounded-md text-sm bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             {confirmLabel}
-                        </button>
+                        </Button>
                     </div>
                 </div>
             </div>

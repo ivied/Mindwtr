@@ -1,0 +1,3 @@
+- Agregamos fechas objetivo opcionales para proyectos y asi planificar mejor tus listas.
+- Los widgets de Android ahora usan la altura real del widget para ajustar mejor la cantidad de tareas.
+- El sync movil es mas fiable, con recuperacion mas segura y filtros mas consistentes para las tareas visibles.

@@ -24,6 +24,12 @@ MINDWTR_CLOUD_AUTH_TOKENS=your_token_here
 
 `MINDWTR_CLOUD_TOKEN` is still accepted for backward compatibility, but deprecated.
 
+For Docker secrets, you can point to a mounted file instead:
+
+```
+MINDWTR_CLOUD_AUTH_TOKENS_FILE=/run/secrets/mindwtr_cloud_tokens
+```
+
 Use the **same token** in Mindwtr Settings → Sync → Self-Hosted.
 Set the Self-Hosted URL to the **base** endpoint, for example:
 

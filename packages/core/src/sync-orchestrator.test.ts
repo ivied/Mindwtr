@@ -70,4 +70,27 @@ describe('sync orchestrator', () => {
         await new Promise((resolve) => setTimeout(resolve, 20));
         expect(calls).toBe(2);
     });
+
+    it('treats synchronous re-entrant calls as queued while the first cycle is in flight', async () => {
+        const args: Array<string | undefined> = [];
+        const nestedCallStates: Array<{ inFlight: boolean; queued: boolean }> = [];
+        const orchestrator = createSyncOrchestrator<string | undefined, string>({
+            runCycle: async (arg) => {
+                args.push(arg);
+                if (arg === 'first') {
+                    void orchestrator.run('second');
+                    nestedCallStates.push(orchestrator.getState());
+                    await new Promise((resolve) => setTimeout(resolve, 20));
+                }
+                return arg ?? 'none';
+            },
+        });
+
+        const result = await orchestrator.run('first');
+        expect(result).toBe('first');
+        expect(nestedCallStates).toEqual([{ inFlight: true, queued: true }]);
+
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        expect(args).toEqual(['first', 'second']);
+    });
 });

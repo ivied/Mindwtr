@@ -8,6 +8,17 @@ Mindwtr uses local-first synchronization with deterministic conflict handling.
 - Input B: remote snapshot (same shape)
 - Output: merged snapshot + merge stats (`conflicts`, `clockSkew`, `timestampAdjustments`, `conflictIds`)
 
+## Snapshot-Based Transport
+
+Mindwtr currently syncs by merging full snapshots. That is the intended design, not an unbuilt delta layer.
+
+- ADR 0003 and ADR 0007 define the revision-aware merge behavior that runs on top of the snapshot payload.
+- ADR 0008 records the transport decision to keep snapshot sync and defer any append-only delta log.
+- ADR 0009 records the SQLite-to-JSON bridge contract: SQLite is the primary local store, while `data.json` is the sync/backup snapshot.
+- For current scale, this keeps sync atomic and easier to reason about than replaying and compacting per-device operation logs.
+
+Revisit ADR 0008 only if snapshot files regularly exceed 5 MB, sync round-trips exceed 5 seconds on typical networks, or Mindwtr needs real-time multi-device streaming. If that happens, the delta design should extend existing `rev` and `revBy` metadata instead of introducing a parallel sequence scheme.
+
 ## Merge Rules
 
 1. Entities are matched by `id`.
@@ -19,6 +30,8 @@ Mindwtr uses local-first synchronization with deterministic conflict handling.
 4. Soft-deletes use operation time:
    - Operation time = `max(updatedAt, deletedAt)` for tombstones.
    - Live-vs-deleted conflicts choose newer operation time.
+   - If the delete-vs-live operation times are within 30 seconds of each other, Mindwtr preserves the live item instead of immediately letting the tombstone win.
+   - If revisions differ inside that 30-second window, the higher revision still wins.
 5. Invalid `deletedAt` falls back to `updatedAt` for conservative operation timing.
 6. Attachments are merged per attachment `id` with the same LWW rules.
 7. Settings merge by sync preferences:
@@ -26,6 +39,17 @@ Mindwtr uses local-first synchronization with deterministic conflict handling.
    - Conflict resolution uses group-level timestamps (`appearance`, `language`, `externalCalendars`, `ai`).
    - Concurrent edits to different fields inside the same group can still collapse to the newer group update.
    - Secrets (API keys, local model paths) are never synced.
+8. Remote-write recovery is explicit:
+   - Local data is first written with `pendingRemoteWriteAt`.
+   - Remote write clears the flag on success.
+   - Failed remote writes schedule retries with exponential backoff from 5 seconds up to 5 minutes.
+   - Device-local sync diagnostics stay local and are stripped before remote writes.
+9. Clock skew telemetry:
+   - Merge stats record the largest observed skew.
+   - Warnings surface when skew exceeds 5 minutes.
+10. Local edits during sync do not take a hard lock:
+   - Desktop and mobile detect when local state changed during the sync write phase.
+   - When that happens, the current cycle aborts and a fresh sync is queued rather than overwriting the newer local snapshot.
 
 ## Pseudocode
 
@@ -60,6 +84,12 @@ record sync history and diagnostics
 - Remote: task `t1` deleted at `10:03`
 - Result: deleted version wins (`10:03` operation time is newer)
 
+### Example 1b: Ambiguous delete vs live
+
+- Local: task `t1` edited at `10:00:05`, still live
+- Remote: task `t1` deleted at `10:00:20`
+- Result: live item wins because the operations are only 15 seconds apart, which falls inside the ambiguity window
+
 ### Example 2: Equal Revision and Timestamp
 
 - Local and remote both have `rev=4`, `updatedAt=10:00`
@@ -78,6 +108,12 @@ record sync history and diagnostics
 - Winner attachment URI/local status is preserved when usable.
 - If winner has no usable local URI, merge can fall back to the other side URI/status.
 - Missing local files are handled later by attachment sync/download.
+
+## Retry Recovery
+
+- A failed remote write does not silently discard the just-merged local state.
+- `pendingRemoteWriteAt`, `pendingRemoteWriteRetryAt`, and `pendingRemoteWriteAttempts` are stored locally.
+- The next sync pauses until the retry window expires, then retries using the preserved local snapshot plus any newer local edits.
 
 ## Diagnostics You Can Inspect
 

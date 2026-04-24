@@ -1,6 +1,26 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 
 import { createService } from './service.js';
+
+const tempDirs: string[] = [];
+
+const createTempDir = (): string => {
+  const dir = mkdtempSync(join(tmpdir(), 'mindwtr-mcp-service-'));
+  tempDirs.push(dir);
+  return dir;
+};
+
+afterEach(() => {
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (dir) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
 
 describe('mcp service', () => {
   test('delegates read operations through query deps', async () => {
@@ -96,7 +116,8 @@ describe('mcp service', () => {
     await service.addTask({
       quickAdd: 'Buy milk +Home',
       status: 'next',
-      tags: ['#weekly'],
+      tags: [' #weekly '],
+      contexts: [' @errands '],
     });
 
     expect(quickAddCalls).toBe(1);
@@ -152,8 +173,8 @@ describe('mcp service', () => {
     await service.updateTask({
       id: 't1',
       status: 'next',
-      contexts: null,
-      tags: null,
+      contexts: [' @desk '],
+      tags: [' #weekly '],
       projectId: null,
       dueDate: null,
       startTime: null,
@@ -163,10 +184,77 @@ describe('mcp service', () => {
     expect(receivedUpdateInput).toBeTruthy();
     expect(receivedUpdateInput.id).toBe('t1');
     expect(receivedUpdateInput.updates.status).toBe('next');
-    expect(receivedUpdateInput.updates.contexts).toEqual([]);
-    expect(receivedUpdateInput.updates.tags).toEqual([]);
+    expect(receivedUpdateInput.updates.contexts).toEqual(['@desk']);
+    expect(receivedUpdateInput.updates.tags).toEqual(['#weekly']);
     expect(receivedUpdateInput.updates.projectId).toBeUndefined();
     expect(closedDbCount).toBe(1);
+  });
+
+  test('rejects addTask when token values are blank', async () => {
+    const fakeDb = {} as any;
+    const deps = {
+      openMindwtrDb: async () => ({ db: fakeDb }),
+      closeDb: () => undefined,
+      listTasks: () => [],
+      listProjects: () => [],
+      listAreas: () => [],
+      getTask: () => ({ id: 't1', title: 'Task', status: 'inbox', createdAt: '2026-01-01', updatedAt: '2026-01-01' }),
+      getProject: () => ({ id: 'p1', title: 'Project' }),
+      parseQuickAdd: () => ({ title: '', props: {} }),
+      runCoreService: async (_options: any, fn: any) =>
+        fn({
+          addTask: async () => ({ id: 't1' }),
+          updateTask: async () => ({ id: 't1' }),
+          completeTask: async () => ({ id: 't1' }),
+          deleteTask: async () => ({ id: 't1' }),
+          restoreTask: async () => ({ id: 't1' }),
+          addProject: async () => ({ id: 'p1', title: 'Project' }),
+          updateProject: async () => ({ id: 'p1', title: 'Project' }),
+          deleteProject: async () => ({ id: 'p1', title: 'Project' }),
+          addArea: async () => ({ id: 'a1', name: 'Area' }),
+          updateArea: async () => ({ id: 'a1', name: 'Area' }),
+          deleteArea: async () => ({ id: 'a1', name: 'Area' }),
+        }),
+    };
+    const service = createService({ readonly: false }, deps as any);
+
+    await expect(service.addTask({ title: 'Task', contexts: ['   '] } as any)).rejects.toThrow(
+      'Context values must be non-empty strings'
+    );
+  });
+
+  test('rejects updateTask when token values exceed max length', async () => {
+    const fakeDb = {} as any;
+    const deps = {
+      openMindwtrDb: async () => ({ db: fakeDb }),
+      closeDb: () => undefined,
+      listTasks: () => [],
+      listProjects: () => [],
+      listAreas: () => [],
+      getTask: () => ({ id: 't1', title: 'Task', status: 'inbox', createdAt: '2026-01-01', updatedAt: '2026-01-01' }),
+      getProject: () => ({ id: 'p1', title: 'Project' }),
+      parseQuickAdd: () => ({ title: '', props: {} }),
+      runCoreService: async (_options: any, fn: any) =>
+        fn({
+          addTask: async () => ({ id: 't1' }),
+          updateTask: async () => ({ id: 't1' }),
+          completeTask: async () => ({ id: 't1' }),
+          deleteTask: async () => ({ id: 't1' }),
+          restoreTask: async () => ({ id: 't1' }),
+          addProject: async () => ({ id: 'p1', title: 'Project' }),
+          updateProject: async () => ({ id: 'p1', title: 'Project' }),
+          deleteProject: async () => ({ id: 'p1', title: 'Project' }),
+          addArea: async () => ({ id: 'a1', name: 'Area' }),
+          updateArea: async () => ({ id: 'a1', name: 'Area' }),
+          deleteArea: async () => ({ id: 'a1', name: 'Area' }),
+        }),
+    };
+    const service = createService({ readonly: false }, deps as any);
+    const longTag = `#${'x'.repeat(500)}`;
+
+    await expect(service.updateTask({ id: 't1', tags: [longTag] } as any)).rejects.toThrow(
+      'Tag values must be at most 500 characters'
+    );
   });
 
   test('rejects addTask input when both title and quickAdd are provided', async () => {
@@ -313,5 +401,69 @@ describe('mcp service', () => {
     expect(receivedProjectCreate.props.areaId).toBeUndefined();
     expect(receivedAreaUpdate.updates.icon).toBe('briefcase');
     expect(receivedAreaUpdate.updates.color).toBeUndefined();
+  });
+
+  test('persists write operations to a real sqlite database', async () => {
+    const dir = createTempDir();
+    const dbPath = join(dir, 'mindwtr.db');
+    const dataPath = join(dir, 'data.json');
+
+    writeFileSync(
+      dataPath,
+      JSON.stringify(
+        {
+          tasks: [],
+          projects: [],
+          sections: [],
+          areas: [],
+          settings: {},
+        },
+        null,
+        2
+      )
+    );
+
+    const service = createService({ dbPath, readonly: false });
+    try {
+      const project = await service.addProject({
+        title: 'Home',
+        status: 'active',
+      });
+
+      const task = await service.addTask({
+        quickAdd: 'Buy milk +Home @errands #weekly /due:2026-04-20 /next',
+      });
+
+      const updatedProject = await service.updateProject({
+        id: project.id,
+        title: 'Household',
+        status: 'waiting',
+        supportNotes: 'Track home-related work here.',
+      });
+
+      const tasks = await service.listTasks({ status: 'all' });
+      const projects = await service.listProjects();
+      const persistedTask = tasks.find((item) => item.id === task.id);
+      const persistedProject = projects.find((item) => item.id === project.id);
+
+      expect(updatedProject.title).toBe('Household');
+      expect(updatedProject.status).toBe('waiting');
+      expect(updatedProject.supportNotes).toBe('Track home-related work here.');
+
+      expect(persistedTask).toBeTruthy();
+      expect(persistedTask?.title).toBe('Buy milk');
+      expect(persistedTask?.status).toBe('next');
+      expect(persistedTask?.projectId).toBe(project.id);
+      expect(persistedTask?.dueDate).toContain('2026-04-20');
+      expect(persistedTask?.contexts).toEqual(['@errands']);
+      expect(persistedTask?.tags).toEqual(['#weekly']);
+
+      expect(persistedProject).toBeTruthy();
+      expect(persistedProject?.title).toBe('Household');
+      expect(persistedProject?.status).toBe('waiting');
+      expect(persistedProject?.supportNotes).toBe('Track home-related work here.');
+    } finally {
+      await service.close();
+    }
   });
 });

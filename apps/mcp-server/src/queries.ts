@@ -1,82 +1,25 @@
-import { DEFAULT_PROJECT_COLOR, parseQuickAdd as parseQuickAddCore, type Project as CoreProject } from '@mindwtr/core';
+import {
+  DEFAULT_PROJECT_COLOR,
+  TASK_STATUS_SET,
+  normalizeTaskStatus as normalizeCoreTaskStatus,
+  parseQuickAdd as parseQuickAddCore,
+  type Area as CoreArea,
+  type Project as CoreProject,
+  type Task as CoreTask,
+  type TaskStatus as CoreTaskStatus,
+} from '@mindwtr/core';
 import type { DbClient } from './db.js';
 import { parseJson } from './db.js';
 import { NotFoundError, ValidationError } from './errors.js';
 
-export type TaskStatus = 'inbox' | 'next' | 'waiting' | 'someday' | 'reference' | 'done' | 'archived';
-export type Task = {
-  id: string;
-  title: string;
-  status: TaskStatus;
-  priority?: string;
-  taskMode?: string;
-  startTime?: string;
-  dueDate?: string;
-  recurrence?: unknown;
-  pushCount?: number;
-  tags?: string[];
-  contexts?: string[];
-  checklist?: unknown[];
-  description?: string;
-  attachments?: unknown[];
-  location?: string;
-  projectId?: string;
-  orderNum?: number;
-  isFocusedToday?: boolean;
-  timeEstimate?: string;
-  reviewAt?: string;
-  completedAt?: string;
-  createdAt: string;
-  updatedAt: string;
-  deletedAt?: string;
-  purgedAt?: string;
-};
-
-export type Project = {
-  id: string;
-  title: string;
-  status?: string;
-  color?: string;
-  orderNum?: number;
-  tagIds?: string[];
-  areaId?: string;
-  areaTitle?: string;
-  isSequential?: boolean;
-  isFocused?: boolean;
-  supportNotes?: string;
-  attachments?: unknown[];
-  reviewAt?: string;
-  createdAt?: string;
-  updatedAt?: string;
-  deletedAt?: string;
-};
-
-export type Area = {
-  id: string;
-  name: string;
-  color?: string;
-  icon?: string;
-  order?: number;
-  createdAt?: string;
-  updatedAt?: string;
-  deletedAt?: string;
-};
-
-type ProjectRef = Pick<Project, 'id' | 'title'>;
-
-const STATUS_TOKENS: Record<string, TaskStatus> = {
-  inbox: 'inbox',
-  next: 'next',
-  waiting: 'waiting',
-  someday: 'someday',
-  reference: 'reference',
-  done: 'done',
-  archived: 'archived',
-};
+export type TaskStatus = CoreTaskStatus;
+export type Task = CoreTask;
+export type Project = CoreProject & { orderNum?: number };
+export type Area = CoreArea;
+export type ProjectRef = Pick<CoreProject, 'id' | 'title'>;
 
 const normalizeTaskStatus = (value: string): TaskStatus => {
-  const key = value.toLowerCase();
-  return STATUS_TOKENS[key] ?? 'inbox';
+  return normalizeCoreTaskStatus(value);
 };
 
 const parseTaskStatusInput = (value: unknown): TaskStatus | undefined => {
@@ -84,11 +27,11 @@ const parseTaskStatusInput = (value: unknown): TaskStatus | undefined => {
   if (typeof value !== 'string') {
     throw new ValidationError(`Invalid task status: ${String(value)}`);
   }
-  const normalized = STATUS_TOKENS[value.toLowerCase()];
-  if (!normalized) {
+  const normalized = value.toLowerCase().trim();
+  if (!TASK_STATUS_SET.has(normalized as TaskStatus)) {
     throw new ValidationError(`Invalid task status: ${value}`);
   }
-  return normalized;
+  return normalized as TaskStatus;
 };
 
 const generateUUID = (): string => {
@@ -99,7 +42,7 @@ const generateUUID = (): string => {
 };
 
 export const parseQuickAdd = (input: string, projects: ProjectRef[]): { title: string; props: Partial<Task> } => {
-  const parsed = parseQuickAddCore(input, projects as unknown as CoreProject[]);
+  const parsed = parseQuickAddCore(input, projects as CoreProject[]);
   return {
     title: parsed.title,
     props: parsed.props as Partial<Task>,
@@ -130,23 +73,22 @@ export type AddTaskInput = {
   tags?: string[];
   description?: string;
   priority?: string;
+  energyLevel?: string;
+  assignedTo?: string;
   timeEstimate?: string;
 };
 
 export type CompleteTaskInput = { id: string };
 
-export type TaskRow = Task & {
-  contexts?: string[];
-  tags?: string[];
-  checklist?: Task['checklist'];
-  attachments?: Task['attachments'];
-};
+export type TaskRow = Task;
 
 const BASE_TASK_COLUMNS = [
   'id',
   'title',
   'status',
   'priority',
+  'energyLevel',
+  'assignedTo',
   'taskMode',
   'startTime',
   'dueDate',
@@ -156,9 +98,12 @@ const BASE_TASK_COLUMNS = [
   'contexts',
   'checklist',
   'description',
+  'textDirection',
   'attachments',
   'location',
   'projectId',
+  'sectionId',
+  'areaId',
   'orderNum',
   'isFocusedToday',
   'timeEstimate',
@@ -180,7 +125,7 @@ const getTaskColumns = (db: DbClient) => {
     const columns = db.prepare('PRAGMA table_info(tasks)').all();
     const names = new Set<string>(columns.map((col: any) => String(col.name)));
     const hasOrderNum = names.has('orderNum');
-    const selectColumns = BASE_TASK_COLUMNS.filter((name) => hasOrderNum || name !== 'orderNum');
+    const selectColumns = BASE_TASK_COLUMNS.filter((name) => name === 'orderNum' ? hasOrderNum : names.has(name));
     const resolved = { hasOrderNum, selectColumns };
     taskColumnsCache.set(db, resolved);
     return resolved;
@@ -225,6 +170,8 @@ function mapTaskRow(row: any): TaskRow {
     title: row.title as string,
     status: normalizeTaskStatus(row.status as string),
     priority: row.priority ?? undefined,
+    energyLevel: row.energyLevel ?? undefined,
+    assignedTo: row.assignedTo ?? undefined,
     taskMode: row.taskMode ?? undefined,
     startTime: row.startTime ?? undefined,
     dueDate: row.dueDate ?? undefined,
@@ -234,9 +181,13 @@ function mapTaskRow(row: any): TaskRow {
     contexts: parseJson(row.contexts, []),
     checklist: parseJson(row.checklist, []),
     description: row.description ?? undefined,
+    textDirection: row.textDirection ?? undefined,
     attachments: parseJson(row.attachments, []),
     location: row.location ?? undefined,
     projectId: row.projectId ?? undefined,
+    sectionId: row.sectionId ?? undefined,
+    areaId: row.areaId ?? undefined,
+    order: row.orderNum ?? undefined,
     orderNum: row.orderNum ?? undefined,
     isFocusedToday: row.isFocusedToday === 1,
     timeEstimate: row.timeEstimate ?? undefined,
@@ -329,6 +280,7 @@ const BASE_PROJECT_COLUMNS = [
   'isFocused',
   'supportNotes',
   'attachments',
+  'dueDate',
   'reviewAt',
   'createdAt',
   'updatedAt',
@@ -344,7 +296,10 @@ const getProjectColumns = (db: DbClient) => {
     const columns = db.prepare('PRAGMA table_info(projects)').all();
     const names = new Set<string>(columns.map((col: any) => String(col.name)));
     const hasOrderNum = names.has('orderNum');
-    const selectColumns = BASE_PROJECT_COLUMNS.filter((name) => hasOrderNum || name !== 'orderNum');
+    const hasDueDate = names.has('dueDate');
+    const selectColumns = BASE_PROJECT_COLUMNS.filter(
+      (name) => (hasOrderNum || name !== 'orderNum') && (hasDueDate || name !== 'dueDate')
+    );
     const resolved = { hasOrderNum, selectColumns };
     projectColumnsCache.set(db, resolved);
     return resolved;
@@ -371,14 +326,16 @@ export function listProjects(db: DbClient): Project[] {
 const mapProjectRow = (row: any): Project => ({
   id: row.id,
   title: row.title,
-  status: row.status,
+  status: row.status === 'someday' || row.status === 'waiting' || row.status === 'archived' ? row.status : 'active',
   color: row.color ?? DEFAULT_PROJECT_COLOR,
+  order: row.orderNum ?? 0,
   orderNum: row.orderNum ?? undefined,
   tagIds: parseJson(row.tagIds, []),
   isSequential: row.isSequential === 1,
   isFocused: row.isFocused === 1,
   supportNotes: row.supportNotes ?? undefined,
   attachments: parseJson(row.attachments, []),
+  dueDate: row.dueDate ?? undefined,
   reviewAt: row.reviewAt ?? undefined,
   areaId: row.areaId ?? undefined,
   areaTitle: row.areaTitle ?? undefined,
@@ -438,7 +395,7 @@ const mapAreaRow = (row: any): Area => ({
   name: row.name,
   color: row.color ?? undefined,
   icon: row.icon ?? undefined,
-  order: row.orderNum ?? undefined,
+  order: row.orderNum ?? 0,
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
   deletedAt: row.deletedAt ?? undefined,
@@ -489,6 +446,8 @@ export function addTask(db: DbClient, input: AddTaskInput): TaskRow {
       title,
       status,
       priority: (input.priority ?? props.priority) as Task['priority'],
+      energyLevel: (input.energyLevel ?? props.energyLevel) as Task['energyLevel'],
+      assignedTo: (input.assignedTo ?? props.assignedTo) as Task['assignedTo'],
       taskMode: props.taskMode,
       startTime: input.startTime ?? props.startTime,
       dueDate: input.dueDate ?? props.dueDate,
@@ -501,7 +460,8 @@ export function addTask(db: DbClient, input: AddTaskInput): TaskRow {
       attachments: props.attachments,
       location: props.location,
       projectId: input.projectId ?? props.projectId,
-      orderNum: props.orderNum ?? undefined,
+      order: props.order ?? props.orderNum ?? undefined,
+      orderNum: props.orderNum ?? props.order ?? undefined,
       isFocusedToday: props.isFocusedToday ?? false,
       timeEstimate: input.timeEstimate ?? props.timeEstimate,
       reviewAt: props.reviewAt,
@@ -518,6 +478,8 @@ export function addTask(db: DbClient, input: AddTaskInput): TaskRow {
       'title',
       'status',
       'priority',
+      'energyLevel',
+      'assignedTo',
       'taskMode',
       'startTime',
       'dueDate',
@@ -553,6 +515,8 @@ export function addTask(db: DbClient, input: AddTaskInput): TaskRow {
       title: task.title,
       status: task.status,
       priority: task.priority ?? null,
+      energyLevel: task.energyLevel ?? null,
+      assignedTo: task.assignedTo ?? null,
       taskMode: task.taskMode ?? null,
       startTime: task.startTime ?? null,
       dueDate: task.dueDate ?? null,
@@ -613,6 +577,8 @@ export type UpdateTaskInput = {
   tags?: string[] | null;
   description?: string | null;
   priority?: string | null;
+  energyLevel?: string | null;
+  assignedTo?: string | null;
   timeEstimate?: string | null;
   reviewAt?: string | null;
   isFocusedToday?: boolean;
@@ -639,6 +605,8 @@ export function updateTask(db: DbClient, input: UpdateTaskInput): TaskRow {
       tags: input.tags === null ? [] : input.tags ?? current.tags ?? [],
       description: input.description === null ? undefined : input.description ?? current.description,
       priority: input.priority === null ? undefined : input.priority ?? current.priority,
+      energyLevel: input.energyLevel === null ? undefined : input.energyLevel ?? current.energyLevel,
+      assignedTo: input.assignedTo === null ? undefined : input.assignedTo ?? current.assignedTo,
       timeEstimate: input.timeEstimate === null ? undefined : input.timeEstimate ?? current.timeEstimate,
       reviewAt: input.reviewAt === null ? undefined : input.reviewAt ?? current.reviewAt,
       isFocusedToday: input.isFocusedToday ?? current.isFocusedToday,
@@ -656,6 +624,8 @@ export function updateTask(db: DbClient, input: UpdateTaskInput): TaskRow {
           tags = @tags,
           description = @description,
           priority = @priority,
+          energyLevel = @energyLevel,
+          assignedTo = @assignedTo,
           timeEstimate = @timeEstimate,
           reviewAt = @reviewAt,
           isFocusedToday = @isFocusedToday,
@@ -674,6 +644,8 @@ export function updateTask(db: DbClient, input: UpdateTaskInput): TaskRow {
       tags: JSON.stringify(updated.tags ?? []),
       description: updated.description ?? null,
       priority: updated.priority ?? null,
+      energyLevel: updated.energyLevel ?? null,
+      assignedTo: updated.assignedTo ?? null,
       timeEstimate: updated.timeEstimate ?? null,
       reviewAt: updated.reviewAt ?? null,
       isFocusedToday: updated.isFocusedToday ? 1 : 0,

@@ -12,6 +12,7 @@ import {
     reserveNextProjectOrder,
     updateVisibleTasks,
 } from './store-helpers';
+import { logWarn } from './logger';
 import { generateUUID as uuidv4 } from './uuid';
 
 const stripAttachmentRemoteMetadata = (attachments: Task['attachments']): Task['attachments'] =>
@@ -51,6 +52,7 @@ type TaskActionContext = {
 
 const actionOk = (extra?: Omit<StoreActionResult, 'success'>): StoreActionResult => ({ success: true, ...extra });
 const actionFail = (error: string): StoreActionResult => ({ success: false, error });
+const MAX_FOCUS_TASKS = 3;
 const hasOwnField = (value: object, field: PropertyKey): boolean => Object.prototype.hasOwnProperty.call(value, field);
 const normalizeOptionalReferenceId = (value: unknown): string | undefined => (
     typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
@@ -377,7 +379,11 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
         const existingTask = currentState._allTasks.find((task) => task.id === id);
         if (!existingTask) {
             const message = 'Task not found';
-            console.warn(`[mindwtr] updateTask skipped: ${id} was not found`);
+            logWarn('updateTask skipped: task not found', {
+                scope: 'store',
+                category: 'validation',
+                context: { id },
+            });
             set({ error: message });
             return actionFail(message);
         }
@@ -392,6 +398,17 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
         if (!preparedUpdates.ok) {
             set({ error: preparedUpdates.error });
             return actionFail(preparedUpdates.error);
+        }
+        const isPromotingTaskFocus = preparedUpdates.updates.isFocusedToday === true && existingTask.isFocusedToday !== true;
+        if (isPromotingTaskFocus) {
+            const focusedCount = currentState._allTasks.filter(
+                (task) => task.isFocusedToday === true && !task.deletedAt
+            ).length;
+            if (focusedCount >= MAX_FOCUS_TASKS) {
+                const message = `Maximum of ${MAX_FOCUS_TASKS} focused tasks allowed`;
+                set({ error: message });
+                return actionFail(message);
+            }
         }
         let snapshot: AppData | null = null;
         set((state) => {
@@ -584,18 +601,22 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
         let snapshot: AppData | null = null;
         set((state) => {
             const deviceState = ensureDeviceId(state.settings);
-            const newAllTasks = state._allTasks.map((task) =>
-                task.deletedAt
-                    ? {
-                        ...task,
-                        purgedAt: now,
-                        attachments: stripAttachmentRemoteMetadata(task.attachments),
-                        updatedAt: now,
-                        rev: normalizeRevision(task.rev) + 1,
-                        revBy: deviceState.deviceId,
-                    }
-                    : task
-            );
+            let changed = false;
+            const newAllTasks = state._allTasks.map((task) => {
+                if (!task.deletedAt || task.purgedAt) return task;
+                changed = true;
+                return {
+                    ...task,
+                    purgedAt: now,
+                    attachments: stripAttachmentRemoteMetadata(task.attachments),
+                    updatedAt: now,
+                    rev: normalizeRevision(task.rev) + 1,
+                    revBy: deviceState.deviceId,
+                };
+            });
+            if (!changed && !deviceState.updated) {
+                return state;
+            }
             snapshot = buildSaveSnapshot(state, {
                 tasks: newAllTasks,
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
@@ -771,7 +792,7 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
             set({ error: message });
             return actionFail(message);
         }
-        const existingTaskIds = new Set(state._allTasks.map((task) => task.id));
+        const existingTaskIds = new Set(state._tasksById.keys());
         const missingIds = updatesList
             .map((update) => update.id)
             .filter((id, index, ids) => !existingTaskIds.has(id) && ids.indexOf(id) === index);
@@ -780,10 +801,9 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
             set({ error: message });
             return actionFail(message);
         }
-        const tasksById = new Map(state._allTasks.map((task) => [task.id, task] as const));
         const preparedUpdatesById = new Map<string, Partial<Task>>();
         for (const { id, updates } of updatesList) {
-            const task = tasksById.get(id);
+            const task = state._tasksById.get(id);
             if (!task) continue;
             const preparedUpdates = prepareTaskUpdatesForStore({
                 task,
@@ -865,6 +885,18 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
 
     batchDeleteTasks: async (ids: string[]) => {
         if (ids.length === 0) return actionOk();
+        const state = get();
+        const existingTaskIds = new Set(
+            state._allTasks
+                .filter((task) => !task.deletedAt)
+                .map((task) => task.id)
+        );
+        const missingIds = ids.filter((id, index) => !existingTaskIds.has(id) && ids.indexOf(id) === index);
+        if (missingIds.length > 0) {
+            const message = `Tasks not found: ${missingIds.join(', ')}`;
+            set({ error: message });
+            return actionFail(message);
+        }
         const changeAt = Date.now();
         const now = new Date().toISOString();
         const idSet = new Set(ids);

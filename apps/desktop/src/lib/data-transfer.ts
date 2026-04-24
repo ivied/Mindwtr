@@ -1,12 +1,23 @@
 import {
+    addBreadcrumb,
+    applyDgtImport,
+    applyOmniFocusImport,
     applyTodoistImport,
     createBackupFileName,
+    parseDgtImportSource,
     flushPendingSave,
+    parseOmniFocusImportSource,
     parseTodoistImportSource,
     serializeBackupData,
     validateBackupJson,
     type AppData,
     type BackupValidation,
+    type ParsedDgtImportData,
+    type DgtImportExecutionResult,
+    type DgtImportParseResult,
+    type OmniFocusImportExecutionResult,
+    type OmniFocusImportParseResult,
+    type ParsedOmniFocusImportData,
     type ParsedTodoistProject,
     type TodoistImportExecutionResult,
     type TodoistImportParseResult,
@@ -17,6 +28,7 @@ import { SyncService } from './sync-service';
 import { tauriStorage } from './storage-adapter';
 import { webStorage } from './storage-adapter-web';
 import { isTauriRuntime } from './runtime';
+import { logError, logInfo } from './app-log';
 
 type TransferMode = 'binary' | 'text';
 
@@ -29,6 +41,23 @@ export type DesktopTransferDocument = {
 
 type DesktopTransferResult = {
     snapshotName: string | null;
+};
+
+const countActiveRecords = (data: AppData) => ({
+    tasks: data.tasks.filter((task) => !task.deletedAt).length,
+    projects: data.projects.filter((project) => !project.deletedAt).length,
+    sections: data.sections.filter((section) => !section.deletedAt).length,
+    areas: data.areas.filter((area) => !area.deletedAt).length,
+});
+
+const toCountExtra = (data: AppData): Record<string, string> => {
+    const counts = countActiveRecords(data);
+    return {
+        tasks: String(counts.tasks),
+        projects: String(counts.projects),
+        sections: String(counts.sections),
+        areas: String(counts.areas),
+    };
 };
 
 const getStorage = () => (isTauriRuntime() ? tauriStorage : webStorage);
@@ -132,8 +161,29 @@ const persistTransferredData = async (data: AppData): Promise<void> => {
 };
 
 export const exportDesktopBackup = async (data: AppData): Promise<void> => {
-    await flushPendingSave();
-    await downloadTextFile(createBackupFileName(), serializeBackupData(data));
+    addBreadcrumb('transfer:export');
+    void logInfo('Backup export started', {
+        scope: 'transfer',
+        extra: {
+            operation: 'exportBackup',
+            source: 'local',
+        },
+    });
+    try {
+        await flushPendingSave();
+        await downloadTextFile(createBackupFileName(), serializeBackupData(data));
+        void logInfo('Backup export complete', {
+            scope: 'transfer',
+            extra: {
+                operation: 'exportBackup',
+                source: 'local',
+                ...toCountExtra(data),
+            },
+        });
+    } catch (error) {
+        void logError(error, { scope: 'transfer', extra: { operation: 'exportBackup' } });
+        throw error;
+    }
 };
 
 export const inspectDesktopBackup = async (appVersion?: string | null): Promise<BackupValidation | null> => {
@@ -165,23 +215,173 @@ export const inspectDesktopTodoistImport = async (): Promise<TodoistImportParseR
     });
 };
 
+export const inspectDesktopDgtImport = async (): Promise<DgtImportParseResult | null> => {
+    const document = await pickTransferDocument({
+        accept: '.json,.zip,application/json,application/zip',
+        extensions: ['json', 'zip'],
+        mode: 'binary',
+        title: 'DGT GTD Export',
+    });
+    if (!document) return null;
+    return parseDgtImportSource({
+        bytes: document.bytes,
+        fileName: document.fileName,
+    });
+};
+
+export const inspectDesktopOmniFocusImport = async (): Promise<OmniFocusImportParseResult | null> => {
+    const document = await pickTransferDocument({
+        accept: '.csv,.json,.zip,text/csv,application/json,application/zip,application/octet-stream',
+        extensions: ['csv', 'json', 'zip'],
+        mode: 'binary',
+        title: 'OmniFocus Export',
+    });
+    if (!document) return null;
+    return parseOmniFocusImportSource({
+        bytes: document.bytes,
+        fileName: document.fileName,
+    });
+};
+
 export const restoreDesktopBackup = async (data: AppData): Promise<DesktopTransferResult> => {
-    await flushPendingSave();
-    const snapshotName = isTauriRuntime() ? await SyncService.createDataSnapshot() : null;
-    await persistTransferredData(data);
-    return { snapshotName };
+    addBreadcrumb('transfer:restore');
+    void logInfo('Backup restore started', {
+        scope: 'transfer',
+        extra: {
+            operation: 'restoreBackup',
+            source: 'backup',
+        },
+    });
+    try {
+        await flushPendingSave();
+        const snapshotName = isTauriRuntime() ? await SyncService.createDataSnapshot() : null;
+        await persistTransferredData(data);
+        void logInfo('Backup restore complete', {
+            scope: 'transfer',
+            extra: {
+                operation: 'restoreBackup',
+                source: 'backup',
+                ...toCountExtra(data),
+            },
+        });
+        return { snapshotName };
+    } catch (error) {
+        void logError(error, { scope: 'transfer', extra: { operation: 'restoreBackup' } });
+        throw error;
+    }
 };
 
 export const importDesktopTodoistData = async (
     parsedProjects: ParsedTodoistProject[]
 ): Promise<DesktopTransferResult & { result: TodoistImportExecutionResult }> => {
-    await flushPendingSave();
-    const currentData = await getStorage().getData();
-    const snapshotName = isTauriRuntime() ? await SyncService.createDataSnapshot() : null;
-    const result = applyTodoistImport(currentData, parsedProjects);
-    await persistTransferredData(result.data);
-    return {
-        snapshotName,
-        result,
-    };
+    addBreadcrumb('transfer:restore');
+    void logInfo('Todoist import started', {
+        scope: 'transfer',
+        extra: {
+            operation: 'importTodoist',
+            source: 'todoist',
+        },
+    });
+    try {
+        await flushPendingSave();
+        const currentData = await getStorage().getData();
+        const snapshotName = isTauriRuntime() ? await SyncService.createDataSnapshot() : null;
+        const result = applyTodoistImport(currentData, parsedProjects);
+        await persistTransferredData(result.data);
+        void logInfo('Todoist import complete', {
+            scope: 'transfer',
+            extra: {
+                operation: 'importTodoist',
+                source: 'todoist',
+                tasks: String(result.importedTaskCount),
+                projects: String(result.importedProjectCount),
+                sections: String(result.importedSectionCount),
+                checklistItems: String(result.importedChecklistItemCount),
+            },
+        });
+        return {
+            snapshotName,
+            result,
+        };
+    } catch (error) {
+        void logError(error, { scope: 'transfer', extra: { operation: 'importTodoist' } });
+        throw error;
+    }
+};
+
+export const importDesktopDgtData = async (
+    parsedData: ParsedDgtImportData
+): Promise<DesktopTransferResult & { result: DgtImportExecutionResult }> => {
+    addBreadcrumb('transfer:restore');
+    void logInfo('DGT import started', {
+        scope: 'transfer',
+        extra: {
+            operation: 'importDgt',
+            source: 'dgt',
+        },
+    });
+    try {
+        await flushPendingSave();
+        const currentData = await getStorage().getData();
+        const snapshotName = isTauriRuntime() ? await SyncService.createDataSnapshot() : null;
+        const result = applyDgtImport(currentData, parsedData);
+        await persistTransferredData(result.data);
+        void logInfo('DGT import complete', {
+            scope: 'transfer',
+            extra: {
+                operation: 'importDgt',
+                source: 'dgt',
+                tasks: String(result.importedTaskCount),
+                projects: String(result.importedProjectCount),
+                areas: String(result.importedAreaCount),
+                checklistItems: String(result.importedChecklistItemCount),
+            },
+        });
+        return {
+            snapshotName,
+            result,
+        };
+    } catch (error) {
+        void logError(error, { scope: 'transfer', extra: { operation: 'importDgt' } });
+        throw error;
+    }
+};
+
+export const importDesktopOmniFocusData = async (
+    parsedData: ParsedOmniFocusImportData
+): Promise<DesktopTransferResult & { result: OmniFocusImportExecutionResult }> => {
+    addBreadcrumb('transfer:restore');
+    void logInfo('OmniFocus import started', {
+        scope: 'transfer',
+        extra: {
+            operation: 'importOmniFocus',
+            source: 'omnifocus',
+        },
+    });
+    try {
+        await flushPendingSave();
+        const currentData = await getStorage().getData();
+        const snapshotName = isTauriRuntime() ? await SyncService.createDataSnapshot() : null;
+        const result = applyOmniFocusImport(currentData, parsedData);
+        await persistTransferredData(result.data);
+        void logInfo('OmniFocus import complete', {
+            scope: 'transfer',
+            extra: {
+                operation: 'importOmniFocus',
+                source: 'omnifocus',
+                areas: String(result.importedAreaCount),
+                checklistItems: String(result.importedChecklistItemCount),
+                tasks: String(result.importedTaskCount),
+                projects: String(result.importedProjectCount),
+                standaloneTasks: String(result.importedStandaloneTaskCount),
+            },
+        });
+        return {
+            snapshotName,
+            result,
+        };
+    } catch (error) {
+        void logError(error, { scope: 'transfer', extra: { operation: 'importOmniFocus' } });
+        throw error;
+    }
 };

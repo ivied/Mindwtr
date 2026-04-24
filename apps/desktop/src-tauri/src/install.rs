@@ -160,11 +160,27 @@ fn find_macos_bundle_root(path: &Path) -> Option<PathBuf> {
         .map(|ancestor| ancestor.to_path_buf())
 }
 
+fn resolve_arch_package_install_source(
+    has_aur_bin: bool,
+    has_aur_source: bool,
+) -> Option<&'static str> {
+    if has_aur_bin {
+        return Some("aur-bin");
+    }
+    if has_aur_source {
+        return Some("aur-source");
+    }
+    None
+}
+
 fn detect_install_source() -> String {
     #[cfg(target_os = "windows")]
     {
         if is_windows_store_install() {
             return "microsoft-store".to_string();
+        }
+        if crate::storage::is_portable_mode() {
+            return "portable".to_string();
         }
         if env::var_os("WINGET_PACKAGE_IDENTIFIER").is_some() {
             return "winget".to_string();
@@ -253,11 +269,13 @@ fn detect_install_source() -> String {
         if is_homebrew_install_linux() {
             return "homebrew".to_string();
         }
-        if command_succeeds("pacman", &["-Q", "mindwtr"]) {
-            return "aur-source".to_string();
-        }
-        if command_succeeds("pacman", &["-Q", "mindwtr-bin"]) {
-            return "aur-bin".to_string();
+        if let Some(source) = resolve_arch_package_install_source(
+            command_succeeds("pacman", &["-Qq", "mindwtr-bin"]),
+            command_succeeds("pacman", &["-Qq", "mindwtr"]),
+        ) {
+            // Check the binary package first so packages that provide `mindwtr`
+            // still report as `aur-bin` instead of collapsing into `aur-source`.
+            return source.to_string();
         }
         if command_succeeds("dpkg-query", &["-W", "mindwtr"]) {
             return "apt".to_string();
@@ -373,5 +391,27 @@ pub(crate) fn diagnostics_enabled() -> bool {
     match env::var("MINDWTR_DIAGNOSTICS") {
         Ok(value) => matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"),
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_arch_package_install_source;
+
+    #[test]
+    fn resolve_arch_package_install_source_prefers_bin_when_both_match() {
+        assert_eq!(
+            resolve_arch_package_install_source(true, true),
+            Some("aur-bin")
+        );
+        assert_eq!(
+            resolve_arch_package_install_source(true, false),
+            Some("aur-bin")
+        );
+        assert_eq!(
+            resolve_arch_package_install_source(false, true),
+            Some("aur-source")
+        );
+        assert_eq!(resolve_arch_package_install_source(false, false), None);
     }
 }

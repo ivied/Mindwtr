@@ -26,16 +26,36 @@
   </description>
   <screenshots>
     <screenshot type="default" xml:lang="en">
-      <caption>Review tasks across your lists</caption>
-      <image>https://raw.githubusercontent.com/dongdongbh/Mindwtr/main/apps/desktop/screenshots/review_light.png</image>
+      <caption>Capture and triage tasks in Inbox</caption>
+      <image>https://raw.githubusercontent.com/dongdongbh/Mindwtr/main/apps/desktop/screenshots/flathub/inbox_light.png</image>
     </screenshot>
     <screenshot xml:lang="en">
-      <caption>Capture tasks quickly in Inbox</caption>
-      <image>https://raw.githubusercontent.com/dongdongbh/Mindwtr/main/apps/desktop/screenshots/inbox_light.png</image>
+      <caption>Focus on your next actions for today</caption>
+      <image>https://raw.githubusercontent.com/dongdongbh/Mindwtr/main/apps/desktop/screenshots/flathub/focus_light.png</image>
     </screenshot>
     <screenshot xml:lang="en">
-      <caption>Learn the workflow with the built-in guide</caption>
-      <image>https://raw.githubusercontent.com/dongdongbh/Mindwtr/main/apps/desktop/screenshots/tutorial_light.png</image>
+      <caption>Organize work in the projects workspace</caption>
+      <image>https://raw.githubusercontent.com/dongdongbh/Mindwtr/main/apps/desktop/screenshots/flathub/projects_workspace_light.png</image>
+    </screenshot>
+    <screenshot xml:lang="en">
+      <caption>Plan visually with board view</caption>
+      <image>https://raw.githubusercontent.com/dongdongbh/Mindwtr/main/apps/desktop/screenshots/flathub/board_view_light.png</image>
+    </screenshot>
+    <screenshot xml:lang="en">
+      <caption>Adjust appearance and workflow settings</caption>
+      <image>https://raw.githubusercontent.com/dongdongbh/Mindwtr/main/apps/desktop/screenshots/flathub/settings_light.png</image>
+    </screenshot>
+    <screenshot xml:lang="en">
+      <caption>Keep supporting material in Reference</caption>
+      <image>https://raw.githubusercontent.com/dongdongbh/Mindwtr/main/apps/desktop/screenshots/flathub/reference_light.png</image>
+    </screenshot>
+    <screenshot xml:lang="en">
+      <caption>Review due dates in calendar view</caption>
+      <image>https://raw.githubusercontent.com/dongdongbh/Mindwtr/main/apps/desktop/screenshots/flathub/calendar_light.png</image>
+    </screenshot>
+    <screenshot xml:lang="en">
+      <caption>Group and filter work by context</caption>
+      <image>https://raw.githubusercontent.com/dongdongbh/Mindwtr/main/apps/desktop/screenshots/flathub/contexts_light.png</image>
     </screenshot>
   </screenshots>
   <branding>
@@ -51,6 +71,89 @@
   <url type="bugtracker">https://github.com/dongdongbh/Mindwtr/issues</url>
   <url type="vcs-browser">https://github.com/dongdongbh/Mindwtr</url>
   <releases>
+    <release version="0.8.6" date="2026-04-22">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.8.6</url>
+      <description translate="no">
+        <p>Mindwtr 0.8.6 improves desktop planning, sync handling, and Linux release polish.</p>
+        <ul>
+          <li>Added recurrence end conditions, custom Pomodoro durations, and OmniFocus CSV import for desktop workflows.</li>
+          <li>Split Settings into clearer Sync and Data pages, improved dialog accessibility, and added confirmation before permanent archive or trash deletes.</li>
+          <li>Made desktop sync steadier with clearer conflict and status feedback, safer WebDAV folder creation, and more reliable queued reruns.</li>
+          <li>Refreshed AppStream and Flathub screenshots plus desktop install documentation.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.8.5" date="2026-04-19">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.8.5</url>
+      <description translate="no">
+        <p>Mindwtr 0.8.5 sharpens desktop review and project planning while tightening attachment and sync behavior for Linux desktop users.</p>
+        <ul>
+          <li>Added review sort and detail controls plus a resizable projects sidebar with steadier width syncing.</li>
+          <li>Let the projects workspace use more width and improved task editing with inline image previews and undo support.</li>
+          <li>Improved desktop attachment-path handling and re-enabled CloudKit autosync on desktop builds.</li>
+          <li>Preferred the web audio backend on Flatpak and updated Flathub-facing release plumbing.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.8.4" date="2026-04-16">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.8.4</url>
+      <description translate="no">
+        <p>Mindwtr 0.8.4 is a maintenance release focused on sync documentation and regression coverage for desktop builds.</p>
+        <ul>
+          <li>Documented the SQLite-to-JSON bridge so the local-store and sync-snapshot contract is easier to reason about.</li>
+          <li>Clarified the current sync behavior and roadmap wording in the main docs.</li>
+          <li>Added regression coverage to ensure device-local sync history does not trigger unnecessary remote writes.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.8.3" date="2026-04-14">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.8.3</url>
+      <description translate="no">
+        <p>Mindwtr 0.8.3 expands desktop planning and Markdown editing while tightening Linux-facing polish and sync recovery.</p>
+        <ul>
+          <li>Expanded desktop Markdown notes with fullscreen editors, toolbar actions, automatic list continuation, and task/project internal links.</li>
+          <li>Added area filter keyboard chords, task-date clear buttons, contexts bulk energy assignment, and a new energy-level focus filter.</li>
+          <li>Kept the desktop shell tidier with persistent collapsible sidebar sections, localized native date inputs, Lucide sync-setting icons, and remembered area collapse state.</li>
+          <li>Made sync recovery safer by preserving recoverable createdAt timestamps and flushing pending writes before retry recovery.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.8.2" date="2026-04-11">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.8.2</url>
+      <description translate="no">
+        <p>Mindwtr 0.8.2 sharpens desktop capture, error handling, and sync recovery for Linux desktop users.</p>
+        <ul>
+          <li>Added natural-language date parsing for quick inbox capture so entries like tomorrow resolve while you type.</li>
+          <li>Kept desktop sync steadier by preserving queued reruns, restoring Dropbox autosync, and keeping scroll position stable during refreshes.</li>
+          <li>Surfaced confirmation, project-drag, calendar, and sync failures more clearly instead of letting them disappear during rerenders.</li>
+          <li>Improved self-hosted cloud diagnostics with safer upload blocking and request IDs on 500 responses.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.8.1" date="2026-04-09">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.8.1</url>
+      <description translate="no">
+        <p>Mindwtr 0.8.1 refines desktop planning, inbox processing, and sync reliability for Linux desktop users.</p>
+        <ul>
+          <li>Added adjustable desktop text size controls for more comfortable reading across large and small displays.</li>
+          <li>Expanded desktop inbox processing with priority, energy, and assignee fields that respect editor layout settings.</li>
+          <li>Improved calendar and Today behavior with clearer selected-day external events and stricter next-action scheduling rules.</li>
+          <li>Hardened desktop sync and storage with safer area merge handling and faster task metadata filtering.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.8.0" date="2026-04-05">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.8.0</url>
+      <description translate="no">
+        <p>Mindwtr 0.8.0 improves desktop project planning, sidebar behavior, and storage safety across Linux and other desktop builds.</p>
+        <ul>
+          <li>Added optional project due dates so project planning and review timing are easier to manage.</li>
+          <li>Improved the Projects sidebar with single-click selection, a separate archived section, and clearer calendar and review contrast.</li>
+          <li>Added configurable inline task editor sections and kept the Obsidian integration settings collapsed until needed.</li>
+          <li>Hardened sync and storage with safer pending-write recovery, filtered deleted attachments, clearer keyring fallback warnings, and more consistent search visibility.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.7.9" date="2026-04-01">
       <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.7.9</url>
       <description translate="no">

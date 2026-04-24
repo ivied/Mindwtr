@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppData, Attachment } from '@mindwtr/core';
 import { DropboxUnauthorizedError } from './dropbox-sync';
-import { getFileSyncDir, hashString, normalizeSyncBackend } from './sync-service-utils';
+import { fallbackHashString, getFileSyncDir, hashString, normalizeSyncBackend } from './sync-service-utils';
+import { useUiStore } from '../store/ui-store';
 
 const markLocalWriteMock = vi.hoisted(() => vi.fn());
 
@@ -48,6 +49,11 @@ describe('sync-service test utils', () => {
     it('hashes sync payloads with sha256 output', async () => {
         const hash = await hashString('mindwtr');
         expect(hash).toBe('feb7a7b01b1c68e586e77288a4b2598d146ee3696ec7dbfac0074196b8d68c33');
+    });
+
+    it('formats fallback hashes as unsigned hex', () => {
+        expect(fallbackHashString('mindwtr')).toMatch(/^[0-9a-f]+$/);
+        expect(fallbackHashString('mindwtr')).not.toContain('-');
     });
 
     it('marks attachments unrecoverable when validation failures hit retry cap', () => {
@@ -102,8 +108,37 @@ describe('SyncService testability hooks', () => {
             lastResultAt: null,
         });
         expect((SyncService as any).syncListeners.size).toBe(0);
-        expect((SyncService as any).syncQueued).toBe(false);
+        expect((SyncService as any).syncOrchestrator.getState()).toEqual({
+            inFlight: false,
+            queued: false,
+        });
         expect((SyncService as any).externalSyncTimer).toBeNull();
+    });
+
+    it('only surfaces attachment warnings after repeated sync runs', async () => {
+        const originalShowToast = useUiStore.getState().showToast;
+        const showToast = vi.fn();
+        useUiStore.setState({ showToast });
+
+        try {
+            (SyncService as any).consecutiveAttachmentWarningRuns = 0;
+            (SyncService as any).lastAttachmentWarningToastAt = 0;
+
+            (SyncService as any).finalizeAttachmentWarningState({ hadAttachmentWarning: true }, { success: true });
+            expect(showToast).not.toHaveBeenCalled();
+
+            (SyncService as any).finalizeAttachmentWarningState({ hadAttachmentWarning: true }, { success: true });
+            expect(showToast).toHaveBeenCalledWith(
+                'Attachment sync is still failing. Files will retry in the background.',
+                'error',
+                6000,
+            );
+
+            (SyncService as any).finalizeAttachmentWarningState({ hadAttachmentWarning: false }, { success: true });
+            expect((SyncService as any).consecutiveAttachmentWarningRuns).toBe(0);
+        } finally {
+            useUiStore.setState({ showToast: originalShowToast });
+        }
     });
 
     it('allows injecting tauri dependencies for orchestration tests', async () => {
@@ -241,6 +276,44 @@ describe('SyncService testability hooks', () => {
         getMonotonicNowSpy.mockRestore();
     });
 
+    it('finalizes the sync file ignore window when external keep-local writes fail', async () => {
+        const getMonotonicNowSpy = vi.spyOn(SyncService as any, 'getMonotonicNow');
+        getMonotonicNowSpy.mockReturnValue(9_000);
+        const invoke = vi.fn(async (command: string) => {
+            if (command === 'get_sync_backend') return 'file';
+            if (command === 'save_data') return undefined;
+            if (command === 'write_sync_file') {
+                throw new Error('disk full');
+            }
+            throw new Error(`unexpected command: ${command}`);
+        });
+        __syncServiceTestUtils.setDependenciesForTests({
+            flushPendingSave: vi.fn(async () => undefined),
+            invoke: invoke as unknown as <T>(command: string, args?: Record<string, unknown>) => Promise<T>,
+            isTauriRuntime: () => true,
+        });
+        await __syncServiceTestUtils.persistLocalDataForTests({
+            tasks: [],
+            projects: [],
+            sections: [],
+            areas: [],
+            settings: {},
+        });
+        (SyncService as any).didMigrate = true;
+        (SyncService as any).pendingExternalSyncChange = {
+            path: '/tmp/mindwtr-sync.json',
+            localHash: 'local-hash',
+            incomingHash: 'incoming-hash',
+        };
+
+        const result = await SyncService.resolveExternalSyncChange('keep-local');
+
+        expect(result).toEqual({ success: false, error: 'disk full' });
+        expect((SyncService as any).fileWriteIgnoreActive).toBe(false);
+        expect((SyncService as any).ignoreFileEventsUntil).toBe(11_000);
+        getMonotonicNowSpy.mockRestore();
+    });
+
     it('bounds Dropbox authorization retries to one forced refresh', async () => {
         const resolveAccessToken = vi.fn(async (forceRefresh = false) => forceRefresh ? 'token-2' : 'token-1');
         const operation = vi.fn(async () => {
@@ -327,6 +400,68 @@ describe('SyncService orchestration', () => {
         unsubscribe();
 
         expect(snapshots.some((status) => status.queued === true)).toBe(true);
+    });
+
+    it('queues an additional follow-up when a new request lands during the queued rerun', async () => {
+        const firstRun = createDeferred();
+        const secondRun = createDeferred();
+        const backendSpy = vi.spyOn(SyncService as any, 'getSyncBackend');
+        let backendCalls = 0;
+        backendSpy.mockImplementation(async () => {
+            backendCalls += 1;
+            if (backendCalls === 1) {
+                await firstRun.promise;
+            } else if (backendCalls === 2) {
+                await secondRun.promise;
+            }
+            return 'off';
+        });
+        const snapshots: Array<ReturnType<typeof SyncService.getSyncStatus>> = [];
+        const unsubscribe = SyncService.subscribeSyncStatus((status) => {
+            snapshots.push({ ...status });
+        });
+
+        const first = SyncService.performSync();
+        await waitForAssertion(() => {
+            expect(SyncService.getSyncStatus()).toMatchObject({
+                inFlight: true,
+                queued: false,
+            });
+        });
+        const second = SyncService.performSync();
+        await waitForAssertion(() => {
+            expect(SyncService.getSyncStatus()).toMatchObject({
+                inFlight: true,
+                queued: true,
+            });
+        });
+        firstRun.resolve();
+        await waitForAssertion(() => {
+            expect(backendCalls).toBeGreaterThanOrEqual(2);
+            expect(SyncService.getSyncStatus().inFlight).toBe(true);
+        });
+        const third = SyncService.performSync();
+        await waitForAssertion(() => {
+            expect(SyncService.getSyncStatus()).toMatchObject({
+                inFlight: true,
+                queued: true,
+            });
+        });
+        secondRun.resolve();
+
+        const [firstResult, secondResult, thirdResult] = await Promise.all([first, second, third]);
+        expect(firstResult.success).toBe(true);
+        expect(secondResult.success).toBe(true);
+        expect(thirdResult.success).toBe(true);
+        await waitForAssertion(() => {
+            expect(SyncService.getSyncStatus()).toMatchObject({
+                inFlight: false,
+                queued: false,
+                lastResult: 'success',
+            });
+            expect(countInFlightStarts(snapshots)).toBe(3);
+        });
+        unsubscribe();
     });
 
     it('emits queued status updates while a sync is already in flight', async () => {
@@ -420,6 +555,50 @@ describe('SyncService orchestration', () => {
         expect(snapshots.some((status) => status.queued === true)).toBe(true);
     });
 
+    it('uses the latest queued sync options for the follow-up run', async () => {
+        const firstRun = createDeferred();
+        const backendSpy = vi.spyOn(SyncService as any, 'getSyncBackend');
+        let backendCalls = 0;
+        backendSpy.mockImplementation(async () => {
+            backendCalls += 1;
+            if (backendCalls === 1) {
+                await firstRun.promise;
+            }
+            return 'off';
+        });
+
+        const first = SyncService.performSync();
+        await waitForAssertion(() => {
+            expect(SyncService.getSyncStatus()).toMatchObject({
+                inFlight: true,
+                queued: false,
+            });
+        });
+        const second = SyncService.performSync({ backendOverride: 'cloud' });
+        const third = SyncService.performSync({ backendOverride: 'off' });
+        await waitForAssertion(() => {
+            expect(SyncService.getSyncStatus()).toMatchObject({
+                inFlight: true,
+                queued: true,
+            });
+        });
+        firstRun.resolve();
+
+        const [firstResult, secondResult, thirdResult] = await Promise.all([first, second, third]);
+        expect(firstResult.success).toBe(true);
+        expect(secondResult.success).toBe(true);
+        expect(thirdResult.success).toBe(true);
+        await waitForAssertion(() => {
+            expect(SyncService.getSyncStatus()).toMatchObject({
+                inFlight: false,
+                queued: false,
+                lastResult: 'success',
+            });
+        });
+
+        expect(backendCalls).toBe(1);
+    });
+
     it('runs a queued follow-up sync after an in-flight failure', async () => {
         const firstRun = createDeferred();
         const backendSpy = vi.spyOn(SyncService as any, 'getSyncBackend');
@@ -483,5 +662,64 @@ describe('SyncService orchestration', () => {
         expect(persisted).toBe(false);
         expect(updateSettings).toHaveBeenCalledTimes(1);
         expect((SyncService as any).lastSuccessfulSyncLocalChangeAt).toBe(0);
+    });
+
+    it('refreshes store data without overwriting synced settings after a successful sync', async () => {
+        const callOrder: string[] = [];
+        const storeState = {
+            lastDataChangeAt: 0,
+            settings: {},
+            fetchData: vi.fn(async () => {
+                callOrder.push('fetchData');
+            }),
+            updateSettings: vi.fn(async () => {
+                callOrder.push('updateSettings');
+            }),
+            setError: vi.fn(),
+        };
+        const prepareSpy = vi.spyOn(SyncService as any, 'prepareSyncExecutionContext').mockImplementation(
+            async (...args: unknown[]) => {
+                const context = args[0] as Record<string, unknown>;
+                context.backend = 'file';
+                context.fileBaseDir = '';
+            }
+        );
+        const preSyncSpy = vi.spyOn(SyncService as any, 'runPreSyncAttachmentPhase').mockResolvedValue(undefined);
+        const postMergeSpy = vi.spyOn(SyncService as any, 'runPostMergeAttachmentPhase').mockImplementation(
+            async (...args: unknown[]) => args[1] as AppData
+        );
+
+        try {
+            __syncServiceTestUtils.setDependenciesForTests({
+                flushPendingSave: vi.fn(async () => undefined),
+                getStoreState: () => storeState as any,
+                performSyncCycle: vi.fn(async () => ({
+                    data: {
+                        tasks: [],
+                        projects: [],
+                        sections: [],
+                        areas: [],
+                        settings: {},
+                    } satisfies AppData,
+                    status: 'success' as const,
+                    stats: {
+                        tasks: {},
+                        projects: {},
+                        sections: {},
+                        areas: {},
+                    } as any,
+                })),
+            });
+
+            const result = await SyncService.performSync();
+
+            expect(result.success).toBe(true);
+            expect(callOrder).toEqual(['fetchData']);
+            expect(storeState.updateSettings).not.toHaveBeenCalled();
+        } finally {
+            prepareSpy.mockRestore();
+            preSyncSpy.mockRestore();
+            postMergeSpy.mockRestore();
+        }
     });
 });

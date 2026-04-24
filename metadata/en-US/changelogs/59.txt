@@ -1,0 +1,3 @@
+Improved Android planning and editing with desktop-matching project groups, persistent Manage state, fenced code blocks, and quicker task field toggles.
+Hardened due-date calendar sync with local Android calendar creation and more reliable notification routing.
+Made share capture, attachment directories, and local WebDAV setups more reliable.

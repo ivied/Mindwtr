@@ -27,9 +27,11 @@ The design goal is that GTD behavior, merge logic, and validation live once in c
 ## Persistence model
 
 - Desktop and mobile use SQLite as the primary structured store.
-- JSON snapshots remain part of the durability and sync story.
+- JSON snapshots remain part of the durability and sync story, but as a derived sync/backup representation rather than a second equal local source of truth.
 - Attachments are treated separately from structured task/project data.
 - Deletes are soft by default using `deletedAt` tombstones so sync can converge safely across devices.
+
+The SQLite<->JSON bridge contract is recorded in [ADR 0009](./adr/0009-sqlite-json-sync-bridge.md).
 
 Mindwtr prefers explicit repair and merge logic in the app layer over hard database-only assumptions. That is why sync-sensitive relationships are normalized and repaired by shared code instead of depending purely on foreign-key enforcement.
 

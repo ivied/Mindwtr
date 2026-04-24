@@ -25,6 +25,7 @@ import {
     ATTACHMENTS_DIR_NAME,
     buildCloudKey,
     extractExtension,
+    resolveFileBackendPath,
     sleep,
     stripFileScheme,
     createCooperativeYield,
@@ -737,7 +738,7 @@ export async function syncFileAttachments(
                 return failure.mutated;
             }
             clearAttachmentValidationFailure(attachment.id);
-            await writeFileSafelyAbsolute(await join(baseSyncDir, cloudKey), fileData, {
+            await writeFileSafelyAbsolute(await resolveFileBackendPath(join, baseSyncDir, cloudKey), fileData, {
                 writeFile,
                 rename,
                 remove,
@@ -751,7 +752,7 @@ export async function syncFileAttachments(
         },
         onDownload: async (attachment) => {
             if (!attachment.cloudKey) return false;
-            const sourcePath = await join(baseSyncDir, attachment.cloudKey);
+            const sourcePath = await resolveFileBackendPath(join, baseSyncDir, attachment.cloudKey);
             if (!(await exists(sourcePath))) return false;
             const fileData = await readFile(sourcePath);
             await validateAttachmentHash(attachment, fileData);

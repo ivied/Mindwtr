@@ -1,0 +1,15 @@
+<en-US>
+Clarified the shipped mobile calendar sync behavior in the docs.
+Documented the SQLite-to-JSON sync bridge and local-only sync diagnostics more clearly.
+Added sync regression coverage so device-local history does not trigger unnecessary remote writes.
+</en-US>
+<zh-CN>
+文档现已更清楚说明已上线的移动端日历同步行为。
+新增 SQLite 与 JSON 同步桥接 ADR，并明确同步诊断只保留在本机。
+补充同步回归覆盖，避免设备本地同步历史差异触发不必要的远端写入。
+</zh-CN>
+<es-ES>
+La documentacion ahora aclara mejor el comportamiento ya publicado de sync con calendario en movil.
+Tambien documenta el puente SQLite-JSON y que el diagnostico de sync queda solo en el dispositivo.
+Agregamos cobertura para evitar escrituras remotas innecesarias por historial local de sync.
+</es-ES>

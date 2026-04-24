@@ -192,7 +192,7 @@ Tap **Process Inbox** to start the clarify workflow:
    - Yes → Do it now, mark Done
    - No → Continue
 
-3. **What's next?**
+3. **Who should do it?**
    - I'll do it → Add context, move to Next Actions
    - Delegate → Move to Waiting For
 
@@ -221,7 +221,7 @@ Your primary dashboard for doing.
 - **Context filter** — Tap a context chip to filter the Next list.
 - **Swipe to Focus** — Swipe a task right to toggle "Focus" status (moves it to Today).
 - **Quick Status** — Tap the status badge to change status.
-- **Pomodoro (Optional)** — Enable in **Settings → GTD → Features → Pomodoro timer** to show a focus/break timer panel linked to your current task.
+- **Pomodoro (Optional)** — Enable in **Settings → GTD → Features → Pomodoro timer** to show a focus/break timer panel linked to your current task. You can also add one optional custom preset there.
 
 ---
 
@@ -250,13 +250,17 @@ Checklist-first tasks default to View mode for faster checking.
 The editor starts minimal. Tap **More options** to reveal advanced fields; any field with existing content stays visible.
 
 Description markdown supports unordered lists and task checkboxes (`- item`, `[ ] item`, `[x] item`).
+Type `[[` in task descriptions or project notes to link another task or project from the link picker sheet.
+Those links are navigational only; they do not sync completion state between tasks.
 Markdown checkbox lines can populate checklist items when you save.
 
 Recurring tasks support two strategies:
 - **Strict** (fixed cadence)
 - **Repeat after completion** (next date from completion time)
+- **Ends: Never / On date / After N occurrences**
 
 Use the recurrence field in the task editor, then toggle **Repeat after completion** when needed.
+The same sheet lets you stop a series on a target date or after a fixed number of total occurrences.
 
 ### Attachments
 
@@ -432,12 +436,6 @@ Mindwtr sends push notifications to keep you on track.
 - **Start time alerts** — Reminds you when it's time to begin
 - **Recurring task reminders** — Notifications for recurring items
 
-### Snooze
-
-When a notification appears, you can snooze it directly:
-- Tap **Snooze** to be reminded later
-- Choose from preset intervals (5 min, 15 min, 1 hour, etc.)
-
 Tap the notification body to jump directly to the **Review** screen.
 
 ### Permissions
@@ -454,7 +452,7 @@ Make sure notifications are enabled:
 ### General
 
 - **Appearance** — System, Light, or Dark
-- **Language** — English, Chinese, Spanish, Hindi, Arabic, German, Russian, Japanese, French, Portuguese, Korean, Italian, Turkish
+- **Language** — English, Chinese (Simplified), Chinese (Traditional), Spanish, Hindi, Arabic, German, Russian, Japanese, French, Portuguese, Polish, Korean, Italian, Turkish
 
 ### Notifications
 

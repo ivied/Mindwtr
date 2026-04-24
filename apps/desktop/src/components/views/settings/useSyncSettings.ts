@@ -3,15 +3,22 @@ import { SyncService, type CloudProvider } from '../../../lib/sync-service';
 import { useUiStore } from '../../../store/ui-store';
 import { logError } from '../../../lib/app-log';
 import { markSettingsOpenTrace, measureSettingsOpenStep } from '../../../lib/settings-open-diagnostics';
+import { useLanguage } from '../../../contexts/language-context';
 import {
+    addBreadcrumb,
     CLOCK_SKEW_THRESHOLD_MS,
     getInMemoryAppDataSnapshot,
+    translateWithFallback,
     type SyncBackend,
 } from '@mindwtr/core';
 import {
+    importDesktopDgtData,
     exportDesktopBackup,
+    importDesktopOmniFocusData,
     importDesktopTodoistData,
+    inspectDesktopDgtImport,
     inspectDesktopBackup,
+    inspectDesktopOmniFocusImport,
     inspectDesktopTodoistImport,
     restoreDesktopBackup,
 } from '../../../lib/data-transfer';
@@ -34,9 +41,16 @@ type UseSyncSettingsOptions = {
     isTauri: boolean;
     showSaved: () => void;
     selectSyncFolderTitle: string;
+    requestConfirmation: (options: { title: string; message: string }) => Promise<boolean>;
 };
 
-export const useSyncSettings = ({ appVersion, isTauri, showSaved, selectSyncFolderTitle }: UseSyncSettingsOptions) => {
+export const useSyncSettings = ({
+    appVersion,
+    isTauri,
+    showSaved,
+    selectSyncFolderTitle,
+    requestConfirmation,
+}: UseSyncSettingsOptions) => {
     const [syncPath, setSyncPath] = useState('');
     const [syncStatus, setSyncStatus] = useState(() => SyncService.getSyncStatus());
     const [syncError, setSyncError] = useState<string | null>(null);
@@ -55,6 +69,7 @@ export const useSyncSettings = ({ appVersion, isTauri, showSaved, selectSyncFold
     const [dropboxConfigured, setDropboxConfigured] = useState(false);
     const [dropboxConnected, setDropboxConnected] = useState(false);
     const [dropboxBusy, setDropboxBusy] = useState(false);
+    const [dropboxAuthInProgress, setDropboxAuthInProgress] = useState(false);
     const [dropboxRedirectUri, setDropboxRedirectUri] = useState('http://127.0.0.1:53682/oauth/dropbox/callback');
     const [dropboxTestState, setDropboxTestState] = useState<DropboxTestState>('idle');
     const [snapshots, setSnapshots] = useState<string[]>([]);
@@ -62,6 +77,7 @@ export const useSyncSettings = ({ appVersion, isTauri, showSaved, selectSyncFold
     const [isRestoringSnapshot, setIsRestoringSnapshot] = useState(false);
     const [transferAction, setTransferAction] = useState<null | 'export' | 'restore' | 'import'>(null);
     const showToast = useUiStore((state) => state.showToast);
+    const { t } = useLanguage();
 
     const formatSyncPathError = useCallback((message?: string): string => {
         const normalized = (message || '').toLowerCase();
@@ -80,26 +96,21 @@ export const useSyncSettings = ({ appVersion, isTauri, showSaved, selectSyncFold
         return text || fallback;
     }, []);
 
-    const requestConfirmation = useCallback(async ({
-        message,
-        title,
-    }: {
-        message: string;
-        title: string;
-    }): Promise<boolean> => {
-        if (isTauri) {
-            const { confirm } = await import('@tauri-apps/plugin-dialog');
-            return await confirm(message, {
-                title,
-                okLabel: 'Continue',
-                cancelLabel: 'Cancel',
-            });
-        }
-        if (typeof window !== 'undefined') {
-            return window.confirm(`${title}\n\n${message}`);
-        }
-        return false;
-    }, [isTauri]);
+    const resolveText = useCallback((key: string, fallback: string): string => {
+        return translateWithFallback(t, key, fallback);
+    }, [t]);
+
+    const formatText = useCallback((
+        key: string,
+        fallback: string,
+        replacements: Record<string, string | number>,
+    ): string => {
+        let text = resolveText(key, fallback);
+        Object.entries(replacements).forEach(([name, value]) => {
+            text = text.split(`{{${name}}}`).join(String(value));
+        });
+        return text;
+    }, [resolveText]);
 
     useEffect(() => {
         markSettingsOpenTrace('sync-settings-effect');
@@ -253,6 +264,7 @@ export const useSyncSettings = ({ appVersion, isTauri, showSaved, selectSyncFold
     }, [formatSyncPathError, isTauri, selectSyncFolderTitle, showSaved, showToast]);
 
     const handleSetSyncBackend = useCallback(async (backend: SyncBackend) => {
+        addBreadcrumb(`settings:syncBackend:${backend}`);
         setSyncBackend(backend);
         setSyncError(null);
         if (backend === 'cloudkit') {
@@ -327,6 +339,7 @@ export const useSyncSettings = ({ appVersion, isTauri, showSaved, selectSyncFold
         setCloudProvider(provider);
         if (provider !== 'dropbox') {
             setDropboxTestState('idle');
+            setDropboxAuthInProgress(false);
         }
         await SyncService.setCloudProvider(provider);
         showSaved();
@@ -338,6 +351,7 @@ export const useSyncSettings = ({ appVersion, isTauri, showSaved, selectSyncFold
             showToast('Dropbox app key is not configured in this build.', 'error');
             return;
         }
+        setDropboxAuthInProgress(true);
         setDropboxBusy(true);
         try {
             await SyncService.connectDropbox(appKey);
@@ -352,6 +366,7 @@ export const useSyncSettings = ({ appVersion, isTauri, showSaved, selectSyncFold
             setSyncError(message);
             showToast(message, 'error');
         } finally {
+            setDropboxAuthInProgress(false);
             setDropboxBusy(false);
         }
     }, [dropboxAppKey, showSaved, showToast, toErrorMessage]);
@@ -410,6 +425,7 @@ export const useSyncSettings = ({ appVersion, isTauri, showSaved, selectSyncFold
     }, [dropboxAppKey, showToast, toErrorMessage]);
 
     const handleSync = useCallback(async () => {
+        addBreadcrumb('sync:manual');
         try {
             setSyncError(null);
 
@@ -521,6 +537,7 @@ export const useSyncSettings = ({ appVersion, isTauri, showSaved, selectSyncFold
 
     const handleRestoreSnapshot = useCallback(async (snapshotFileName: string) => {
         if (!snapshotFileName) return false;
+        addBreadcrumb('transfer:restore');
         setIsRestoringSnapshot(true);
         try {
             const result = await SyncService.restoreDataSnapshot(snapshotFileName);
@@ -537,6 +554,7 @@ export const useSyncSettings = ({ appVersion, isTauri, showSaved, selectSyncFold
     }, [showToast]);
 
     const handleExportBackup = useCallback(async () => {
+        addBreadcrumb('transfer:export');
         setTransferAction('export');
         try {
             await exportDesktopBackup(getInMemoryAppDataSnapshot());
@@ -549,6 +567,7 @@ export const useSyncSettings = ({ appVersion, isTauri, showSaved, selectSyncFold
     }, [showToast, toErrorMessage]);
 
     const handleRestoreBackup = useCallback(async () => {
+        addBreadcrumb('transfer:restore');
         setTransferAction('restore');
         try {
             const validation = await inspectDesktopBackup(appVersion);
@@ -587,6 +606,7 @@ export const useSyncSettings = ({ appVersion, isTauri, showSaved, selectSyncFold
     }, [appVersion, isTauri, requestConfirmation, showToast, toErrorMessage]);
 
     const handleImportTodoist = useCallback(async () => {
+        addBreadcrumb('transfer:restore');
         setTransferAction('import');
         try {
             const parseResult = await inspectDesktopTodoistImport();
@@ -599,7 +619,7 @@ export const useSyncSettings = ({ appVersion, isTauri, showSaved, selectSyncFold
             const preview = parseResult.preview;
             const projectLines = preview.projects
                 .slice(0, 4)
-                .map((project) => `- ${project.name}: ${project.taskCount}`);
+                .map((project: { name: string; taskCount: number }) => `- ${project.name}: ${project.taskCount}`);
             if (preview.projects.length > 4) {
                 projectLines.push(`- ${preview.projects.length - 4} more project(s)...`);
             }
@@ -622,7 +642,14 @@ export const useSyncSettings = ({ appVersion, isTauri, showSaved, selectSyncFold
                 setSnapshots(await SyncService.listDataSnapshots());
             }
             const details = [
-                `Imported ${result.importedTaskCount} tasks into ${result.importedProjectCount} project(s).`,
+                formatText(
+                    'settings.importTodoistSummary',
+                    'Imported {{taskCount}} tasks into {{projectCount}} project(s).',
+                    {
+                        taskCount: result.importedTaskCount,
+                        projectCount: result.importedProjectCount,
+                    },
+                ),
                 result.importedChecklistItemCount > 0 ? `${result.importedChecklistItemCount} subtask(s) became checklist items.` : null,
                 snapshotName ? `Snapshot saved as ${snapshotName}.` : null,
                 ...(result.warnings.length > 0 ? ['', ...result.warnings] : []),
@@ -633,7 +660,131 @@ export const useSyncSettings = ({ appVersion, isTauri, showSaved, selectSyncFold
         } finally {
             setTransferAction(null);
         }
-    }, [isTauri, requestConfirmation, showToast, toErrorMessage]);
+    }, [formatText, isTauri, requestConfirmation, showToast, toErrorMessage]);
+
+    const handleImportDgt = useCallback(async () => {
+        addBreadcrumb('transfer:restore');
+        setTransferAction('import');
+        try {
+            const parseResult = await inspectDesktopDgtImport();
+            if (!parseResult) return;
+            if (!parseResult.valid || !parseResult.preview || !parseResult.parsedData) {
+                showToast(parseResult.errors[0] || 'The selected file is not a supported DGT GTD export.', 'error');
+                return;
+            }
+
+            const preview = parseResult.preview;
+            const projectLines = preview.projects
+                .slice(0, 4)
+                .map((project: { areaName?: string; name: string; taskCount: number }) => `- ${project.areaName ? `${project.areaName} / ` : ''}${project.name}: ${project.taskCount}`);
+            if (preview.projects.length > 4) {
+                projectLines.push(`- ${preview.projects.length - 4} more project(s)...`);
+            }
+
+            const confirmed = await requestConfirmation({
+                title: 'Import DGT GTD data?',
+                message: [
+                    `Import ${preview.taskCount} tasks from ${preview.fileName}?`,
+                    preview.areaCount > 0 ? `${preview.areaCount} area(s) will be created from DGT folders.` : null,
+                    preview.projectCount > 0 ? `${preview.projectCount} project(s) will be created.` : null,
+                    preview.checklistItemCount > 0 ? `${preview.checklistItemCount} checklist item(s) will be preserved.` : null,
+                    preview.standaloneTaskCount > 0
+                        ? `${preview.standaloneTaskCount} task(s) will stay outside projects so you can process them in Mindwtr.`
+                        : null,
+                    ...(projectLines.length > 0 ? ['', ...projectLines] : []),
+                    ...(preview.warnings.length > 0 ? ['', ...preview.warnings] : []),
+                ].filter(Boolean).join('\n'),
+            });
+            if (!confirmed) return;
+
+            const { snapshotName, result } = await importDesktopDgtData(parseResult.parsedData);
+            if (isTauri) {
+                setSnapshots(await SyncService.listDataSnapshots());
+            }
+            const details = [
+                formatText(
+                    'settings.importDgtSummary',
+                    'Imported {{taskCount}} task(s), {{projectCount}} project(s), and {{areaCount}} area(s).',
+                    {
+                        taskCount: result.importedTaskCount,
+                        projectCount: result.importedProjectCount,
+                        areaCount: result.importedAreaCount,
+                    },
+                ),
+                result.importedChecklistItemCount > 0 ? `${result.importedChecklistItemCount} checklist item(s) were preserved.` : null,
+                snapshotName ? `Snapshot saved as ${snapshotName}.` : null,
+                ...(result.warnings.length > 0 ? ['', ...result.warnings] : []),
+            ].filter(Boolean).join('\n');
+            showToast(details, 'success', 8000);
+        } catch (error) {
+            showToast(toErrorMessage(error, 'Failed to import DGT GTD data.'), 'error');
+        } finally {
+            setTransferAction(null);
+        }
+    }, [formatText, isTauri, requestConfirmation, showToast, toErrorMessage]);
+
+    const handleImportOmniFocus = useCallback(async () => {
+        addBreadcrumb('transfer:restore');
+        setTransferAction('import');
+        try {
+            const parseResult = await inspectDesktopOmniFocusImport();
+            if (!parseResult) return;
+            if (!parseResult.valid || !parseResult.preview || !parseResult.parsedData) {
+                showToast(parseResult.errors[0] || 'The selected file is not a supported OmniFocus export.', 'error');
+                return;
+            }
+
+            const preview = parseResult.preview;
+            const projectLines = preview.projects
+                .slice(0, 4)
+                .map((project) => `- ${project.name}: ${project.taskCount}`);
+            if (preview.projects.length > 4) {
+                projectLines.push(`- ${preview.projects.length - 4} more project(s)...`);
+            }
+
+            const confirmed = await requestConfirmation({
+                title: 'Import OmniFocus data?',
+                message: [
+                    `Import ${preview.taskCount} task(s) from ${preview.fileName}?`,
+                    preview.projectCount > 0 ? `${preview.projectCount} project(s) will be created when needed.` : null,
+                    preview.areaCount > 0 ? `${preview.areaCount} area(s) will be created from OmniFocus folders when needed.` : null,
+                    preview.checklistItemCount > 0 ? `${preview.checklistItemCount} nested task(s) will become checklist items when possible.` : null,
+                    preview.standaloneTaskCount > 0
+                        ? `${preview.standaloneTaskCount} task(s) will stay outside projects so you can process them in Mindwtr.`
+                        : null,
+                    'Imported tasks keep OmniFocus notes, dates, tags, recurrence, and checklist children when supported.',
+                    ...(projectLines.length > 0 ? ['', ...projectLines] : []),
+                    ...(preview.warnings.length > 0 ? ['', ...preview.warnings] : []),
+                ].filter(Boolean).join('\n'),
+            });
+            if (!confirmed) return;
+
+            const { snapshotName, result } = await importDesktopOmniFocusData(parseResult.parsedData);
+            if (isTauri) {
+                setSnapshots(await SyncService.listDataSnapshots());
+            }
+            const details = [
+                formatText(
+                    'settings.importOmniFocusSummary',
+                    'Imported {{taskCount}} task(s) and {{projectCount}} project(s).',
+                    {
+                        taskCount: result.importedTaskCount,
+                        projectCount: result.importedProjectCount,
+                    },
+                ),
+                result.importedAreaCount > 0 ? `${result.importedAreaCount} area(s) were created from OmniFocus folders.` : null,
+                result.importedChecklistItemCount > 0 ? `${result.importedChecklistItemCount} nested task(s) became checklist items.` : null,
+                result.importedStandaloneTaskCount > 0 ? `${result.importedStandaloneTaskCount} task(s) stayed outside projects.` : null,
+                snapshotName ? `Snapshot saved as ${snapshotName}.` : null,
+                ...(result.warnings.length > 0 ? ['', ...result.warnings] : []),
+            ].filter(Boolean).join('\n');
+            showToast(details, 'success', 8000);
+        } catch (error) {
+            showToast(toErrorMessage(error, 'Failed to import OmniFocus data.'), 'error');
+        } finally {
+            setTransferAction(null);
+        }
+    }, [formatText, isTauri, requestConfirmation, showToast, toErrorMessage]);
 
     return {
         syncPath,
@@ -665,6 +816,7 @@ export const useSyncSettings = ({ appVersion, isTauri, showSaved, selectSyncFold
         dropboxConfigured,
         dropboxConnected,
         dropboxBusy,
+        dropboxAuthInProgress,
         dropboxRedirectUri,
         dropboxTestState,
         snapshots,
@@ -686,5 +838,7 @@ export const useSyncSettings = ({ appVersion, isTauri, showSaved, selectSyncFold
         handleExportBackup,
         handleRestoreBackup,
         handleImportTodoist,
+        handleImportDgt,
+        handleImportOmniFocus,
     };
 };

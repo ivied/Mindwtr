@@ -1,6 +1,7 @@
 import type { AIProviderId, AIReasoningEffort, AppData } from '@mindwtr/core';
 
 import { useState } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { ConfirmModal } from '../../ConfirmModal';
 
@@ -14,6 +15,7 @@ type Labels = {
     aiModel: string;
     aiBaseUrl: string;
     aiBaseUrlHint: string;
+    aiBaseUrlModelHint: string;
     aiCopilotModel: string;
     aiCopilotHint: string;
     aiConsentTitle: string;
@@ -61,6 +63,21 @@ type Labels = {
     speechFieldSmart: string;
     speechFieldTitle: string;
     speechFieldDescription: string;
+};
+
+const looksLikeOfficialOpenAIModel = (model: string, knownModels: string[]): boolean => {
+    const trimmed = model.trim();
+    if (!trimmed) return true;
+    const lower = trimmed.toLowerCase();
+    if (knownModels.some((option) => option.toLowerCase() === lower)) return true;
+    return lower.startsWith('gpt-')
+        || lower.startsWith('chatgpt-')
+        || /^o[134](?:$|-)/.test(lower)
+        || lower.startsWith('omni-moderation-')
+        || lower.startsWith('text-embedding-')
+        || lower.startsWith('text-moderation-')
+        || lower.startsWith('tts-')
+        || lower.startsWith('whisper-');
 };
 
 type ThinkingOption = { value: number; label: string };
@@ -147,6 +164,9 @@ export function SettingsAiPage({
             ? t.aiProviderAnthropic
             : t.aiProviderOpenAI;
     const aiConsentDescription = t.aiConsentDescription.replace('{provider}', selectedProviderLabel);
+    const showCustomBaseUrlModelHint = aiProvider === 'openai'
+        && !aiBaseUrl.trim()
+        && !looksLikeOfficialOpenAIModel(aiModel, aiModelOptions);
     const handleAiToggle = () => {
         if (aiEnabled) {
             onUpdateAISettings({ enabled: false });
@@ -170,7 +190,7 @@ export function SettingsAiPage({
                             <div className="text-sm font-medium">{t.aiEnable}</div>
                             <div className="text-xs text-muted-foreground mt-1">{t.aiDesc}</div>
                         </div>
-                        <span className="text-xs text-muted-foreground">{aiOpen ? '▾' : '▸'}</span>
+                        {aiOpen ? <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />}
                     </button>
                     <button
                         type="button"
@@ -276,6 +296,9 @@ export function SettingsAiPage({
                                         spellCheck={false}
                                     />
                                     <div className="text-xs text-muted-foreground">{t.aiBaseUrlHint}</div>
+                                    {showCustomBaseUrlModelHint && (
+                                        <div className="text-xs text-amber-600">{t.aiBaseUrlModelHint}</div>
+                                    )}
                                 </div>
                             )}
 
@@ -373,7 +396,7 @@ export function SettingsAiPage({
                             <div className="text-sm font-medium">{t.speechTitle}</div>
                             <div className="text-xs text-muted-foreground mt-1">{t.speechDesc}</div>
                         </div>
-                        <span className="text-xs text-muted-foreground">{speechOpen ? '▾' : '▸'}</span>
+                        {speechOpen ? <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />}
                     </button>
                     <button
                         type="button"

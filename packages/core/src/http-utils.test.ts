@@ -30,6 +30,14 @@ describe('isAllowedInsecureUrl', () => {
         expect(isAllowedInsecureUrl('http://100.127.255.255/data.json', options)).toBe(true);
     });
 
+    it('allows clearly local hostnames when enabled', () => {
+        const options = { allowLocalHostnames: true };
+        expect(isAllowedInsecureUrl('http://nas/data.json', options)).toBe(true);
+        expect(isAllowedInsecureUrl('http://nas.local/data.json', options)).toBe(true);
+        expect(isAllowedInsecureUrl('http://router.home.arpa/data.json', options)).toBe(true);
+        expect(isAllowedInsecureUrl('http://example.com/data.json', options)).toBe(false);
+    });
+
     it('keeps private range boundaries strict', () => {
         const options = { allowPrivateIpRanges: true };
         expect(isAllowedInsecureUrl('http://172.15.255.255/data.json', options)).toBe(false);

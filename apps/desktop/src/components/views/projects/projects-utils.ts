@@ -9,6 +9,13 @@ export function toDateTimeLocalValue(dateStr: string | undefined): string {
     return safeFormatDate(parsed, "yyyy-MM-dd'T'HH:mm", dateStr);
 }
 
+export function toDateInputValue(dateStr: string | undefined): string {
+    if (!dateStr) return '';
+    const parsed = safeParseDate(dateStr);
+    if (!parsed) return dateStr;
+    return safeFormatDate(parsed, 'yyyy-MM-dd', dateStr);
+}
+
 export function normalizeTag(value: string): string {
     const trimmed = value.trim();
     if (!trimmed) return '';

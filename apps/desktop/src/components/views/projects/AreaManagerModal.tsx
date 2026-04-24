@@ -1,7 +1,8 @@
 import { DndContext, type DragEndEvent, closestCenter } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
-import type { Area } from '@mindwtr/core';
+import { translateWithFallback, type Area, type StoreActionResult } from '@mindwtr/core';
 import type { ChangeEventHandler, MouseEventHandler } from 'react';
+import { X } from 'lucide-react';
 import { SortableAreaRow } from './SortableRows';
 import { AreaColorPicker } from './AreaColorPicker';
 
@@ -10,7 +11,7 @@ type AreaManagerModalProps = {
     areaSensors: ReturnType<typeof import('@dnd-kit/core').useSensors>;
     onDragEnd: (event: DragEndEvent) => void;
     onDeleteArea: (areaId: string) => void;
-    onUpdateArea: (areaId: string, updates: Partial<Area>) => Promise<void> | void;
+    onUpdateArea: (areaId: string, updates: Partial<Area>) => Promise<StoreActionResult> | void;
     newAreaColor: string;
     onChangeNewAreaColor: (color: string) => void;
     newAreaName: string;
@@ -44,8 +45,7 @@ export function AreaManagerModal({
         event.stopPropagation();
     };
     const resolveText = (key: string, fallback: string) => {
-        const value = t(key);
-        return value === key ? fallback : value;
+        return translateWithFallback(t, key, fallback);
     };
     const manageAreasLabel = resolveText('areas.manage', 'Manage Areas');
     const newAreaLabel = resolveText('areas.new', 'New Area');
@@ -86,9 +86,10 @@ export function AreaManagerModal({
                     <button
                         type="button"
                         onClick={onClose}
-                        className="text-muted-foreground hover:text-foreground"
+                        className="text-muted-foreground hover:text-foreground p-1 rounded cursor-pointer transition-colors"
+                        aria-label="Close"
                     >
-                        ✕
+                        <X className="w-4 h-4" />
                     </button>
                 </div>
                 <div className="p-4 space-y-4">

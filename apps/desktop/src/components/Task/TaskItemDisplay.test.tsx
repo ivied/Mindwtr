@@ -1,8 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render } from '@testing-library/react';
 import type { Task } from '@mindwtr/core';
+import { useTaskStore } from '@mindwtr/core';
 
+import { LanguageProvider } from '../../contexts/language-context';
 import { TaskItemDisplay } from './TaskItemDisplay';
+
+const initialTaskState = useTaskStore.getState();
 
 const baseTask: Task = {
     id: 'task-1',
@@ -15,31 +19,39 @@ const baseTask: Task = {
 };
 
 describe('TaskItemDisplay', () => {
+    beforeEach(() => {
+        act(() => {
+            useTaskStore.setState(initialTaskState, true);
+        });
+    });
+
     it('renders task age in Chinese when language is zh', () => {
         const { getByText } = render(
-            <TaskItemDisplay
-                task={baseTask}
-                language="zh"
-                selectionMode={false}
-                isViewOpen={false}
-                actions={{
-                    onToggleView: vi.fn(),
-                    onEdit: vi.fn(),
-                    onDelete: vi.fn(),
-                    onDuplicate: vi.fn(),
-                    onStatusChange: vi.fn(),
-                    openAttachment: vi.fn(),
-                }}
-                visibleAttachments={[]}
-                recurrenceRule=""
-                recurrenceStrategy="strict"
-                prioritiesEnabled={false}
-                timeEstimatesEnabled={false}
-                isStagnant={false}
-                showQuickDone={false}
-                readOnly={false}
-                t={(key: string) => key}
-            />
+            <LanguageProvider>
+                <TaskItemDisplay
+                    task={baseTask}
+                    language="zh"
+                    selectionMode={false}
+                    isViewOpen={false}
+                    actions={{
+                        onToggleView: vi.fn(),
+                        onEdit: vi.fn(),
+                        onDelete: vi.fn(),
+                        onDuplicate: vi.fn(),
+                        onStatusChange: vi.fn(),
+                        openAttachment: vi.fn(),
+                    }}
+                    visibleAttachments={[]}
+                    recurrenceRule=""
+                    recurrenceStrategy="strict"
+                    prioritiesEnabled={false}
+                    timeEstimatesEnabled={false}
+                    isStagnant={false}
+                    showQuickDone={false}
+                    readOnly={false}
+                    t={(key: string) => key}
+                />
+            </LanguageProvider>
         );
 
         expect(getByText('2周前')).toBeInTheDocument();
@@ -52,59 +64,163 @@ describe('TaskItemDisplay', () => {
         };
 
         const { queryByText, rerender } = render(
-            <TaskItemDisplay
-                task={taskWithDescription}
-                language="en"
-                selectionMode={false}
-                isViewOpen={false}
-                actions={{
-                    onToggleView: vi.fn(),
-                    onEdit: vi.fn(),
-                    onDelete: vi.fn(),
-                    onDuplicate: vi.fn(),
-                    onStatusChange: vi.fn(),
-                    openAttachment: vi.fn(),
-                }}
-                visibleAttachments={[]}
-                recurrenceRule=""
-                recurrenceStrategy="strict"
-                prioritiesEnabled={false}
-                timeEstimatesEnabled={false}
-                isStagnant={false}
-                showQuickDone={false}
-                readOnly={false}
-                t={(key: string) => key}
-            />
+            <LanguageProvider>
+                <TaskItemDisplay
+                    task={taskWithDescription}
+                    language="en"
+                    selectionMode={false}
+                    isViewOpen={false}
+                    actions={{
+                        onToggleView: vi.fn(),
+                        onEdit: vi.fn(),
+                        onDelete: vi.fn(),
+                        onDuplicate: vi.fn(),
+                        onStatusChange: vi.fn(),
+                        openAttachment: vi.fn(),
+                    }}
+                    visibleAttachments={[]}
+                    recurrenceRule=""
+                    recurrenceStrategy="strict"
+                    prioritiesEnabled={false}
+                    timeEstimatesEnabled={false}
+                    isStagnant={false}
+                    showQuickDone={false}
+                    readOnly={false}
+                    t={(key: string) => key}
+                />
+            </LanguageProvider>
         );
 
         expect(queryByText('Expanded task note')).not.toBeInTheDocument();
 
         rerender(
-            <TaskItemDisplay
-                task={taskWithDescription}
-                language="en"
-                selectionMode={false}
-                isViewOpen
-                actions={{
-                    onToggleView: vi.fn(),
-                    onEdit: vi.fn(),
-                    onDelete: vi.fn(),
-                    onDuplicate: vi.fn(),
-                    onStatusChange: vi.fn(),
-                    openAttachment: vi.fn(),
-                }}
-                visibleAttachments={[]}
-                recurrenceRule=""
-                recurrenceStrategy="strict"
-                prioritiesEnabled={false}
-                timeEstimatesEnabled={false}
-                isStagnant={false}
-                showQuickDone={false}
-                readOnly={false}
-                t={(key: string) => key}
-            />
+            <LanguageProvider>
+                <TaskItemDisplay
+                    task={taskWithDescription}
+                    language="en"
+                    selectionMode={false}
+                    isViewOpen
+                    actions={{
+                        onToggleView: vi.fn(),
+                        onEdit: vi.fn(),
+                        onDelete: vi.fn(),
+                        onDuplicate: vi.fn(),
+                        onStatusChange: vi.fn(),
+                        openAttachment: vi.fn(),
+                    }}
+                    visibleAttachments={[]}
+                    recurrenceRule=""
+                    recurrenceStrategy="strict"
+                    prioritiesEnabled={false}
+                    timeEstimatesEnabled={false}
+                    isStagnant={false}
+                    showQuickDone={false}
+                    readOnly={false}
+                    t={(key: string) => key}
+                />
+            </LanguageProvider>
         );
 
         expect(queryByText('Expanded task note')).toBeInTheDocument();
+    });
+
+    it('renders internal markdown task links in expanded details', () => {
+        act(() => {
+            useTaskStore.setState((state) => ({
+                ...state,
+                tasks: [baseTask, {
+                    ...baseTask,
+                    id: 'task-2',
+                    title: 'Referenced task',
+                }],
+                _allTasks: [baseTask, {
+                    ...baseTask,
+                    id: 'task-2',
+                    title: 'Referenced task',
+                }],
+                projects: [],
+                _allProjects: [],
+            }));
+        });
+
+        const { getByRole } = render(
+            <LanguageProvider>
+                <TaskItemDisplay
+                    task={{
+                        ...baseTask,
+                        description: 'See [[task:task-2|Referenced task]]',
+                    }}
+                    language="en"
+                    selectionMode={false}
+                    isViewOpen
+                    actions={{
+                        onToggleView: vi.fn(),
+                        onEdit: vi.fn(),
+                        onDelete: vi.fn(),
+                        onDuplicate: vi.fn(),
+                        onStatusChange: vi.fn(),
+                        openAttachment: vi.fn(),
+                    }}
+                    visibleAttachments={[]}
+                    recurrenceRule=""
+                    recurrenceStrategy="strict"
+                    prioritiesEnabled={false}
+                    timeEstimatesEnabled={false}
+                    isStagnant={false}
+                    showQuickDone={false}
+                    readOnly={false}
+                    t={(key: string) => key}
+                />
+            </LanguageProvider>
+        );
+
+        expect(getByRole('button', { name: 'Referenced task' })).toBeInTheDocument();
+    });
+
+    it('renders inline image attachment previews in expanded details', () => {
+        const openAttachment = vi.fn();
+        const imageAttachment = {
+            id: 'attachment-1',
+            kind: 'file' as const,
+            title: 'Sunset',
+            uri: 'file:///tmp/sunset.png',
+            mimeType: 'image/png',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+        };
+
+        const { getByRole } = render(
+            <LanguageProvider>
+                <TaskItemDisplay
+                    task={baseTask}
+                    language="en"
+                    selectionMode={false}
+                    isViewOpen
+                    actions={{
+                        onToggleView: vi.fn(),
+                        onEdit: vi.fn(),
+                        onDelete: vi.fn(),
+                        onDuplicate: vi.fn(),
+                        onStatusChange: vi.fn(),
+                        openAttachment,
+                    }}
+                    visibleAttachments={[imageAttachment]}
+                    recurrenceRule=""
+                    recurrenceStrategy="strict"
+                    prioritiesEnabled={false}
+                    timeEstimatesEnabled={false}
+                    isStagnant={false}
+                    showQuickDone={false}
+                    readOnly={false}
+                    t={(key: string) => key}
+                />
+            </LanguageProvider>
+        );
+
+        expect(getByRole('img', { name: 'Sunset' })).toBeInTheDocument();
+
+        fireEvent.click(getByRole('button', { name: 'attachments.open: Sunset' }));
+
+        expect(openAttachment).toHaveBeenCalledWith(imageAttachment);
     });
 });

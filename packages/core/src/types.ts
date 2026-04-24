@@ -3,6 +3,7 @@ import type { ExternalCalendarSubscription } from './ics';
 export type TaskStatus = 'inbox' | 'next' | 'waiting' | 'someday' | 'reference' | 'done' | 'archived';
 
 export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
+export type TaskEnergyLevel = 'low' | 'medium' | 'high';
 
 export type TimeEstimate = '5min' | '10min' | '15min' | '30min' | '1hr' | '2hr' | '3hr' | '4hr' | '4hr+';
 
@@ -32,6 +33,9 @@ export interface Recurrence {
     rule: RecurrenceRule;
     strategy?: RecurrenceStrategy; // Defaults to 'strict'
     byDay?: RecurrenceByDay[]; // Explicit weekdays for weekly/monthly recurrences
+    count?: number; // Total occurrences in the series, including the current task
+    until?: string; // ISO date/datetime when the series should stop
+    completedOccurrences?: number; // Internal counter used to preserve COUNT across generated tasks
     rrule?: string; // Optional RFC 5545 fragment (e.g. FREQ=WEEKLY;BYDAY=MO,WE)
 }
 
@@ -41,6 +45,8 @@ export type TaskEditorFieldId =
     | 'section'
     | 'area'
     | 'priority'
+    | 'energyLevel'
+    | 'assignedTo'
     | 'contexts'
     | 'tags'
     | 'timeEstimate'
@@ -68,6 +74,7 @@ export interface Project {
     isFocused?: boolean; // If true, this project is a priority focus (max 5 allowed)
     supportNotes?: string;
     attachments?: Attachment[];
+    dueDate?: string; // Optional project deadline/target date (ISO date or datetime).
     reviewAt?: string; // Tickler/review date (ISO string). If set, project is due for review at/after this time.
     areaId?: string;
     areaTitle?: string;
@@ -144,6 +151,8 @@ export interface Task {
     title: string;
     status: TaskStatus;
     priority?: TaskPriority;
+    energyLevel?: TaskEnergyLevel;
+    assignedTo?: string;
     taskMode?: TaskMode; // 'list' for checklist-first tasks
     startTime?: string; // ISO date string
     dueDate?: string; // ISO date string
@@ -221,6 +230,14 @@ export interface AppData {
             weeklyReview?: {
                 includeContextStep?: boolean;
             };
+            pomodoro?: {
+                customDurations?: {
+                    focusMinutes?: number;
+                    breakMinutes?: number;
+                };
+                autoStartBreaks?: boolean;
+                autoStartFocus?: boolean;
+            };
         };
         attachments?: {
             lastCleanupAt?: string;
@@ -233,6 +250,7 @@ export interface AppData {
         };
         appearance?: {
             density?: 'comfortable' | 'compact';
+            textSize?: 'default' | 'large' | 'extra-large';
         };
         theme?: 'light' | 'dark' | 'system' | 'eink' | 'nord' | 'sepia' | 'material3-light' | 'material3-dark' | 'oled';
         language?: 'en' | 'zh' | 'zh-Hant' | 'es' | 'hi' | 'ar' | 'de' | 'ru' | 'ja' | 'fr' | 'pt' | 'pl' | 'ko' | 'it' | 'tr' | 'nl' | 'system';

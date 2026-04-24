@@ -1,12 +1,18 @@
-import { ArrowRight, BookOpen, CheckCircle, ChevronLeft, Clock, Trash2, User, X } from 'lucide-react';
-import { DEFAULT_PROJECT_COLOR, type Area, type Project, type Task } from '@mindwtr/core';
+import { memo } from 'react';
+import { ArrowRight, BookOpen, CheckCircle, ChevronLeft, ClipboardList, Clock, Trash2, User, X } from 'lucide-react';
+import { DEFAULT_PROJECT_COLOR, type Area, type Project, type Task, type TaskPriority, type TimeEstimate } from '@mindwtr/core';
 
 import { cn } from '../lib/utils';
+import {
+    InboxProcessingScheduleFields,
+    type InboxProcessingScheduleFieldKey,
+    type InboxProcessingScheduleFieldsControls,
+} from './InboxProcessingScheduleFields';
 import { ProjectSelector } from './ui/ProjectSelector';
 
 export type ProcessingStep = 'refine' | 'actionable' | 'projectcheck' | 'twomin' | 'decide' | 'context' | 'project' | 'delegate';
 
-type InboxProcessingWizardProps = {
+export type InboxProcessingWizardProps = {
     t: (key: string) => string;
     isProcessing: boolean;
     processingTask: Task | null;
@@ -41,6 +47,21 @@ type InboxProcessingWizardProps = {
     handleConfirmWaiting: () => void;
     selectedContexts: string[];
     selectedTags: string[];
+    selectedEnergyLevel?: Task['energyLevel'];
+    setSelectedEnergyLevel: (value: Task['energyLevel']) => void;
+    selectedAssignedTo: string;
+    setSelectedAssignedTo: (value: string) => void;
+    selectedTimeEstimate?: TimeEstimate;
+    setSelectedTimeEstimate: (value: TimeEstimate | undefined) => void;
+    timeEstimateOptions: TimeEstimate[];
+    showContextsField: boolean;
+    showTagsField: boolean;
+    showEnergyLevelField: boolean;
+    showAssignedToField: boolean;
+    showTimeEstimateField: boolean;
+    showPriorityField: boolean;
+    selectedPriority?: TaskPriority;
+    setSelectedPriority: (value: TaskPriority | undefined) => void;
     allContexts: string[];
     customContext: string;
     setCustomContext: (value: string) => void;
@@ -75,15 +96,28 @@ type InboxProcessingWizardProps = {
     setSelectedProjectId: (value: string | null) => void;
     selectedAreaId: string | null;
     setSelectedAreaId: (value: string | null) => void;
-    scheduleDate: string;
-    scheduleTimeDraft: string;
-    setScheduleDate: (value: string) => void;
-    setScheduleTimeDraft: (value: string) => void;
-    onScheduleTimeCommit: () => void;
+    showProjectField: boolean;
+    showAreaField: boolean;
     showScheduleFields: boolean;
+    scheduleFields: InboxProcessingScheduleFieldsControls;
+    visibleScheduleFieldKeys: InboxProcessingScheduleFieldKey[];
 };
 
-export function InboxProcessingWizard({
+const PRIORITY_OPTIONS: TaskPriority[] = ['low', 'medium', 'high', 'urgent'];
+const ENERGY_LEVEL_OPTIONS: Array<NonNullable<Task['energyLevel']>> = ['low', 'medium', 'high'];
+const formatTimeEstimateLabel = (value: TimeEstimate): string => {
+    if (value === '5min') return '5m';
+    if (value === '10min') return '10m';
+    if (value === '15min') return '15m';
+    if (value === '30min') return '30m';
+    if (value === '1hr') return '1h';
+    if (value === '2hr') return '2h';
+    if (value === '3hr') return '3h';
+    if (value === '4hr') return '4h';
+    return '4h+';
+};
+
+export const InboxProcessingWizard = memo(function InboxProcessingWizard({
     t,
     isProcessing,
     processingTask,
@@ -118,6 +152,21 @@ export function InboxProcessingWizard({
     handleConfirmWaiting,
     selectedContexts,
     selectedTags,
+    selectedEnergyLevel,
+    setSelectedEnergyLevel,
+    selectedAssignedTo,
+    setSelectedAssignedTo,
+    selectedTimeEstimate,
+    setSelectedTimeEstimate,
+    timeEstimateOptions,
+    showContextsField,
+    showTagsField,
+    showEnergyLevelField,
+    showAssignedToField,
+    showTimeEstimateField,
+    showPriorityField,
+    selectedPriority,
+    setSelectedPriority,
     allContexts,
     customContext,
     setCustomContext,
@@ -152,12 +201,11 @@ export function InboxProcessingWizard({
     setSelectedProjectId,
     selectedAreaId,
     setSelectedAreaId,
-    scheduleDate,
-    scheduleTimeDraft,
-    setScheduleDate,
-    setScheduleTimeDraft,
-    onScheduleTimeCommit,
+    showProjectField,
+    showAreaField,
     showScheduleFields,
+    scheduleFields,
+    visibleScheduleFieldKeys,
 }: InboxProcessingWizardProps) {
     if (!isProcessing || !processingTask) return null;
 
@@ -191,7 +239,10 @@ export function InboxProcessingWizard({
                             <ChevronLeft className="w-4 h-4" />
                         </button>
                     )}
-                    <h3 className="font-semibold text-[15px]">📋 {t('process.title')}</h3>
+                    <h3 className="font-semibold text-[15px] inline-flex items-center gap-2">
+                        <ClipboardList className="w-4 h-4 text-muted-foreground" aria-hidden="true" />
+                        {t('process.title')}
+                    </h3>
                     <span className="text-[11px] font-medium text-primary bg-primary/10 px-2.5 py-0.5 rounded-full">
                         {remainingCount} {t('process.remaining')}
                     </span>
@@ -276,7 +327,7 @@ export function InboxProcessingWizard({
                                 rows={2}
                             />
                         </div>
-                        {showProjectInRefine && (
+                        {showProjectInRefine && showProjectField && (
                             <div className="space-y-1">
                                 <label className="text-[11px] text-muted-foreground font-medium">{t('taskEdit.projectLabel')}</label>
                                 <ProjectSelector
@@ -301,7 +352,7 @@ export function InboxProcessingWizard({
                                 />
                             </div>
                         )}
-                        {showProjectInRefine && !selectedProjectId && (
+                        {showProjectInRefine && showAreaField && !selectedProjectId && (
                             <div className="space-y-1">
                                 <label className="text-[11px] text-muted-foreground font-medium">{t('taskEdit.areaLabel')}</label>
                                 <select
@@ -441,26 +492,12 @@ export function InboxProcessingWizard({
                         {t('process.nextStepDesc')}
                     </p>
                     {showScheduleFields && (
-                        <div className="space-y-1">
-                            <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.startDateLabel')}</label>
-                            <div className="flex items-center gap-2">
-                                <input
-                                    type="date"
-                                    value={scheduleDate}
-                                    onChange={(e) => setScheduleDate(e.target.value)}
-                                    className="text-xs bg-muted/50 border border-border rounded px-2 py-1 text-foreground"
-                                />
-                                <input
-                                    type="text"
-                                    value={scheduleTimeDraft}
-                                    inputMode="numeric"
-                                    placeholder="HH:MM"
-                                    onChange={(e) => setScheduleTimeDraft(e.target.value)}
-                                    onBlur={onScheduleTimeCommit}
-                                    className="text-xs bg-muted/50 border border-border rounded px-2 py-1 text-foreground"
-                                />
-                            </div>
-                        </div>
+                        <InboxProcessingScheduleFields
+                            t={t}
+                            fields={scheduleFields}
+                            visibleFieldKeys={visibleScheduleFieldKeys}
+                            variant="guided"
+                        />
                     )}
                     <div className="flex gap-3">
                         <button
@@ -532,133 +569,231 @@ export function InboxProcessingWizard({
                         {t('process.contextDesc')} {t('process.selectMultipleHint')}
                     </p>
 
-                    {(selectedContexts.length > 0 || selectedTags.length > 0) && (
+                    {((showContextsField && selectedContexts.length > 0) || (showTagsField && selectedTags.length > 0)) && (
                         <div className="flex flex-wrap gap-2 justify-center p-3 bg-primary/10 rounded-lg">
                             <span className="text-xs text-primary font-medium">{t('process.selectedLabel')}</span>
-                            {selectedContexts.map(ctx => (
-                                <span key={ctx} className="px-2 py-1 bg-primary text-primary-foreground rounded-full text-xs">
-                                    {ctx}
-                                </span>
-                            ))}
-                            {selectedTags.map(tag => (
-                                <button
-                                    key={tag}
-                                    onClick={() => toggleTag(tag)}
-                                    className="px-2 py-1 bg-emerald-500 text-white rounded-full text-xs"
-                                >
-                                    {tag}
-                                </button>
-                            ))}
-                        </div>
-                    )}
-
-                    <div className="flex gap-2">
-                        <input
-                            type="text"
-                            placeholder="@home"
-                            value={customContext}
-                            onChange={(e) => setCustomContext(e.target.value)}
-                            className="flex-1 bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary"
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                    addCustomContext();
-                                }
-                            }}
-                        />
-                        <button
-                            onClick={addCustomContext}
-                            disabled={!customContext.trim()}
-                            className="px-4 py-2 bg-secondary text-secondary-foreground rounded-lg text-sm font-medium hover:bg-secondary/80 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                            +
-                        </button>
-                    </div>
-
-                    {suggestedContexts.length > 0 && (
-                        <div className="space-y-2">
-                            <div className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">
-                                {t('taskEdit.contextsLabel')}
-                            </div>
-                            <div className="flex flex-wrap gap-2 justify-center">
-                                {suggestedContexts.map(ctx => (
-                                    <button
-                                        key={ctx}
-                                        onClick={() => toggleContext(ctx)}
-                                        className={cn(
-                                            'px-4 py-2 rounded-full text-sm font-medium transition-colors',
-                                            selectedContexts.includes(ctx)
-                                                ? 'bg-primary text-primary-foreground'
-                                                : 'bg-muted hover:bg-muted/80'
-                                        )}
-                                    >
+                            {showContextsField
+                                ? selectedContexts.map(ctx => (
+                                    <span key={ctx} className="px-2 py-1 bg-primary text-primary-foreground rounded-full text-xs">
                                         {ctx}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    {allContexts.length > 0 && (
-                        <div className="flex flex-wrap gap-2 justify-center">
-                            {allContexts.filter((ctx) => !suggestedContexts.includes(ctx)).map(ctx => (
-                                <button
-                                    key={ctx}
-                                    onClick={() => toggleContext(ctx)}
-                                    className={`px-4 py-2 rounded-full text-sm font-medium transition-colors ${selectedContexts.includes(ctx)
-                                        ? 'bg-primary text-primary-foreground'
-                                        : 'bg-muted hover:bg-muted/80'
-                                        }`}
-                                >
-                                    {ctx}
-                                </button>
-                            ))}
-                        </div>
-                    )}
-
-                    <div className="space-y-2">
-                        <div className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">
-                            {t('taskEdit.tagsLabel')}
-                        </div>
-                        <div className="flex gap-2">
-                            <input
-                                type="text"
-                                placeholder="#deep-work"
-                                value={customTag}
-                                onChange={(e) => setCustomTag(e.target.value)}
-                                className="flex-1 bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary"
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                        addCustomTag();
-                                    }
-                                }}
-                            />
-                            <button
-                                onClick={addCustomTag}
-                                disabled={!customTag.trim()}
-                                className="px-4 py-2 bg-secondary text-secondary-foreground rounded-lg text-sm font-medium hover:bg-secondary/80 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                +
-                            </button>
-                        </div>
-                        {suggestedTags.length > 0 && (
-                            <div className="flex flex-wrap gap-2 justify-center">
-                                {suggestedTags.map(tag => (
+                                    </span>
+                                ))
+                                : null}
+                            {showTagsField
+                                ? selectedTags.map(tag => (
                                     <button
                                         key={tag}
                                         onClick={() => toggleTag(tag)}
-                                        className={cn(
-                                            'px-4 py-2 rounded-full text-sm font-medium transition-colors',
-                                            selectedTags.includes(tag)
-                                                ? 'bg-emerald-500 text-white'
-                                                : 'bg-muted hover:bg-muted/80'
-                                        )}
+                                        className="px-2 py-1 bg-emerald-500 text-white rounded-full text-xs"
                                     >
                                         {tag}
                                     </button>
-                                ))}
+                                ))
+                                : null}
+                        </div>
+                    )}
+
+                    {showContextsField ? (
+                        <>
+                            <div className="flex gap-2">
+                                <input
+                                    type="text"
+                                    placeholder="@home"
+                                    value={customContext}
+                                    onChange={(e) => setCustomContext(e.target.value)}
+                                    className="flex-1 bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary"
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                            addCustomContext();
+                                        }
+                                    }}
+                                />
+                                <button
+                                    onClick={addCustomContext}
+                                    disabled={!customContext.trim()}
+                                    className="px-4 py-2 bg-secondary text-secondary-foreground rounded-lg text-sm font-medium hover:bg-secondary/80 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    +
+                                </button>
                             </div>
-                        )}
-                    </div>
+
+                            {suggestedContexts.length > 0 && (
+                                <div className="space-y-2">
+                                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">
+                                        {t('taskEdit.contextsLabel')}
+                                    </div>
+                                    <div className="flex flex-wrap gap-2 justify-center">
+                                        {suggestedContexts.map(ctx => (
+                                            <button
+                                                key={ctx}
+                                                onClick={() => toggleContext(ctx)}
+                                                className={cn(
+                                                    'px-4 py-2 rounded-full text-sm font-medium transition-colors',
+                                                    selectedContexts.includes(ctx)
+                                                        ? 'bg-primary text-primary-foreground'
+                                                        : 'bg-muted hover:bg-muted/80'
+                                                )}
+                                            >
+                                                {ctx}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {allContexts.length > 0 && (
+                                <div className="flex flex-wrap gap-2 justify-center">
+                                    {allContexts.filter((ctx) => !suggestedContexts.includes(ctx)).map(ctx => (
+                                        <button
+                                            key={ctx}
+                                            onClick={() => toggleContext(ctx)}
+                                            className={cn(
+                                                'px-4 py-2 rounded-full text-sm font-medium transition-colors',
+                                                selectedContexts.includes(ctx)
+                                                    ? 'bg-primary text-primary-foreground'
+                                                    : 'bg-muted hover:bg-muted/80'
+                                            )}
+                                        >
+                                            {ctx}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </>
+                    ) : null}
+
+                    {showTagsField ? (
+                        <div className="space-y-2">
+                            <div className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">
+                                {t('taskEdit.tagsLabel')}
+                            </div>
+                            <div className="flex gap-2">
+                                <input
+                                    type="text"
+                                    placeholder="#deep-work"
+                                    value={customTag}
+                                    onChange={(e) => setCustomTag(e.target.value)}
+                                    className="flex-1 bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary"
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                            addCustomTag();
+                                        }
+                                    }}
+                                />
+                                <button
+                                    onClick={addCustomTag}
+                                    disabled={!customTag.trim()}
+                                    className="px-4 py-2 bg-secondary text-secondary-foreground rounded-lg text-sm font-medium hover:bg-secondary/80 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    +
+                                </button>
+                            </div>
+                            {suggestedTags.length > 0 && (
+                                <div className="flex flex-wrap gap-2 justify-center">
+                                    {suggestedTags.map(tag => (
+                                        <button
+                                            key={tag}
+                                            onClick={() => toggleTag(tag)}
+                                            className={cn(
+                                                'px-4 py-2 rounded-full text-sm font-medium transition-colors',
+                                                selectedTags.includes(tag)
+                                                    ? 'bg-emerald-500 text-white'
+                                                    : 'bg-muted hover:bg-muted/80'
+                                            )}
+                                        >
+                                            {tag}
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    ) : null}
+
+                    {showPriorityField && (
+                        <div className="space-y-2">
+                            <div className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">
+                                {t('taskEdit.priorityLabel')}
+                            </div>
+                            <div className="flex flex-wrap gap-2 justify-center">
+                                {PRIORITY_OPTIONS.map((priority) => {
+                                    const isSelected = selectedPriority === priority;
+                                    return (
+                                        <button
+                                            key={priority}
+                                            onClick={() => setSelectedPriority(isSelected ? undefined : priority)}
+                                            className={cn(
+                                                'px-4 py-2 rounded-full text-sm font-medium transition-colors',
+                                                isSelected
+                                                    ? 'bg-primary text-primary-foreground'
+                                                    : 'bg-muted hover:bg-muted/80'
+                                            )}
+                                        >
+                                            {t(`priority.${priority}`)}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
+                    {(showEnergyLevelField || showAssignedToField || showTimeEstimateField) && (
+                        <div className="grid gap-3 md:grid-cols-2">
+                            {showEnergyLevelField && (
+                                <div className="space-y-2">
+                                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">
+                                        {t('taskEdit.energyLevel')}
+                                    </div>
+                                    <select
+                                        aria-label={t('taskEdit.energyLevel')}
+                                        value={selectedEnergyLevel ?? ''}
+                                        onChange={(event) => setSelectedEnergyLevel((event.target.value || undefined) as Task['energyLevel'])}
+                                        className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary/40 focus:outline-none"
+                                    >
+                                        <option value="">{t('common.none')}</option>
+                                        {ENERGY_LEVEL_OPTIONS.map((energyLevel) => (
+                                            <option key={energyLevel} value={energyLevel}>
+                                                {t(`energyLevel.${energyLevel}`)}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
+                            {showTimeEstimateField && (
+                                <div className="space-y-2">
+                                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">
+                                        {t('taskEdit.timeEstimateLabel')}
+                                    </div>
+                                    <select
+                                        aria-label={t('taskEdit.timeEstimateLabel')}
+                                        value={selectedTimeEstimate ?? ''}
+                                        onChange={(event) => setSelectedTimeEstimate((event.target.value || undefined) as TimeEstimate | undefined)}
+                                        className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary/40 focus:outline-none"
+                                    >
+                                        <option value="">{t('common.none')}</option>
+                                        {timeEstimateOptions.map((estimate) => (
+                                            <option key={estimate} value={estimate}>
+                                                {formatTimeEstimateLabel(estimate)}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
+                            {showAssignedToField && (
+                                <div className="space-y-2">
+                                    <div className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">
+                                        {t('taskEdit.assignedTo')}
+                                    </div>
+                                    <input
+                                        aria-label={t('taskEdit.assignedTo')}
+                                        value={selectedAssignedTo}
+                                        onChange={(event) => setSelectedAssignedTo(event.target.value)}
+                                        placeholder={t('taskEdit.assignedToPlaceholder')}
+                                        className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary/40 focus:outline-none"
+                                    />
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     <button
                         onClick={handleConfirmContexts}
@@ -737,89 +872,102 @@ export function InboxProcessingWizard({
                         </div>
                     ) : (
                         <>
-                            <div className="space-y-1">
-                                <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.areaLabel')}</label>
-                                <select
-                                    value={selectedAreaId ?? ''}
-                                    onChange={(event) => setSelectedAreaId(event.target.value || null)}
-                                    className="w-full bg-card border border-border rounded-lg py-2 px-3 text-sm focus:ring-2 focus:ring-primary focus:border-transparent"
-                                >
-                                    <option value="">{t('projects.noArea')}</option>
-                                    {areas.map((area) => (
-                                        <option key={area.id} value={area.id}>
-                                            {area.name}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-                            <div className="space-y-2">
-                                <input
-                                    value={projectSearch}
-                                    onChange={(e) => setProjectSearch(e.target.value)}
-                                    onKeyDown={async (e) => {
-                                        if (e.key !== 'Enter') return;
-                                        if (!projectSearch.trim()) return;
-                                        e.preventDefault();
-                                        const title = projectSearch.trim();
-                                        const existing = projects.find((project) => project.title.toLowerCase() === title.toLowerCase());
-                                        if (existing) {
-                                            handleSetProject(existing.id);
-                                            return;
-                                        }
-                                        const created = await addProject(title, DEFAULT_PROJECT_COLOR);
-                                        if (!created) return;
-                                        handleSetProject(created.id);
-                                        setProjectSearch('');
-                                    }}
-                                    placeholder={t('projects.addPlaceholder')}
-                                    className="w-full bg-card border border-border rounded-lg py-2 px-3 text-sm focus:ring-2 focus:ring-primary focus:border-transparent"
-                                />
-                                {!hasExactProjectMatch && projectSearch.trim() && (
-                                    <button
-                                        type="button"
-                                        onClick={async () => {
-                                            const title = projectSearch.trim();
-                                            if (!title) return;
-                                            const created = await addProject(title, DEFAULT_PROJECT_COLOR);
-                                            if (!created) return;
-                                            handleSetProject(created.id);
-                                            setProjectSearch('');
-                                        }}
-                                        className="w-full py-2 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90"
+                            {showAreaField ? (
+                                <div className="space-y-1">
+                                    <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.areaLabel')}</label>
+                                    <select
+                                        value={selectedAreaId ?? ''}
+                                        onChange={(event) => setSelectedAreaId(event.target.value || null)}
+                                        className="w-full bg-card border border-border rounded-lg py-2 px-3 text-sm focus:ring-2 focus:ring-primary focus:border-transparent"
                                     >
-                                        {t('projects.create')} "{projectSearch.trim()}"
-                                    </button>
-                                )}
-                            </div>
-
-                            <button
-                                onClick={() => handleSetProject(null)}
-                                className="w-full py-3 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700"
-                            >
-                                ✓ {t('process.noProject')}
-                            </button>
-
-                            {filteredProjects.length > 0 && (
-                                <div className="space-y-2 max-h-48 overflow-y-auto">
-                                    {filteredProjects.map(project => (
-                                        <button
-                                            key={project.id}
-                                            onClick={() => handleSetProject(project.id)}
-                                            className={cn(
-                                                "w-full flex items-center gap-3 p-3 rounded-lg text-left border",
-                                                selectedProjectId === project.id
-                                                    ? "bg-primary/10 border-primary"
-                                                    : "bg-muted border-transparent hover:bg-muted/80"
-                                            )}
-                                        >
-                                            <div
-                                                className="w-3 h-3 rounded-full"
-                                                style={{ backgroundColor: (project.areaId ? areaById.get(project.areaId)?.color : undefined) || '#6B7280' }}
-                                            />
-                                            <span>{project.title}</span>
-                                        </button>
-                                    ))}
+                                        <option value="">{t('projects.noArea')}</option>
+                                        {areas.map((area) => (
+                                            <option key={area.id} value={area.id}>
+                                                {area.name}
+                                            </option>
+                                        ))}
+                                    </select>
                                 </div>
+                            ) : null}
+                            {showProjectField ? (
+                                <>
+                                    <div className="space-y-2">
+                                        <input
+                                            value={projectSearch}
+                                            onChange={(e) => setProjectSearch(e.target.value)}
+                                            onKeyDown={async (e) => {
+                                                if (e.key !== 'Enter') return;
+                                                if (!projectSearch.trim()) return;
+                                                e.preventDefault();
+                                                const title = projectSearch.trim();
+                                                const existing = projects.find((project) => project.title.toLowerCase() === title.toLowerCase());
+                                                if (existing) {
+                                                    handleSetProject(existing.id);
+                                                    return;
+                                                }
+                                                const created = await addProject(title, DEFAULT_PROJECT_COLOR);
+                                                if (!created) return;
+                                                handleSetProject(created.id);
+                                                setProjectSearch('');
+                                            }}
+                                            placeholder={t('projects.addPlaceholder')}
+                                            className="w-full bg-card border border-border rounded-lg py-2 px-3 text-sm focus:ring-2 focus:ring-primary focus:border-transparent"
+                                        />
+                                        {!hasExactProjectMatch && projectSearch.trim() && (
+                                            <button
+                                                type="button"
+                                                onClick={async () => {
+                                                    const title = projectSearch.trim();
+                                                    if (!title) return;
+                                                    const created = await addProject(title, DEFAULT_PROJECT_COLOR);
+                                                    if (!created) return;
+                                                    handleSetProject(created.id);
+                                                    setProjectSearch('');
+                                                }}
+                                                className="w-full py-2 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90"
+                                            >
+                                                {t('projects.create')} "{projectSearch.trim()}"
+                                            </button>
+                                        )}
+                                    </div>
+
+                                    <button
+                                        onClick={() => handleSetProject(null)}
+                                        className="w-full py-3 bg-green-600 text-white rounded-lg font-medium hover:bg-green-700"
+                                    >
+                                        ✓ {t('process.noProject')}
+                                    </button>
+
+                                    {filteredProjects.length > 0 && (
+                                        <div className="space-y-2 max-h-48 overflow-y-auto">
+                                            {filteredProjects.map(project => (
+                                                <button
+                                                    key={project.id}
+                                                    onClick={() => handleSetProject(project.id)}
+                                                    className={cn(
+                                                        "w-full flex items-center gap-3 p-3 rounded-lg text-left border",
+                                                        selectedProjectId === project.id
+                                                            ? "bg-primary/10 border-primary"
+                                                            : "bg-muted border-transparent hover:bg-muted/80"
+                                                    )}
+                                                >
+                                                    <div
+                                                        className="w-3 h-3 rounded-full"
+                                                        style={{ backgroundColor: (project.areaId ? areaById.get(project.areaId)?.color : undefined) || '#6B7280' }}
+                                                    />
+                                                    <span>{project.title}</span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                </>
+                            ) : (
+                                <button
+                                    onClick={() => handleSetProject(null)}
+                                    className="w-full py-3 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90"
+                                >
+                                    {t('process.next')}
+                                </button>
                             )}
                         </>
                     )}
@@ -829,4 +977,6 @@ export function InboxProcessingWizard({
             </div>
         </div>
     );
-}
+});
+
+InboxProcessingWizard.displayName = 'InboxProcessingWizard';

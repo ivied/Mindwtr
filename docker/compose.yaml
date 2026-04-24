@@ -20,6 +20,7 @@ services:
     environment:
       - MINDWTR_CLOUD_AUTH_TOKENS=${MINDWTR_CLOUD_AUTH_TOKENS:?MINDWTR_CLOUD_AUTH_TOKENS must be set}
       - MINDWTR_CLOUD_ALLOW_ANY_TOKEN=${MINDWTR_CLOUD_ALLOW_ANY_TOKEN:-false}
+      - MINDWTR_CLOUD_CORS_ORIGIN=${MINDWTR_CLOUD_CORS_ORIGIN:-*}
     volumes:
       - ./data:/app/cloud_data
 
@@ -33,6 +34,9 @@ services:
     restart: always
     cpus: "1.0"
     mem_limit: 512m
+    depends_on:
+      mindwtr-cloud:
+        condition: service_healthy
     ports:
       - 5173:5173
 

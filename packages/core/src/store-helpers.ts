@@ -6,9 +6,18 @@ import { generateUUID as uuidv4 } from './uuid';
 import type { DerivedState, SaveBaseState } from './store-types';
 
 type EntityWithId = { id: string };
+type EntityWithRevision = EntityWithId & {
+    updatedAt?: string;
+    rev?: number;
+    revBy?: string;
+    deletedAt?: string;
+    purgedAt?: string;
+};
 
-const projectOrderCache = new WeakMap<Task[], Map<string, number>>();
-const reservedProjectOrders = new WeakMap<Task[], Map<string, number>>();
+let projectOrderCacheRef: Task[] | null = null;
+let projectOrderCacheValue: Map<string, number> | null = null;
+let reservedProjectOrdersRef: Task[] | null = null;
+let reservedProjectOrdersValue: Map<string, number> | null = null;
 
 export const normalizeRevision = (value?: number): number => (typeof value === 'number' && Number.isFinite(value) ? value : 0);
 
@@ -107,17 +116,84 @@ export const isTaskVisible = (task?: Task | null, options?: TaskVisibilityOption
     return true;
 };
 
+export const toVisibleTask = (task: Task): Task => {
+    const attachments = task.attachments;
+    if (!attachments || attachments.length === 0) return task;
+    const visibleAttachments = attachments.filter((attachment) => !attachment.deletedAt);
+    return visibleAttachments.length === attachments.length
+        ? task
+        : { ...task, attachments: visibleAttachments };
+};
+
+export const selectVisibleTasks = (tasks: Task[]): Task[] =>
+    tasks.filter((task) => isTaskVisible(task)).map(toVisibleTask);
+
+export const selectVisibleProjects = (projects: Project[]): Project[] =>
+    projects.filter((project) => !project.deletedAt);
+
+export const selectVisibleSections = (sections: Section[]): Section[] =>
+    sections.filter((section) => !section.deletedAt);
+
+export const selectVisibleAreas = (areas: Area[]): Area[] =>
+    areas.filter((area) => !area.deletedAt);
+
+export const buildEntityMap = <T extends EntityWithId>(items: readonly T[]): Map<string, T> =>
+    new Map(items.map((item) => [item.id, item] as const));
+
+export const reuseArrayIfShallowEqual = <T>(previous: T[], next: T[]): T[] => (
+    previous.length === next.length && previous.every((item, index) => item === next[index])
+        ? previous
+        : next
+);
+
+export const hasSameEntityIdentity = <T extends EntityWithRevision>(existing: T, incoming: T): boolean => (
+    existing.updatedAt === incoming.updatedAt
+    && normalizeRevision(existing.rev) === normalizeRevision(incoming.rev)
+    && existing.revBy === incoming.revBy
+    && existing.deletedAt === incoming.deletedAt
+    && existing.purgedAt === incoming.purgedAt
+);
+
+export const reconcileEntityCollection = <T extends EntityWithRevision>(
+    previousItems: readonly T[],
+    previousById: Map<string, T>,
+    incomingItems: readonly T[]
+): { items: T[]; byId: Map<string, T> } => {
+    let changed = previousItems.length !== incomingItems.length;
+    const nextItems = incomingItems.map((incoming, index) => {
+        const existing = previousById.get(incoming.id);
+        const resolved = existing && hasSameEntityIdentity(existing, incoming) ? existing : incoming;
+        if (!changed && previousItems[index] !== resolved) {
+            changed = true;
+        }
+        return resolved;
+    });
+
+    if (!changed) {
+        return {
+            items: previousItems as T[],
+            byId: previousById,
+        };
+    }
+
+    return {
+        items: nextItems,
+        byId: buildEntityMap(nextItems),
+    };
+};
+
 export const updateVisibleTasks = (visible: Task[], previous?: Task | null, next?: Task | null): Task[] => {
     const wasVisible = isTaskVisible(previous);
     const isVisible = isTaskVisible(next);
+    const visibleNext = next && isVisible ? toVisibleTask(next) : next;
     if (wasVisible && isVisible && next) {
-        return visible.map((task) => (task.id === next.id ? next : task));
+        return visible.map((task) => (task.id === visibleNext!.id ? visibleNext! : task));
     }
     if (wasVisible && !isVisible && previous) {
         return visible.filter((task) => task.id !== previous.id);
     }
     if (!wasVisible && isVisible && next) {
-        return [...visible, next];
+        return [...visible, visibleNext!];
     }
     return visible;
 };
@@ -175,32 +251,40 @@ export const computeDerivedState = (tasks: Task[], projects: Project[]): Derived
     };
 };
 
-export const computeProjectDerivedState = (projects: Project[]): Pick<DerivedState, 'projectMap' | 'sequentialProjectIds'> => {
-    const projectMap = new Map<string, Project>();
+export const computeProjectDerivedState = (
+    projects: Iterable<Project>,
+    projectMap?: Map<string, Project>
+): Pick<DerivedState, 'projectMap' | 'sequentialProjectIds'> => {
+    const resolvedProjectMap = projectMap ?? new Map<string, Project>();
     const sequentialProjectIds = new Set<string>();
 
-    projects.forEach((project) => {
-        projectMap.set(project.id, project);
+    for (const project of projects) {
+        if (!projectMap) {
+            resolvedProjectMap.set(project.id, project);
+        }
         if (project.isSequential && !project.deletedAt) {
             sequentialProjectIds.add(project.id);
         }
-    });
+    }
 
     return {
-        projectMap,
+        projectMap: resolvedProjectMap,
         sequentialProjectIds,
     };
 };
 
 export const computeTaskDerivedState = (
-    tasks: Task[]
+    tasks: Task[],
+    tasksById?: Map<string, Task>
 ): Pick<DerivedState, 'tasksById' | 'activeTasksByStatus' | 'allContexts' | 'allTags' | 'focusedCount'> => {
-    const tasksById = new Map<string, Task>();
+    const resolvedTasksById = tasksById ?? new Map<string, Task>();
     const activeTasksByStatus = new Map<TaskStatus, Task[]>();
     let focusedCount = 0;
 
     tasks.forEach((task) => {
-        tasksById.set(task.id, task);
+        if (!tasksById) {
+            resolvedTasksById.set(task.id, task);
+        }
         if (task.deletedAt) return;
         const list = activeTasksByStatus.get(task.status) ?? [];
         list.push(task);
@@ -211,7 +295,7 @@ export const computeTaskDerivedState = (
     });
 
     return {
-        tasksById,
+        tasksById: resolvedTasksById,
         activeTasksByStatus,
         allContexts: getUsedTaskTokens(tasks, (task) => task.contexts, { prefix: '@' }),
         allTags: getUsedTaskTokens(tasks, (task) => task.tags, { prefix: '#' }),
@@ -285,8 +369,9 @@ export const getTaskOrder = (task: Pick<Task, 'order' | 'orderNum'>): number | u
 };
 
 const getProjectOrderIndex = (tasks: Task[]): Map<string, number> => {
-    const cached = projectOrderCache.get(tasks);
-    if (cached) return cached;
+    if (projectOrderCacheRef === tasks && projectOrderCacheValue) {
+        return projectOrderCacheValue;
+    }
     const nextCache = new Map<string, number>();
     for (const task of tasks) {
         if (task.deletedAt || !task.projectId) continue;
@@ -296,7 +381,12 @@ const getProjectOrderIndex = (tasks: Task[]): Map<string, number> => {
             nextCache.set(task.projectId, order);
         }
     }
-    projectOrderCache.set(tasks, nextCache);
+    projectOrderCacheRef = tasks;
+    projectOrderCacheValue = nextCache;
+    if (reservedProjectOrdersRef !== tasks) {
+        reservedProjectOrdersRef = tasks;
+        reservedProjectOrdersValue = null;
+    }
     return nextCache;
 };
 
@@ -313,8 +403,11 @@ export const reserveNextProjectOrder = (
     tasks: Task[]
 ): number | undefined => {
     if (!projectId) return undefined;
-    const snapshotReservations = reservedProjectOrders.get(tasks) ?? new Map<string, number>();
-    reservedProjectOrders.set(tasks, snapshotReservations);
+    if (reservedProjectOrdersRef !== tasks || !reservedProjectOrdersValue) {
+        reservedProjectOrdersRef = tasks;
+        reservedProjectOrdersValue = new Map<string, number>();
+    }
+    const snapshotReservations = reservedProjectOrdersValue;
     const reserved = snapshotReservations.get(projectId);
     if (typeof reserved === 'number') {
         snapshotReservations.set(projectId, reserved + 1);

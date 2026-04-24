@@ -1,11 +1,11 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, mock } from 'bun:test'
 import { Classifier } from './classifier'
 import type { LLMClient } from './client'
 import type { ClassifierInput } from './types'
 
 function mockLLM(response: Record<string, unknown>): LLMClient {
   return {
-    chatCompletion: vi.fn().mockResolvedValue({
+    chatCompletion: mock().mockResolvedValue({
       choices: [
         {
           message: {
@@ -119,7 +119,7 @@ describe('Classifier', () => {
 
   it('throws when LLM does not return tool call', async () => {
     const classifier = new Classifier({
-      chatCompletion: vi.fn().mockResolvedValue({
+      chatCompletion: mock().mockResolvedValue({
         choices: [{ message: { role: 'assistant', content: 'no tool call' }, finish_reason: 'stop' }],
       }),
     } as unknown as LLMClient)
@@ -129,7 +129,7 @@ describe('Classifier', () => {
 
   it('throws on invalid JSON in tool call', async () => {
     const classifier = new Classifier({
-      chatCompletion: vi.fn().mockResolvedValue({
+      chatCompletion: mock().mockResolvedValue({
         choices: [
           {
             message: {

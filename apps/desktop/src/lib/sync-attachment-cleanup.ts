@@ -18,6 +18,7 @@ import {
     createCooperativeYield,
     getFileSyncDir,
     isTempAttachmentFile,
+    resolveFileBackendPath,
     stripFileScheme,
     type SyncBackend,
 } from './sync-service-utils';
@@ -227,7 +228,7 @@ export const cleanupOrphanedAttachments = async (
             } else if (backend === 'file' && fileBaseDir) {
                 const { remove } = await import('@tauri-apps/plugin-fs');
                 const { join } = await import('@tauri-apps/api/path');
-                const targetPath = await join(fileBaseDir, target.cloudKey);
+                const targetPath = await resolveFileBackendPath(join, fileBaseDir, target.cloudKey);
                 await remove(targetPath);
             }
         } catch (error) {

@@ -1,3 +1,5 @@
+export const SQLITE_SCHEMA_VERSION = 3;
+
 export const SQLITE_BASE_SCHEMA = `
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
@@ -7,6 +9,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   title TEXT NOT NULL,
   status TEXT NOT NULL,
   priority TEXT,
+  energyLevel TEXT,
+  assignedTo TEXT,
   taskMode TEXT,
   startTime TEXT,
   dueDate TEXT,
@@ -47,6 +51,7 @@ CREATE TABLE IF NOT EXISTS projects (
   isFocused INTEGER,
   supportNotes TEXT,
   attachments TEXT,
+  dueDate TEXT,
   reviewAt TEXT,
   areaId TEXT REFERENCES areas(id) ON DELETE SET NULL,
   areaTitle TEXT,
@@ -65,8 +70,8 @@ CREATE TABLE IF NOT EXISTS areas (
   orderNum INTEGER NOT NULL,
   rev INTEGER,
   revBy TEXT,
-  createdAt TEXT,
-  updatedAt TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
   deletedAt TEXT
 );
 
@@ -91,6 +96,15 @@ CREATE TABLE IF NOT EXISTS settings (
 
 CREATE TABLE IF NOT EXISTS schema_migrations (
   version INTEGER PRIMARY KEY
+);
+
+CREATE TABLE IF NOT EXISTS calendar_sync (
+  task_id TEXT NOT NULL,
+  calendar_event_id TEXT NOT NULL,
+  calendar_id TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  last_synced_at TEXT NOT NULL,
+  PRIMARY KEY (task_id, platform)
 );
 
 INSERT OR IGNORE INTO schema_migrations (version) VALUES (1);
@@ -175,6 +189,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_section_id ON tasks(sectionId);
 CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
 CREATE INDEX IF NOT EXISTS idx_projects_areaId ON projects(areaId);
 CREATE INDEX IF NOT EXISTS idx_projects_area_order ON projects(areaId, orderNum);
+CREATE INDEX IF NOT EXISTS idx_projects_dueDate ON projects(dueDate);
 `;
 
 export const SQLITE_FTS_SCHEMA = `

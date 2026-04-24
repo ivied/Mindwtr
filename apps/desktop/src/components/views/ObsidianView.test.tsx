@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 
 import { LanguageProvider } from '../../contexts/language-context';
 import { useObsidianStore } from '../../store/obsidian-store';
@@ -24,21 +24,22 @@ beforeEach(() => {
     act(() => {
         useObsidianStore.setState((state) => ({
             ...state,
-                config: {
-                    vaultPath: null,
-                    vaultName: '',
-                    scanFolders: ['/'],
-                    inboxFile: 'Mindwtr/Inbox.md',
-                    taskNotesIncludeArchived: false,
-                    newTaskFormat: 'auto',
-                    lastScannedAt: null,
-                    enabled: false,
-                },
-                tasks: [],
-                scannedFileCount: 0,
-                scannedRelativePaths: [],
-                importMode: 'inline',
-                hasScannedThisSession: true,
+            config: {
+                vaultPath: null,
+                vaultName: '',
+                scanFolders: ['/'],
+                inboxFile: 'Mindwtr/Inbox.md',
+                taskNotesIncludeArchived: false,
+                newTaskFormat: 'auto',
+                lastScannedAt: null,
+                enabled: false,
+            },
+            tasks: [],
+            scannedFileCount: 0,
+            scannedRelativePaths: [],
+            taskNotesDetectedPaths: [],
+            importMode: 'inline',
+            hasScannedThisSession: true,
             hasVaultMarker: null,
             isInitialized: true,
             isLoadingConfig: false,
@@ -82,6 +83,7 @@ describe('ObsidianView', () => {
                     enabled: true,
                 },
                 scannedFileCount: 3,
+                taskNotesDetectedPaths: [],
                 importMode: 'inline',
                 isWatching: true,
                 tasks: [{
@@ -115,6 +117,75 @@ describe('ObsidianView', () => {
         expect(getByText('Watching for changes')).toBeInTheDocument();
     });
 
+    it('hides completed tasks by default and reveals them on toggle', () => {
+        act(() => {
+            useObsidianStore.setState((state) => ({
+                ...state,
+                config: {
+                    vaultPath: '/Vault',
+                    vaultName: 'Vault',
+                    scanFolders: ['/'],
+                    inboxFile: 'Mindwtr/Inbox.md',
+                    taskNotesIncludeArchived: false,
+                    newTaskFormat: 'auto',
+                    lastScannedAt: '2026-03-14T11:00:00.000Z',
+                    enabled: true,
+                },
+                scannedFileCount: 2,
+                taskNotesDetectedPaths: [],
+                importMode: 'inline',
+                isWatching: true,
+                tasks: [
+                    {
+                        id: 'obsidian-open',
+                        text: 'Open follow-up',
+                        completed: false,
+                        tags: [],
+                        wikiLinks: [],
+                        nestingLevel: 0,
+                        source: {
+                            vaultName: 'Vault',
+                            vaultPath: '/Vault',
+                            relativeFilePath: 'Projects/Alpha.md',
+                            lineNumber: 12,
+                            fileModifiedAt: '2026-03-14T10:00:00.000Z',
+                            noteTags: [],
+                        },
+                        format: 'inline',
+                    },
+                    {
+                        id: 'obsidian-done',
+                        text: 'Closed follow-up',
+                        completed: true,
+                        tags: [],
+                        wikiLinks: [],
+                        nestingLevel: 0,
+                        source: {
+                            vaultName: 'Vault',
+                            vaultPath: '/Vault',
+                            relativeFilePath: 'Projects/Alpha.md',
+                            lineNumber: 18,
+                            fileModifiedAt: '2026-03-14T10:00:00.000Z',
+                            noteTags: [],
+                        },
+                        format: 'inline',
+                    },
+                ],
+            }));
+        });
+
+        const { getByRole, getByText, queryByText } = renderWithProviders();
+
+        expect(getByText('Open follow-up')).toBeInTheDocument();
+        expect(queryByText('Closed follow-up')).not.toBeInTheDocument();
+        expect(getByText('Completed hidden: 1')).toBeInTheDocument();
+
+        fireEvent.click(getByRole('button', { name: 'Show completed' }));
+
+        expect(getByText('Closed follow-up')).toBeInTheDocument();
+        expect(queryByText('Completed hidden: 1')).not.toBeInTheDocument();
+    });
+
     it('rescans once when a configured vault has not been scanned in this session', async () => {
         const rescan = vi.fn().mockResolvedValue(undefined);
 
@@ -131,6 +202,7 @@ describe('ObsidianView', () => {
                     lastScannedAt: null,
                     enabled: true,
                 },
+                taskNotesDetectedPaths: [],
                 importMode: 'inline',
                 hasScannedThisSession: false,
                 rescan,
@@ -159,6 +231,10 @@ describe('ObsidianView', () => {
                     enabled: true,
                 },
                 scannedFileCount: 1,
+                taskNotesDetectedPaths: [
+                    'TaskNotes/Archive/Old task.md',
+                    'TaskNotes/Review quarterly report.md',
+                ],
                 importMode: 'tasknotes',
                 tasks: [{
                     id: 'obsidian-tasknotes-1',
@@ -200,5 +276,8 @@ describe('ObsidianView', () => {
         expect(getByText('@office')).toBeInTheDocument();
         expect(getByText(/120m/)).toBeInTheDocument();
         expect(getByText(/Creates a new TaskNotes file in/)).toBeInTheDocument();
+        expect(getByText('TaskNotes mode is active')).toBeInTheDocument();
+        expect(getByText('TaskNotes/Archive/Old task.md')).toBeInTheDocument();
+        expect(getAllByText('TaskNotes/Review quarterly report.md').length).toBeGreaterThan(0);
     });
 });

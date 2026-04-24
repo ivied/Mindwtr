@@ -1,7 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
-import { CLOCK_SKEW_THRESHOLD_MS, mergeAppData, mergeAppDataWithStats, filterDeleted, appendSyncHistory } from './sync';
+import { CLOCK_SKEW_THRESHOLD_MS, mergeAppData, mergeAppDataWithStats } from './sync';
+import { chooseDeterministicWinner } from './sync-signatures';
 import { createMockArea, createMockProject, createMockSection, createMockTask, mockAppData } from './sync-test-utils';
 import { AppData, Task, Project, Attachment, Section, Area } from './types';
+
+const parseLoggedContext = (value: unknown): Record<string, unknown> => {
+    expect(typeof value).toBe('string');
+    return JSON.parse(String(value)) as Record<string, unknown>;
+};
 
 describe('Sync Logic', () => {
     describe('mergeAppData', () => {
@@ -739,7 +745,7 @@ describe('Sync Logic', () => {
             expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:00:00.000Z');
         });
 
-        it('prefers delete when live update falls inside the ambiguity window', () => {
+        it('prefers live data when live update falls inside the ambiguity window', () => {
             const local = mockAppData([
                 createMockTask('1', '2023-01-02T00:00:00.100Z'),
             ]);
@@ -750,11 +756,26 @@ describe('Sync Logic', () => {
             const merged = mergeAppData(local, incoming);
 
             expect(merged.tasks).toHaveLength(1);
-            expect(merged.tasks[0].deletedAt).toBe('2023-01-02T00:00:00.000Z');
-            expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:00:00.000Z');
+            expect(merged.tasks[0].deletedAt).toBeUndefined();
+            expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:00:00.100Z');
         });
 
-        it('prefers delete when delete time is only 100ms newer', () => {
+        it('prefers live data when live update is 20 seconds newer inside the ambiguity window', () => {
+            const local = mockAppData([
+                createMockTask('1', '2023-01-02T00:00:20.000Z'),
+            ]);
+            const incoming = mockAppData([
+                createMockTask('1', '2023-01-02T00:00:00.000Z', '2023-01-02T00:00:00.000Z'),
+            ]);
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.tasks).toHaveLength(1);
+            expect(merged.tasks[0].deletedAt).toBeUndefined();
+            expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:00:20.000Z');
+        });
+
+        it('prefers live data when delete time is only 100ms newer', () => {
             const local = mockAppData([
                 createMockTask('1', '2023-01-02T00:00:00.100Z', '2023-01-02T00:00:00.100Z'),
             ]);
@@ -765,8 +786,8 @@ describe('Sync Logic', () => {
             const merged = mergeAppData(local, incoming);
 
             expect(merged.tasks).toHaveLength(1);
-            expect(merged.tasks[0].deletedAt).toBe('2023-01-02T00:00:00.100Z');
-            expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:00:00.100Z');
+            expect(merged.tasks[0].deletedAt).toBeUndefined();
+            expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:00:00.000Z');
         });
 
         it('resolves equal revision delete-vs-live conflicts consistently across sync direction', () => {
@@ -788,10 +809,51 @@ describe('Sync Logic', () => {
 
             expect(forward.tasks).toHaveLength(1);
             expect(forward.tasks[0]).toEqual(reverse.tasks[0]);
-            expect(forward.tasks[0].deletedAt).toBe('2023-01-02T00:00:00.000Z');
+            expect(forward.tasks[0].deletedAt).toBeUndefined();
+            expect(forward.tasks[0].title).toBe('aa live');
         });
 
-        it('prefers delete over revBy tie-breaks inside the ambiguity window', () => {
+        it('logs when a live item is preserved inside the delete ambiguity window', () => {
+            const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+            const deletedTask = {
+                ...createMockTask('1', '2023-01-02T00:00:00.000Z', '2023-01-02T00:00:00.000Z'),
+                rev: 7,
+                revBy: 'device-a',
+            } satisfies Task;
+            const liveTask = {
+                ...createMockTask('1', '2023-01-02T00:00:00.000Z'),
+                rev: 7,
+                revBy: 'device-a',
+            } satisfies Task;
+
+            const merged = mergeAppData(mockAppData([deletedTask]), mockAppData([liveTask]));
+
+            expect(merged.tasks).toHaveLength(1);
+            expect(merged.tasks[0].deletedAt).toBeUndefined();
+
+            const warningCall = warnSpy.mock.calls.find(([message]) => (
+                message === 'Preserved live item during ambiguous delete-vs-live merge'
+            ));
+            expect(warningCall).toBeTruthy();
+            const [, warningMeta] = warningCall ?? [];
+            expect(warningMeta).toEqual(
+                expect.objectContaining({
+                    scope: 'sync',
+                    category: 'sync',
+                    context: expect.any(String),
+                })
+            );
+            expect(parseLoggedContext(warningMeta?.context)).toMatchObject({
+                entityType: 'task',
+                id: '1',
+                operationDiffMs: 0,
+                localDeletedAt: '2023-01-02T00:00:00.000Z',
+                localRev: 7,
+                incomingRev: 7,
+            });
+        });
+
+        it('prefers live data over revBy tie-breaks inside the ambiguity window', () => {
             const deletedTask = {
                 ...createMockTask('1', '2023-01-02T00:00:00.000Z', '2023-01-02T00:00:00.000Z'),
                 rev: 7,
@@ -806,7 +868,7 @@ describe('Sync Logic', () => {
             const merged = mergeAppData(mockAppData([deletedTask]), mockAppData([liveTask]));
 
             expect(merged.tasks).toHaveLength(1);
-            expect(merged.tasks[0].deletedAt).toBe('2023-01-02T00:00:00.000Z');
+            expect(merged.tasks[0].deletedAt).toBeUndefined();
         });
 
         it('prefers newer timestamp when revisions tie but revBy differs', () => {
@@ -848,6 +910,26 @@ describe('Sync Logic', () => {
 
             expect(merged.tasks).toHaveLength(1);
             expect(merged.tasks[0].title).toBe('incoming');
+        });
+
+        it('falls back to deterministic tie-break when only one side has revBy', () => {
+            const localTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                title: 'alpha',
+                rev: 7,
+                revBy: 'device-z',
+            } satisfies Task;
+            const incomingTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                title: 'zulu',
+                rev: 7,
+            } satisfies Task;
+
+            const merged = mergeAppData(mockAppData([localTask]), mockAppData([incomingTask]));
+
+            expect(merged.tasks).toHaveLength(1);
+            expect(merged.tasks[0].title).toBe('zulu');
+            expect(merged.tasks[0].title).toBe(chooseDeterministicWinner(localTask, incomingTask).title);
         });
 
         it('counts a conflict when revision metadata matches but content differs', () => {
@@ -953,6 +1035,122 @@ describe('Sync Logic', () => {
             expect(result.stats.tasks.conflictIds).toContain('1');
         });
 
+        it('does not count conflict when only file attachment transport metadata differs', () => {
+            const localTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                rev: 7,
+                revBy: 'device-a',
+                attachments: [{
+                    id: 'att-1',
+                    kind: 'file',
+                    title: 'doc.txt',
+                    uri: '/local/doc.txt',
+                    localStatus: 'available',
+                    createdAt: '2023-01-01T00:00:00.000Z',
+                    updatedAt: '2023-01-02T00:00:00.000Z',
+                }],
+            } satisfies Task;
+            const incomingTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                rev: 7,
+                revBy: 'device-a',
+                attachments: [{
+                    id: 'att-1',
+                    kind: 'file',
+                    title: 'doc.txt',
+                    uri: '',
+                    cloudKey: 'attachments/att-1.txt',
+                    fileHash: 'hash-1',
+                    createdAt: '2023-01-01T00:00:00.000Z',
+                    updatedAt: '2023-01-02T00:00:00.000Z',
+                }],
+            } satisfies Task;
+
+            const result = mergeAppDataWithStats(mockAppData([localTask]), mockAppData([incomingTask]));
+            const attachment = result.data.tasks[0].attachments?.find((item) => item.id === 'att-1');
+
+            expect(result.data.tasks).toHaveLength(1);
+            expect(result.stats.tasks.conflicts).toBe(0);
+            expect(result.stats.tasks.conflictIds).toHaveLength(0);
+            expect(attachment?.uri).toBe('/local/doc.txt');
+            expect(attachment?.localStatus).toBe('available');
+            expect(attachment?.cloudKey).toBe('attachments/att-1.txt');
+            expect(attachment?.fileHash).toBe('hash-1');
+        });
+
+        it('does not count conflict when attachment order differs but content matches', () => {
+            const attachmentA: Attachment = {
+                id: 'att-a',
+                kind: 'file',
+                title: 'a.txt',
+                uri: '/tmp/a.txt',
+                localStatus: 'available',
+                createdAt: '2023-01-01T00:00:00.000Z',
+                updatedAt: '2023-01-02T00:00:00.000Z',
+            };
+            const attachmentB: Attachment = {
+                id: 'att-b',
+                kind: 'link',
+                title: 'Docs',
+                uri: 'https://example.com/docs',
+                createdAt: '2023-01-01T00:00:00.000Z',
+                updatedAt: '2023-01-02T00:00:00.000Z',
+            };
+            const localTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                rev: 7,
+                revBy: 'device-a',
+                attachments: [attachmentB, attachmentA],
+            } satisfies Task;
+            const incomingTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                rev: 7,
+                revBy: 'device-a',
+                attachments: [attachmentA, attachmentB],
+            } satisfies Task;
+
+            const result = mergeAppDataWithStats(mockAppData([localTask]), mockAppData([incomingTask]));
+
+            expect(result.data.tasks).toHaveLength(1);
+            expect(result.stats.tasks.conflicts).toBe(0);
+            expect(result.stats.tasks.conflictIds).toHaveLength(0);
+        });
+
+        it('counts conflict when link attachment content differs', () => {
+            const localTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                rev: 7,
+                revBy: 'device-a',
+                attachments: [{
+                    id: 'att-link',
+                    kind: 'link',
+                    title: 'Docs',
+                    uri: 'https://example.com/docs-a',
+                    createdAt: '2023-01-01T00:00:00.000Z',
+                    updatedAt: '2023-01-02T00:00:00.000Z',
+                }],
+            } satisfies Task;
+            const incomingTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                rev: 7,
+                revBy: 'device-a',
+                attachments: [{
+                    id: 'att-link',
+                    kind: 'link',
+                    title: 'Docs',
+                    uri: 'https://example.com/docs-b',
+                    createdAt: '2023-01-01T00:00:00.000Z',
+                    updatedAt: '2023-01-02T00:00:00.000Z',
+                }],
+            } satisfies Task;
+
+            const result = mergeAppDataWithStats(mockAppData([localTask]), mockAppData([incomingTask]));
+
+            expect(result.data.tasks).toHaveLength(1);
+            expect(result.stats.tasks.conflicts).toBe(1);
+            expect(result.stats.tasks.conflictIds).toContain('1');
+        });
+
         it('resolves equal revision/timestamp conflicts consistently across sync direction', () => {
             const localTask = {
                 ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
@@ -1007,7 +1205,7 @@ describe('Sync Logic', () => {
             expect(forward.tasks[0]).toEqual(reverse.tasks[0]);
         });
 
-        it('prefers delete when delete-vs-live operation times are equal', () => {
+        it('prefers live data when delete-vs-live operation times are equal', () => {
             const local = mockAppData([
                 createMockTask('1', '2023-01-02T00:00:00.000Z', '2023-01-02T00:05:00.000Z'),
             ]);
@@ -1018,13 +1216,13 @@ describe('Sync Logic', () => {
             const merged = mergeAppData(local, incoming);
 
             expect(merged.tasks).toHaveLength(1);
-            expect(merged.tasks[0].deletedAt).toBe('2023-01-02T00:05:00.000Z');
-            expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:00:00.000Z');
+            expect(merged.tasks[0].deletedAt).toBeUndefined();
+            expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:05:00.000Z');
         });
 
         it('still prefers delete when it is more than the ambiguity window newer than live', () => {
             const local = mockAppData([
-                createMockTask('1', '2023-01-02T00:00:06.000Z', '2023-01-02T00:00:06.000Z'),
+                createMockTask('1', '2023-01-02T00:00:31.000Z', '2023-01-02T00:00:31.000Z'),
             ]);
             const incoming = mockAppData([
                 createMockTask('1', '2023-01-02T00:00:00.000Z'),
@@ -1033,8 +1231,8 @@ describe('Sync Logic', () => {
             const merged = mergeAppData(local, incoming);
 
             expect(merged.tasks).toHaveLength(1);
-            expect(merged.tasks[0].deletedAt).toBe('2023-01-02T00:00:06.000Z');
-            expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:00:06.000Z');
+            expect(merged.tasks[0].deletedAt).toBe('2023-01-02T00:00:31.000Z');
+            expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:00:31.000Z');
         });
 
         it('treats invalid deletedAt as a conservative deletion timestamp', () => {
@@ -1045,11 +1243,12 @@ describe('Sync Logic', () => {
                 createMockTask('1', '2023-01-02T00:00:00.000Z'),
             ]);
 
-            const merged = mergeAppData(local, incoming);
+            const merged = mergeAppDataWithStats(local, incoming);
 
-            expect(merged.tasks).toHaveLength(1);
-            expect(merged.tasks[0].deletedAt).toBeUndefined();
-            expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:00:00.000Z');
+            expect(merged.data.tasks).toHaveLength(1);
+            expect(merged.data.tasks[0].deletedAt).toBeUndefined();
+            expect(merged.data.tasks[0].updatedAt).toBe('2023-01-02T00:00:00.000Z');
+            expect(merged.stats.tasks.invalidTimestamps).toBe(1);
         });
 
         it('uses deletedAt as delete operation time when deciding delete-vs-live beyond skew window', () => {
@@ -1126,14 +1325,23 @@ describe('Sync Logic', () => {
             }
         });
 
-        it('prefers newer item when timestamps are within skew threshold', () => {
-            const local = mockAppData([createMockTask('1', '2023-01-02T00:00:00.000Z')]);
-            const incoming = mockAppData([createMockTask('1', '2023-01-02T00:04:00.000Z')]);
+        it('uses a deterministic winner for legacy records when timestamps are within skew threshold', () => {
+            const olderTask = {
+                ...createMockTask('1', '2023-01-02T00:00:00.000Z'),
+                title: 'Bravo',
+            } satisfies Task;
+            const newerTask = {
+                ...createMockTask('1', '2023-01-02T00:04:00.000Z'),
+                title: 'Alpha',
+            } satisfies Task;
 
-            const merged = mergeAppData(local, incoming);
+            const expectedWinner = chooseDeterministicWinner(olderTask, newerTask);
+            const forward = mergeAppData(mockAppData([olderTask]), mockAppData([newerTask]));
+            const reverse = mergeAppData(mockAppData([newerTask]), mockAppData([olderTask]));
 
-            expect(merged.tasks).toHaveLength(1);
-            expect(merged.tasks[0].updatedAt).toBe('2023-01-02T00:04:00.000Z');
+            expect(forward.tasks).toHaveLength(1);
+            expect(forward.tasks[0]).toEqual(reverse.tasks[0]);
+            expect(forward.tasks[0].title).toBe(expectedWinner.title);
         });
 
         it('treats empty updatedAt as older than a valid epoch timestamp', () => {
@@ -1170,6 +1378,30 @@ describe('Sync Logic', () => {
             expect(stats.projects.timestampAdjustments).toBe(1);
         });
 
+        it('reuses a recoverable peer createdAt before falling back to updatedAt', () => {
+            const localProject: Project = {
+                ...createMockProject('p1', '2023-01-02T00:03:00.000Z'),
+                title: 'local wins',
+                createdAt: '2023-01-02T00:05:00.000Z',
+            };
+            const incomingProject: Project = {
+                ...createMockProject('p1', '2023-01-02T00:01:00.000Z'),
+                title: 'incoming older',
+                createdAt: '2023-01-02T00:00:00.000Z',
+            };
+
+            const { data, stats } = mergeAppDataWithStats(
+                mockAppData([], [localProject]),
+                mockAppData([], [incomingProject])
+            );
+
+            expect(data.projects).toHaveLength(1);
+            expect(data.projects[0].title).toBe('local wins');
+            expect(data.projects[0].updatedAt).toBe('2023-01-02T00:03:00.000Z');
+            expect(data.projects[0].createdAt).toBe('2023-01-02T00:00:00.000Z');
+            expect(stats.projects.timestampAdjustments).toBe(1);
+        });
+
         it('should revive item if update is newer than deletion', () => {
             // This case implies "undo delete" or "re-edit" happened after delete on another device
             const local = mockAppData([createMockTask('1', '2023-01-01', '2023-01-01')]); // Deleted
@@ -1182,483 +1414,5 @@ describe('Sync Logic', () => {
             expect(merged.tasks[0].updatedAt).toBe('2023-01-02');
         });
 
-        it('should preserve local settings regardless of incoming settings', () => {
-            const local: AppData = { ...mockAppData(), settings: { theme: 'dark' } };
-            const incoming: AppData = { ...mockAppData(), settings: { theme: 'light' } };
-
-            const merged = mergeAppData(local, incoming);
-
-            expect(merged.settings.theme).toBe('dark');
-        });
-
-        it('merges synced language settings per field', () => {
-            const local: AppData = {
-                ...mockAppData(),
-                settings: {
-                    language: 'en',
-                    weekStart: 'monday',
-                    dateFormat: 'yyyy-MM-dd',
-                    timeFormat: '24h',
-                    syncPreferences: { language: true },
-                    syncPreferencesUpdatedAt: {
-                        preferences: '2024-01-01T00:00:00.000Z',
-                        language: '2024-01-01T00:00:00.000Z',
-                    },
-                },
-            };
-            const incoming: AppData = {
-                ...mockAppData(),
-                settings: {
-                    language: 'es',
-                    weekStart: 'monday',
-                    timeFormat: '12h',
-                    syncPreferences: { language: true },
-                    syncPreferencesUpdatedAt: {
-                        preferences: '2024-01-02T00:00:00.000Z',
-                        language: '2024-01-02T00:00:00.000Z',
-                    },
-                },
-            };
-
-            const merged = mergeAppData(local, incoming);
-
-            expect(merged.settings.language).toBe('es');
-            expect(merged.settings.weekStart).toBe('monday');
-            expect(merged.settings.dateFormat).toBe('yyyy-MM-dd');
-            expect(merged.settings.timeFormat).toBe('12h');
-        });
-
-        it('merges language settings even when sync preferences are empty', () => {
-            const local: AppData = {
-                ...mockAppData(),
-                settings: {
-                    language: 'en',
-                    syncPreferences: {},
-                    syncPreferencesUpdatedAt: {
-                        language: '2024-01-01T00:00:00.000Z',
-                    },
-                },
-            };
-            const incoming: AppData = {
-                ...mockAppData(),
-                settings: {
-                    language: 'es',
-                    syncPreferences: {},
-                    syncPreferencesUpdatedAt: {
-                        language: '2024-01-02T00:00:00.000Z',
-                    },
-                },
-            };
-
-            const merged = mergeAppData(local, incoming);
-
-            expect(merged.settings.language).toBe('es');
-        });
-
-        it('merges settings for disabled preference groups instead of dropping them', () => {
-            const local: AppData = {
-                ...mockAppData(),
-                settings: {
-                    theme: 'dark',
-                    syncPreferences: { appearance: false },
-                    syncPreferencesUpdatedAt: {
-                        appearance: '2024-01-01T00:00:00.000Z',
-                    },
-                },
-            };
-            const incoming: AppData = {
-                ...mockAppData(),
-                settings: {
-                    theme: 'light',
-                    syncPreferences: { appearance: false },
-                    syncPreferencesUpdatedAt: {
-                        appearance: '2024-01-02T00:00:00.000Z',
-                    },
-                },
-            };
-
-            const merged = mergeAppData(local, incoming);
-
-            expect(merged.settings.theme).toBe('light');
-        });
-
-        it('deep-clones merged settings arrays to avoid shared references', () => {
-            const incomingCalendars = [
-                { id: 'cal-1', name: 'Team', url: 'https://calendar.example.com/team.ics', enabled: true },
-            ];
-            const local: AppData = {
-                ...mockAppData(),
-                settings: {
-                    externalCalendars: [
-                        { id: 'cal-local', name: 'Local', url: 'https://calendar.example.com/local.ics', enabled: true },
-                    ],
-                    syncPreferencesUpdatedAt: {
-                        externalCalendars: '2024-01-01T00:00:00.000Z',
-                    },
-                },
-            };
-            const incoming: AppData = {
-                ...mockAppData(),
-                settings: {
-                    externalCalendars: incomingCalendars,
-                    syncPreferencesUpdatedAt: {
-                        externalCalendars: '2024-01-02T00:00:00.000Z',
-                    },
-                },
-            };
-
-            const merged = mergeAppData(local, incoming);
-
-            expect(merged.settings.externalCalendars).toEqual(incomingCalendars);
-            expect(merged.settings.externalCalendars).not.toBe(incomingCalendars);
-
-            incomingCalendars[0].name = 'Mutated Incoming';
-            expect(merged.settings.externalCalendars?.[0]?.name).toBe('Team');
-        });
-
-        it('falls back to local values when incoming synced settings are malformed', () => {
-            const local: AppData = {
-                ...mockAppData(),
-                settings: {
-                    language: 'en',
-                    weekStart: 'monday',
-                    dateFormat: 'yyyy-MM-dd',
-                    externalCalendars: [
-                        { id: 'cal-local', name: 'Local', url: 'https://calendar.example.com/local.ics', enabled: true },
-                    ],
-                    syncPreferences: {
-                        language: true,
-                        externalCalendars: true,
-                    },
-                    syncPreferencesUpdatedAt: {
-                        preferences: '2024-01-01T00:00:00.000Z',
-                        language: '2024-01-01T00:00:00.000Z',
-                        externalCalendars: '2024-01-01T00:00:00.000Z',
-                    },
-                },
-            };
-            const incoming: AppData = {
-                ...mockAppData(),
-                settings: {
-                    language: 'xx' as AppData['settings']['language'],
-                    weekStart: 'friday' as AppData['settings']['weekStart'],
-                    dateFormat: 123 as unknown as string,
-                    externalCalendars: [
-                        { id: '', name: 'Broken', url: '', enabled: true },
-                    ] as AppData['settings']['externalCalendars'],
-                    syncPreferences: {
-                        language: 'yes' as unknown as boolean,
-                    },
-                    syncPreferencesUpdatedAt: {
-                        preferences: '2024-01-02T00:00:00.000Z',
-                        language: '2024-01-02T00:00:00.000Z',
-                        externalCalendars: '2024-01-02T00:00:00.000Z',
-                    },
-                },
-            };
-
-            const merged = mergeAppData(local, incoming);
-
-            expect(merged.settings.language).toBe('en');
-            expect(merged.settings.weekStart).toBe('monday');
-            expect(merged.settings.dateFormat).toBe('yyyy-MM-dd');
-            expect(merged.settings.externalCalendars).toEqual(local.settings.externalCalendars);
-            expect(merged.settings.syncPreferences).toEqual(local.settings.syncPreferences);
-        });
-
-        it('keeps area tombstones so deletions sync across devices', () => {
-            const local: AppData = {
-                ...mockAppData(),
-                areas: [createMockArea('a1', '2023-01-01T00:00:00.000Z')],
-            };
-            const incoming: AppData = {
-                ...mockAppData(),
-                areas: [createMockArea('a1', '2023-01-03T00:00:00.000Z', '2023-01-03T00:00:00.000Z')],
-            };
-
-            const merged = mergeAppData(local, incoming);
-            expect(merged.areas).toHaveLength(1);
-            expect(merged.areas[0].deletedAt).toBe('2023-01-03T00:00:00.000Z');
-        });
-
-        it('does not globally re-sort areas after merge', () => {
-            const local: AppData = {
-                ...mockAppData(),
-                areas: [
-                    { ...createMockArea('a1', '2023-01-04T00:00:00.000Z'), order: 10 },
-                    { ...createMockArea('a2', '2023-01-04T00:00:00.000Z'), order: 0 },
-                ],
-            };
-            const incoming: AppData = {
-                ...mockAppData(),
-                areas: [],
-            };
-
-            const merged = mergeAppData(local, incoming);
-            expect(merged.areas.map((area) => area.id)).toEqual(['a1', 'a2']);
-            expect(merged.areas.map((area) => area.order)).toEqual([10, 0]);
-        });
-    });
-
-    describe('mergeAppDataWithStats', () => {
-        it('should report conflicts and resolution counts', () => {
-            const local = mockAppData([
-                {
-                    ...createMockTask('1', '2023-01-02'),
-                    title: 'Local title',
-                },
-                createMockTask('2', '2023-01-01'),
-            ]);
-            const incoming = mockAppData([
-                {
-                    ...createMockTask('1', '2023-01-01'), // older -> local wins conflict
-                    title: 'Incoming title',
-                },
-                createMockTask('3', '2023-01-01'), // incoming only
-            ]);
-
-            const result = mergeAppDataWithStats(local, incoming);
-
-            expect(result.data.tasks).toHaveLength(3);
-            expect(result.stats.tasks.localOnly).toBe(1);
-            expect(result.stats.tasks.incomingOnly).toBe(1);
-            expect(result.stats.tasks.conflicts).toBe(1);
-            expect(result.stats.tasks.resolvedUsingLocal).toBeGreaterThan(0);
-        });
-
-        it('captures conflict diagnostics for content and revision drift', () => {
-            const now = '2026-03-16T00:00:00.000Z';
-            const local = mockAppData([
-                {
-                    ...createMockTask('content-conflict', now),
-                    title: 'Local title',
-                },
-                {
-                    ...createMockTask('revision-conflict', now),
-                    rev: 2,
-                    revBy: 'device-local',
-                    title: 'Local title',
-                },
-            ]);
-            const incoming = mockAppData([
-                {
-                    ...createMockTask('content-conflict', now),
-                    title: 'Incoming title',
-                },
-                {
-                    ...createMockTask('revision-conflict', now),
-                    rev: 1,
-                    revBy: 'device-remote',
-                    title: 'Incoming title',
-                },
-            ]);
-
-            const result = mergeAppDataWithStats(local, incoming);
-            const contentSample = result.stats.tasks.conflictSamples?.find((sample) => sample.id === 'content-conflict');
-            const revisionSample = result.stats.tasks.conflictSamples?.find((sample) => sample.id === 'revision-conflict');
-
-            expect(result.stats.tasks.conflictReasonCounts).toEqual({
-                content: 1,
-                revision: 1,
-            });
-            expect(contentSample).toMatchObject({
-                reasons: ['content'],
-                winner: 'local',
-                diffKeys: ['title'],
-            });
-            expect(revisionSample).toMatchObject({
-                reasons: ['revision'],
-                winner: 'local',
-                diffKeys: [],
-            });
-            expect(revisionSample?.localComparableHash).not.toBe(revisionSample?.incomingComparableHash);
-        });
-
-        it('does not count conflict when only timestamp differs for legacy items', () => {
-            const local = mockAppData([createMockTask('1', '2026-02-22T22:30:40.000Z')]);
-            const incoming = mockAppData([createMockTask('1', '2026-02-22T22:30:11.000Z')]);
-
-            const result = mergeAppDataWithStats(local, incoming);
-
-            expect(result.stats.tasks.conflicts).toBe(0);
-            expect(result.stats.tasks.maxClockSkewMs).toBe(29000);
-            expect(result.data.tasks[0].updatedAt).toBe('2026-02-22T22:30:40.000Z');
-        });
-
-        it('does not count conflicts for legacy order-field shape differences', () => {
-            const now = '2026-02-22T22:30:40.000Z';
-            const localTask = {
-                ...createMockTask('task-1', now),
-                order: 7,
-                orderNum: 7,
-            } satisfies Task;
-            const incomingTask = {
-                ...createMockTask('task-1', now),
-            } satisfies Task;
-            const localProject = {
-                ...createMockProject('project-1', now),
-                order: 0,
-            } satisfies Project;
-            const incomingProject = {
-                ...createMockProject('project-1', now),
-            } as unknown as Project;
-            const localSection = {
-                ...createMockSection('section-1', 'project-1', now),
-                order: 0,
-            } satisfies Section;
-            const incomingSection = {
-                ...createMockSection('section-1', 'project-1', now),
-            } as unknown as Section;
-            delete (incomingProject as Record<string, unknown>).order;
-            delete (incomingSection as Record<string, unknown>).order;
-
-            const result = mergeAppDataWithStats(
-                mockAppData([localTask], [localProject], [localSection]),
-                mockAppData([incomingTask], [incomingProject], [incomingSection])
-            );
-
-            expect(result.stats.tasks.conflicts).toBe(0);
-            expect(result.stats.projects.conflicts).toBe(0);
-            expect(result.stats.sections.conflicts).toBe(0);
-        });
-
-        it('does not count conflicts for omitted legacy default fields', () => {
-            const now = '2026-03-07T00:00:00.000Z';
-            const localTask = {
-                ...createMockTask('task-legacy', now),
-                isFocusedToday: false,
-                pushCount: 0,
-            } satisfies Task;
-            const incomingTask = {
-                ...createMockTask('task-legacy', now),
-            } as unknown as Task;
-            delete (incomingTask as Record<string, unknown>).status;
-            delete (incomingTask as Record<string, unknown>).tags;
-            delete (incomingTask as Record<string, unknown>).contexts;
-
-            const localProject = {
-                ...createMockProject('project-legacy', now),
-                color: '#6B7280',
-                isSequential: false,
-                isFocused: false,
-            } satisfies Project;
-            const incomingProject = {
-                ...createMockProject('project-legacy', now),
-            } as unknown as Project;
-            delete (incomingProject as Record<string, unknown>).status;
-            delete (incomingProject as Record<string, unknown>).color;
-            delete (incomingProject as Record<string, unknown>).tagIds;
-            delete (incomingProject as Record<string, unknown>).isSequential;
-            delete (incomingProject as Record<string, unknown>).isFocused;
-
-            const localSection = {
-                ...createMockSection('section-legacy', 'project-legacy', now),
-                isCollapsed: false,
-            } satisfies Section;
-            const incomingSection = {
-                ...createMockSection('section-legacy', 'project-legacy', now),
-            } as unknown as Section;
-            delete (incomingSection as Record<string, unknown>).isCollapsed;
-
-            const result = mergeAppDataWithStats(
-                mockAppData([localTask], [localProject], [localSection]),
-                mockAppData([incomingTask], [incomingProject], [incomingSection])
-            );
-
-            expect(result.stats.tasks.conflicts).toBe(0);
-            expect(result.stats.projects.conflicts).toBe(0);
-            expect(result.stats.sections.conflicts).toBe(0);
-        });
-
-        it('does not count conflicts when remote payload omits default task and project fields', () => {
-            const now = '2026-03-13T00:00:00.000Z';
-            const localTask = {
-                ...createMockTask('task-1', now),
-                isFocusedToday: false,
-            } satisfies Task;
-            const incomingTask = {
-                id: 'task-1',
-                title: 'Task task-1',
-                status: 'inbox',
-                createdAt: '2023-01-01T00:00:00.000Z',
-                updatedAt: now,
-            } as unknown as Task;
-
-            const localProject = {
-                ...createMockProject('project-1', now),
-                isSequential: false,
-                isFocused: false,
-            } satisfies Project;
-            const incomingProject = {
-                id: 'project-1',
-                title: 'Project project-1',
-                status: 'active',
-                color: '#000000',
-                createdAt: '2023-01-01T00:00:00.000Z',
-                updatedAt: now,
-            } as unknown as Project;
-
-            const result = mergeAppDataWithStats(
-                mockAppData([localTask], [localProject]),
-                mockAppData([incomingTask], [incomingProject])
-            );
-
-            expect(result.stats.tasks.conflicts).toBe(0);
-            expect(result.stats.projects.conflicts).toBe(0);
-            expect(result.data.tasks[0]).toMatchObject({
-                id: 'task-1',
-                tags: [],
-                contexts: [],
-                isFocusedToday: false,
-            });
-            expect(result.data.projects[0]).toMatchObject({
-                id: 'project-1',
-                tagIds: [],
-                isSequential: false,
-                isFocused: false,
-            });
-        });
-    });
-
-    describe('appendSyncHistory', () => {
-        it('drops invalid entries and respects limits', () => {
-            const entry = {
-                at: '2024-01-01T00:00:00.000Z',
-                status: 'success',
-                conflicts: 0,
-                conflictIds: [],
-                maxClockSkewMs: 0,
-                timestampAdjustments: 0,
-            } as const;
-            const settings: AppData['settings'] = {
-                lastSyncHistory: [
-                    entry,
-                    { invalid: true } as any,
-                ],
-            };
-
-            const next = appendSyncHistory(settings, {
-                ...entry,
-                at: '2024-01-02T00:00:00.000Z',
-            }, 2);
-
-            expect(next).toHaveLength(2);
-            expect(next[0].at).toBe('2024-01-02T00:00:00.000Z');
-            expect(next[1].at).toBe('2024-01-01T00:00:00.000Z');
-        });
-    });
-
-    describe('filterDeleted', () => {
-        it('should filter out items with deletedAt set', () => {
-            const tasks = [
-                createMockTask('1', '2023-01-01'),
-                createMockTask('2', '2023-01-01', '2023-01-01')
-            ];
-
-            const filtered = filterDeleted(tasks);
-
-            expect(filtered).toHaveLength(1);
-            expect(filtered[0].id).toBe('1');
-        });
     });
 });

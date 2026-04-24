@@ -51,13 +51,17 @@ export const hashString = async (value: string): Promise<string> => {
         }
     }
 
+    return fallbackHashString(value);
+};
+
+export const fallbackHashString = (value: string): string => {
     // Legacy fallback for runtimes without Web Crypto or node:crypto.
     let hash = 0;
     for (let i = 0; i < value.length; i += 1) {
         hash = Math.imul(31, hash) + value.charCodeAt(i);
         hash |= 0;
     }
-    return hash.toString(16);
+    return (hash >>> 0).toString(16);
 };
 
 export const sleep = (ms: number) => new Promise<void>((resolve) => {
@@ -172,6 +176,17 @@ export const writeFileSafelyAbsolute = async (
 export const buildCloudKey = (attachment: Attachment): string => {
     const ext = extractExtension(attachment.title) || extractExtension(attachment.uri);
     return `${ATTACHMENTS_DIR_NAME}/${attachment.id}${ext}`;
+};
+
+export const resolveFileBackendPath = async (
+    join: (...paths: string[]) => Promise<string>,
+    baseDir: string,
+    relativePath: string,
+): Promise<string> => {
+    const segments = relativePath
+        .split(/[\\/]+/)
+        .filter(Boolean);
+    return segments.length > 0 ? await join(baseDir, ...segments) : baseDir;
 };
 
 export const isTempAttachmentFile = (name: string): boolean => {

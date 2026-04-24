@@ -6,11 +6,13 @@ import { isTauriRuntime } from '../lib/runtime';
 import { reportError } from '../lib/report-error';
 import { logWarn } from '../lib/app-log';
 import { useUiStore } from '../store/ui-store';
+import { saveStoredFullscreen } from '../lib/window-state';
 import {
     type GlobalQuickAddShortcutSetting,
     matchesGlobalQuickAddShortcut,
     normalizeGlobalQuickAddShortcut,
 } from '../lib/global-quick-add-shortcut';
+import { AREA_FILTER_ALL } from '../lib/area-filter';
 
 export type KeybindingStyle = 'vim' | 'emacs';
 
@@ -115,8 +117,9 @@ export function KeybindingProvider({
     const isTest = import.meta.env.MODE === 'test' || import.meta.env.VITEST || process.env.NODE_ENV === 'test';
     const isWindows = typeof navigator !== 'undefined' && /win/i.test(navigator.userAgent);
     const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.userAgent);
-    const { settings, updateSettings } = useTaskStore(
+    const { areas, settings, updateSettings } = useTaskStore(
         (state) => ({
+            areas: state.areas,
             settings: state.settings,
             updateSettings: state.updateSettings,
         }),
@@ -127,6 +130,7 @@ export function KeybindingProvider({
     const showToast = useUiStore((state) => state.showToast);
     const listOptions = useUiStore((state) => state.listOptions);
     const setListOptions = useUiStore((state) => state.setListOptions);
+    const collapseAllTaskDetails = useUiStore((state) => state.collapseAllTaskDetails);
     const editingTaskId = useUiStore((state) => state.editingTaskId);
     const editingTaskIdRef = useRef<string | null>(editingTaskId);
 
@@ -143,19 +147,53 @@ export function KeybindingProvider({
         }),
         [isMac, isWindows, settings.globalQuickAddShortcut]
     );
+    const sortedAreas = useMemo(
+        () => [...areas].sort((a, b) => a.order - b.order),
+        [areas],
+    );
 
     const isSidebarCollapsed = settings.sidebarCollapsed ?? false;
     const toggleSidebar = useCallback(() => {
         updateSettings({ sidebarCollapsed: !isSidebarCollapsed }).catch((error) => reportError('Failed to update settings', error));
     }, [updateSettings, isSidebarCollapsed]);
     const toggleListDetails = useCallback(() => {
-        setListOptions({ showDetails: !listOptions.showDetails });
-    }, [listOptions.showDetails, setListOptions]);
+        if (listOptions.showDetails) {
+            collapseAllTaskDetails();
+            setListOptions({ showDetails: false });
+            return;
+        }
+        setListOptions({ showDetails: true });
+    }, [collapseAllTaskDetails, listOptions.showDetails, setListOptions]);
     const toggleDensity = useCallback(() => {
         const nextDensity = settings.appearance?.density === 'compact' ? 'comfortable' : 'compact';
         updateSettings({ appearance: { density: nextDensity } })
             .catch((error) => reportError('Failed to update density', error));
     }, [settings.appearance?.density, updateSettings]);
+    const applyAreaFilterShortcut = useCallback((key: string): boolean => {
+        if (key === '0') {
+            updateSettings({
+                filters: {
+                    ...(useTaskStore.getState().settings?.filters ?? {}),
+                    areaId: AREA_FILTER_ALL,
+                },
+            }).catch((error) => reportError('Failed to update area filter', error));
+            return true;
+        }
+
+        if (!/^[1-9]$/.test(key)) return false;
+
+        const areaIndex = Number(key) - 1;
+        const targetArea = sortedAreas[areaIndex];
+        if (!targetArea) return false;
+
+        updateSettings({
+            filters: {
+                ...(useTaskStore.getState().settings?.filters ?? {}),
+                areaId: targetArea.id,
+            },
+        }).catch((error) => reportError('Failed to update area filter', error));
+        return true;
+    }, [sortedAreas, updateSettings]);
 
     const scopeRef = useRef<TaskListScope | null>(null);
     const pendingRef = useRef<{ key: string | null; timestamp: number }>({ key: null, timestamp: 0 });
@@ -367,7 +405,9 @@ export function KeybindingProvider({
             const { getCurrentWindow } = await import('@tauri-apps/api/window');
             const current = getCurrentWindow();
             const isFullscreen = await current.isFullscreen();
-            await current.setFullscreen(!isFullscreen);
+            const nextFullscreen = !isFullscreen;
+            await current.setFullscreen(nextFullscreen);
+            saveStoredFullscreen(nextFullscreen, localStorage);
         } catch (error) {
             void logWarn('Failed to toggle fullscreen', {
                 scope: 'keybinding',
@@ -436,6 +476,8 @@ export function KeybindingProvider({
                     } else if (vimGoMap[e.key]) {
                         onNavigate(vimGoMap[e.key]);
                     }
+                } else if (pending === 'a') {
+                    applyAreaFilterShortcut(e.key);
                 } else if (pending === 'd') {
                     if (e.key === 'd') {
                         scope?.deleteSelected();
@@ -497,6 +539,7 @@ export function KeybindingProvider({
                     setIsHelpOpen(true);
                     break;
                 case 'g':
+                case 'a':
                 case 'd':
                     e.preventDefault();
                     pendingRef.current = { key: e.key, timestamp: now };
@@ -684,6 +727,7 @@ export function KeybindingProvider({
         toggleDensity,
         currentView,
         getActiveScope,
+        applyAreaFilterShortcut,
     ]);
 
     useEffect(() => {

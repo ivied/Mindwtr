@@ -1,3 +1,4 @@
+import { readFileSync } from 'fs';
 import { createHash } from 'crypto';
 import { BEARER_TOKEN_PATTERN, logWarn } from './server-config';
 
@@ -79,10 +80,24 @@ export function parseBoolEnv(value: string | undefined): boolean {
     return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
 }
 
+function readOptionalEnvFile(env: Record<string, string | undefined>, fileVarName: string): string | null {
+    const filePath = String(env[fileVarName] || '').trim();
+    if (!filePath) return null;
+    try {
+        const raw = readFileSync(filePath, 'utf8').trim();
+        return raw.length > 0 ? raw : null;
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Failed to read ${fileVarName}: ${message}`);
+    }
+}
+
 export function resolveAllowedAuthTokensFromEnv(env: Record<string, string | undefined>): Set<string> | null {
     const values = [
         env.MINDWTR_CLOUD_AUTH_TOKENS,
+        readOptionalEnvFile(env, 'MINDWTR_CLOUD_AUTH_TOKENS_FILE'),
         env.MINDWTR_CLOUD_TOKEN,
+        readOptionalEnvFile(env, 'MINDWTR_CLOUD_TOKEN_FILE'),
     ]
         .map((value) => String(value || '').trim())
         .filter((value) => value.length > 0);

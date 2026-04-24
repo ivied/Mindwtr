@@ -2858,7 +2858,7 @@ checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
 name = "mindwtr"
-version = "0.7.9"
+version = "0.8.6"
 dependencies = [
  "base64 0.22.1",
  "cc",
@@ -2884,6 +2884,7 @@ dependencies = [
  "tauri-plugin-log",
  "tauri-plugin-notification",
  "tauri-plugin-shell",
+ "tauri-plugin-single-instance",
  "tempfile",
  "time",
  "whisper-rs",
@@ -5515,6 +5516,21 @@ dependencies = [
  "tauri-plugin",
  "thiserror 2.0.17",
  "tokio",
+]
+
+[[package]]
+name = "tauri-plugin-single-instance"
+version = "2.3.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "acba6b5ca527a96cdfcc96ae09b09ccb91ddff5e33978ca6873b96ea16bb404c"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "thiserror 2.0.17",
+ "tracing",
+ "windows-sys 0.60.2",
+ "zbus 5.12.0",
 ]
 
 [[package]]

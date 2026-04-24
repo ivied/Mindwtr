@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { safeFormatDate } from '@mindwtr/core';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 
 import { cn } from '../../../lib/utils';
 
@@ -104,7 +105,7 @@ export function SettingsObsidianSection({
                         <div className="text-sm font-medium">{t.obsidianVault}</div>
                         <p className="text-xs text-muted-foreground mt-1">{t.obsidianVaultDesc}</p>
                     </div>
-                    <span className="text-xs text-muted-foreground">{open ? '▾' : '▸'}</span>
+                    {open ? <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />}
                 </button>
                 <button
                     type="button"

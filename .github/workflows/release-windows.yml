@@ -4,21 +4,21 @@ on:
   workflow_call:
     inputs:
       tag:
-        description: 'Release tag (e.g., v0.2.3)'
+        description: "Release tag (e.g., v0.2.3)"
         required: false
         type: string
       run_msstore:
-        description: 'Run Microsoft Store publish steps even if this is not a tag push'
+        description: "Run Microsoft Store publish steps even if this is not a tag push"
         required: false
         type: boolean
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g., v0.2.3)'
+        description: "Release tag (e.g., v0.2.3)"
         required: false
         type: string
       run_msstore:
-        description: 'Run Microsoft Store publish steps even if this is not a tag push'
+        description: "Run Microsoft Store publish steps even if this is not a tag push"
         required: false
         type: boolean
 
@@ -35,10 +35,10 @@ env:
   MS_PUBLISHER_DISPLAY_NAME: "Dongda Li"
 
 jobs:
-  windows:
+  standalone:
     runs-on: windows-latest
-    name: Windows Build (EXE)
-    timeout-minutes: 90
+    name: Windows Release
+    timeout-minutes: 120
     env:
       VITE_DROPBOX_APP_KEY: ${{ vars.VITE_DROPBOX_APP_KEY || secrets.VITE_DROPBOX_APP_KEY }}
 
@@ -93,7 +93,61 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VITE_ANALYTICS_HEARTBEAT_URL: ${{ secrets.ANALYTICS_HEARTBEAT_URL }}
 
+      - name: Create portable ZIP
+        shell: pwsh
+        run: |
+          $buildDir = "apps/desktop/src-tauri/target/release"
+          $portableDir = "portable-staging"
+          $zipPath = "mindwtr_${{ steps.version.outputs.version }}_windows_x64_portable.zip"
+
+          Remove-Item -Recurse -Force $portableDir -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path "$portableDir\profile\config" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$portableDir\profile\data" | Out-Null
+
+          Copy-Item "$buildDir/mindwtr.exe" -Destination "$portableDir\mindwtr.exe"
+          if (Test-Path "$buildDir/WebView2Loader.dll") {
+            Copy-Item "$buildDir/WebView2Loader.dll" -Destination "$portableDir"
+          }
+
+          Set-Content -Path "$portableDir\portable.txt" -NoNewline -Value "Mindwtr portable mode marker. Keep this file next to mindwtr.exe."
+          @(
+            "Mindwtr Portable for Windows",
+            "",
+            "- Extract this ZIP to a writable folder.",
+            "- Keep portable.txt next to mindwtr.exe.",
+            "- Mindwtr stores local data under profile\data and profile\config beside the executable.",
+            "- Portable mode keeps secrets in the local profile instead of Windows Credential Manager.",
+            "- Windows WebView2 is still required."
+          ) | Set-Content -Path "$portableDir\README-portable.txt"
+
+          if (Test-Path $zipPath) {
+            Remove-Item $zipPath -Force
+          }
+          Compress-Archive -Path "$portableDir\*" -DestinationPath $zipPath
+
+      - name: Collect Windows artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release-artifacts | Out-Null
+          Get-ChildItem "apps/desktop/src-tauri/target/release/bundle/nsis/*.exe" -ErrorAction SilentlyContinue | ForEach-Object {
+            $lower = $_.Name.ToLower()
+            Copy-Item $_.FullName "release-artifacts/$lower"
+          }
+          Get-ChildItem "mindwtr_*_windows_x64_portable.zip" -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item $_.FullName "release-artifacts/$($_.Name)"
+          }
+          Get-ChildItem release-artifacts
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: release-windows
+          path: release-artifacts/*
+          if-no-files-found: warn
+          retention-days: 28
+
       - name: Ensure MakeAppx is available
+        if: startsWith(github.ref, 'refs/tags/') || inputs.run_msstore
         shell: pwsh
         run: |
           $makeappx = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits" -Recurse -Filter "makeappx.exe" -ErrorAction SilentlyContinue |
@@ -110,14 +164,16 @@ jobs:
           Write-Error "makeappx.exe not found and winget is unavailable."
 
       - name: Create MSIX layout
+        if: startsWith(github.ref, 'refs/tags/') || inputs.run_msstore
         shell: pwsh
         run: |
           $buildDir = "apps/desktop/src-tauri/target/release"
-          $outDir = "msix-staging"
           $iconDir = "apps/desktop/src-tauri/icons"
+          $outDir = "msix-staging"
+          Remove-Item -Recurse -Force $outDir -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
           New-Item -ItemType Directory -Force -Path "$outDir\Assets" | Out-Null
-          Copy-Item "$buildDir/mindwtr.exe" -Destination "$outDir/mindwtr.exe"
+          Copy-Item "$buildDir/mindwtr.exe" -Destination "$outDir\mindwtr.exe"
           if (Test-Path "$buildDir/WebView2Loader.dll") {
             Copy-Item "$buildDir/WebView2Loader.dll" -Destination "$outDir"
           }
@@ -126,6 +182,7 @@ jobs:
           Copy-Item "$iconDir/Square44x44Logo.png" "$outDir\Assets\Square44x44Logo.png"
 
       - name: Generate AppxManifest.xml
+        if: startsWith(github.ref, 'refs/tags/') || inputs.run_msstore
         shell: pwsh
         run: |
           $manifest = @"
@@ -165,6 +222,7 @@ jobs:
           $manifest | Out-File -FilePath "msix-staging\AppxManifest.xml" -Encoding UTF8
 
       - name: Build MSIX package
+        if: startsWith(github.ref, 'refs/tags/') || inputs.run_msstore
         shell: pwsh
         run: |
           $msixPath = "mindwtr_${{ steps.version.outputs.version }}_x64.msix"
@@ -193,8 +251,8 @@ jobs:
           }
 
       - name: Check Microsoft Store submission status
-        id: msstore_status
         if: startsWith(github.ref, 'refs/tags/') || inputs.run_msstore
+        id: msstore_status
         shell: pwsh
         env:
           MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
@@ -362,6 +420,196 @@ jobs:
             throw "Retry loop exhausted unexpectedly for $Method $Uri."
           }
 
+          function Get-PartnerCenterApplication {
+            $appsResponse = Invoke-RestMethodWithRetry -Method Get `
+              -Uri 'https://manage.devcenter.microsoft.com/v1.0/my/applications' `
+              -Headers $headers
+            $matchedApp = $appsResponse.value | Where-Object {
+              $_.id -eq $env:MS_STORE_APP_ID -or
+              ($_.applicationId -and $_.applicationId -eq $env:MS_STORE_APP_ID) -or
+              ($_ | ConvertTo-Json -Depth 5 | Select-String -Pattern $env:MS_STORE_APP_ID -Quiet)
+            } | Select-Object -First 1
+            if (-not $matchedApp) {
+              Write-Host "Available apps:"
+              $appsResponse.value | ForEach-Object { Write-Host "  ID=$($_.id)  primaryName=$($_.primaryName)" }
+              throw "Could not find app matching MS_STORE_APP_ID='$($env:MS_STORE_APP_ID)'."
+            }
+            return $matchedApp
+          }
+
+          function Get-PendingSubmissionFromStore {
+            param([string]$ApplicationId)
+            $appSnapshot = Get-PartnerCenterApplication
+            $pending = $null
+            if ($appSnapshot.PSObject.Properties.Name -contains 'pendingApplicationSubmission') {
+              $pending = $appSnapshot.pendingApplicationSubmission
+            }
+            if (-not $pending) {
+              return $null
+            }
+            $pendingId = $pending.id
+            Write-Warning "Found pending submission $pendingId after ambiguous create attempt. Reusing it."
+            return Invoke-RestMethodWithRetry -Method Get `
+              -Uri "https://manage.devcenter.microsoft.com/v1.0/my/applications/$ApplicationId/submissions/$pendingId" `
+              -Headers $headers
+          }
+
+          $repoRoot = (Get-Location).Path
+          $submissionUploadFiles = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+          $preferredDesktopStoreScreenshots = @(
+            'capture.png',
+            'focus.png',
+            'kanban.png',
+            'project.png',
+            'review.png'
+          )
+          $preferredDesktopStoreBannerNames = @(
+            'banner.png',
+            'hero.png',
+            'superhero.png',
+            'super-hero.png'
+          )
+
+          function Convert-ToSubmissionRelativePath {
+            param([string]$Path)
+            $resolved = (Resolve-Path $Path).Path
+            return [System.IO.Path]::GetRelativePath($repoRoot, $resolved).Replace('\', '/')
+          }
+
+          function Register-SubmissionUploadFile {
+            param([string]$Path)
+            $resolved = (Resolve-Path $Path).Path
+            $relative = Convert-ToSubmissionRelativePath -Path $resolved
+            if (-not $script:submissionUploadFiles.ContainsKey($relative)) {
+              $script:submissionUploadFiles[$relative] = $resolved
+            }
+            return $relative
+          }
+
+          function Get-DesktopStoreListingAssets {
+            $preferredDir = Join-Path $repoRoot 'apps/desktop/screenshots/msstore'
+            $legacyDir = Join-Path $repoRoot 'apps/desktop/screenshots'
+            $screenshotsDir = if (Test-Path $preferredDir) { $preferredDir } elseif (Test-Path $legacyDir) { $legacyDir } else { $null }
+            if (-not $screenshotsDir) {
+              return @{
+                BaseDir = $preferredDir
+                Screenshots = @()
+                Banner = $null
+              }
+            }
+
+            $available = @(Get-ChildItem -Path $screenshotsDir -File | Where-Object {
+              $_.Extension.ToLowerInvariant() -in @('.png', '.jpg', '.jpeg')
+            } | Sort-Object Name)
+            if ($available.Count -eq 0) {
+              return @{
+                BaseDir = $screenshotsDir
+                Screenshots = @()
+                Banner = $null
+              }
+            }
+
+            $byName = @{}
+            foreach ($file in $available) {
+              $byName[$file.Name.ToLowerInvariant()] = $file.FullName
+            }
+
+            $bannerPath = $null
+            foreach ($name in $preferredDesktopStoreBannerNames) {
+              if ($byName.ContainsKey($name)) {
+                $bannerPath = $byName[$name]
+                break
+              }
+            }
+
+            $selected = [System.Collections.Generic.List[string]]::new()
+            foreach ($name in $preferredDesktopStoreScreenshots) {
+              if ($byName.ContainsKey($name)) {
+                $candidate = $byName[$name]
+                if ($bannerPath -and $candidate -eq $bannerPath) {
+                  continue
+                }
+                $selected.Add($candidate)
+              }
+            }
+
+            if ($selected.Count -eq 0) {
+              foreach ($file in ($available | Where-Object { -not $bannerPath -or $_.FullName -ne $bannerPath } | Select-Object -First 8)) {
+                $selected.Add($file.FullName)
+              }
+            }
+
+            return @{
+              BaseDir = $screenshotsDir
+              Screenshots = $selected.ToArray()
+              Banner = $bannerPath
+            }
+          }
+
+          function Apply-RepoStoreListingAssets {
+            param([object]$Metadata)
+            if (-not $Metadata) { return }
+            if (-not ($Metadata.PSObject.Properties.Name -contains 'Listings') -or -not $Metadata.Listings) {
+              return
+            }
+
+            $listingAssets = Get-DesktopStoreListingAssets
+            $screenshotsDir = $listingAssets.BaseDir
+            $screenshotPaths = @($listingAssets.Screenshots)
+            $bannerPath = $listingAssets.Banner
+            $iconPath = Join-Path $repoRoot 'apps/desktop/src-tauri/icons/StoreLogo.png'
+            if (-not (Test-Path $iconPath)) {
+              $iconPath = $null
+            }
+            if ($screenshotPaths.Count -eq 0 -and -not $iconPath -and -not $bannerPath) {
+              return
+            }
+
+            foreach ($listingProp in $Metadata.Listings.PSObject.Properties) {
+              if (-not $listingProp.Value) { continue }
+              if (-not ($listingProp.Value.PSObject.Properties.Name -contains 'BaseListing')) { continue }
+              $baseListing = $listingProp.Value.BaseListing
+              if (-not $baseListing) { continue }
+
+              $images = [System.Collections.ArrayList]::new()
+              foreach ($screenshotPath in $screenshotPaths) {
+                [void]$images.Add([pscustomobject]@{
+                  FileName   = (Register-SubmissionUploadFile -Path $screenshotPath)
+                  FileStatus = 'PendingUpload'
+                  ImageType  = 'Screenshot'
+                })
+              }
+              if ($iconPath) {
+                [void]$images.Add([pscustomobject]@{
+                  FileName   = (Register-SubmissionUploadFile -Path $iconPath)
+                  FileStatus = 'PendingUpload'
+                  ImageType  = 'Icon'
+                })
+              }
+              if ($bannerPath) {
+                [void]$images.Add([pscustomobject]@{
+                  FileName   = (Register-SubmissionUploadFile -Path $bannerPath)
+                  FileStatus = 'PendingUpload'
+                  ImageType  = 'PromotionalArt16x9'
+                })
+              }
+
+              if ($images.Count -gt 0) {
+                $baseListing.Images = $images.ToArray()
+              }
+            }
+
+            $extraNotes = [System.Collections.Generic.List[string]]::new()
+            if ($iconPath) {
+              [void]$extraNotes.Add('the desktop Store logo')
+            }
+            if ($bannerPath) {
+              [void]$extraNotes.Add('the 16:9 promotional hero art')
+            }
+            $suffix = if ($extraNotes.Count -gt 0) { " plus " + ($extraNotes -join ' and ') } else { '' }
+            Write-Host "Using $($screenshotPaths.Count) screenshots from $screenshotsDir$suffix for Microsoft Store listings."
+          }
+
           $tokenBody = @{
             grant_type    = 'client_credentials'
             resource      = 'https://manage.devcenter.microsoft.com'
@@ -383,19 +631,7 @@ jobs:
           }
 
           Write-Host "Looking up application..."
-          $appsResponse = Invoke-RestMethodWithRetry -Method Get `
-            -Uri 'https://manage.devcenter.microsoft.com/v1.0/my/applications' `
-            -Headers $headers
-          $app = $appsResponse.value | Where-Object {
-            $_.id -eq $env:MS_STORE_APP_ID -or
-            ($_.applicationId -and $_.applicationId -eq $env:MS_STORE_APP_ID) -or
-            ($_ | ConvertTo-Json -Depth 5 | Select-String -Pattern $env:MS_STORE_APP_ID -Quiet)
-          } | Select-Object -First 1
-          if (-not $app) {
-            Write-Host "Available apps:"
-            $appsResponse.value | ForEach-Object { Write-Host "  ID=$($_.id)  primaryName=$($_.primaryName)" }
-            throw "Could not find app matching MS_STORE_APP_ID='$($env:MS_STORE_APP_ID)'."
-          }
+          $app = Get-PartnerCenterApplication
           $applicationId = $app.id
           Write-Host "Found application: $($app.primaryName) (ID: $applicationId)"
 
@@ -413,6 +649,9 @@ jobs:
               Write-Host "Deleted pending submission."
             } catch {
               $errText = $_.Exception.Message
+              if ($errText -match '(?i)created through the API') {
+                throw "Existing pending submission $pendingId was created or edited in Partner Center, so the submission API cannot delete or update it. Delete or publish that draft manually, then rerun this workflow. The workflow now sources listing assets from apps/desktop/screenshots/msstore (falling back to apps/desktop/screenshots) instead of a Partner Center draft."
+              }
               if (& $isStoreBusy $errText) {
                 Write-Warning "Existing submission is in certification; cannot delete. Skipping publish."
                 exit 0
@@ -422,9 +661,50 @@ jobs:
           }
 
           Write-Host "Creating new submission..."
-          $submission = Invoke-RestMethodWithRetry -Method Post `
-            -Uri "https://manage.devcenter.microsoft.com/v1.0/my/applications/$applicationId/submissions" `
-            -Headers $headers
+          $submission = $null
+          for ($createAttempt = 1; $createAttempt -le 3 -and -not $submission; $createAttempt++) {
+            try {
+              $submission = Invoke-RestMethodWithRetry -Method Post `
+                -Uri "https://manage.devcenter.microsoft.com/v1.0/my/applications/$applicationId/submissions" `
+                -Headers $headers `
+                -MaxAttempts 1
+            } catch {
+              $errText = $_.Exception.Message
+              $statusCode = Get-HttpStatusCodeFromError -ErrorRecord $_
+              $retryable = Test-IsRetryableHttpFailure -ErrorRecord $_
+
+              try {
+                $submission = Get-PendingSubmissionFromStore -ApplicationId $applicationId
+              } catch {
+                Write-Warning "Failed to inspect pending submissions after create attempt ${createAttempt}: $($_.Exception.Message)"
+              }
+
+              if ($submission) {
+                break
+              }
+
+              if (& $isStoreBusy $errText) {
+                Write-Warning "Microsoft Store rejected new submission creation because another submission is still being processed. Skipping publish."
+                exit 0
+              }
+
+              if ($retryable -and $createAttempt -lt 3) {
+                $delaySeconds = [Math]::Min(60, [int]([Math]::Pow(2, $createAttempt - 1) * 5))
+                if ($null -ne $statusCode) {
+                  Write-Warning "Submission creation returned HTTP $statusCode on attempt $createAttempt/3. Retrying after checking store state in $delaySeconds seconds..."
+                } else {
+                  Write-Warning "Submission creation failed on attempt $createAttempt/3. Retrying after checking store state in $delaySeconds seconds..."
+                }
+                Start-Sleep -Seconds $delaySeconds
+                continue
+              }
+
+              throw
+            }
+          }
+          if (-not $submission) {
+            throw "Failed to create or recover a Microsoft Store submission."
+          }
           $submissionId = $submission.id
           $fileUploadUrl = $submission.fileUploadUrl
           Write-Host "Created submission $submissionId"
@@ -493,6 +773,8 @@ jobs:
               }
             }
 
+            Apply-RepoStoreListingAssets -Metadata $metadata
+
             $fieldMap = @{
               listings = 'Listings'
               applicationCategory = 'ApplicationCategory'
@@ -521,7 +803,7 @@ jobs:
             Write-Warning "metadata/metadata.json not found; submitting cloned metadata from last published version."
           }
 
-          foreach ($prop in @('id', 'status', 'statusDetails', 'fileUploadUrl', 'friendlyName', 'pendingApplicationId')) {
+          foreach ($prop in @('id', 'status', 'statusDetails', 'fileUploadUrl', 'friendlyName', 'pendingApplicationId', 'sales')) {
             if ($submission.PSObject.Properties.Name -contains $prop) {
               $submission.PSObject.Properties.Remove($prop)
             }
@@ -537,8 +819,21 @@ jobs:
 
           Write-Host "Creating ZIP archive for upload..."
           $zipPath = "$env:RUNNER_TEMP/submission-package.zip"
+          $uploadRoot = Join-Path $env:RUNNER_TEMP 'submission-package'
           if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-          Compress-Archive -Path $msixPath -DestinationPath $zipPath -Force
+          if (Test-Path $uploadRoot) { Remove-Item -Recurse -Force $uploadRoot }
+          New-Item -ItemType Directory -Force -Path $uploadRoot | Out-Null
+          Copy-Item $msixPath (Join-Path $uploadRoot $msixFileName)
+          foreach ($relativePath in ($submissionUploadFiles.Keys | Sort-Object)) {
+            $sourcePath = $submissionUploadFiles[$relativePath]
+            $destinationPath = Join-Path $uploadRoot ($relativePath -replace '/', [System.IO.Path]::DirectorySeparatorChar)
+            $destinationDir = Split-Path -Parent $destinationPath
+            if (-not (Test-Path $destinationDir)) {
+              New-Item -ItemType Directory -Force -Path $destinationDir | Out-Null
+            }
+            Copy-Item $sourcePath $destinationPath -Force
+          }
+          Compress-Archive -Path (Join-Path $uploadRoot '*') -DestinationPath $zipPath -Force
           $zipBytes = [System.IO.File]::ReadAllBytes($zipPath)
 
           Write-Host "Uploading package payload..."
@@ -588,21 +883,3 @@ jobs:
             }
           }
           Write-Host "Microsoft Store publish completed."
-
-      - name: Collect Windows artifacts
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path release-artifacts | Out-Null
-          Get-ChildItem "apps/desktop/src-tauri/target/release/bundle/nsis/*.exe" -ErrorAction SilentlyContinue | ForEach-Object {
-            $lower = $_.Name.ToLower()
-            Copy-Item $_.FullName "release-artifacts/$lower"
-          }
-          Get-ChildItem release-artifacts
-
-      - name: Upload Windows artifacts
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: release-windows
-          path: release-artifacts/*
-          if-no-files-found: warn
-          retention-days: 28

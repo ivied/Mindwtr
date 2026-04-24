@@ -2,7 +2,7 @@ import { DEFAULT_AREA_COLOR } from '@mindwtr/core';
 import type { Area, Project, Task } from '@mindwtr/core';
 import { getContextColor } from '../../../lib/context-color';
 
-export type NextGroupBy = 'none' | 'context' | 'area';
+export type NextGroupBy = 'none' | 'context' | 'area' | 'project';
 
 export interface TaskGroup {
     id: string;
@@ -22,6 +22,12 @@ interface GroupByAreaParams {
 interface GroupByContextParams {
     tasks: Task[];
     noContextLabel: string;
+}
+
+interface GroupByProjectParams {
+    tasks: Task[];
+    projectMap: Map<string, Project>;
+    noProjectLabel: string;
 }
 
 export function groupTasksByArea({
@@ -114,5 +120,61 @@ export function groupTasksByContext({
             dotColor: getContextColor(context),
         });
     });
+    return groups;
+}
+
+export function groupTasksByProject({
+    tasks,
+    projectMap,
+    noProjectLabel,
+}: GroupByProjectParams): TaskGroup[] {
+    const grouped = new Map<string, Task[]>();
+    const noProjectTasks: Task[] = [];
+
+    tasks.forEach((task) => {
+        if (!task.projectId) {
+            noProjectTasks.push(task);
+            return;
+        }
+        const project = projectMap.get(task.projectId);
+        if (!project) {
+            noProjectTasks.push(task);
+            return;
+        }
+        const projectTasks = grouped.get(project.id) ?? [];
+        projectTasks.push(task);
+        grouped.set(project.id, projectTasks);
+    });
+
+    const groups: TaskGroup[] = [];
+    if (noProjectTasks.length > 0) {
+        groups.push({
+            id: 'project:none',
+            title: noProjectLabel,
+            tasks: noProjectTasks,
+            muted: true,
+        });
+    }
+
+    const sortedProjects = [...grouped.keys()]
+        .map((projectId) => projectMap.get(projectId))
+        .filter((project): project is Project => Boolean(project))
+        .sort((a, b) => {
+            const aOrder = Number.isFinite(a.order) ? (a.order as number) : Number.POSITIVE_INFINITY;
+            const bOrder = Number.isFinite(b.order) ? (b.order as number) : Number.POSITIVE_INFINITY;
+            if (aOrder !== bOrder) return aOrder - bOrder;
+            return a.title.localeCompare(b.title);
+        });
+
+    sortedProjects.forEach((project) => {
+        const projectTasks = grouped.get(project.id) ?? [];
+        groups.push({
+            id: `project:${project.id}`,
+            title: project.title,
+            tasks: projectTasks,
+            dotColor: project.color,
+        });
+    });
+
     return groups;
 }

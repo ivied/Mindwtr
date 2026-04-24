@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { Button } from './ui/Button';
 
 interface ConfirmModalProps {
     isOpen: boolean;
@@ -94,27 +95,21 @@ export function ConfirmModal({
                 <div className="px-4 py-3 border-b">
                     <h3 id={titleId} className="font-semibold">{title}</h3>
                     {description && (
-                        <p id={descriptionId} className="text-xs text-muted-foreground mt-1">
+                        <p
+                            id={descriptionId}
+                            className="mt-1 max-h-64 overflow-y-auto whitespace-pre-line break-words text-xs leading-relaxed text-muted-foreground"
+                        >
                             {description}
                         </p>
                     )}
                 </div>
                 <div className="p-4 flex justify-end gap-2">
-                    <button
-                        type="button"
-                        onClick={onCancel}
-                        className="px-3 py-1.5 rounded-md text-sm bg-muted hover:bg-muted/80"
-                    >
+                    <Button variant="secondary" onClick={onCancel}>
                         {cancelLabel}
-                    </button>
-                    <button
-                        ref={confirmRef}
-                        type="button"
-                        onClick={onConfirm}
-                        className="px-3 py-1.5 rounded-md text-sm bg-primary text-primary-foreground hover:bg-primary/90"
-                    >
+                    </Button>
+                    <Button ref={confirmRef} onClick={onConfirm}>
                         {confirmLabel}
-                    </button>
+                    </Button>
                 </div>
             </div>
         </div>

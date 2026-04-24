@@ -1,6 +1,7 @@
 type InsecureUrlOptions = {
     allowAndroidEmulator?: boolean;
     allowAndroidEmulatorInDev?: boolean;
+    allowLocalHostnames?: boolean;
     allowPrivateIpRanges?: boolean;
 };
 
@@ -27,6 +28,16 @@ const parseIpv4Host = (host: string): Ipv4Octets | null => {
     return [octets[0], octets[1], octets[2], octets[3]];
 };
 
+const isLikelyLocalHostname = (host: string): boolean => {
+    if (!host) return false;
+    if (host.includes('.')) {
+        return host.endsWith('.local')
+            || host.endsWith('.localdomain')
+            || host.endsWith('.home.arpa');
+    }
+    return /^[a-z0-9-]+$/i.test(host);
+};
+
 export const isAllowedInsecureUrl = (rawUrl: string, options: InsecureUrlOptions = {}): boolean => {
     try {
         const parsed = new URL(rawUrl);
@@ -45,6 +56,7 @@ export const isAllowedInsecureUrl = (rawUrl: string, options: InsecureUrlOptions
             if (first === 192 && second === 168) return true;
             if (first === 100 && second >= 64 && second <= 127) return true;
         }
+        if (options.allowLocalHostnames && !ipv4 && isLikelyLocalHostname(host)) return true;
         if (host === '10.0.2.2') {
             if (options.allowAndroidEmulator) return true;
             if (options.allowAndroidEmulatorInDev) {

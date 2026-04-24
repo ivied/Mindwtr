@@ -1,11 +1,14 @@
 import type { AppData, TaskEditorFieldId, TaskEditorSectionId } from '@mindwtr/core';
-import { translateText } from '@mindwtr/core';
+import { sanitizePomodoroDurations, translateText } from '@mindwtr/core';
 
+import { useEffect, useState } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { reportError } from '../../../lib/report-error';
 import type { Language } from '../../../contexts/language-context';
 import {
     DEFAULT_TASK_EDITOR_ORDER,
+    DEFAULT_TASK_EDITOR_VISIBLE,
     DEFAULT_TASK_EDITOR_SECTION_BY_FIELD,
     DEFAULT_TASK_EDITOR_SECTION_OPEN,
     TASK_EDITOR_FIXED_FIELDS,
@@ -53,6 +56,8 @@ type Labels = {
     taskEditorFieldSection: string;
     taskEditorFieldArea: string;
     taskEditorFieldPriority: string;
+    taskEditorFieldEnergyLevel: string;
+    taskEditorFieldAssignedTo: string;
     taskEditorFieldContexts: string;
     taskEditorFieldDescription: string;
     taskEditorFieldTags: string;
@@ -69,6 +74,14 @@ type Labels = {
     featureTimeEstimatesDesc: string;
     featurePomodoro: string;
     featurePomodoroDesc: string;
+    pomodoroCustomPreset: string;
+    pomodoroCustomPresetDesc: string;
+    pomodoroFocusMinutes: string;
+    pomodoroBreakMinutes: string;
+    pomodoroAutoStartBreaks: string;
+    pomodoroAutoStartBreaksDesc: string;
+    pomodoroAutoStartFocus: string;
+    pomodoroAutoStartFocusDesc: string;
     weeklyReviewConfig: string;
     weeklyReviewConfigDesc: string;
     weeklyReviewIncludeContextsStep: string;
@@ -95,6 +108,8 @@ export function SettingsGtdPage({
     autoArchiveDays,
 }: SettingsGtdPageProps) {
     const safeSettings = settings ?? ({} as AppData['settings']);
+    const [inboxOpen, setInboxOpen] = useState(false);
+    const [taskEditorOpen, setTaskEditorOpen] = useState(false);
     const autoArchiveOptions = [0, 1, 3, 7, 14, 30, 60];
     const formatArchiveLabel = (days: number) => {
         if (days <= 0) return t.autoArchiveNever;
@@ -128,18 +143,7 @@ export function SettingsGtdPage({
     }
 
     const defaultTaskEditorOrder = DEFAULT_TASK_EDITOR_ORDER;
-    const defaultVisibleFields = new Set<TaskEditorFieldId>([
-        'status',
-        'project',
-        'section',
-        'area',
-        'description',
-        'checklist',
-        'contexts',
-        'dueDate',
-        'priority',
-        'timeEstimate',
-    ]);
+    const defaultVisibleFields = new Set<TaskEditorFieldId>(DEFAULT_TASK_EDITOR_VISIBLE);
     const defaultTaskEditorHidden = defaultTaskEditorOrder.filter(
         (fieldId) => !defaultVisibleFields.has(fieldId) || featureHiddenFields.has(fieldId)
     );
@@ -162,9 +166,47 @@ export function SettingsGtdPage({
     const inboxProjectFirst = inboxProcessing.projectFirst === true;
     const inboxContextStepEnabled = inboxProcessing.contextStepEnabled !== false;
     const inboxScheduleEnabled = inboxProcessing.scheduleEnabled === true;
-    const inboxReferenceEnabled = inboxProcessing.referenceEnabled === true;
     const includeContextStep = safeSettings.gtd?.weeklyReview?.includeContextStep !== false;
     const pomodoroEnabled = safeSettings.features?.pomodoro === true;
+    const pomodoroCustomDurations = sanitizePomodoroDurations(safeSettings.gtd?.pomodoro?.customDurations);
+    const pomodoroAutoStartBreaks = safeSettings.gtd?.pomodoro?.autoStartBreaks === true;
+    const pomodoroAutoStartFocus = safeSettings.gtd?.pomodoro?.autoStartFocus === true;
+    const [pomodoroFocusDraft, setPomodoroFocusDraft] = useState(String(pomodoroCustomDurations.focusMinutes));
+    const [pomodoroBreakDraft, setPomodoroBreakDraft] = useState(String(pomodoroCustomDurations.breakMinutes));
+
+    useEffect(() => {
+        setPomodoroFocusDraft(String(pomodoroCustomDurations.focusMinutes));
+        setPomodoroBreakDraft(String(pomodoroCustomDurations.breakMinutes));
+    }, [pomodoroCustomDurations.breakMinutes, pomodoroCustomDurations.focusMinutes]);
+
+    const updatePomodoroSettings = (partial: Partial<NonNullable<NonNullable<AppData['settings']['gtd']>['pomodoro']>>) => {
+        updateSettings({
+            gtd: {
+                ...(safeSettings.gtd ?? {}),
+                pomodoro: {
+                    ...(safeSettings.gtd?.pomodoro ?? {}),
+                    ...partial,
+                },
+            },
+        }).then(showSaved).catch((error) => reportError('Failed to update Pomodoro settings', error));
+    };
+
+    const savePomodoroCustomDurations = (nextDurations: { focusMinutes: number; breakMinutes: number }) => {
+        updatePomodoroSettings({ customDurations: nextDurations });
+        return nextDurations;
+    };
+
+    const commitPomodoroMinutes = () => {
+        const focusValue = Number.parseInt(pomodoroFocusDraft, 10);
+        const breakValue = Number.parseInt(pomodoroBreakDraft, 10);
+        const nextDurations = savePomodoroCustomDurations(sanitizePomodoroDurations({
+            focusMinutes: Number.isFinite(focusValue) ? focusValue : pomodoroCustomDurations.focusMinutes,
+            breakMinutes: Number.isFinite(breakValue) ? breakValue : pomodoroCustomDurations.breakMinutes,
+        }));
+        setPomodoroFocusDraft(String(nextDurations.focusMinutes));
+        setPomodoroBreakDraft(String(nextDurations.breakMinutes));
+    };
+
     const fieldLabel = (fieldId: TaskEditorFieldId) => {
         switch (fieldId) {
             case 'status':
@@ -177,6 +219,10 @@ export function SettingsGtdPage({
                 return t.taskEditorFieldArea;
             case 'priority':
                 return t.taskEditorFieldPriority;
+            case 'energyLevel':
+                return t.taskEditorFieldEnergyLevel;
+            case 'assignedTo':
+                return t.taskEditorFieldAssignedTo;
             case 'contexts':
                 return t.taskEditorFieldContexts;
             case 'description':
@@ -386,6 +432,100 @@ export function SettingsGtdPage({
                         />
                     </button>
                 </div>
+                {pomodoroEnabled && (
+                    <div className="p-4 space-y-3">
+                        <div>
+                            <div className="text-sm font-medium">{t.pomodoroCustomPreset}</div>
+                            <div className="text-xs text-muted-foreground mt-1">{t.pomodoroCustomPresetDesc}</div>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <label className="space-y-1.5">
+                                <span className="text-xs font-medium text-muted-foreground">{t.pomodoroFocusMinutes}</span>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    max={180}
+                                    inputMode="numeric"
+                                    value={pomodoroFocusDraft}
+                                    onChange={(event) => setPomodoroFocusDraft(event.target.value)}
+                                    onBlur={commitPomodoroMinutes}
+                                    onKeyDown={(event) => {
+                                        if (event.key === 'Enter') {
+                                            event.currentTarget.blur();
+                                        }
+                                    }}
+                                    className="w-full text-sm bg-muted/50 text-foreground border border-border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/40"
+                                />
+                            </label>
+                            <label className="space-y-1.5">
+                                <span className="text-xs font-medium text-muted-foreground">{t.pomodoroBreakMinutes}</span>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    max={180}
+                                    inputMode="numeric"
+                                    value={pomodoroBreakDraft}
+                                    onChange={(event) => setPomodoroBreakDraft(event.target.value)}
+                                    onBlur={commitPomodoroMinutes}
+                                    onKeyDown={(event) => {
+                                        if (event.key === 'Enter') {
+                                            event.currentTarget.blur();
+                                        }
+                                    }}
+                                    className="w-full text-sm bg-muted/50 text-foreground border border-border rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary/40"
+                                />
+                            </label>
+                        </div>
+                        <div className="rounded-lg border border-border divide-y divide-border">
+                            <div className="p-3 flex items-center justify-between gap-6">
+                                <div className="min-w-0">
+                                    <div className="text-sm font-medium">{t.pomodoroAutoStartBreaks}</div>
+                                    <div className="text-xs text-muted-foreground mt-1">{t.pomodoroAutoStartBreaksDesc}</div>
+                                </div>
+                                <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={pomodoroAutoStartBreaks}
+                                    onClick={() => updatePomodoroSettings({ autoStartBreaks: !pomodoroAutoStartBreaks })}
+                                    className={cn(
+                                        'relative inline-flex h-5 w-9 items-center rounded-full border transition-colors',
+                                        pomodoroAutoStartBreaks ? 'bg-primary border-primary' : 'bg-muted/50 border-border'
+                                    )}
+                                >
+                                    <span
+                                        className={cn(
+                                            'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
+                                            pomodoroAutoStartBreaks ? 'translate-x-4' : 'translate-x-1'
+                                        )}
+                                    />
+                                </button>
+                            </div>
+                            <div className="p-3 flex items-center justify-between gap-6">
+                                <div className="min-w-0">
+                                    <div className="text-sm font-medium">{t.pomodoroAutoStartFocus}</div>
+                                    <div className="text-xs text-muted-foreground mt-1">{t.pomodoroAutoStartFocusDesc}</div>
+                                </div>
+                                <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={pomodoroAutoStartFocus}
+                                    onClick={() => updatePomodoroSettings({ autoStartFocus: !pomodoroAutoStartFocus })}
+                                    className={cn(
+                                        'relative inline-flex h-5 w-9 items-center rounded-full border transition-colors',
+                                        pomodoroAutoStartFocus ? 'bg-primary border-primary' : 'bg-muted/50 border-border'
+                                    )}
+                                >
+                                    <span
+                                        className={cn(
+                                            'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
+                                            pomodoroAutoStartFocus ? 'translate-x-4' : 'translate-x-1'
+                                        )}
+                                    />
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
             <div className="bg-card border border-border rounded-lg divide-y divide-border">
                 <div className="p-4 space-y-3">
@@ -498,17 +638,20 @@ export function SettingsGtdPage({
                     </button>
                 </div>
             </div>
-            <details className="bg-card border border-border rounded-lg">
-                <summary className="list-none cursor-pointer p-4">
-                    <div className="flex items-center justify-between">
-                        <div className="min-w-0">
-                            <div className="text-sm font-medium">{t.inboxProcessing}</div>
-                            <div className="text-xs text-muted-foreground mt-1">{t.inboxProcessingDesc}</div>
-                        </div>
-                        <span className="text-xs text-muted-foreground">▸</span>
+            <div className="bg-card border border-border rounded-lg">
+                <button
+                    type="button"
+                    onClick={() => setInboxOpen((prev) => !prev)}
+                    aria-expanded={inboxOpen}
+                    className="w-full p-4 flex items-center justify-between gap-4 text-left"
+                >
+                    <div className="min-w-0">
+                        <div className="text-sm font-medium">{t.inboxProcessing}</div>
+                        <div className="text-xs text-muted-foreground mt-1">{t.inboxProcessingDesc}</div>
                     </div>
-                </summary>
-                <div className="divide-y divide-border border-t border-border">
+                    {inboxOpen ? <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />}
+                </button>
+                {inboxOpen && <div className="divide-y divide-border border-t border-border">
                     <div className="p-4 space-y-3">
                         <div className="text-sm font-medium">{t.inboxDefaultMode}</div>
                         <div className="inline-flex rounded-lg border border-border bg-muted/40 p-1">
@@ -650,42 +793,23 @@ export function SettingsGtdPage({
                             />
                         </button>
                     </div>
-                    <div className="p-4 flex items-center justify-between gap-6">
-                        <div className="min-w-0">
-                            <div className="text-sm font-medium">{t.inboxReferenceEnabled}</div>
-                        </div>
-                        <button
-                            type="button"
-                            role="switch"
-                            aria-checked={inboxReferenceEnabled}
-                            onClick={() => updateInboxProcessing({ referenceEnabled: !inboxReferenceEnabled })}
-                            className={cn(
-                                'relative inline-flex h-5 w-9 items-center rounded-full border transition-colors',
-                                inboxReferenceEnabled ? 'bg-primary border-primary' : 'bg-muted/50 border-border'
-                            )}
-                        >
-                            <span
-                                className={cn(
-                                    'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
-                                    inboxReferenceEnabled ? 'translate-x-4' : 'translate-x-1'
-                                )}
-                            />
-                        </button>
+                </div>}
+            </div>
+            <div className="bg-card border border-border rounded-lg">
+                <button
+                    type="button"
+                    onClick={() => setTaskEditorOpen((prev) => !prev)}
+                    aria-expanded={taskEditorOpen}
+                    className="w-full p-4 flex items-center justify-between gap-4 text-left"
+                >
+                    <div className="min-w-0">
+                        <div className="text-sm font-medium">{t.taskEditorLayout}</div>
+                        <div className="text-xs text-muted-foreground mt-1">{t.taskEditorLayoutDesc}</div>
+                        <div className="text-xs text-muted-foreground">{t.taskEditorLayoutHint}</div>
                     </div>
-                </div>
-            </details>
-            <details className="bg-card border border-border rounded-lg p-4">
-                <summary className="list-none cursor-pointer">
-                    <div className="flex items-center justify-between">
-                        <div>
-                            <div className="text-sm font-medium">{t.taskEditorLayout}</div>
-                            <div className="text-xs text-muted-foreground mt-1">{t.taskEditorLayoutDesc}</div>
-                            <div className="text-xs text-muted-foreground">{t.taskEditorLayoutHint}</div>
-                        </div>
-                        <span className="text-xs text-muted-foreground">▼</span>
-                    </div>
-                </summary>
-                <div className="space-y-4 mt-4">
+                    {taskEditorOpen ? <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />}
+                </button>
+                {taskEditorOpen && <div className="p-4 space-y-4">
                     <div className="flex justify-end">
                         <button
                             type="button"
@@ -812,8 +936,8 @@ export function SettingsGtdPage({
                             </div>
                         );
                     })}
-                </div>
-            </details>
+                </div>}
+            </div>
         </div>
     );
 }

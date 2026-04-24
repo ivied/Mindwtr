@@ -167,6 +167,13 @@ Mindwtr/
 We track key technical decisions as ADRs under `docs/adr/`. See:
 - `docs/adr/README.md`
 
+Current sync ADRs to know before changing merge or transport behavior:
+- ADR 0003 defines revision-aware sync metadata (`rev`, `revBy`) and deterministic tombstone-aware merge.
+- ADR 0007 defines the shipped live-wins rule for ambiguous delete-vs-live conflicts.
+- ADR 0008 records that Mindwtr intentionally stays on snapshot-based sync for now instead of adding a delta log.
+
+Contributors should treat the snapshot transport as a deliberate product choice, not missing infrastructure. Revisit ADR 0008 only if snapshot files regularly exceed 5 MB, sync round-trips exceed 5 seconds on typical networks, or Mindwtr needs real-time multi-device streaming.
+
 ---
 
 ## Development Workflow

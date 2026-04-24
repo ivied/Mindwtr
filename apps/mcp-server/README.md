@@ -17,6 +17,12 @@ Default database locations:
 - macOS: `~/Library/Application Support/mindwtr/mindwtr.db`
 - Windows: `%APPDATA%\mindwtr\mindwtr.db`
 
+Additional macOS path for sandboxed builds:
+- `~/Library/Containers/tech.dongdongbh.mindwtr/Data/Library/Application Support/mindwtr/mindwtr.db`
+
+If `mindwtr.db` is missing but `data.json` exists in the same desktop data folder, the MCP server will bootstrap a fresh SQLite database from that local data snapshot on first start.
+Desktop Settings → Sync → Local Data shows the exact storage location used by the app.
+
 You can override with:
 - `--db /path/to/mindwtr.db`
 - `MINDWTR_DB_PATH=/path/to/mindwtr.db`
@@ -316,9 +322,9 @@ Any MCP-compatible client can work as long as it can launch a **stdio** server w
 - `mindwtr_restore_task` **(requires `--write`)**
   - Input: `{ id }`
 - `mindwtr_add_project` **(requires `--write`)**
-  - Input: `{ title, color?, status?, areaId?, isSequential?, isFocused?, reviewAt?, supportNotes? }`
+  - Input: `{ title, color?, status?, areaId?, isSequential?, isFocused?, dueDate?, reviewAt?, supportNotes? }`
 - `mindwtr_update_project` **(requires `--write`)**
-  - Input: `{ id, title?, color?, status?, areaId?, isSequential?, isFocused?, reviewAt?, supportNotes? }`
+  - Input: `{ id, title?, color?, status?, areaId?, isSequential?, isFocused?, dueDate?, reviewAt?, supportNotes? }`
 - `mindwtr_delete_project` **(requires `--write`)**
   - Input: `{ id }`
 - `mindwtr_add_area` **(requires `--write`)**

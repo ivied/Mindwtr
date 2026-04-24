@@ -1,0 +1,3 @@
+- Agregamos importacion DGT GTD y enlaces a tareas y proyectos dentro de notas Markdown.
+- La edicion Markdown movil mejora con editor ampliado, barra de herramientas y continuacion automatica de listas.
+- Las notificaciones de revision y posponer recordatorios vuelven a funcionar, Hoy espera datos locales y el widget Android ahora usa 2x2 por defecto.

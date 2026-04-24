@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, mock, beforeEach } from 'bun:test'
 import { MindwtrClient } from './mindwtr-client'
 
-const mockFetch = vi.fn()
+const mockFetch = mock()
 global.fetch = mockFetch as unknown as typeof fetch
 
 describe('MindwtrClient', () => {

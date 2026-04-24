@@ -58,4 +58,31 @@ describe('BoardView', () => {
         fireEvent.click(filtersButton);
         expect(getByRole('button', { name: /hide/i })).toHaveAttribute('aria-expanded', 'true');
     });
+
+    it('allows hiding the project filter panel after selecting a filter', () => {
+        useTaskStore.setState({
+            tasks: [],
+            projects: [{
+                id: 'project-1',
+                title: 'Alpha project',
+                status: 'active',
+                color: '#123456',
+                order: 0,
+                tagIds: [],
+                createdAt: '2026-02-28T12:00:00.000Z',
+                updatedAt: '2026-02-28T12:00:00.000Z',
+            }],
+            areas: [],
+            settings: {},
+        });
+
+        const { getByRole, queryByRole } = renderWithProviders();
+
+        fireEvent.click(getByRole('button', { name: /^show$/i }));
+        fireEvent.click(getByRole('button', { name: 'Alpha project' }));
+        fireEvent.click(getByRole('button', { name: /^hide$/i }));
+
+        expect(getByRole('button', { name: /^show$/i })).toHaveAttribute('aria-expanded', 'false');
+        expect(queryByRole('button', { name: 'Alpha project' })).not.toBeInTheDocument();
+    });
 });

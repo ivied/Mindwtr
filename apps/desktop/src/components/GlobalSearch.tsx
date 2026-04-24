@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useId, useMemo, useRef } from 'react';
 import { Search, FileText, CheckCircle, Save, SlidersHorizontal, X } from 'lucide-react';
 import {
     shallow,
@@ -11,7 +11,6 @@ import {
     SearchTaskResult,
     getStorageAdapter,
     TaskStatus,
-    safeParseDate,
 } from '@mindwtr/core';
 import { useLanguage } from '../contexts/language-context';
 import { cn } from '../lib/utils';
@@ -19,37 +18,16 @@ import { PromptModal } from './PromptModal';
 import { useUiStore } from '../store/ui-store';
 import { AREA_FILTER_ALL, AREA_FILTER_NONE, resolveAreaFilter } from '../lib/area-filter';
 import { computeGlobalSearchResults, type DuePreset, type GlobalSearchScope } from './global-search-filtering';
+import { resolveTaskNavigationView } from '../lib/task-navigation';
 
 interface GlobalSearchProps {
     onNavigate: (view: string, itemId?: string) => void;
 }
 
-function isDeferredForPrimaryFocus(task: Task, now: Date = new Date()): boolean {
-    const start = safeParseDate(task.startTime);
-    if (!start) return false;
-    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
-    return start > endOfToday;
-}
-
-export function resolveGlobalSearchTaskView(task: Task, now: Date = new Date()): string {
-    const statusViewMap: Record<TaskStatus, string> = {
-        inbox: 'inbox',
-        next: 'next',
-        waiting: 'waiting',
-        someday: 'someday',
-        reference: 'reference',
-        done: 'done',
-        archived: 'archived',
-    };
-    const primaryView = statusViewMap[task.status] || 'next';
-    const hidesDeferredTasks = primaryView === 'inbox' || primaryView === 'next';
-    if (hidesDeferredTasks && isDeferredForPrimaryFocus(task, now)) {
-        return 'review';
-    }
-    return primaryView;
-}
+export const resolveGlobalSearchTaskView = resolveTaskNavigationView;
 
 export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
+    const dialogTitleId = useId();
     const [isOpen, setIsOpen] = useState(false);
     const [query, setQuery] = useState('');
     const [selectedIndex, setSelectedIndex] = useState(0);
@@ -390,11 +368,13 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
             className="fixed inset-0 z-50 flex items-start justify-center pt-[20vh] bg-background/80 backdrop-blur-sm animate-in fade-in-0"
             role="dialog"
             aria-modal="true"
+            aria-labelledby={dialogTitleId}
         >
             <div
                 className="w-full max-w-lg bg-popover text-popover-foreground rounded-xl border shadow-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-100"
                 onClick={(e) => e.stopPropagation()}
             >
+                <h2 id={dialogTitleId} className="sr-only">{t('search.title')}</h2>
                 <div className="flex items-center border-b px-4 py-3 gap-3">
                     <Search className="w-5 h-5 text-muted-foreground" />
                     <input
@@ -423,7 +403,7 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
                     </div>
                     <button
                         type="button"
-                        aria-label="Filters"
+                        aria-label={t('filters.label')}
                         aria-expanded={filtersOpen}
                         onClick={() => setFiltersOpen((prev) => !prev)}
                         className={cn(

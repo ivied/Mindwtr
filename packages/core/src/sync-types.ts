@@ -12,6 +12,8 @@ export interface EntityMergeStats {
     deletionsWon: number;
     conflictIds: string[];
     maxClockSkewMs: number;
+    maxClockSkewDirection?: ClockSkewDirection;
+    invalidTimestamps: number;
     timestampAdjustments: number;
     timestampAdjustmentIds: string[];
     conflictReasonCounts?: Partial<Record<ConflictReason, number>>;
@@ -46,9 +48,17 @@ export interface MergeStats {
     areas: EntityMergeStats;
 }
 
+export type ClockSkewDirection = 'local-ahead' | 'remote-ahead';
+
+export interface ClockSkewWarning {
+    skewMs: number;
+    direction: ClockSkewDirection;
+}
+
 export interface MergeResult {
     data: AppData;
     stats: MergeStats;
+    clockSkewWarning?: ClockSkewWarning;
 }
 
 export type SyncHistoryEntry = {
@@ -73,6 +83,8 @@ export type SyncCycleIO = {
     readLocal: () => Promise<AppData>;
     readRemote: () => Promise<AppData | null | undefined>;
     writeLocal: (data: AppData) => Promise<void>;
+    flushPendingLocalBeforeRetryRead?: () => Promise<void>;
+    prepareRemoteWrite?: (data: AppData) => Promise<AppData | void>;
     writeRemote: (data: AppData) => Promise<void>;
     historyContext?: {
         backend?: SyncHistoryEntry['backend'];
@@ -89,4 +101,5 @@ export type SyncCycleResult = {
     data: AppData;
     stats: MergeStats;
     status: 'success' | 'conflict';
+    clockSkewWarning?: ClockSkewWarning;
 };

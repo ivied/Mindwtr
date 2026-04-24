@@ -1,7 +1,9 @@
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { render, fireEvent } from '@testing-library/react';
+import { useTaskStore, type Task } from '@mindwtr/core';
 import { ReviewView } from './ReviewView';
 import { LanguageProvider } from '../../contexts/language-context';
+import { useUiStore } from '../../store/ui-store';
 
 const renderWithProviders = (ui: React.ReactElement) => {
     return render(
@@ -17,10 +19,73 @@ vi.mock('../../lib/external-calendar-events', () => ({
 }));
 
 describe('ReviewView', () => {
+    const nowIso = '2026-04-19T12:00:00.000Z';
+    const makeTask = (id: string, overrides: Partial<Task> = {}): Task => ({
+        id,
+        title: `Task ${id}`,
+        status: 'next',
+        tags: [],
+        contexts: [],
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        ...overrides,
+    });
+
+    beforeEach(() => {
+        useTaskStore.setState({
+            tasks: [],
+            _allTasks: [],
+            projects: [],
+            _allProjects: [],
+            sections: [],
+            _allSections: [],
+            areas: [],
+            _allAreas: [],
+            settings: {},
+            highlightTaskId: null,
+        });
+        useUiStore.setState({
+            listOptions: {
+                showDetails: false,
+                nextGroupBy: 'none',
+            },
+            expandedTaskIds: {},
+        });
+    });
+
     it('renders the review list with a guide button', () => {
         const { getByRole } = renderWithProviders(<ReviewView />);
         expect(getByRole('heading', { name: /^review$/i })).toBeInTheDocument();
         expect(getByRole('button', { name: /weekly review/i })).toBeInTheDocument();
+    });
+
+    it('hides compact metadata when the details toggle is turned off', () => {
+        const reviewTask = makeTask('review-1', {
+            title: 'Review task',
+            location: 'Desk lamp',
+        });
+
+        useTaskStore.setState({
+            tasks: [reviewTask],
+            _allTasks: [reviewTask],
+            lastDataChangeAt: 1,
+        });
+        useUiStore.setState((state) => ({
+            ...state,
+            listOptions: {
+                ...state.listOptions,
+                showDetails: true,
+            },
+        }));
+
+        const { getByRole, queryByText } = renderWithProviders(<ReviewView />);
+
+        expect(queryByText('Desk lamp')).toBeInTheDocument();
+
+        fireEvent.click(getByRole('button', { name: /^details$/i }));
+
+        expect(queryByText('Desk lamp')).not.toBeInTheDocument();
+        expect(useUiStore.getState().listOptions.showDetails).toBe(false);
     });
 
     it('navigates through the wizard steps', () => {

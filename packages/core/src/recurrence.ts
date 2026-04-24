@@ -19,6 +19,21 @@ const RRULE_FREQ_MAP: Record<string, RecurrenceRule> = {
     YEARLY: 'yearly',
 };
 
+type ParsedRRule = {
+    rule?: RecurrenceRule;
+    byDay?: RecurrenceByDay[];
+    byMonthDay?: number[];
+    interval?: number;
+    count?: number;
+    until?: string;
+};
+
+type BuildRRuleOptions = {
+    byMonthDay?: number[];
+    count?: number;
+    until?: string;
+};
+
 const parseByDayToken = (token: string): RecurrenceByDay | null => {
     const trimmed = token.toUpperCase().trim();
     if (!trimmed) return null;
@@ -49,7 +64,43 @@ const normalizeMonthDays = (days?: string[] | null): number[] | undefined => {
     return unique.length > 0 ? unique : undefined;
 };
 
-export function parseRRuleString(rrule: string): { rule?: RecurrenceRule; byDay?: RecurrenceByDay[]; byMonthDay?: number[]; interval?: number } {
+const parseUntilToken = (value: string | undefined): string | undefined => {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) return undefined;
+    const dateOnlyMatch = /^(\d{4})(\d{2})(\d{2})$/.exec(trimmed);
+    if (dateOnlyMatch) {
+        const [, year, month, day] = dateOnlyMatch;
+        return `${year}-${month}-${day}`;
+    }
+
+    const dateTimeMatch = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})?(Z)?$/i.exec(trimmed);
+    if (!dateTimeMatch) return undefined;
+
+    const [, year, month, day, hour, minute, second = '00', isUtc] = dateTimeMatch;
+    const iso = `${year}-${month}-${day}T${hour}:${minute}:${second}${isUtc ? 'Z' : ''}`;
+    const parsed = safeParseDate(iso);
+    if (!parsed) return undefined;
+    return isUtc ? parsed.toISOString() : format(parsed, "yyyy-MM-dd'T'HH:mm:ss");
+};
+
+const formatUntilToken = (until: string | undefined): string | undefined => {
+    const trimmed = String(until || '').trim();
+    if (!trimmed) return undefined;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+        return trimmed.replace(/-/g, '');
+    }
+    const parsed = safeParseDate(trimmed);
+    if (!parsed) return undefined;
+    const year = String(parsed.getUTCFullYear()).padStart(4, '0');
+    const month = String(parsed.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(parsed.getUTCDate()).padStart(2, '0');
+    const hour = String(parsed.getUTCHours()).padStart(2, '0');
+    const minute = String(parsed.getUTCMinutes()).padStart(2, '0');
+    const second = String(parsed.getUTCSeconds()).padStart(2, '0');
+    return `${year}${month}${day}T${hour}${minute}${second}Z`;
+};
+
+export function parseRRuleString(rrule: string): ParsedRRule {
     if (!rrule) return {};
     const tokens = rrule.split(';').reduce<Record<string, string>>((acc, part) => {
         const [key, value] = part.split('=');
@@ -60,7 +111,16 @@ export function parseRRuleString(rrule: string): { rule?: RecurrenceRule; byDay?
     const byDay = tokens.BYDAY ? normalizeWeekdays(tokens.BYDAY.split(',')) : undefined;
     const byMonthDay = tokens.BYMONTHDAY ? normalizeMonthDays(tokens.BYMONTHDAY.split(',')) : undefined;
     const interval = tokens.INTERVAL ? Number(tokens.INTERVAL) : undefined;
-    return { rule: freq, byDay, byMonthDay, interval: interval && interval > 0 ? interval : undefined };
+    const count = tokens.COUNT ? Number(tokens.COUNT) : undefined;
+    const until = parseUntilToken(tokens.UNTIL);
+    return {
+        rule: freq,
+        byDay,
+        byMonthDay,
+        interval: interval && interval > 0 ? interval : undefined,
+        count: count && count > 0 ? Math.round(count) : undefined,
+        until,
+    };
 }
 
 const normalizeWeeklyByDay = (days?: RecurrenceByDay[] | null): RecurrenceWeekday[] | undefined => {
@@ -70,7 +130,12 @@ const normalizeWeeklyByDay = (days?: RecurrenceByDay[] | null): RecurrenceWeekda
     return weekly.length > 0 ? Array.from(new Set(weekly)) : undefined;
 };
 
-export function buildRRuleString(rule: RecurrenceRule, byDay?: RecurrenceByDay[], interval?: number): string {
+export function buildRRuleString(
+    rule: RecurrenceRule,
+    byDay?: RecurrenceByDay[],
+    interval?: number,
+    options: BuildRRuleOptions = {}
+): string {
     const parts = [`FREQ=${rule.toUpperCase()}`];
     if (interval && interval > 1) {
         parts.push(`INTERVAL=${interval}`);
@@ -89,6 +154,18 @@ export function buildRRuleString(rule: RecurrenceRule, byDay?: RecurrenceByDay[]
                 .sort((a, b) => String(a).localeCompare(String(b)));
             parts.push(`BYDAY=${ordered.join(',')}`);
         }
+    } else if (rule === 'monthly') {
+        const normalizedMonthDays = normalizeMonthDays((options.byMonthDay || []).map(String));
+        if (normalizedMonthDays && normalizedMonthDays.length > 0) {
+            parts.push(`BYMONTHDAY=${normalizedMonthDays.join(',')}`);
+        }
+    }
+    if (options.count && options.count > 0) {
+        parts.push(`COUNT=${Math.round(options.count)}`);
+    }
+    const untilToken = formatUntilToken(options.until);
+    if (untilToken) {
+        parts.push(`UNTIL=${untilToken}`);
     }
     return parts.join(';');
 }
@@ -146,6 +223,38 @@ function getRecurrenceInterval(value: Task['recurrence']): number {
         if (parsed.interval && parsed.interval > 0) return parsed.interval;
     }
     return 1;
+}
+
+export function getRecurrenceCountValue(value: Task['recurrence']): number | undefined {
+    if (!value || typeof value === 'string') return undefined;
+    const recurrence = value as Recurrence;
+    if (typeof recurrence.count === 'number' && recurrence.count > 0) {
+        return Math.round(recurrence.count);
+    }
+    if (recurrence.rrule) {
+        const parsed = parseRRuleString(recurrence.rrule);
+        if (parsed.count && parsed.count > 0) return parsed.count;
+    }
+    return undefined;
+}
+
+export function getRecurrenceUntilValue(value: Task['recurrence']): string | undefined {
+    if (!value || typeof value === 'string') return undefined;
+    const recurrence = value as Recurrence;
+    if (recurrence.until) return recurrence.until;
+    if (recurrence.rrule) {
+        return parseRRuleString(recurrence.rrule).until;
+    }
+    return undefined;
+}
+
+export function getRecurrenceCompletedOccurrencesValue(value: Task['recurrence']): number | undefined {
+    if (!value || typeof value === 'string') return undefined;
+    const recurrence = value as Recurrence;
+    if (typeof recurrence.completedOccurrences !== 'number' || recurrence.completedOccurrences < 0) {
+        return undefined;
+    }
+    return Math.floor(recurrence.completedOccurrences);
 }
 
 function addInterval(base: Date, rule: RecurrenceRule, interval: number = 1): Date {
@@ -368,6 +477,18 @@ function resetChecklist(checklist: ChecklistItem[] | undefined): ChecklistItem[]
     }));
 }
 
+const shouldStopAtUntil = (nextIso: string | undefined, until: string | undefined): boolean => {
+    if (!nextIso || !until) return false;
+    const nextDate = safeParseDate(nextIso);
+    if (!nextDate) return false;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(until)) {
+        return format(nextDate, 'yyyy-MM-dd') > until;
+    }
+    const untilDate = safeParseDate(until);
+    if (!untilDate) return false;
+    return nextDate.getTime() > untilDate.getTime();
+};
+
 /**
  * Create the next instance of a recurring task.
  *
@@ -388,6 +509,9 @@ export function createNextRecurringTask(
     const byDay = getRecurrenceByDay(task.recurrence);
     const byMonthDay = getRecurrenceByMonthDay(task.recurrence);
     const interval = getRecurrenceInterval(task.recurrence);
+    const count = getRecurrenceCountValue(task.recurrence);
+    const until = getRecurrenceUntilValue(task.recurrence);
+    const completedOccurrences = getRecurrenceCompletedOccurrencesValue(task.recurrence) ?? 0;
     const parsedCompletedAt = safeParseDate(completedAtIso);
     const fallbackCompletedAt = (() => {
         const candidate = new Date(completedAtIso);
@@ -411,6 +535,15 @@ export function createNextRecurringTask(
         nextStartTime = nextDueDate ?? nextReviewAt;
     }
 
+    if (count && completedOccurrences + 1 >= count) {
+        return null;
+    }
+
+    const nextOccurrenceAnchor = nextDueDate ?? nextStartTime ?? nextReviewAt;
+    if (shouldStopAtUntil(nextOccurrenceAnchor, until)) {
+        return null;
+    }
+
     let newStatus: TaskStatus = previousStatus;
     if (newStatus === 'done' || newStatus === 'archived') {
         newStatus = 'next';
@@ -426,13 +559,34 @@ export function createNextRecurringTask(
             deletedAt: undefined,
         }));
 
+    const nextCompletedOccurrences = completedOccurrences + 1;
+    let nextRecurrence = task.recurrence;
+    if (task.recurrence && typeof task.recurrence === 'object') {
+        const recurrence = task.recurrence as Recurrence;
+        nextRecurrence = {
+            ...recurrence,
+            ...(typeof recurrence.count === 'number' || count ? { count } : {}),
+            ...(typeof recurrence.until === 'string' || until ? { until } : {}),
+            ...(count ? { completedOccurrences: nextCompletedOccurrences } : {}),
+            ...(recurrence.rrule
+                ? {
+                    rrule: buildRRuleString(rule, byDay, interval, {
+                        byMonthDay,
+                        count,
+                        until,
+                    }),
+                }
+                : {}),
+        };
+    }
+
     return {
         id: uuidv4(),
         title: task.title,
         status: newStatus,
         startTime: nextStartTime,
         dueDate: nextDueDate,
-        recurrence: task.recurrence,
+        recurrence: nextRecurrence,
         tags: [...(task.tags || [])],
         contexts: [...(task.contexts || [])],
         checklist: resetChecklist(task.checklist),

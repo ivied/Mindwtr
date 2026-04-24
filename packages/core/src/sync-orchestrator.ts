@@ -46,10 +46,23 @@ export const createSyncOrchestrator = <Arg, Result>(
         const cycleArg = queuedArg ?? arg;
         queuedArg = undefined;
 
-        const current = runCycle(cycleArg, {
-            requestFollowUp: (nextArg?: Arg) => requestFollowUp(nextArg ?? cycleArg),
+        let resolveDeferred!: (value: Result) => void;
+        let rejectDeferred!: (error: unknown) => void;
+        const current = new Promise<Result>((resolve, reject) => {
+            resolveDeferred = resolve;
+            rejectDeferred = reject;
         });
         inFlight = current;
+        try {
+            void runCycle(cycleArg, {
+                requestFollowUp: (nextArg?: Arg) => requestFollowUp(nextArg ?? cycleArg),
+            }).then(
+                (result) => resolveDeferred(result),
+                (error) => rejectDeferred(error),
+            );
+        } catch (error) {
+            rejectDeferred(error);
+        }
 
         current.finally(() => {
             if (inFlight !== current) return;

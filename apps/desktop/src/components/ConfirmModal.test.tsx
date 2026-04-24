@@ -46,4 +46,20 @@ describe('ConfirmModal', () => {
         expect(onConfirm).toHaveBeenCalledTimes(1);
         expect(onCancel).toHaveBeenCalledTimes(1);
     });
+
+    it('preserves line breaks in multiline descriptions', () => {
+        const { getByText } = render(
+            <ConfirmModal
+                isOpen
+                title="Import data"
+                description={'Import 10 tasks?\n\n- Project A: 4\n- Project B: 6'}
+                confirmLabel="Import"
+                cancelLabel="Cancel"
+                onConfirm={vi.fn()}
+                onCancel={vi.fn()}
+            />,
+        );
+
+        expect(getByText(/Import 10 tasks\?/)).toHaveClass('whitespace-pre-line');
+    });
 });

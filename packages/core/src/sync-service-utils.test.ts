@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+    canAutoSync,
     formatSyncErrorMessage,
     getFileSyncDir,
     isLikelyOfflineSyncError,
@@ -29,6 +30,18 @@ describe('sync-service-utils', () => {
         expect(getFileSyncDir('/storage/folder/data.json')).toBe('/storage/folder');
         expect(getFileSyncDir('/storage/folder/mindwtr-sync.json')).toBe('/storage/folder');
         expect(getFileSyncDir('/storage/folder/')).toBe('/storage/folder');
+    });
+
+    it('evaluates autosync eligibility from normalized backend config', () => {
+        expect(canAutoSync({ backend: 'off' })).toBe(false);
+        expect(canAutoSync({ backend: 'cloudkit' })).toBe(true);
+        expect(canAutoSync({ backend: 'file', filePath: '' })).toBe(false);
+        expect(canAutoSync({ backend: 'file', filePath: '/tmp/data.json' })).toBe(true);
+        expect(canAutoSync({ backend: 'webdav', webdavUrl: 'https://sync.example.com' })).toBe(true);
+        expect(canAutoSync({ backend: 'cloud', cloudProvider: 'selfhosted', cloudUrl: '' })).toBe(false);
+        expect(canAutoSync({ backend: 'cloud', cloudProvider: 'selfhosted', cloudUrl: 'https://sync.example.com' })).toBe(true);
+        expect(canAutoSync({ backend: 'cloud', cloudProvider: 'dropbox', dropboxAppKey: 'key', isDropboxConnected: false })).toBe(false);
+        expect(canAutoSync({ backend: 'cloud', cloudProvider: 'dropbox', dropboxAppKey: 'key', isDropboxConnected: true })).toBe(true);
     });
 
     it('redacts credentials from sync error messages', () => {

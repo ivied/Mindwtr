@@ -30,6 +30,8 @@ interface Task {
     status: TaskStatus;            // Current status
     taskMode?: 'task' | 'list';    // 'list' = checklist-first task
     priority?: TaskPriority;       // 'low' | 'medium' | 'high' | 'urgent'
+    energyLevel?: TaskEnergyLevel; // 'low' | 'medium' | 'high'
+    assignedTo?: string;           // Waiting-for person
     startTime?: string;            // ISO date string
     dueDate?: string;              // ISO date string
     recurrence?: Recurrence | RecurrenceRule;
@@ -70,6 +72,31 @@ type TaskStatus =
     | 'done' 
     | 'archived';
 ```
+
+### Recurrence
+
+```typescript
+type RecurrenceRule = 'daily' | 'weekly' | 'monthly' | 'yearly';
+type RecurrenceStrategy = 'strict' | 'fluid';
+type RecurrenceWeekday = 'MO' | 'TU' | 'WE' | 'TH' | 'FR' | 'SA' | 'SU';
+type RecurrenceByDay = RecurrenceWeekday | `${'1' | '2' | '3' | '4' | '-1'}${RecurrenceWeekday}`;
+
+interface Recurrence {
+    rule: RecurrenceRule;
+    strategy?: RecurrenceStrategy;      // Defaults to 'strict'
+    byDay?: RecurrenceByDay[];          // Weekly/monthly weekday pattern
+    count?: number;                     // Total occurrences in the series, including the current task
+    until?: string;                     // ISO date/datetime when the series should stop
+    completedOccurrences?: number;      // Internal counter used to preserve COUNT across generated tasks
+    rrule?: string;                     // Optional RFC 5545 fragment
+}
+```
+
+- `strategy: 'strict'` keeps the planned cadence anchored to the schedule.
+- `strategy: 'fluid'` means “repeat after completion”.
+- `count` stops the series after the total number of occurrences has been created.
+- `until` stops the series when the next generated task would land after the given date/time.
+- `completedOccurrences` is internal sync-safe metadata; clients should preserve it when round-tripping recurrence objects.
 
 ### Project
 

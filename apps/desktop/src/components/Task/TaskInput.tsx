@@ -1,4 +1,4 @@
-import { useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { KeyboardEventHandler, RefObject } from 'react';
 import type { Area, Project } from '@mindwtr/core';
 import { cn } from '../../lib/utils';
@@ -10,6 +10,11 @@ interface TriggerState {
     start: number;
     end: number;
     query: string;
+}
+
+interface InputSelection {
+    start: number;
+    end: number;
 }
 
 type Option =
@@ -77,6 +82,12 @@ export function TaskInput({
     const listboxId = useId();
     const [trigger, setTrigger] = useState<TriggerState | null>(null);
     const [selectedIndex, setSelectedIndex] = useState(0);
+    const valueRef = useRef(value);
+    const selectionRef = useRef<InputSelection>({
+        start: value.length,
+        end: value.length,
+    });
+    const undoRef = useRef<Array<{ value: string; selection: InputSelection }>>([]);
 
     const options = useMemo<Option[]>(() => {
         if (!trigger) return [];
@@ -134,6 +145,43 @@ export function TaskInput({
         setSelectedIndex(0);
     };
 
+    const pushUndoEntry = (previousValue: string, selection: InputSelection) => {
+        const previousEntry = undoRef.current[undoRef.current.length - 1];
+        if (
+            previousEntry
+            && previousEntry.value === previousValue
+            && previousEntry.selection.start === selection.start
+            && previousEntry.selection.end === selection.end
+        ) {
+            return;
+        }
+
+        const nextUndoEntries = [...undoRef.current, { value: previousValue, selection }];
+        undoRef.current = nextUndoEntries.length > 100
+            ? nextUndoEntries.slice(nextUndoEntries.length - 100)
+            : nextUndoEntries;
+    };
+
+    const updateSelection = (input: HTMLInputElement) => {
+        selectionRef.current = {
+            start: input.selectionStart ?? input.value.length,
+            end: input.selectionEnd ?? input.value.length,
+        };
+    };
+
+    useEffect(() => {
+        const isFocused = typeof document !== 'undefined' && mergedRef.current === document.activeElement;
+        if (!isFocused && value !== valueRef.current) {
+            undoRef.current = [];
+            closeTrigger();
+            selectionRef.current = {
+                start: value.length,
+                end: value.length,
+            };
+        }
+        valueRef.current = value;
+    }, [mergedRef, value]);
+
     const updateTrigger = (text: string, caret: number) => {
         const nextTrigger = getTrigger(text, caret);
         setTrigger(nextTrigger);
@@ -163,16 +211,36 @@ export function TaskInput({
         const after = value.slice(trigger.end);
         const needsSpace = after.length > 0 && !/^\s/.test(after);
         const nextValue = `${before}${tokenValue}${needsSpace ? ' ' : ''}${after}`;
+        pushUndoEntry(valueRef.current, selectionRef.current);
+        valueRef.current = nextValue;
         onChange(nextValue);
         closeTrigger();
 
         requestAnimationFrame(() => {
             const caret = before.length + tokenValue.length + (needsSpace ? 1 : 0);
             mergedRef.current?.setSelectionRange(caret, caret);
+            selectionRef.current = { start: caret, end: caret };
         });
     };
 
     const handleKeyDown: KeyboardEventHandler<HTMLInputElement> = async (event) => {
+        const lowerKey = event.key.toLowerCase();
+        if ((event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey && lowerKey === 'z') {
+            const previousEntry = undoRef.current[undoRef.current.length - 1];
+            if (previousEntry) {
+                event.preventDefault();
+                undoRef.current = undoRef.current.slice(0, -1);
+                valueRef.current = previousEntry.value;
+                onChange(previousEntry.value);
+                closeTrigger();
+                requestAnimationFrame(() => {
+                    mergedRef.current?.focus();
+                    mergedRef.current?.setSelectionRange(previousEntry.selection.start, previousEntry.selection.end);
+                    selectionRef.current = previousEntry.selection;
+                });
+                return;
+            }
+        }
         if (trigger && options.length > 0) {
             if (event.key === 'ArrowDown') {
                 event.preventDefault();
@@ -212,17 +280,27 @@ export function TaskInput({
                 autoFocus={autoFocus}
                 onChange={(event) => {
                     const text = event.target.value;
+                    if (text !== valueRef.current) {
+                        pushUndoEntry(valueRef.current, selectionRef.current);
+                    }
                     onChange(text);
+                    valueRef.current = text;
+                    updateSelection(event.target);
                     updateTrigger(text, event.target.selectionStart ?? text.length);
                 }}
                 onKeyDown={handleKeyDown}
                 onClick={(event) => {
                     const target = event.target as HTMLInputElement;
+                    updateSelection(target);
                     updateTrigger(target.value, target.selectionStart ?? target.value.length);
+                }}
+                onSelect={(event) => {
+                    updateSelection(event.currentTarget);
                 }}
                 onKeyUp={(event) => {
                     if (['ArrowDown', 'ArrowUp', 'Enter', 'Escape', 'Tab'].includes(event.key)) return;
                     const target = event.currentTarget;
+                    updateSelection(target);
                     updateTrigger(target.value, target.selectionStart ?? target.value.length);
                 }}
                 onBlur={() => {

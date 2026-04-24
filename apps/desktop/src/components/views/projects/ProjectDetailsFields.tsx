@@ -1,5 +1,5 @@
 import type { Project } from '@mindwtr/core';
-import { CalendarClock, FolderOpenDot, ListOrdered, Plus, Settings2, Signal, Tags } from 'lucide-react';
+import { Calendar, CalendarClock, FolderOpenDot, ListOrdered, Plus, Settings2, Signal, Tags } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 
 type ProjectDetailsFieldsProps = {
@@ -18,6 +18,8 @@ type ProjectDetailsFieldsProps = {
     onToggleSequential: () => void;
     status: Project['status'];
     onChangeStatus: (status: Project['status']) => void;
+    dueDateValue: string;
+    onDueDateChange: (value: string) => void;
     reviewAtValue: string;
     onReviewAtChange: (value: string) => void;
 };
@@ -38,6 +40,8 @@ export function ProjectDetailsFields({
     onToggleSequential,
     status,
     onChangeStatus,
+    dueDateValue,
+    onDueDateChange,
     reviewAtValue,
     onReviewAtChange,
 }: ProjectDetailsFieldsProps) {
@@ -145,6 +149,20 @@ export function ProjectDetailsFields({
                             }
                         }}
                         placeholder="#feature, #client"
+                        className="h-9 w-full text-sm bg-background border border-border rounded-md px-2 text-foreground"
+                    />
+                </div>
+
+                <div className="space-y-2 min-w-0 2xl:col-span-2">
+                    <label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider flex items-center gap-1.5 truncate">
+                        <Calendar className="h-3.5 w-3.5" />
+                        {t('taskEdit.dueDateLabel')}
+                    </label>
+                    <input
+                        key={`${project.id}-due`}
+                        type="date"
+                        defaultValue={dueDateValue}
+                        onBlur={(e) => onDueDateChange(e.target.value)}
                         className="h-9 w-full text-sm bg-background border border-border rounded-md px-2 text-foreground"
                     />
                 </div>

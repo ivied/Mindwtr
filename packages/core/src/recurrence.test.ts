@@ -12,6 +12,22 @@ describe('recurrence', () => {
         expect(parsed.byDay).toEqual(['MO', 'WE']);
     });
 
+    it('builds and parses count and until options', () => {
+        const rrule = buildRRuleString('monthly', undefined, 2, {
+            byMonthDay: [15],
+            count: 4,
+            until: '2025-06-15',
+        });
+        expect(rrule).toBe('FREQ=MONTHLY;INTERVAL=2;BYMONTHDAY=15;COUNT=4;UNTIL=20250615');
+
+        const parsed = parseRRuleString(rrule);
+        expect(parsed.rule).toBe('monthly');
+        expect(parsed.interval).toBe(2);
+        expect(parsed.byMonthDay).toEqual([15]);
+        expect(parsed.count).toBe(4);
+        expect(parsed.until).toBe('2025-06-15');
+    });
+
     it('creates next instance using weekly BYDAY (strict)', () => {
         const task: Task = {
             id: 't1',
@@ -63,6 +79,26 @@ describe('recurrence', () => {
         const next = createNextRecurringTask(task, '2025-01-01T12:00:00.000Z', 'done');
         expect(next?.startTime).toBe('2025-01-02T09:00:00.000Z');
         expect(next?.dueDate).toBeUndefined();
+    });
+
+    it('carries startTime and dueDate forward for yearly strict recurrence', () => {
+        const task: Task = {
+            id: 't2-yearly-window',
+            title: 'Annual enrollment reminder',
+            status: 'done',
+            tags: [],
+            contexts: [],
+            startTime: '2027-03-01T09:00:00.000Z',
+            dueDate: '2027-04-01T09:00:00.000Z',
+            recurrence: { rule: 'yearly', strategy: 'strict' },
+            createdAt: '2027-01-01T00:00:00.000Z',
+            updatedAt: '2027-01-01T00:00:00.000Z',
+        };
+
+        const next = createNextRecurringTask(task, '2027-04-01T12:00:00.000Z', 'done');
+        expect(next?.startTime).toBe('2028-03-01T09:00:00.000Z');
+        expect(next?.dueDate).toBe('2028-04-01T09:00:00.000Z');
+        expect(next?.status).toBe('next');
     });
 
     it('respects daily interval for strict recurrence', () => {
@@ -187,6 +223,62 @@ describe('recurrence', () => {
 
         const next = createNextRecurringTask(task, '2025-01-01T12:00:00.000Z', 'done');
         expect(next?.dueDate).toBe('2025-01-06T09:00:00.000Z');
+    });
+
+    it('stops generating tasks after the configured count', () => {
+        const task: Task = {
+            id: 't6-count',
+            title: 'Three-time reminder',
+            status: 'done',
+            tags: [],
+            contexts: [],
+            dueDate: '2025-01-01',
+            recurrence: {
+                rule: 'daily',
+                strategy: 'strict',
+                count: 3,
+                completedOccurrences: 1,
+                rrule: 'FREQ=DAILY;COUNT=3',
+            },
+            createdAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z',
+        };
+
+        const next = createNextRecurringTask(task, '2025-01-02T12:00:00.000Z', 'done');
+        expect(next?.dueDate).toBe('2025-01-02');
+        expect(next?.recurrence).toMatchObject({
+            count: 3,
+            completedOccurrences: 2,
+            rrule: 'FREQ=DAILY;COUNT=3',
+        });
+
+        const final = createNextRecurringTask(next as Task, '2025-01-03T12:00:00.000Z', 'done');
+        expect(final).toBeNull();
+    });
+
+    it('stops generating tasks after the until date', () => {
+        const task: Task = {
+            id: 't6-until',
+            title: 'Temporary habit',
+            status: 'done',
+            tags: [],
+            contexts: [],
+            dueDate: '2025-01-02',
+            recurrence: {
+                rule: 'daily',
+                strategy: 'strict',
+                until: '2025-01-03',
+                rrule: 'FREQ=DAILY;UNTIL=20250103',
+            },
+            createdAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z',
+        };
+
+        const next = createNextRecurringTask(task, '2025-01-02T12:00:00.000Z', 'done');
+        expect(next?.dueDate).toBe('2025-01-03');
+
+        const final = createNextRecurringTask(next as Task, '2025-01-03T12:00:00.000Z', 'done');
+        expect(final).toBeNull();
     });
 
     it('preserves date-only format for next occurrence', () => {

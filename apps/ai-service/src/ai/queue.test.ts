@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, mock } from 'bun:test'
 import { ClassificationQueue } from './queue'
 import type { Classifier } from './classifier'
 import type { MindwtrClient } from '../api/mindwtr-client'
@@ -29,16 +29,16 @@ function makeInput(): ClassifierInput {
 describe('ClassificationQueue', () => {
   it('processes enqueued job and updates task', async () => {
     const classifier = {
-      classify: vi.fn().mockResolvedValue(makeResult()),
+      classify: mock().mockResolvedValue(makeResult()),
     } as unknown as Classifier
     const mindwtr = {
-      updateTask: vi.fn().mockResolvedValue({ id: 'task-1' }),
+      updateTask: mock().mockResolvedValue({ id: 'task-1' }),
     } as unknown as MindwtrClient
 
     const queue = new ClassificationQueue(classifier, mindwtr)
     queue.start()
 
-    const onComplete = vi.fn()
+    const onComplete = mock()
     queue.enqueue({
       taskId: 'task-1',
       input: makeInput(),
@@ -49,7 +49,7 @@ describe('ClassificationQueue', () => {
     await new Promise((r) => setTimeout(r, 700))
     await queue.stop()
 
-    expect(classifier.classify).toHaveBeenCalledOnce()
+    expect(classifier.classify).toHaveBeenCalledTimes(1)
     expect(mindwtr.updateTask).toHaveBeenCalledWith(
       'task-1',
       expect.objectContaining({
@@ -62,15 +62,15 @@ describe('ClassificationQueue', () => {
         }),
       })
     )
-    expect(onComplete).toHaveBeenCalledOnce()
+    expect(onComplete).toHaveBeenCalledTimes(1)
   })
 
   it('keeps task in inbox when confidence is low', async () => {
     const classifier = {
-      classify: vi.fn().mockResolvedValue(makeResult({ confidence: 0.4 })),
+      classify: mock().mockResolvedValue(makeResult({ confidence: 0.4 })),
     } as unknown as Classifier
     const mindwtr = {
-      updateTask: vi.fn().mockResolvedValue({ id: 'task-1' }),
+      updateTask: mock().mockResolvedValue({ id: 'task-1' }),
     } as unknown as MindwtrClient
 
     const queue = new ClassificationQueue(classifier, mindwtr)
@@ -88,10 +88,10 @@ describe('ClassificationQueue', () => {
 
   it('adds noise tag and keeps in inbox for noise items', async () => {
     const classifier = {
-      classify: vi.fn().mockResolvedValue(makeResult({ is_noise: true, confidence: 0.95 })),
+      classify: mock().mockResolvedValue(makeResult({ is_noise: true, confidence: 0.95 })),
     } as unknown as Classifier
     const mindwtr = {
-      updateTask: vi.fn().mockResolvedValue({ id: 'task-1' }),
+      updateTask: mock().mockResolvedValue({ id: 'task-1' }),
     } as unknown as MindwtrClient
 
     const queue = new ClassificationQueue(classifier, mindwtr)
@@ -101,17 +101,18 @@ describe('ClassificationQueue', () => {
     await new Promise((r) => setTimeout(r, 700))
     await queue.stop()
 
-    const call = (mindwtr.updateTask as ReturnType<typeof vi.fn>).mock.calls[0]
-    expect(call[1].status).toBe('inbox')
-    expect(call[1].tags).toContain('noise')
+    const calls = (mindwtr.updateTask as unknown as { mock: { calls: [string, Record<string, unknown>][] } }).mock.calls
+    const updates = calls[0][1] as { status: string; tags: string[] }
+    expect(updates.status).toBe('inbox')
+    expect(updates.tags).toContain('noise')
   })
 
   it('maps two_minute to next status with 2min tag', async () => {
     const classifier = {
-      classify: vi.fn().mockResolvedValue(makeResult({ category: 'two_minute' })),
+      classify: mock().mockResolvedValue(makeResult({ category: 'two_minute' })),
     } as unknown as Classifier
     const mindwtr = {
-      updateTask: vi.fn().mockResolvedValue({ id: 'task-1' }),
+      updateTask: mock().mockResolvedValue({ id: 'task-1' }),
     } as unknown as MindwtrClient
 
     const queue = new ClassificationQueue(classifier, mindwtr)
@@ -121,20 +122,20 @@ describe('ClassificationQueue', () => {
     await new Promise((r) => setTimeout(r, 700))
     await queue.stop()
 
-    const call = (mindwtr.updateTask as ReturnType<typeof vi.fn>).mock.calls[0]
-    expect(call[1].status).toBe('next')
-    expect(call[1].tags).toContain('2min')
+    const calls = (mindwtr.updateTask as unknown as { mock: { calls: [string, Record<string, unknown>][] } }).mock.calls
+    const updates = calls[0][1] as { status: string; tags: string[] }
+    expect(updates.status).toBe('next')
+    expect(updates.tags).toContain('2min')
   })
 
   it('continues processing after a job fails', async () => {
     const classifier = {
-      classify: vi
-        .fn()
+      classify: mock()
         .mockRejectedValueOnce(new Error('LLM error'))
         .mockResolvedValueOnce(makeResult()),
     } as unknown as Classifier
     const mindwtr = {
-      updateTask: vi.fn().mockResolvedValue({ id: 'task' }),
+      updateTask: mock().mockResolvedValue({ id: 'task' }),
     } as unknown as MindwtrClient
 
     const queue = new ClassificationQueue(classifier, mindwtr)
@@ -146,7 +147,7 @@ describe('ClassificationQueue', () => {
     await queue.stop()
 
     expect(classifier.classify).toHaveBeenCalledTimes(2)
-    expect(mindwtr.updateTask).toHaveBeenCalledOnce()
+    expect(mindwtr.updateTask).toHaveBeenCalledTimes(1)
     expect(mindwtr.updateTask).toHaveBeenCalledWith('task-2', expect.anything())
   })
 })

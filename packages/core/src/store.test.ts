@@ -3,6 +3,7 @@ import { addDays } from 'date-fns';
 import { safeParseDate } from './date';
 import { useTaskStore, flushPendingSave, setStorageAdapter } from './store';
 import type { StorageAdapter } from './storage';
+import type { Task } from './types';
 
 const waitForExpectation = async (assertion: () => void, maxAttempts = 200): Promise<void> => {
     let lastError: unknown = null;
@@ -17,6 +18,24 @@ const waitForExpectation = async (assertion: () => void, maxAttempts = 200): Pro
     }
     throw lastError ?? new Error('Timed out waiting for expectation');
 };
+
+const parseLoggedContext = (value: unknown): Record<string, unknown> => {
+    expect(typeof value).toBe('string');
+    return JSON.parse(String(value)) as Record<string, unknown>;
+};
+
+const createStoreTask = (id: string, overrides: Partial<Task> = {}): Task => ({
+    id,
+    title: `Task ${id}`,
+    status: 'inbox',
+    tags: [],
+    contexts: [],
+    createdAt: '2026-04-01T00:00:00.000Z',
+    updatedAt: '2026-04-01T00:00:00.000Z',
+    rev: 1,
+    revBy: 'device-a',
+    ...overrides,
+});
 
 describe('TaskStore', () => {
     let mockStorage: StorageAdapter;
@@ -34,6 +53,8 @@ describe('TaskStore', () => {
             sections: [],
             areas: [],
             settings: {},
+            isLoading: false,
+            error: null,
             _allTasks: [],
             _allProjects: [],
             _allSections: [],
@@ -197,6 +218,153 @@ describe('TaskStore', () => {
         expect(updatedTask.pushCount).toBe(0);
     });
 
+    it('rejects promoting a fourth task into today focus', async () => {
+        const { addTask, updateTask } = useTaskStore.getState();
+
+        const taskIds: string[] = [];
+        for (const title of ['Focused 1', 'Focused 2', 'Focused 3', 'Focused 4']) {
+            const result = await addTask(title, { status: 'next' });
+            expect(result.success).toBe(true);
+            expect(result.id).toBeTruthy();
+            if (result.id) taskIds.push(result.id);
+        }
+
+        for (const taskId of taskIds.slice(0, 3)) {
+            const result = await updateTask(taskId, { isFocusedToday: true });
+            expect(result).toEqual({ success: true });
+        }
+        await flushPendingSave();
+        (mockStorage.saveData as ReturnType<typeof vi.fn>).mockClear();
+
+        const fourthResult = await updateTask(taskIds[3], { isFocusedToday: true });
+
+        expect(fourthResult).toEqual({ success: false, error: 'Maximum of 3 focused tasks allowed' });
+        const focusedTasks = useTaskStore.getState()._allTasks.filter((task) => task.isFocusedToday === true && !task.deletedAt);
+        expect(focusedTasks).toHaveLength(3);
+        expect(focusedTasks.map((task) => task.id)).toEqual(taskIds.slice(0, 3));
+        expect(useTaskStore.getState()._allTasks.find((task) => task.id === taskIds[3])?.isFocusedToday).not.toBe(true);
+        expect(useTaskStore.getState().error).toBe('Maximum of 3 focused tasks allowed');
+        expect(mockStorage.saveData).not.toHaveBeenCalled();
+    });
+
+    it('prefers the renamed tag when deduplicating normalized tag collisions', async () => {
+        const { addProject, addTask, renameTag } = useTaskStore.getState();
+
+        const project = await addProject('Tagged Project', '#123456', {
+            status: 'active',
+            tagIds: ['BAR', 'foo'],
+        });
+        expect(project).not.toBeNull();
+        if (!project) return;
+
+        const taskResult = await addTask('Tagged Task', {
+            status: 'next',
+            projectId: project.id,
+            tags: ['BAR', 'foo'],
+        });
+        expect(taskResult.success).toBe(true);
+        expect(taskResult.id).toBeTruthy();
+        if (!taskResult.id) return;
+
+        await renameTag('foo', 'bar');
+
+        const updatedTask = useTaskStore.getState()._allTasks.find((task) => task.id === taskResult.id);
+        const updatedProject = useTaskStore.getState()._allProjects.find((item) => item.id === project.id);
+        expect(updatedTask?.tags).toEqual(['#bar']);
+        expect(updatedProject?.tagIds).toEqual(['#bar']);
+    });
+
+    it('allows case-only tag renames', async () => {
+        const { addProject, addTask, renameTag } = useTaskStore.getState();
+
+        const project = await addProject('Tagged Project', '#123456', {
+            status: 'active',
+            tagIds: ['#help'],
+        });
+        expect(project).not.toBeNull();
+        if (!project) return;
+
+        const taskResult = await addTask('Tagged Task', {
+            status: 'next',
+            projectId: project.id,
+            tags: ['#help'],
+        });
+        expect(taskResult.success).toBe(true);
+        expect(taskResult.id).toBeTruthy();
+        if (!taskResult.id) return;
+
+        await renameTag('#help', '#Help');
+
+        const updatedTask = useTaskStore.getState()._allTasks.find((task) => task.id === taskResult.id);
+        const updatedProject = useTaskStore.getState()._allProjects.find((item) => item.id === project.id);
+        expect(updatedTask?.tags).toEqual(['#Help']);
+        expect(updatedProject?.tagIds).toEqual(['#Help']);
+    });
+
+    it('allows case-only context renames', async () => {
+        const { addTask, renameContext } = useTaskStore.getState();
+
+        const taskResult = await addTask('Context Task', {
+            status: 'next',
+            contexts: ['@help'],
+        });
+        expect(taskResult.success).toBe(true);
+        expect(taskResult.id).toBeTruthy();
+        if (!taskResult.id) return;
+
+        await renameContext('@help', '@Help');
+
+        const updatedTask = useTaskStore.getState()._allTasks.find((task) => task.id === taskResult.id);
+        expect(updatedTask?.contexts).toEqual(['@Help']);
+    });
+
+    it('filters soft-deleted attachments from visible tasks while preserving tombstones in _allTasks', async () => {
+        const now = '2026-03-01T10:00:00.000Z';
+        mockStorage.getData = vi.fn().mockResolvedValue({
+            tasks: [
+                {
+                    id: 'task-with-attachments',
+                    title: 'Task with attachments',
+                    status: 'next',
+                    attachments: [
+                        {
+                            id: 'keep',
+                            kind: 'file',
+                            title: 'Keep',
+                            uri: 'file:///keep.txt',
+                            createdAt: now,
+                            updatedAt: now,
+                        },
+                        {
+                            id: 'deleted',
+                            kind: 'file',
+                            title: 'Deleted',
+                            uri: 'file:///deleted.txt',
+                            createdAt: now,
+                            updatedAt: now,
+                            deletedAt: now,
+                        },
+                    ],
+                    createdAt: now,
+                    updatedAt: now,
+                },
+            ],
+            projects: [],
+            sections: [],
+            areas: [],
+            settings: {},
+        });
+
+        await useTaskStore.getState().fetchData({ silent: true });
+        await flushPendingSave();
+
+        expect(useTaskStore.getState().tasks[0]?.attachments?.map((attachment) => attachment.id)).toEqual(['keep']);
+        expect(useTaskStore.getState()._allTasks[0]?.attachments?.map((attachment) => attachment.id)).toEqual([
+            'keep',
+            'deleted',
+        ]);
+    });
+
     it('should delete a task', () => {
         const { addTask, deleteTask } = useTaskStore.getState();
         addTask('Task to Delete');
@@ -206,6 +374,39 @@ describe('TaskStore', () => {
 
         const { tasks } = useTaskStore.getState();
         expect(tasks).toHaveLength(0);
+    });
+
+    it('auto-clears stale errors after ten seconds', () => {
+        useTaskStore.getState().setError('Temporary failure');
+
+        vi.advanceTimersByTime(10_000);
+
+        expect(useTaskStore.getState().error).toBeNull();
+    });
+
+    it('keeps save queue overflow errors visible until dismissed', () => {
+        useTaskStore.getState().setError(
+            'Save queue overflow: dropped 1 queued save(s) (versions 1-1) while keeping versions 2-2.'
+        );
+
+        vi.advanceTimersByTime(10_000);
+
+        expect(useTaskStore.getState().error).toBe(
+            'Save queue overflow: dropped 1 queued save(s) (versions 1-1) while keeping versions 2-2.'
+        );
+    });
+
+    it('does not replace a visible save queue overflow error with a transient error', () => {
+        useTaskStore.getState().setError(
+            'Save queue overflow: dropped 1 queued save(s) (versions 1-1) while keeping versions 2-2.'
+        );
+
+        useTaskStore.getState().setError('Temporary failure');
+        vi.advanceTimersByTime(10_000);
+
+        expect(useTaskStore.getState().error).toBe(
+            'Save queue overflow: dropped 1 queued save(s) (versions 1-1) while keeping versions 2-2.'
+        );
     });
 
     it('tracks filter changes as local data mutations', async () => {
@@ -233,6 +434,51 @@ describe('TaskStore', () => {
         expect(state.settings.lastSyncAt).toBe('2026-03-21T12:00:00.000Z');
         expect(state.settings.lastSyncStatus).toBe('success');
         expect(state.lastDataChangeAt).toBe(123);
+    });
+
+    it('keeps entity maps synchronized when a same-slot task update arrives via setState', () => {
+        const first = createStoreTask('task-1');
+        const second = createStoreTask('task-2');
+        useTaskStore.setState({
+            tasks: [first, second],
+            _allTasks: [first, second],
+        });
+
+        const previousMap = useTaskStore.getState()._tasksById;
+        const updatedFirst = createStoreTask('task-1', {
+            title: 'Task task-1 updated',
+            updatedAt: '2026-04-02T00:00:00.000Z',
+            rev: 2,
+        });
+        useTaskStore.setState({
+            tasks: [updatedFirst, second],
+            _allTasks: [updatedFirst, second],
+        });
+
+        const state = useTaskStore.getState();
+        expect(state._tasksById).not.toBe(previousMap);
+        expect(state._tasksById.get(updatedFirst.id)).toBe(updatedFirst);
+        expect(state._tasksById.get(second.id)).toBe(second);
+    });
+
+    it('removes deleted ids from entity maps when a collection shrinks via setState', () => {
+        const visibleTask = createStoreTask('task-visible');
+        const deletedTask = createStoreTask('task-deleted', {
+            deletedAt: '2026-04-02T00:00:00.000Z',
+        });
+        useTaskStore.setState({
+            tasks: [visibleTask],
+            _allTasks: [visibleTask, deletedTask],
+        });
+
+        useTaskStore.setState({
+            tasks: [visibleTask],
+            _allTasks: [visibleTask],
+        });
+
+        const state = useTaskStore.getState();
+        expect(state._tasksById.has(deletedTask.id)).toBe(false);
+        expect(state._tasksById.get(visibleTask.id)).toBe(visibleTask);
     });
 
     it('keeps derived context and tag lists scoped to used tokens', () => {
@@ -329,6 +575,14 @@ describe('TaskStore', () => {
         await fetchData({ silent: true });
         expect(mockStorage.getData).not.toHaveBeenCalled();
         unlockEditing();
+    });
+
+    it('keeps specific fetch failure details in store error state', async () => {
+        mockStorage.getData = vi.fn().mockRejectedValue(new Error('Database needs repair'));
+
+        await useTaskStore.getState().fetchData({ silent: true });
+
+        expect(useTaskStore.getState().error).toBe('Failed to fetch data: Database needs repair');
     });
 
     it('does not overwrite local task edits made during an in-flight fetch', async () => {
@@ -728,6 +982,24 @@ describe('TaskStore', () => {
         expect(useTaskStore.getState()._allTasks.find((task) => task.id === deletedTask.id)?.purgedAt).toBeTruthy();
     });
 
+    it('does not re-purge tasks that already have a tombstone purge marker', async () => {
+        const alreadyPurgedTask = createStoreTask('purged-task', {
+            deletedAt: '2026-04-01T00:00:00.000Z',
+            purgedAt: '2026-04-02T00:00:00.000Z',
+            updatedAt: '2026-04-03T00:00:00.000Z',
+            rev: 7,
+        });
+
+        useTaskStore.setState({
+            tasks: [],
+            _allTasks: [alreadyPurgedTask],
+        });
+
+        await useTaskStore.getState().purgeDeletedTasks();
+
+        expect(useTaskStore.getState()._allTasks).toEqual([alreadyPurgedTask]);
+    });
+
     it('should coalesce saves and allow immediate flush', async () => {
         const { addTask } = useTaskStore.getState();
 
@@ -785,16 +1057,21 @@ describe('TaskStore', () => {
 
         expect(useTaskStore.getState().error).toContain('Save queue overflow');
         expect(useTaskStore.getState().error).toContain('versions');
-        expect(warnSpy).toHaveBeenCalledWith(
-            'Save queue overflow',
+        const overflowCall = warnSpy.mock.calls.find(([message]) => message === 'Save queue overflow');
+        expect(overflowCall).toBeTruthy();
+        const [, overflowMeta] = overflowCall ?? [];
+        expect(overflowMeta).toEqual(
             expect.objectContaining({
                 scope: 'store',
                 category: 'storage',
-                context: expect.objectContaining({
-                    droppedCount: expect.any(Number),
-                    droppedFromVersion: expect.any(Number),
-                    droppedToVersion: expect.any(Number),
-                }),
+                context: expect.any(String),
+            })
+        );
+        expect(parseLoggedContext(overflowMeta?.context)).toEqual(
+            expect.objectContaining({
+                droppedCount: expect.any(Number),
+                droppedFromVersion: expect.any(Number),
+                droppedToVersion: expect.any(Number),
             })
         );
 
@@ -875,9 +1152,12 @@ describe('TaskStore', () => {
         const { addTask } = useTaskStore.getState();
         addTask('Unsaveable task');
 
-        await vi.runAllTimersAsync();
+        await vi.advanceTimersByTimeAsync(4_000);
         expect(mockStorage.saveData).toHaveBeenCalledTimes(5);
         expect(useTaskStore.getState().error).toContain('disk full');
+
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(useTaskStore.getState().error).toBeNull();
     });
 
     it('should add a project', () => {
@@ -955,9 +1235,7 @@ describe('TaskStore', () => {
 
         const originalUpdateArea = useTaskStore.getState().updateArea;
         useTaskStore.setState({
-            updateArea: async () => {
-                // Simulate a failed restore/update operation.
-            },
+            updateArea: async () => ({ success: false, error: 'Failed to restore area' }),
         });
 
         const restored = await useTaskStore.getState().addArea('Work');
@@ -965,6 +1243,32 @@ describe('TaskStore', () => {
         expect(useTaskStore.getState().error).toBe('Failed to restore area');
 
         useTaskStore.setState({ updateArea: originalUpdateArea });
+    });
+
+    it('returns action failure when updateArea targets a missing area', async () => {
+        const result = await useTaskStore.getState().updateArea('missing-area', { color: '#ef4444' });
+
+        expect(result).toEqual({ success: false, error: 'Area not found' });
+        expect(useTaskStore.getState().error).toBe('Area not found');
+    });
+
+    it('returns action failure when updateArea receives a blank name', async () => {
+        const area = await useTaskStore.getState().addArea('Work');
+
+        expect(area).not.toBeNull();
+
+        const result = await useTaskStore.getState().updateArea(area!.id, { name: '   ' });
+
+        expect(result).toEqual({ success: false, error: 'Area name is required' });
+        expect(useTaskStore.getState().error).toBe('Area name is required');
+        expect(useTaskStore.getState()._allAreas.find((item) => item.id === area!.id)?.name).toBe('Work');
+    });
+
+    it('returns action failure when deleteArea targets a missing area', async () => {
+        const result = await useTaskStore.getState().deleteArea('missing-area');
+
+        expect(result).toEqual({ success: false, error: 'Area not found' });
+        expect(useTaskStore.getState().error).toBe('Area not found');
     });
 
     it('should move a project to someday without altering task status', () => {
@@ -1002,14 +1306,41 @@ describe('TaskStore', () => {
         expect(projectSections[0].deletedAt).toBeTruthy();
     });
 
-    it('sets error when updateProject targets a missing project', () => {
+    it('sets error when updateProject targets a missing project', async () => {
         const { updateProject } = useTaskStore.getState();
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-        updateProject('missing-project-id', { status: 'active' });
+        const result = await updateProject('missing-project-id', { status: 'active' });
 
+        expect(result).toEqual({ success: false, error: 'Project not found' });
         expect(useTaskStore.getState().error).toBe('Project not found');
-        expect(warnSpy).toHaveBeenCalledWith('[mindwtr] updateProject skipped: missing-project-id was not found');
+        const missingProjectCall = warnSpy.mock.calls.find(
+            ([message]) => message === 'updateProject skipped: project not found'
+        );
+        expect(missingProjectCall).toBeTruthy();
+        const [, missingProjectMeta] = missingProjectCall ?? [];
+        expect(missingProjectMeta).toEqual(
+            expect.objectContaining({
+                scope: 'store',
+                category: 'validation',
+                context: expect.any(String),
+            })
+        );
+        expect(parseLoggedContext(missingProjectMeta?.context)).toEqual({ id: 'missing-project-id' });
+        warnSpy.mockRestore();
+    });
+
+    it('returns action failure when deleteProject targets a missing project', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+        const result = await useTaskStore.getState().deleteProject('missing-project-id');
+
+        expect(result).toEqual({ success: false, error: 'Project not found' });
+        expect(useTaskStore.getState().error).toBe('Project not found');
+        expect(warnSpy).toHaveBeenCalledWith(
+            'deleteProject skipped: project not found',
+            expect.objectContaining({ scope: 'store', category: 'validation' }),
+        );
         warnSpy.mockRestore();
     });
 
@@ -1106,6 +1437,20 @@ describe('TaskStore', () => {
             const clearedTask = useTaskStore.getState()._allTasks.find((item) => item.id === task.id)!;
             expect(clearedTask.sectionId).toBeUndefined();
             expect(useTaskStore.getState().sections.find((section) => section.id === first.id)).toBeUndefined();
+        });
+
+        it('returns action failure when updateSection targets a missing section', async () => {
+            const result = await useTaskStore.getState().updateSection('missing-section', { title: 'Updated Phase' });
+
+            expect(result).toEqual({ success: false, error: 'Section not found' });
+            expect(useTaskStore.getState().error).toBe('Section not found');
+        });
+
+        it('returns action failure when deleteSection targets a missing section', async () => {
+            const result = await useTaskStore.getState().deleteSection('missing-section');
+
+            expect(result).toEqual({ success: false, error: 'Section not found' });
+            expect(useTaskStore.getState().error).toBe('Section not found');
         });
 
         it('should not create sections without a valid project or title', async () => {
@@ -1224,6 +1569,34 @@ describe('TaskStore', () => {
 
             expect(result).toEqual({ success: false, error: 'Project not found' });
             expect(useTaskStore.getState()._allTasks.find((item) => item.id === task.id)?.projectId).toBeUndefined();
+        });
+
+        it('fails batch deletes when any task id is missing', async () => {
+            const { addTask, batchDeleteTasks } = useTaskStore.getState();
+            await addTask('Existing Task', { status: 'next' });
+            const task = useTaskStore.getState()._allTasks.find((item) => item.title === 'Existing Task')!;
+
+            const result = await batchDeleteTasks([task.id, 'missing-task']);
+
+            expect(result).toEqual({ success: false, error: 'Tasks not found: missing-task' });
+            expect(useTaskStore.getState()._allTasks.find((item) => item.id === task.id)?.deletedAt).toBeUndefined();
+        });
+
+        it('fails batch deletes when any task id is already tombstoned', async () => {
+            const { addTask, batchDeleteTasks, deleteTask } = useTaskStore.getState();
+            await addTask('Active Task', { status: 'next' });
+            await addTask('Deleted Task', { status: 'next' });
+            const activeTask = useTaskStore.getState()._allTasks.find((item) => item.title === 'Active Task')!;
+            const deletedTask = useTaskStore.getState()._allTasks.find((item) => item.title === 'Deleted Task')!;
+
+            await deleteTask(deletedTask.id);
+            const deletedTaskBeforeBatch = useTaskStore.getState()._allTasks.find((item) => item.id === deletedTask.id)!;
+
+            const result = await batchDeleteTasks([activeTask.id, deletedTask.id]);
+
+            expect(result).toEqual({ success: false, error: `Tasks not found: ${deletedTask.id}` });
+            expect(useTaskStore.getState()._allTasks.find((item) => item.id === activeTask.id)?.deletedAt).toBeUndefined();
+            expect(useTaskStore.getState()._allTasks.find((item) => item.id === deletedTask.id)).toEqual(deletedTaskBeforeBatch);
         });
 
         it('preserves deleted project task section ids so a project can be restored intact', async () => {

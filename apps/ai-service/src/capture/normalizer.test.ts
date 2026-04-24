@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect } from 'bun:test'
 import { toTaskSuggestion, type CapturedItem } from './normalizer'
 
 describe('toTaskSuggestion', () => {

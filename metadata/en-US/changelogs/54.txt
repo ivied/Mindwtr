@@ -1,0 +1,3 @@
+- Added optional project due dates for clearer planning across your lists.
+- Android home screen widgets now use actual widget height so task counts fit each widget size more reliably.
+- Mobile sync handling is more reliable, with safer merge recovery and more consistent visible-task filtering.

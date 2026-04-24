@@ -53,7 +53,7 @@ Your unified dashboard combining daily planning and next actions.
 **Features:**
 - **Context Filters**: Filter Next Actions by context (e.g., @home, @work) or tag.
 - **Top 3 Only**: Toggle to hide everything except your top 3 focus tasks (Zen Mode).
-- **Pomodoro (Optional)**: Enable in **Settings → GTD → Features → Pomodoro timer** to show a task-linked focus/break timer panel (15/3, 25/5, 50/10).
+- **Pomodoro (Optional)**: Enable in **Settings → GTD → Features → Pomodoro timer** to show a task-linked focus/break timer panel (15/3, 25/5, 50/10, plus one optional custom preset).
 
 ### 📁 Projects
 
@@ -215,6 +215,8 @@ Available options follow platform conventions:
 - Windows/Linux: `Ctrl+Alt+M` (default), `Ctrl+Alt+N`, `Ctrl+Alt+Q`, or legacy `Ctrl+Shift+A`
 - Disabled (no system-wide Quick Add shortcut)
 
+**Flatpak/Wayland note:** Some compositors do not allow app-registered global shortcuts. In that case, bind your desktop shortcut to `flatpak run tech.dongdongbh.mindwtr --quick-add` instead.
+
 ### Tray Icon
 
 Click the system tray icon for instant capture:
@@ -296,8 +298,9 @@ Configure notifications in Settings:
 1. Use the input field at the bottom of any list view
 2. Use the global hotkey from anywhere
 3. Click the tray icon for quick capture
-4. Type your task title with quick-add syntax
-5. Press Enter to add
+4. On Flatpak/Wayland, bind `flatpak run tech.dongdongbh.mindwtr --quick-add` as a custom shortcut if the built-in hotkey is unavailable
+5. Type your task title with quick-add syntax
+6. Press Enter to add
 
 ### Editing Tasks
 
@@ -306,6 +309,8 @@ Configure notifications in Settings:
 - Set: due date, start date, review date, time estimate, recurrence
 - Manage checklist items
 - Description markdown supports unordered lists and task checkboxes (`- item`, `[ ] item`, `[x] item`)
+- Type `[[` in task descriptions or project notes to link another task or project from a floating picker
+- Those links are navigational only; they do not sync completion state between tasks
 - Markdown checkbox lines can populate checklist items when you save
 - Assign to a project
 
@@ -340,8 +345,11 @@ When you complete a recurring task, Mindwtr automatically creates the next insta
   Example: every 5 days remains anchored to the planned cycle.
 - **Repeat after completion**: shifts the next due date from completion time.
   Example: complete now, next is due 5 days later.
+- **Ends: Never / On date / After N occurrences**: choose whether the series runs forever, stops on a specific date, or stops after a fixed number of occurrences.
+  `After N occurrences` counts the current task as part of the series total.
 
 You can toggle this in the task editor recurrence field using **Repeat after completion**.
+Use the same recurrence sheet to set an end date or an occurrence count when you need the series to stop automatically.
 
 
 ---
@@ -413,7 +421,7 @@ Access Settings from the sidebar.
 
 ### General
 - **Appearance**: Light, Dark, or System
-- **Language**: English, Chinese, Spanish, Hindi, Arabic, German, Russian, Japanese, French, Portuguese, Korean, Italian, Turkish
+- **Language**: English, Chinese (Simplified), Chinese (Traditional), Spanish, Hindi, Arabic, German, Russian, Japanese, French, Portuguese, Polish, Korean, Italian, Turkish
 - **Keyboard Shortcuts**: Vim or Emacs preset
 
 ### Notifications

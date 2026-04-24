@@ -43,6 +43,12 @@ MINDWTR_CLOUD_AUTH_TOKENS=your_token_here
 
 `MINDWTR_CLOUD_TOKEN` is still accepted for backward compatibility, but deprecated.
 
+For Docker secrets, you can mount a file and point to it instead:
+
+```yaml
+MINDWTR_CLOUD_AUTH_TOKENS_FILE: /run/secrets/mindwtr_cloud_tokens
+```
+
 **Generating a Token:**
 You can generate a strong random token using:
 ```bash

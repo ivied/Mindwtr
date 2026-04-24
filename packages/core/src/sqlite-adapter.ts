@@ -1,4 +1,12 @@
 import type { AppData, Area, Attachment, Project, Task, Section } from './types';
+
+export type CalendarSyncEntry = {
+    taskId: string;
+    calendarEventId: string;
+    calendarId: string;
+    platform: string;
+    lastSyncedAt: string;
+};
 import type { SearchProjectResult, SearchResults, SearchTaskResult, TaskQueryOptions } from './storage';
 import { SQLITE_BASE_SCHEMA, SQLITE_FTS_SCHEMA, SQLITE_INDEX_SCHEMA } from './sqlite-schema';
 import { normalizeTaskStatus } from './task-status';
@@ -321,6 +329,8 @@ export class SqliteAdapter {
         const names = new Set(columns.map((col) => col.name));
         const definitions: Array<{ name: string; sql: string }> = [
             { name: 'priority', sql: 'ALTER TABLE tasks ADD COLUMN priority TEXT' },
+            { name: 'energyLevel', sql: 'ALTER TABLE tasks ADD COLUMN energyLevel TEXT' },
+            { name: 'assignedTo', sql: 'ALTER TABLE tasks ADD COLUMN assignedTo TEXT' },
             { name: 'taskMode', sql: 'ALTER TABLE tasks ADD COLUMN taskMode TEXT' },
             { name: 'startTime', sql: 'ALTER TABLE tasks ADD COLUMN startTime TEXT' },
             { name: 'dueDate', sql: 'ALTER TABLE tasks ADD COLUMN dueDate TEXT' },
@@ -354,6 +364,29 @@ export class SqliteAdapter {
                 await this.client.run(definition.sql);
             }
         }
+        const taskIndexes = [
+            'CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)',
+            'CREATE INDEX IF NOT EXISTS idx_tasks_projectId ON tasks(projectId)',
+            'CREATE INDEX IF NOT EXISTS idx_tasks_deletedAt ON tasks(deletedAt)',
+            'CREATE INDEX IF NOT EXISTS idx_tasks_dueDate ON tasks(dueDate)',
+            'CREATE INDEX IF NOT EXISTS idx_tasks_startTime ON tasks(startTime)',
+            'CREATE INDEX IF NOT EXISTS idx_tasks_reviewAt ON tasks(reviewAt)',
+            'CREATE INDEX IF NOT EXISTS idx_tasks_completedAt ON tasks(completedAt)',
+            'CREATE INDEX IF NOT EXISTS idx_tasks_createdAt ON tasks(createdAt)',
+            'CREATE INDEX IF NOT EXISTS idx_tasks_updatedAt ON tasks(updatedAt)',
+            'CREATE INDEX IF NOT EXISTS idx_tasks_updatedAt_deletedAt ON tasks(updatedAt, deletedAt)',
+            'CREATE INDEX IF NOT EXISTS idx_tasks_status_deletedAt ON tasks(status, deletedAt)',
+            'CREATE INDEX IF NOT EXISTS idx_tasks_project_deletedAt ON tasks(projectId, deletedAt)',
+            'CREATE INDEX IF NOT EXISTS idx_tasks_project_status_deletedAt ON tasks(projectId, status, deletedAt)',
+            'CREATE INDEX IF NOT EXISTS idx_tasks_project_status_updatedAt ON tasks(projectId, status, updatedAt)',
+            'CREATE INDEX IF NOT EXISTS idx_tasks_projectId_orderNum ON tasks(projectId, orderNum)',
+            'CREATE INDEX IF NOT EXISTS idx_tasks_area_deletedAt ON tasks(areaId, deletedAt)',
+            'CREATE INDEX IF NOT EXISTS idx_tasks_area_id ON tasks(areaId)',
+            'CREATE INDEX IF NOT EXISTS idx_tasks_section_id ON tasks(sectionId)',
+        ];
+        for (const sql of taskIndexes) {
+            await this.client.run(sql);
+        }
         await this.client.run(
             'CREATE INDEX IF NOT EXISTS idx_sections_project_deletedAt ON sections(projectId, deletedAt)'
         );
@@ -369,6 +402,7 @@ export class SqliteAdapter {
             { name: 'isFocused', sql: 'ALTER TABLE projects ADD COLUMN isFocused INTEGER' },
             { name: 'supportNotes', sql: 'ALTER TABLE projects ADD COLUMN supportNotes TEXT' },
             { name: 'attachments', sql: 'ALTER TABLE projects ADD COLUMN attachments TEXT' },
+            { name: 'dueDate', sql: 'ALTER TABLE projects ADD COLUMN dueDate TEXT' },
             { name: 'reviewAt', sql: 'ALTER TABLE projects ADD COLUMN reviewAt TEXT' },
             { name: 'areaId', sql: 'ALTER TABLE projects ADD COLUMN areaId TEXT' },
             { name: 'areaTitle', sql: 'ALTER TABLE projects ADD COLUMN areaTitle TEXT' },
@@ -385,6 +419,9 @@ export class SqliteAdapter {
         }
         await this.client.run(
             'CREATE INDEX IF NOT EXISTS idx_projects_area_order ON projects(areaId, orderNum)'
+        );
+        await this.client.run(
+            'CREATE INDEX IF NOT EXISTS idx_projects_dueDate ON projects(dueDate)'
         );
     }
 
@@ -558,6 +595,8 @@ export class SqliteAdapter {
             title: String(row.title ?? ''),
             status: normalizeTaskStatus(row.status),
             priority: row.priority as Task['priority'] | undefined,
+            energyLevel: row.energyLevel as Task['energyLevel'] | undefined,
+            assignedTo: row.assignedTo as string | undefined,
             taskMode: row.taskMode as Task['taskMode'] | undefined,
             startTime: row.startTime as string | undefined,
             dueDate: row.dueDate as string | undefined,
@@ -605,6 +644,7 @@ export class SqliteAdapter {
             isFocused: fromBool(row.isFocused),
             supportNotes: row.supportNotes as string | undefined,
             attachments: toAttachments(fromJson<unknown>(row.attachments, undefined)),
+            dueDate: row.dueDate as string | undefined,
             reviewAt: row.reviewAt as string | undefined,
             areaId: row.areaId as string | undefined,
             areaTitle: row.areaTitle as string | undefined,
@@ -751,7 +791,7 @@ export class SqliteAdapter {
         const ftsQuery = tokens.map((token) => `${token}*`).join(' ');
         const runSearch = async (): Promise<SearchResults> => {
             const taskRows = await this.client.all<Record<string, unknown>>(
-                `SELECT ${SEARCH_TASK_SELECT} FROM tasks_fts f JOIN tasks t ON f.id = t.id WHERE tasks_fts MATCH ? AND t.deletedAt IS NULL AND t.status != 'archived'`,
+                `SELECT ${SEARCH_TASK_SELECT} FROM tasks_fts f JOIN tasks t ON f.id = t.id WHERE tasks_fts MATCH ? AND t.deletedAt IS NULL`,
                 [ftsQuery]
             );
             const projectRows = await this.client.all<Record<string, unknown>>(
@@ -781,6 +821,7 @@ export class SqliteAdapter {
         await this.ensureSchema();
         await this.client.run('BEGIN IMMEDIATE');
         try {
+            const nowIso = new Date().toISOString();
             const chunkArray = <T>(items: T[], size: number): T[][] => {
                 const chunks: T[][] = [];
                 for (let i = 0; i < items.length; i += size) {
@@ -849,18 +890,22 @@ export class SqliteAdapter {
                     'updatedAt',
                     'deletedAt',
                 ],
-                data.areas.map((area) => [
-                    area.id,
-                    area.name,
-                    area.color ?? null,
-                    area.icon ?? null,
-                    area.order,
-                    area.rev ?? null,
-                    area.revBy ?? null,
-                    area.createdAt ?? null,
-                    area.updatedAt ?? null,
-                    area.deletedAt ?? null,
-                ]),
+                data.areas.map((area) => {
+                    const createdAt = area.createdAt ?? area.updatedAt ?? nowIso;
+                    const updatedAt = area.updatedAt ?? area.createdAt ?? nowIso;
+                    return [
+                        area.id,
+                        area.name,
+                        area.color ?? null,
+                        area.icon ?? null,
+                        area.order,
+                        area.rev ?? null,
+                        area.revBy ?? null,
+                        createdAt,
+                        updatedAt,
+                        area.deletedAt ?? null,
+                    ];
+                }),
                 `name=excluded.name,
                  color=excluded.color,
                  icon=excluded.icon,
@@ -885,6 +930,7 @@ export class SqliteAdapter {
                     'isFocused',
                     'supportNotes',
                     'attachments',
+                    'dueDate',
                     'reviewAt',
                     'areaId',
                     'areaTitle',
@@ -905,6 +951,7 @@ export class SqliteAdapter {
                     toBool(project.isFocused),
                     project.supportNotes ?? null,
                     toJson(project.attachments),
+                    project.dueDate ?? null,
                     project.reviewAt ?? null,
                     project.areaId ?? null,
                     project.areaTitle ?? null,
@@ -923,6 +970,7 @@ export class SqliteAdapter {
                  isFocused=excluded.isFocused,
                  supportNotes=excluded.supportNotes,
                  attachments=excluded.attachments,
+                 dueDate=excluded.dueDate,
                  reviewAt=excluded.reviewAt,
                  areaId=excluded.areaId,
                  areaTitle=excluded.areaTitle,
@@ -980,6 +1028,8 @@ export class SqliteAdapter {
                     'title',
                     'status',
                     'priority',
+                    'energyLevel',
+                    'assignedTo',
                     'taskMode',
                     'startTime',
                     'dueDate',
@@ -1014,6 +1064,8 @@ export class SqliteAdapter {
                         task.title,
                         task.status,
                         task.priority ?? null,
+                        task.energyLevel ?? null,
+                        task.assignedTo ?? null,
                         task.taskMode ?? null,
                         task.startTime ?? null,
                         task.dueDate ?? null,
@@ -1045,6 +1097,8 @@ export class SqliteAdapter {
                 `title=excluded.title,
                  status=excluded.status,
                  priority=excluded.priority,
+                 energyLevel=excluded.energyLevel,
+                 assignedTo=excluded.assignedTo,
                  taskMode=excluded.taskMode,
                  startTime=excluded.startTime,
                  dueDate=excluded.dueDate,
@@ -1088,5 +1142,65 @@ export class SqliteAdapter {
             await this.client.run('ROLLBACK');
             throw error;
         }
+    }
+
+    // MARK: - Calendar Sync CRUD
+
+    async getCalendarSyncEntry(taskId: string, platform: string): Promise<CalendarSyncEntry | null> {
+        await this.ensureSchema();
+        const row = await this.client.get<{
+            task_id: string;
+            calendar_event_id: string;
+            calendar_id: string;
+            platform: string;
+            last_synced_at: string;
+        }>('SELECT * FROM calendar_sync WHERE task_id = ? AND platform = ?', [taskId, platform]);
+        if (!row) return null;
+        return {
+            taskId: row.task_id,
+            calendarEventId: row.calendar_event_id,
+            calendarId: row.calendar_id,
+            platform: row.platform,
+            lastSyncedAt: row.last_synced_at,
+        };
+    }
+
+    async upsertCalendarSyncEntry(entry: CalendarSyncEntry): Promise<void> {
+        await this.ensureSchema();
+        await this.client.run(
+            `INSERT INTO calendar_sync (task_id, calendar_event_id, calendar_id, platform, last_synced_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(task_id, platform) DO UPDATE SET
+               calendar_event_id = excluded.calendar_event_id,
+               calendar_id = excluded.calendar_id,
+               last_synced_at = excluded.last_synced_at`,
+            [entry.taskId, entry.calendarEventId, entry.calendarId, entry.platform, entry.lastSyncedAt]
+        );
+    }
+
+    async deleteCalendarSyncEntry(taskId: string, platform: string): Promise<void> {
+        await this.ensureSchema();
+        await this.client.run(
+            'DELETE FROM calendar_sync WHERE task_id = ? AND platform = ?',
+            [taskId, platform]
+        );
+    }
+
+    async getAllCalendarSyncEntries(platform: string): Promise<CalendarSyncEntry[]> {
+        await this.ensureSchema();
+        const rows = await this.client.all<{
+            task_id: string;
+            calendar_event_id: string;
+            calendar_id: string;
+            platform: string;
+            last_synced_at: string;
+        }>('SELECT * FROM calendar_sync WHERE platform = ?', [platform]);
+        return rows.map((row) => ({
+            taskId: row.task_id,
+            calendarEventId: row.calendar_event_id,
+            calendarId: row.calendar_id,
+            platform: row.platform,
+            lastSyncedAt: row.last_synced_at,
+        }));
     }
 }

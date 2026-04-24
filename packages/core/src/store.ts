@@ -1,4 +1,5 @@
 import { createWithEqualityFn } from 'zustand/traditional';
+import { useShallow } from 'zustand/react/shallow';
 export { shallow } from 'zustand/shallow';
 
 import type { AppData } from './types';
@@ -6,7 +7,10 @@ import type { StorageAdapter } from './storage';
 import { noopStorage } from './storage';
 import { logError, logWarn } from './logger';
 import type { TaskStore } from './store-types';
-import { sanitizeAppDataForStorage } from './store-helpers';
+import {
+    buildEntityMap,
+    sanitizeAppDataForStorage,
+} from './store-helpers';
 import { markCoreStartupPhase } from './startup-profiler';
 import { createProjectActions } from './store-projects';
 import { createSettingsActions } from './store-settings';
@@ -38,16 +42,28 @@ let pendingSaves: PendingSave[] = [];
 let pendingVersion = 0;
 let savedVersion = 0;
 let saveInFlight: Promise<void> | null = null;
+let errorAutoClearTimer: ReturnType<typeof setTimeout> | null = null;
 const MAX_PENDING_SAVES = 100;
 const MAX_SAVE_RETRY_ATTEMPTS = 5;
 const INITIAL_SAVE_RETRY_DELAY_MS = 250;
 const MAX_SAVE_RETRY_DELAY_MS = 4000;
+const ERROR_AUTO_CLEAR_MS = 10_000;
+const SAVE_QUEUE_OVERFLOW_ERROR_PREFIX = 'Save queue overflow:';
 const hasPendingSaveWork = (): boolean => pendingSaves.length > 0 || saveInFlight !== null;
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const hasOwnField = (value: object, field: PropertyKey): boolean => Object.prototype.hasOwnProperty.call(value, field);
+const getRequiredArrayField = <T>(value: Record<string, unknown>, field: string): T[] => {
+    const resolved = value[field];
+    if (Array.isArray(resolved)) return resolved as T[];
+    throw new Error(`TaskStore invariant violated: missing ${field} array state`);
+};
 const getSaveRetryDelayMs = (attempt: number): number => {
     const cappedAttempt = Math.max(0, attempt - 1);
     return Math.min(MAX_SAVE_RETRY_DELAY_MS, INITIAL_SAVE_RETRY_DELAY_MS * (2 ** cappedAttempt));
 };
+const isPersistentStoreError = (error: string | null | undefined): boolean => (
+    typeof error === 'string' && error.startsWith(SAVE_QUEUE_OVERFLOW_ERROR_PREFIX)
+);
 const getSaveQueueOverflowMessage = ({
     droppedCount,
     droppedFromVersion,
@@ -91,6 +107,11 @@ const enforcePendingSaveCap = () => {
             keptToVersion: keptLastVersion,
         },
     });
+    try {
+        useTaskStore.getState().setError(message);
+    } catch {
+        // Ignore if the store is not initialized yet.
+    }
     const callbacks = dropped
         .flatMap((item) => item.onErrorCallbacks)
         .filter((callback): callback is (msg: string) => void => typeof callback === 'function');
@@ -134,6 +155,169 @@ const toSaveErrorMessage = (error: unknown): string => {
     return trimmed.toLowerCase().startsWith('failed to save data')
         ? trimmed
         : `Failed to save data: ${trimmed}`;
+};
+
+const scheduleErrorAutoClear = (error: string | null) => {
+    if (errorAutoClearTimer) {
+        clearTimeout(errorAutoClearTimer);
+        errorAutoClearTimer = null;
+    }
+    if (!error || isPersistentStoreError(error)) return;
+    errorAutoClearTimer = setTimeout(() => {
+        errorAutoClearTimer = null;
+        try {
+            const state = useTaskStore.getState();
+            if (state.error === error) {
+                state.setError(null);
+            }
+        } catch {
+            // Ignore if the store is not initialized yet.
+        }
+    }, ERROR_AUTO_CLEAR_MS);
+};
+
+type EntityCollectionConfig = {
+    allKey: '_allTasks' | '_allProjects' | '_allSections' | '_allAreas';
+    visibleKey: 'tasks' | 'projects' | 'sections' | 'areas';
+    mapKey: '_tasksById' | '_projectsById' | '_sectionsById' | '_areasById';
+};
+
+const patchEntityMapFromAlignedArray = <T extends { id: string }>(
+    currentItems: T[],
+    currentMap: Map<string, T>,
+    nextItems: T[]
+): Map<string, T> | null => {
+    if (currentItems.length !== nextItems.length) return null;
+    let nextMap: Map<string, T> | null = null;
+    for (let index = 0; index < nextItems.length; index += 1) {
+        const currentItem = currentItems[index];
+        const nextItem = nextItems[index];
+        if (currentItem === nextItem) continue;
+        if (currentItem?.id !== nextItem?.id) return null;
+        if (!nextMap) nextMap = new Map(currentMap);
+        nextMap.set(nextItem.id, nextItem);
+    }
+    return nextMap ?? currentMap;
+};
+
+const normalizeEntityCollectionUpdate = <T extends { id: string }>(
+    state: TaskStore,
+    nextState: Partial<TaskStore>,
+    config: EntityCollectionConfig
+) => {
+    const { allKey, visibleKey, mapKey } = config;
+    const touchesAll = hasOwnField(nextState, allKey);
+    const touchesVisible = hasOwnField(nextState, visibleKey);
+    const touchesMap = hasOwnField(nextState, mapKey);
+    if (!touchesAll && !touchesVisible && !touchesMap) return;
+
+    const currentStateRecord = state as unknown as Record<string, unknown>;
+    const currentAll = getRequiredArrayField<T>(currentStateRecord, allKey);
+    const currentVisible = getRequiredArrayField<T>(currentStateRecord, visibleKey);
+    const currentMapValue = currentStateRecord[mapKey];
+    const currentMap = currentMapValue instanceof Map ? currentMapValue as Map<string, T> : buildEntityMap(currentAll);
+    const nextAllRaw = (nextState as Record<string, unknown>)[allKey] as T[] | undefined;
+    const nextVisibleRaw = (nextState as Record<string, unknown>)[visibleKey] as T[] | undefined;
+    const nextMapRaw = (nextState as Record<string, unknown>)[mapKey] as Map<string, T> | undefined;
+    const allChanged = touchesAll && Array.isArray(nextAllRaw) && nextAllRaw !== currentAll;
+    const visibleChanged = touchesVisible && Array.isArray(nextVisibleRaw) && nextVisibleRaw !== currentVisible;
+    const mapChanged = touchesMap && nextMapRaw instanceof Map && nextMapRaw !== currentMap;
+
+    let source: 'all' | 'visible' | 'map' | 'current' = 'current';
+    if (visibleChanged && !allChanged && !mapChanged) {
+        source = 'visible';
+    } else if (allChanged && !mapChanged) {
+        source = 'all';
+    } else if (mapChanged && !allChanged) {
+        source = 'map';
+    } else if (allChanged) {
+        source = 'all';
+    } else if (mapChanged) {
+        source = 'map';
+    } else if (visibleChanged) {
+        source = 'visible';
+    }
+    if (
+        source === 'all'
+        && visibleChanged
+        && Array.isArray(nextAllRaw)
+        && Array.isArray(nextVisibleRaw)
+    ) {
+        const nextAllIds = new Set(nextAllRaw.map((item) => item.id));
+        const isVisibleSubsetOfAll = nextVisibleRaw.every((item) => nextAllIds.has(item.id));
+        if (!isVisibleSubsetOfAll) {
+            source = 'visible';
+        }
+    }
+
+    let resolvedAll: T[];
+    if (source === 'all' && Array.isArray(nextAllRaw)) {
+        resolvedAll = nextAllRaw;
+    } else if (source === 'map' && nextMapRaw instanceof Map) {
+        resolvedAll = Array.from(nextMapRaw.values());
+    } else if (source === 'visible' && Array.isArray(nextVisibleRaw)) {
+        resolvedAll = nextVisibleRaw;
+    } else {
+        resolvedAll = currentAll;
+    }
+
+    const resolvedMap = source === 'map' && nextMapRaw instanceof Map
+        ? nextMapRaw
+        : resolvedAll === currentAll
+            ? currentMap
+            : patchEntityMapFromAlignedArray(currentAll, currentMap, resolvedAll) ?? buildEntityMap(resolvedAll);
+    const resolvedVisible = visibleChanged && Array.isArray(nextVisibleRaw)
+        ? nextVisibleRaw
+        : currentVisible;
+
+    (nextState as Record<string, unknown>)[allKey] = resolvedAll;
+    (nextState as Record<string, unknown>)[mapKey] = resolvedMap;
+    if (!touchesVisible || touchesAll || touchesMap) {
+        (nextState as Record<string, unknown>)[visibleKey] = resolvedVisible;
+    }
+};
+
+const prepareStoreStateUpdate = (
+    state: TaskStore,
+    nextState: Partial<TaskStore> | TaskStore
+): Partial<TaskStore> | TaskStore => {
+    if (!nextState || nextState === state || typeof nextState !== 'object') {
+        return nextState;
+    }
+
+    const prepared = { ...(nextState as Partial<TaskStore>) };
+    normalizeEntityCollectionUpdate(state, prepared, {
+        allKey: '_allTasks',
+        visibleKey: 'tasks',
+        mapKey: '_tasksById',
+    });
+    normalizeEntityCollectionUpdate(state, prepared, {
+        allKey: '_allProjects',
+        visibleKey: 'projects',
+        mapKey: '_projectsById',
+    });
+    normalizeEntityCollectionUpdate(state, prepared, {
+        allKey: '_allSections',
+        visibleKey: 'sections',
+        mapKey: '_sectionsById',
+    });
+    normalizeEntityCollectionUpdate(state, prepared, {
+        allKey: '_allAreas',
+        visibleKey: 'areas',
+        mapKey: '_areasById',
+    });
+
+    if (hasOwnField(prepared, 'error')) {
+        const currentError = state.error;
+        const nextError = prepared.error ?? null;
+        if (isPersistentStoreError(currentError) && nextError && !isPersistentStoreError(nextError)) {
+            const { error: _ignored, ...rest } = prepared;
+            return rest as Partial<TaskStore>;
+        }
+        scheduleErrorAutoClear(nextError);
+    }
+
+    return prepared;
 };
 
 /**
@@ -275,43 +459,75 @@ export const flushPendingSave = async (): Promise<void> => {
     }
 };
 
-export const useTaskStore = createWithEqualityFn<TaskStore>()((set, get) => ({
-    tasks: [],
-    projects: [],
-    sections: [],
-    areas: [],
-    settings: {},
-    isLoading: false,
-    error: null,
-    editLockCount: 0,
-    lastDataChangeAt: 0,
-    highlightTaskId: null,
-    highlightTaskAt: null,
-    // Internal: full data including tombstones
-    _allTasks: [],
-    _allProjects: [],
-    _allSections: [],
-    _allAreas: [],
-    setError: (error: string | null) => set({ error }),
-    lockEditing: () => set((state) => ({ editLockCount: state.editLockCount + 1 })),
-    unlockEditing: () => set((state) => ({ editLockCount: Math.max(0, state.editLockCount - 1) })),
-    ...createSettingsActions({
-        set,
-        get,
-        debouncedSave,
-        flushPendingSave,
-        hasPendingSaveWork,
-        getStorage: () => storage,
-    }),
-    ...createTaskActions({
-        set,
-        get,
-        debouncedSave,
-        getStorage: () => storage,
-    }),
-    ...createProjectActions({
-        set,
-        get,
-        debouncedSave,
-    }),
-}));
+export const useTaskStore = createWithEqualityFn<TaskStore>()((rawSet, get) => {
+    const set: typeof rawSet = (partial) => rawSet((state) => {
+        const nextState = typeof partial === 'function' ? partial(state) : partial;
+        return prepareStoreStateUpdate(state, nextState) as Partial<TaskStore> | TaskStore;
+    });
+
+    return {
+        tasks: [],
+        projects: [],
+        sections: [],
+        areas: [],
+        settings: {},
+        isLoading: false,
+        error: null,
+        editLockCount: 0,
+        lastDataChangeAt: 0,
+        highlightTaskId: null,
+        highlightTaskAt: null,
+        // Internal: full data including tombstones
+        _allTasks: [],
+        _allProjects: [],
+        _allSections: [],
+        _allAreas: [],
+        _tasksById: new Map(),
+        _projectsById: new Map(),
+        _sectionsById: new Map(),
+        _areasById: new Map(),
+        setError: (error: string | null) => set({ error }),
+        lockEditing: () => set((state) => ({ editLockCount: state.editLockCount + 1 })),
+        unlockEditing: () => set((state) => ({ editLockCount: Math.max(0, state.editLockCount - 1) })),
+        ...createSettingsActions({
+            set,
+            get,
+            debouncedSave,
+            flushPendingSave,
+            hasPendingSaveWork,
+            getStorage: () => storage,
+        }),
+        ...createTaskActions({
+            set,
+            get,
+            debouncedSave,
+            getStorage: () => storage,
+        }),
+        ...createProjectActions({
+            set,
+            get,
+            debouncedSave,
+        }),
+    };
+});
+
+const originalSetState = useTaskStore.setState;
+// Zustand callers outside our action creators can still use setState directly.
+// Keep all external writes flowing through prepareStoreStateUpdate so derived maps,
+// tombstone-aware collections, and visible lists stay aligned.
+useTaskStore.setState = ((partial, replace) => {
+    if (typeof partial === 'function') {
+        originalSetState((state) => prepareStoreStateUpdate(state, partial(state as TaskStore) as Partial<TaskStore> | TaskStore), replace);
+        return;
+    }
+    originalSetState(prepareStoreStateUpdate(useTaskStore.getState(), partial as Partial<TaskStore> | TaskStore), replace);
+}) as typeof useTaskStore.setState;
+
+export const useTaskById = (id: string) =>
+    useTaskStore((state) => state._tasksById.get(id));
+
+export const useProjectById = (id?: string | null) =>
+    useTaskStore((state) => (id ? state._projectsById.get(id) : undefined));
+
+export const useVisibleTaskIds = () =>
+    useTaskStore(useShallow((state) => state.tasks.map((task) => task.id)));

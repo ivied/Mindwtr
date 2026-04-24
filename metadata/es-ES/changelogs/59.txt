@@ -1,0 +1,3 @@
+Mejoramos la planificacion y edicion en Android con grupos de proyectos alineados con escritorio, estado de Manage persistente, bloques de codigo y cambios rapidos de campos.
+La sincronizacion con calendario para tareas con fecha es mas fiable gracias al calendario local de Android y a una mejor apertura desde notificaciones.
+Tambien mejora la captura compartida, la reutilizacion de carpetas de adjuntos y los entornos WebDAV locales.

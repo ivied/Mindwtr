@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     shallow,
     useTaskStore,
+    buildTaskUpdatesFromSpeechResult,
     parseQuickAdd,
     safeFormatDate,
-    safeParseDate,
     generateUUID,
     DEFAULT_PROJECT_COLOR,
     type Attachment,
@@ -14,11 +14,12 @@ import { BaseDirectory, mkdir, readFile, remove, writeFile } from '@tauri-apps/p
 import { dataDir, join } from '@tauri-apps/api/path';
 import { useLanguage } from '../contexts/language-context';
 import { cn } from '../lib/utils';
-import { isTauriRuntime } from '../lib/runtime';
+import { isFlatpakRuntime, isTauriRuntime } from '../lib/runtime';
 import { reportError } from '../lib/report-error';
 import { logWarn } from '../lib/app-log';
 import { loadAIKey } from '../lib/ai-config';
 import { encodeWav, resampleAudio } from '../lib/audio-utils';
+import { getPreferredDesktopAudioCaptureBackend } from '../lib/audio-capture-backend';
 import { processAudioCapture, type SpeechToTextResult } from '../lib/speech-to-text';
 import { DEFAULT_WHISPER_MODEL } from '../lib/speech-models';
 import { TaskInput } from './Task/TaskInput';
@@ -169,89 +170,15 @@ export function QuickAddModal() {
         const existing = currentTasks.find((task) => task.id === taskId);
         if (!existing) return;
 
-        const updates: Partial<Task> = {};
-        const mode = currentSettings.ai?.speechToText?.mode ?? 'smart_parse';
-        const fieldStrategy = currentSettings.ai?.speechToText?.fieldStrategy ?? 'smart';
-        const transcript = result.transcript?.trim();
-
-        if (mode === 'transcribe_only') {
-            if (transcript) {
-                if (fieldStrategy === 'description_only') {
-                    updates.description = transcript;
-                } else if (fieldStrategy === 'title_only') {
-                    updates.title = transcript;
-                } else {
-                    const wordCount = transcript.split(/\s+/).filter(Boolean).length;
-                    if (wordCount <= 15) {
-                        updates.title = transcript;
-                    } else {
-                        updates.description = transcript;
-                    }
-                }
-            }
-        } else {
-            if (result.title && result.title.trim()) updates.title = result.title.trim();
-            if (result.description !== undefined && result.description !== null) {
-                const desc = result.description.trim();
-                updates.description = desc ? desc : undefined;
-            }
-            if (!updates.title && transcript) {
-                if (fieldStrategy === 'description_only') {
-                    updates.description = transcript;
-                } else if (fieldStrategy === 'title_only') {
-                    updates.title = transcript;
-                } else {
-                    const wordCount = transcript.split(/\s+/).filter(Boolean).length;
-                    if (wordCount <= 15) {
-                        updates.title = transcript;
-                    } else {
-                        const words = transcript.split(/\s+/).filter(Boolean);
-                        updates.title = `${words.slice(0, 7).join(' ')}...`;
-                        if (!updates.description) {
-                            updates.description = transcript;
-                        }
-                    }
-                }
-            }
-        }
-
-        if (result.dueDate) {
-            const parsed = safeParseDate(result.dueDate);
-            if (parsed) updates.dueDate = parsed.toISOString();
-        }
-        if (result.startTime) {
-            const parsed = safeParseDate(result.startTime);
-            if (parsed) updates.startTime = parsed.toISOString();
-        }
-
-        const normalizeList = (items: string[] | null | undefined, prefix: string) => {
-            if (!Array.isArray(items)) return [];
-            return items
-                .map((item) => item.trim())
-                .filter(Boolean)
-                .map((item) => (item.startsWith(prefix) ? item : `${prefix}${item}`));
-        };
-
-        const nextTags = normalizeList(result.tags ?? [], '#');
-        const nextContexts = normalizeList(result.contexts ?? [], '@');
-        if (nextTags.length) {
-            updates.tags = Array.from(new Set([...(existing.tags ?? []), ...nextTags]));
-        }
-        if (nextContexts.length) {
-            updates.contexts = Array.from(new Set([...(existing.contexts ?? []), ...nextContexts]));
-        }
-
-        if (result.projectTitle && !existing.projectId) {
-            const trimmed = typeof result.projectTitle === 'string' ? result.projectTitle.trim() : '';
-            if (trimmed) {
-                const match = currentProjects.find((project) => project.title.toLowerCase() === trimmed.toLowerCase());
-                if (match) {
-                    updates.projectId = match.id;
-                } else {
-                    const created = await addProjectNow(trimmed, DEFAULT_PROJECT_COLOR);
-                    if (!created) return;
-                    updates.projectId = created.id;
-                }
+        const { updates, suggestedProjectTitle } = buildTaskUpdatesFromSpeechResult(existing, result, currentSettings);
+        if (suggestedProjectTitle && !existing.projectId) {
+            const match = currentProjects.find((project) => project.title.toLowerCase() === suggestedProjectTitle.toLowerCase());
+            if (match) {
+                updates.projectId = match.id;
+            } else {
+                const created = await addProjectNow(suggestedProjectTitle, DEFAULT_PROJECT_COLOR);
+                if (!created) return;
+                updates.projectId = created.id;
             }
         }
 
@@ -273,12 +200,27 @@ export function QuickAddModal() {
         if (recordingBusy || isRecording) return;
         setRecordingError(null);
         try {
-            if (isTauriRuntime()) {
-                const { invoke } = await import('@tauri-apps/api/core');
-                await invoke('start_audio_recording');
-                setRecordingBackend('native');
-                setIsRecording(true);
-                return;
+            const preferredBackend = getPreferredDesktopAudioCaptureBackend({
+                isTauriRuntime: isTauriRuntime(),
+                isFlatpakRuntime: isFlatpakRuntime(),
+            });
+
+            if (preferredBackend === 'native') {
+                try {
+                    const { invoke } = await import('@tauri-apps/api/core');
+                    await invoke('start_audio_recording');
+                    setRecordingBackend('native');
+                    setIsRecording(true);
+                    return;
+                } catch (error) {
+                    void logWarn('Native audio recording failed, falling back to web capture', {
+                        scope: 'audio',
+                        extra: {
+                            error: error instanceof Error ? error.message : String(error),
+                            preferredBackend,
+                        },
+                    });
+                }
             }
             if (!navigator.mediaDevices?.getUserMedia) {
                 setRecordingError(t('quickAdd.audioErrorBody'));
@@ -567,13 +509,17 @@ export function QuickAddModal() {
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!value.trim()) return;
-        const { title, props, projectTitle, invalidDateCommands } = parseQuickAdd(value, projects, new Date(), areas);
+        const { title, props, projectTitle, invalidDateCommands, detectedDate } = parseQuickAdd(value, projects, new Date(), areas);
         if (invalidDateCommands && invalidDateCommands.length > 0) {
             return;
         }
-        const finalTitle = title || value;
-        if (!finalTitle.trim()) return;
         const baseProps: Partial<Task> = { ...initialProps, ...props };
+        const shouldApplyDetectedDate = Boolean(detectedDate?.date && !baseProps.dueDate);
+        if (shouldApplyDetectedDate && detectedDate) {
+            baseProps.dueDate = detectedDate.date;
+        }
+        const finalTitle = shouldApplyDetectedDate && detectedDate ? detectedDate.titleWithoutDate : (title || value);
+        if (!finalTitle.trim()) return;
         if (!baseProps.areaId && selectedAreaId) {
             baseProps.areaId = selectedAreaId;
         }
@@ -623,7 +569,7 @@ export function QuickAddModal() {
         >
             <div
                 ref={modalRef}
-                className="w-full max-w-lg bg-popover text-popover-foreground rounded-xl border shadow-2xl overflow-hidden flex flex-col"
+                className="w-full max-w-lg bg-popover text-popover-foreground rounded-xl border shadow-2xl overflow-visible flex flex-col"
                 role="dialog"
                 aria-modal="true"
                 onClick={(e) => e.stopPropagation()}

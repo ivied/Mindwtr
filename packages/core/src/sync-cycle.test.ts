@@ -92,6 +92,56 @@ describe('performSyncCycle', () => {
         expect(result.stats.tasks.conflicts).toBe(0);
     });
 
+    it('preserves the live task during an ambiguous delete-vs-live sync cycle', async () => {
+        const deletedTask = {
+            ...createMockTask('task-1', '2026-04-01T00:00:00.000Z', '2026-04-01T00:00:00.000Z'),
+            rev: 7,
+            revBy: 'device-local',
+        } satisfies Task;
+        const liveTask = {
+            ...createMockTask('task-1', '2026-04-01T00:00:00.000Z'),
+            rev: 7,
+            revBy: 'device-local',
+        } satisfies Task;
+        let wroteLocal: AppData | null = null;
+        let wroteRemote: AppData | null = null;
+
+        const result = await performSyncCycle({
+            readLocal: async () => mockAppData([deletedTask]),
+            readRemote: async () => mockAppData([liveTask]),
+            writeLocal: async (data) => {
+                wroteLocal = data;
+            },
+            writeRemote: async (data) => {
+                wroteRemote = data;
+            },
+        });
+
+        expect(result.status).toBe('conflict');
+        expect(result.data.tasks).toHaveLength(1);
+        expect(result.data.tasks[0].deletedAt).toBeUndefined();
+        expect(wroteLocal?.tasks[0]?.deletedAt).toBeUndefined();
+        expect(wroteRemote?.tasks[0]?.deletedAt).toBeUndefined();
+    });
+
+    it('surfaces a clock skew warning when merge drift exceeds the threshold', async () => {
+        const result = await performSyncCycle({
+            readLocal: async () => mockAppData([
+                createMockTask('task-1', '2026-03-01T00:10:00.000Z'),
+            ]),
+            readRemote: async () => mockAppData([
+                createMockTask('task-1', '2026-03-01T00:00:00.000Z'),
+            ]),
+            writeLocal: async () => undefined,
+            writeRemote: async () => undefined,
+        });
+
+        expect(result.clockSkewWarning).toEqual({
+            skewMs: 10 * 60 * 1000,
+            direction: 'local-ahead',
+        });
+    });
+
     it('returns success when local defaults differ from omitted legacy fields', async () => {
         const now = '2026-03-07T00:00:00.000Z';
         const localTask = {
@@ -297,6 +347,14 @@ describe('performSyncCycle', () => {
             purgedAt: '2025-06-01T00:00:00.000Z',
         } as Task;
         const oldDeletedTask = createMockTask('old-deleted', '2025-06-01T00:00:00.000Z', '2025-06-01T00:00:00.000Z');
+        const oldDeletedProject = createMockProject('old-project', '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z');
+        const oldDeletedSection = createMockSection(
+            'old-section',
+            'old-project',
+            '2025-01-01T00:00:00.000Z',
+            '2025-01-01T00:00:00.000Z'
+        );
+        const oldDeletedArea = createMockArea('old-area', '2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z');
         const taskWithDeletedAttachment = {
             ...createMockTask('with-deleted-attachment', '2025-12-20T00:00:00.000Z'),
             attachments: [{
@@ -310,7 +368,12 @@ describe('performSyncCycle', () => {
             }],
         } as Task;
 
-        const base = mockAppData([oldPurgedTask, oldDeletedTask, taskWithDeletedAttachment]);
+        const base = mockAppData(
+            [oldPurgedTask, oldDeletedTask, taskWithDeletedAttachment],
+            [oldDeletedProject],
+            [oldDeletedSection]
+        );
+        base.areas = [oldDeletedArea];
         base.settings = {
             attachments: {
                 pendingRemoteDeletes: [
@@ -341,6 +404,9 @@ describe('performSyncCycle', () => {
         expect(saved).not.toBeNull();
         expect(saved!.tasks.some((task) => task.id === 'old-purged')).toBe(false);
         expect(saved!.tasks.some((task) => task.id === 'old-deleted')).toBe(true);
+        expect(saved!.projects.some((project) => project.id === 'old-project')).toBe(false);
+        expect(saved!.sections.some((section) => section.id === 'old-section')).toBe(false);
+        expect(saved!.areas.some((area) => area.id === 'old-area')).toBe(false);
         const keptTask = saved!.tasks.find((task) => task.id === 'with-deleted-attachment');
         expect(keptTask).toBeTruthy();
         expect(keptTask!.attachments).toBeUndefined();
@@ -498,6 +564,58 @@ describe('performSyncCycle', () => {
         expect(localWrites[1].settings.pendingRemoteWriteAttempts).toBe(1);
     });
 
+    it('preserves remote-write preparation mutations across the pending-write lifecycle', async () => {
+        const localWrites: AppData[] = [];
+        let remoteWriteData: AppData | null = null;
+
+        await expect(performSyncCycle({
+            readLocal: async () => mockAppData([{
+                ...createMockTask('task-1', '2024-01-01T00:00:00.000Z'),
+                attachments: [{
+                    id: 'att-1',
+                    kind: 'file',
+                    title: 'doc.txt',
+                    uri: '/local/doc.txt',
+                    createdAt: '2024-01-01T00:00:00.000Z',
+                    updatedAt: '2024-01-01T00:00:00.000Z',
+                }],
+            }]),
+            readRemote: async () => mockAppData(),
+            writeLocal: async (data) => {
+                localWrites.push(structuredClone(data));
+            },
+            prepareRemoteWrite: async (data) => ({
+                ...data,
+                tasks: data.tasks.map((task) => ({
+                    ...task,
+                    attachments: task.attachments?.map((attachment) => (
+                        attachment.id === 'att-1'
+                            ? {
+                                ...attachment,
+                                cloudKey: 'attachments/att-1.txt',
+                                localStatus: 'available',
+                            }
+                            : attachment
+                    )),
+                })),
+            }),
+            writeRemote: async (data) => {
+                remoteWriteData = structuredClone(data);
+                throw new Error('remote write failed');
+            },
+            now: () => '2026-01-01T00:00:00.000Z',
+        })).rejects.toThrow('remote write failed');
+
+        expect(localWrites).toHaveLength(2);
+        expect(localWrites[0].tasks[0].attachments?.[0].cloudKey).toBe('attachments/att-1.txt');
+        expect(localWrites[0].tasks[0].attachments?.[0].localStatus).toBe('available');
+        expect(localWrites[1].tasks[0].attachments?.[0].cloudKey).toBe('attachments/att-1.txt');
+        expect(localWrites[1].tasks[0].attachments?.[0].localStatus).toBe('available');
+        expect(remoteWriteData?.tasks[0].attachments?.[0].cloudKey).toBe('attachments/att-1.txt');
+        expect(localWrites[0].settings.pendingRemoteWriteAt).toBe('2026-01-01T00:00:00.000Z');
+        expect(localWrites[1].settings.pendingRemoteWriteRetryAt).toBe('2026-01-01T00:00:05.000Z');
+    });
+
     it('pauses pending remote write recovery until the retry window expires', async () => {
         const localWithPending = mockAppData([createMockTask('1', '2024-01-01T00:00:00.000Z')]);
         localWithPending.settings.pendingRemoteWriteAt = '2025-12-31T23:59:59.000Z';
@@ -542,21 +660,36 @@ describe('performSyncCycle', () => {
             now: () => '2026-01-01T00:00:00.000Z',
         })).rejects.toThrow('recovery write failed');
 
-        expect(localWrites).toHaveLength(1);
+        expect(localWrites).toHaveLength(2);
         expect(localWrites[0].settings.pendingRemoteWriteAt).toBe('2025-12-31T23:59:59.000Z');
-        expect(localWrites[0].settings.pendingRemoteWriteRetryAt).toBe('2026-01-01T00:00:10.000Z');
-        expect(localWrites[0].settings.pendingRemoteWriteAttempts).toBe(2);
+        expect(localWrites[0].settings.pendingRemoteWriteRetryAt).toBeUndefined();
+        expect(localWrites[0].settings.pendingRemoteWriteAttempts).toBe(1);
+        expect(localWrites[1].settings.pendingRemoteWriteAt).toBe('2025-12-31T23:59:59.000Z');
+        expect(localWrites[1].settings.pendingRemoteWriteRetryAt).toBe('2026-01-01T00:00:10.000Z');
+        expect(localWrites[1].settings.pendingRemoteWriteAttempts).toBe(2);
     });
 
-    it('retries pending remote write before reading remote data', async () => {
+    it('re-reads local data before retrying a pending remote write', async () => {
         const sequence: string[] = [];
-        const localWithPending = mockAppData([createMockTask('1', '2024-01-01T00:00:00.000Z')]);
-        localWithPending.settings.pendingRemoteWriteAt = '2025-12-31T23:59:59.000Z';
+        const stalePendingLocal = mockAppData([{
+            ...createMockTask('1', '2024-01-01T00:00:00.000Z'),
+            title: 'stale local title',
+        }]);
+        stalePendingLocal.settings.pendingRemoteWriteAt = '2025-12-31T23:59:59.000Z';
+        const refreshedPendingLocal = mockAppData([{
+            ...createMockTask('1', '2024-01-03T00:00:00.000Z'),
+            title: 'fresh local title',
+        }]);
+        refreshedPendingLocal.settings.pendingRemoteWriteAt = '2025-12-31T23:59:59.000Z';
+        let localData = stalePendingLocal;
+        let localReads = 0;
+        let remoteWriteData: AppData | null = null;
 
         await performSyncCycle({
             readLocal: async () => {
                 sequence.push('read-local');
-                return localWithPending;
+                localReads += 1;
+                return localData;
             },
             readRemote: async () => {
                 sequence.push('read-remote');
@@ -566,17 +699,27 @@ describe('performSyncCycle', () => {
                 sequence.push(`write-local:${data.settings.pendingRemoteWriteAt ? 'pending' : 'clear'}`);
             },
             writeRemote: async (data) => {
+                remoteWriteData = data;
                 sequence.push(`write-remote:${data.settings.pendingRemoteWriteAt ? 'pending' : 'clear'}`);
+            },
+            flushPendingLocalBeforeRetryRead: async () => {
+                sequence.push('flush-before-retry-read');
+                localData = refreshedPendingLocal;
             },
             now: () => '2026-01-01T00:00:00.000Z',
         });
 
-        const retryWriteIndex = sequence.indexOf('write-remote:clear');
-        const clearMarkerIndex = sequence.indexOf('write-local:clear');
+        const refreshReadIndex = sequence.lastIndexOf('read-local');
         const readRemoteIndex = sequence.indexOf('read-remote');
-        expect(retryWriteIndex).toBeGreaterThan(-1);
-        expect(clearMarkerIndex).toBeGreaterThan(retryWriteIndex);
-        expect(readRemoteIndex).toBeGreaterThan(clearMarkerIndex);
+        const flushIndex = sequence.indexOf('flush-before-retry-read');
+        const retryWriteIndex = sequence.indexOf('write-remote:clear');
+        expect(localReads).toBe(2);
+        expect(flushIndex).toBeGreaterThan(sequence.indexOf('read-local'));
+        expect(flushIndex).toBeLessThan(refreshReadIndex);
+        expect(refreshReadIndex).toBeGreaterThan(sequence.indexOf('read-local'));
+        expect(readRemoteIndex).toBeGreaterThan(refreshReadIndex);
+        expect(retryWriteIndex).toBeGreaterThan(readRemoteIndex);
+        expect(remoteWriteData?.tasks[0].title).toBe('fresh local title');
     });
 
     it('reports orchestration steps in order', async () => {

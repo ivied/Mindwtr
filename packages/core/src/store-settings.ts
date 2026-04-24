@@ -13,6 +13,12 @@ import {
     ensureDeviceId,
     normalizeAiSettingsForSync,
     normalizeRevision,
+    reconcileEntityCollection,
+    reuseArrayIfShallowEqual,
+    selectVisibleAreas,
+    selectVisibleProjects,
+    selectVisibleSections,
+    selectVisibleTasks,
     stripSensitiveSettings,
     withTimeout,
 } from './store-helpers';
@@ -25,6 +31,13 @@ const TOMBSTONE_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const TASK_EDITOR_DEFAULTS_VERSION = 4;
 const TASK_EDITOR_ALWAYS_VISIBLE: TaskEditorFieldId[] = ['status', 'project', 'description', 'checklist', 'contexts'];
 const STORAGE_TIMEOUT_MS = 15_000;
+const getFetchDataErrorMessage = (error: unknown): string => {
+    const detail = error instanceof Error ? error.message : String(error ?? '');
+    const trimmed = detail.trim();
+    if (!trimmed) return 'Failed to fetch data';
+    if (/timed out/i.test(trimmed)) return 'Storage request timed out. Try again.';
+    return `Failed to fetch data: ${trimmed}`;
+};
 const NON_MUTATING_SETTINGS_KEYS = new Set<keyof AppData['settings']>([
     'lastSyncAt',
     'lastSyncStatus',
@@ -578,23 +591,27 @@ export const createSettingsActions = ({
                 );
                 allTasks = cleanup.data.tasks;
                 allProjects = cleanup.data.projects;
-                if (cleanup.removedTaskTombstones > 0 || cleanup.removedAttachmentTombstones > 0) {
+                if (
+                    cleanup.removedTaskTombstones > 0
+                    || cleanup.removedProjectTombstones > 0
+                    || cleanup.removedSectionTombstones > 0
+                    || cleanup.removedAreaTombstones > 0
+                    || cleanup.removedAttachmentTombstones > 0
+                ) {
                     didTombstoneCleanup = true;
                     logWarn('Purged expired tombstones during data fetch', {
                         scope: 'store',
                         category: 'storage',
                         context: {
                             removedTaskTombstones: cleanup.removedTaskTombstones,
+                            removedProjectTombstones: cleanup.removedProjectTombstones,
+                            removedSectionTombstones: cleanup.removedSectionTombstones,
+                            removedAreaTombstones: cleanup.removedAreaTombstones,
                             removedAttachmentTombstones: cleanup.removedAttachmentTombstones,
                         },
                     });
                 }
             }
-            // Filter out soft-deleted and archived items for day-to-day UI display
-            const visibleTasks = allTasks.filter(t => !t.deletedAt && t.status !== 'archived');
-            const visibleProjects = allProjects.filter(p => !p.deletedAt);
-            const visibleSections = allSections.filter((section) => !section.deletedAt);
-            const visibleAreas = allAreas.filter((area) => !area.deletedAt);
             markCoreStartupPhase('core.fetch_data.post_process:end', { durationMs: Date.now() - postProcessStartedAt });
             let skippedDueToConcurrentLocalChange = false;
             await measureCoreStartupPhase('core.fetch_data.zustand_set_state', async () => {
@@ -603,16 +620,28 @@ export const createSettingsActions = ({
                         skippedDueToConcurrentLocalChange = true;
                         return options?.silent ? {} : { isLoading: false };
                     }
+                    const nextTasks = reconcileEntityCollection(state._allTasks, state._tasksById, allTasks);
+                    const nextProjects = reconcileEntityCollection(state._allProjects, state._projectsById, allProjects);
+                    const nextSections = reconcileEntityCollection(state._allSections, state._sectionsById, allSections);
+                    const nextAreas = reconcileEntityCollection(state._allAreas, state._areasById, allAreas);
+                    const visibleTasks = reuseArrayIfShallowEqual(state.tasks, selectVisibleTasks(nextTasks.items));
+                    const visibleProjects = reuseArrayIfShallowEqual(state.projects, selectVisibleProjects(nextProjects.items));
+                    const visibleSections = reuseArrayIfShallowEqual(state.sections, selectVisibleSections(nextSections.items));
+                    const visibleAreas = reuseArrayIfShallowEqual(state.areas, selectVisibleAreas(nextAreas.items));
                     return {
                         tasks: visibleTasks,
                         projects: visibleProjects,
                         sections: visibleSections,
                         areas: visibleAreas,
                         settings: nextSettings,
-                        _allTasks: allTasks,
-                        _allProjects: allProjects,
-                        _allSections: allSections,
-                        _allAreas: allAreas,
+                        _allTasks: nextTasks.items,
+                        _allProjects: nextProjects.items,
+                        _allSections: nextSections.items,
+                        _allAreas: nextAreas.items,
+                        _tasksById: nextTasks.byId,
+                        _projectsById: nextProjects.byId,
+                        _sectionsById: nextSections.byId,
+                        _areasById: nextAreas.byId,
                         isLoading: false,
                         lastDataChangeAt:
                             didAutoArchive
@@ -659,7 +688,7 @@ export const createSettingsActions = ({
             markCoreStartupPhase('core.fetch_data.end');
         } catch (err) {
             markCoreStartupPhase('core.fetch_data.error');
-            set({ error: 'Failed to fetch data', isLoading: false });
+            set({ error: getFetchDataErrorMessage(err), isLoading: false });
         }
     },
 
@@ -741,7 +770,7 @@ export const createSettingsActions = ({
                 }
 
                 if (didAutoArchive) {
-                    const newVisibleTasks = newAllTasks.filter((t) => !t.deletedAt && t.status !== 'archived');
+                    const newVisibleTasks = selectVisibleTasks(newAllTasks);
                     snapshot = buildSaveSnapshot(state, { tasks: newAllTasks, settings: newSettings });
                     return {
                         tasks: newVisibleTasks,
@@ -777,12 +806,20 @@ export const createSettingsActions = ({
 
     getDerivedState: () => {
         const state = get();
-        if (derivedCache && derivedCache.tasksRef === state.tasks && derivedCache.projectsRef === state.projects) {
+        if (
+            derivedCache
+            && derivedCache.visibleTasksRef === state.tasks
+            && derivedCache.taskLookupRef === state._tasksById
+            && derivedCache.projectLookupRef === state._projectsById
+        ) {
             return derivedCache.value;
         }
         const previous = derivedCache?.value;
         const taskDerived =
-            derivedCache && derivedCache.tasksRef === state.tasks && previous
+            derivedCache
+                && derivedCache.visibleTasksRef === state.tasks
+                && derivedCache.taskLookupRef === state._tasksById
+                && previous
                 ? {
                     tasksById: previous.tasksById,
                     activeTasksByStatus: previous.activeTasksByStatus,
@@ -790,21 +827,22 @@ export const createSettingsActions = ({
                     allTags: previous.allTags,
                     focusedCount: previous.focusedCount,
                 }
-                : computeTaskDerivedState(state.tasks);
+                : computeTaskDerivedState(state.tasks, state._tasksById);
         const projectDerived =
-            derivedCache && derivedCache.projectsRef === state.projects && previous
+            derivedCache && derivedCache.projectLookupRef === state._projectsById && previous
                 ? {
                     projectMap: previous.projectMap,
                     sequentialProjectIds: previous.sequentialProjectIds,
                 }
-                : computeProjectDerivedState(state.projects);
+                : computeProjectDerivedState(state._allProjects, state._projectsById);
         const derived = {
             ...projectDerived,
             ...taskDerived,
         };
         derivedCache = {
-            tasksRef: state.tasks,
-            projectsRef: state.projects,
+            visibleTasksRef: state.tasks,
+            taskLookupRef: state._tasksById,
+            projectLookupRef: state._projectsById,
             value: derived,
         };
         return derived;

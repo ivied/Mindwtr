@@ -150,6 +150,7 @@ describeSqlite('SqliteAdapter', () => {
                     tagIds: ['tag-1'],
                     isSequential: true,
                     isFocused: false,
+                    dueDate: '2026-03-31',
                     rev: 7,
                     revBy: 'device-desktop',
                     createdAt: now,
@@ -211,6 +212,7 @@ describeSqlite('SqliteAdapter', () => {
         expect(project.tagIds).toEqual(['tag-1']);
         expect(project.isSequential).toBe(true);
         expect(project.isFocused).toBe(false);
+        expect(project.dueDate).toBe('2026-03-31');
         expect(project.rev).toBe(7);
         expect(project.revBy).toBe('device-desktop');
 
@@ -359,7 +361,7 @@ describeSqlite('SqliteAdapter', () => {
                 {
                     id: 'task-search-1',
                     title: 'Searchable task',
-                    status: 'next',
+                    status: 'archived',
                     startTime: '2025-01-01T08:00:00.000Z',
                     dueDate: '2025-01-02T00:00:00.000Z',
                     projectId: 'project-search-1',
@@ -391,7 +393,7 @@ describeSqlite('SqliteAdapter', () => {
         expect(allMock.mock.calls[0]?.[0]).toContain('SELECT t.id AS id');
         expect(allMock.mock.calls[0]?.[0]).not.toContain('t.attachments');
         expect(allMock.mock.calls[0]?.[0]).not.toContain('t.description');
-        expect(allMock.mock.calls[0]?.[0]).toContain("t.status != 'archived'");
+        expect(allMock.mock.calls[0]?.[0]).not.toContain("t.status != 'archived'");
         expect(allMock.mock.calls[1]?.[0]).toContain('SELECT p.id AS id');
         expect(allMock.mock.calls[1]?.[0]).not.toContain('p.supportNotes');
 
@@ -400,7 +402,7 @@ describeSqlite('SqliteAdapter', () => {
         expect(results.tasks[0]).toMatchObject({
             id: 'task-search-1',
             title: 'Searchable task',
-            status: 'next',
+            status: 'archived',
             startTime: '2025-01-01T08:00:00.000Z',
             dueDate: '2025-01-02T00:00:00.000Z',
             projectId: 'project-search-1',
@@ -547,11 +549,19 @@ describeSqlite('SqliteAdapter', () => {
         expect(names).toContain('purgedAt');
         expect(names).toContain('rev');
         expect(names).toContain('revBy');
+        const taskIndexes = allSql<{ name: string }>(db, 'PRAGMA index_list(tasks)');
+        const taskIndexNames = new Set(taskIndexes.map((row) => row.name));
+        expect(taskIndexNames.has('idx_tasks_dueDate')).toBe(true);
+        expect(taskIndexNames.has('idx_tasks_status_deletedAt')).toBe(true);
+        expect(taskIndexNames.has('idx_tasks_project_deletedAt')).toBe(true);
 
         const projectColumns = allSql<{ name: string }>(db, 'PRAGMA table_info(projects)');
         const projectColumnNames = projectColumns.map((col) => col.name);
+        expect(projectColumnNames).toContain('dueDate');
         expect(projectColumnNames).toContain('rev');
         expect(projectColumnNames).toContain('revBy');
+        const projectIndexes = allSql<{ name: string }>(db, 'PRAGMA index_list(projects)');
+        expect(projectIndexes.map((row) => row.name)).toContain('idx_projects_dueDate');
 
         const sectionColumns = allSql<{ name: string }>(db, 'PRAGMA table_info(sections)');
         const sectionColumnNames = sectionColumns.map((col) => col.name);
@@ -564,6 +574,8 @@ describeSqlite('SqliteAdapter', () => {
         const areaColumnNames = areaColumns.map((col) => col.name);
         expect(areaColumnNames).toContain('rev');
         expect(areaColumnNames).toContain('revBy');
+        expect(areaColumns.find((col) => col.name === 'createdAt')?.notnull).toBe(1);
+        expect(areaColumns.find((col) => col.name === 'updatedAt')?.notnull).toBe(1);
     });
 
     it('rejects invalid task status values at the database layer', async () => {

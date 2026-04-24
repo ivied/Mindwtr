@@ -1,6 +1,6 @@
 import { format } from 'date-fns';
 import { safeParseDate, type Project } from '@mindwtr/core';
-import { Archive as ArchiveIcon, CalendarClock, ChevronDown, ChevronRight, Copy, FolderOpenDot, ListOrdered, Loader2, RotateCcw, Signal, Trash2 } from 'lucide-react';
+import { Archive as ArchiveIcon, Calendar, CalendarClock, ChevronDown, ChevronRight, Copy, FolderOpenDot, ListOrdered, Loader2, RotateCcw, Signal, Trash2 } from 'lucide-react';
 
 type ProjectProgress = {
     total: number;
@@ -13,6 +13,7 @@ type ProjectDetailsHeaderProps = {
     projectColor: string;
     areaLabel?: string;
     isSequential: boolean;
+    dueDate?: string;
     reviewAt?: string;
     editTitle: string;
     onEditTitleChange: (value: string) => void;
@@ -34,6 +35,7 @@ export function ProjectDetailsHeader({
     projectColor,
     areaLabel,
     isSequential,
+    dueDate,
     reviewAt,
     editTitle,
     onEditTitleChange,
@@ -53,8 +55,10 @@ export function ProjectDetailsHeader({
         ? Math.round((projectProgress.doneCount / projectProgress.total) * 100)
         : 0;
     const detailsLabel = t('taskEdit.details') === 'taskEdit.details' ? 'Details' : t('taskEdit.details');
+    const dueDateValue = dueDate ? safeParseDate(dueDate) : null;
     const reviewDate = reviewAt ? safeParseDate(reviewAt) : null;
-    const reviewLabel = reviewDate ? format(reviewDate, 'MMM d') : null;
+    const dueLabelPrefix = t('taskEdit.dueDateLabel') === 'taskEdit.dueDateLabel' ? 'Due' : t('taskEdit.dueDateLabel');
+    const reviewLabelPrefix = t('projects.reviewAt') === 'projects.reviewAt' ? 'Review' : t('projects.reviewAt');
     const summaryItems = [
         {
             key: 'status',
@@ -73,10 +77,15 @@ export function ProjectDetailsHeader({
                 ? (t('projects.sequential') === 'projects.sequential' ? 'Sequential' : t('projects.sequential'))
                 : (t('projects.parallel') === 'projects.parallel' ? 'Parallel' : t('projects.parallel')),
         },
-        ...(reviewLabel ? [{
+        ...(dueDateValue ? [{
+            key: 'due',
+            icon: Calendar,
+            label: `${dueLabelPrefix}: ${format(dueDateValue, 'MMM d')}`,
+        }] : []),
+        ...(reviewDate ? [{
             key: 'review',
             icon: CalendarClock,
-            label: reviewLabel,
+            label: `${reviewLabelPrefix}: ${format(reviewDate, 'MMM d')}`,
         }] : []),
     ];
 

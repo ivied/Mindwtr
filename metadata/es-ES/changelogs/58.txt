@@ -1,0 +1,3 @@
+- La documentacion ahora aclara mejor el comportamiento ya publicado de sync con calendario en movil.
+- Tambien documenta el puente SQLite-JSON y que el diagnostico de sync queda solo en el dispositivo.
+- Agregamos cobertura para evitar escrituras remotas innecesarias por historial local de sync.
