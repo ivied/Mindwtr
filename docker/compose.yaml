@@ -64,6 +64,10 @@ services:
       - NOTION_API_KEY=${NOTION_API_KEY:-}
       - NOTION_DATABASE_ID=${NOTION_DATABASE_ID:-}
       - NOTION_POLL_INTERVAL_MS=${NOTION_POLL_INTERVAL_MS:-300000}
+      - HTTP_PORT=${HTTP_PORT:-3030}
+      - HTTP_AUTH_TOKEN=${HTTP_AUTH_TOKEN:-}
       - DATA_DIR=/app/data
+    ports:
+      - "${HTTP_PORT:-3030}:3030"
     volumes:
       - ./ai-service-data:/app/data

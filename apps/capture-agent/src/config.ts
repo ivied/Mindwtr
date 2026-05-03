@@ -1,0 +1,41 @@
+/**
+ * Read agent configuration from env. Throws on missing required fields.
+ */
+
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import type { AgentConfig } from './types'
+import { DEFAULT_EXCLUDED_APPS, DEFAULT_EXCLUDED_TITLES } from './filter/exclusion'
+
+function parseList(value: string | undefined): string[] {
+  if (!value) return []
+  return value
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): AgentConfig {
+  const endpoint = env.AGENT_ENDPOINT
+  const authToken = env.AGENT_AUTH_TOKEN
+  if (!endpoint) throw new Error('AGENT_ENDPOINT is required (e.g. http://localhost:3030)')
+  if (!authToken) throw new Error('AGENT_AUTH_TOKEN is required (matches HTTP_AUTH_TOKEN of AI Service)')
+
+  const intervalMs = Number(env.AGENT_INTERVAL_MS ?? 60_000)
+  const excludedApps = parseList(env.AGENT_EXCLUDED_APPS)
+  const excludedTitles = parseList(env.AGENT_EXCLUDED_TITLES)
+  const useDefaults = env.AGENT_USE_DEFAULT_EXCLUSIONS !== 'false'
+
+  return {
+    endpoint,
+    authToken,
+    intervalMs,
+    excludedApps: useDefaults ? [...DEFAULT_EXCLUDED_APPS, ...excludedApps] : excludedApps,
+    excludedTitles: useDefaults
+      ? [...DEFAULT_EXCLUDED_TITLES, ...excludedTitles]
+      : excludedTitles,
+    pauseFlagPath: env.AGENT_PAUSE_FLAG ?? join(homedir(), '.gtd-paused'),
+    minOcrLength: Number(env.AGENT_MIN_OCR_LENGTH ?? 30),
+    ocrLang: env.AGENT_OCR_LANG ?? 'eng',
+  }
+}

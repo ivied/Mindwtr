@@ -1,0 +1,25 @@
+{
+  "name": "capture-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local desktop capture agent: screenshot + OCR + active window → AI Service",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "test": "bun test",
+    "lint": "eslint src/ --max-warnings 0",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "active-win": "^8.2.1",
+    "screenshot-desktop": "^1.15.2",
+    "tesseract.js": "^5.1.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.0.0",
+    "@types/bun": "latest",
+    "@types/screenshot-desktop": "^1.12.3"
+  }
+}

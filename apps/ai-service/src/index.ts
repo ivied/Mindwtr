@@ -8,6 +8,7 @@ import type { Channel } from './channels/types'
 import { SlackChannel } from './channels/slack'
 import { NotionChannel } from './channels/notion'
 import { FileStateStore, channelStateFile } from './channels/state-store'
+import { createHttpServer } from './http/server'
 
 const MINDWTR_CLOUD_URL = process.env.MINDWTR_CLOUD_URL ?? 'http://localhost:8787'
 const MINDWTR_AUTH_TOKEN = process.env.MINDWTR_AUTH_TOKEN ?? ''
@@ -23,6 +24,9 @@ const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN ?? ''
 const NOTION_API_KEY = process.env.NOTION_API_KEY ?? ''
 const NOTION_DATABASE_ID = process.env.NOTION_DATABASE_ID ?? ''
 const NOTION_POLL_INTERVAL_MS = Number(process.env.NOTION_POLL_INTERVAL_MS ?? 5 * 60 * 1000)
+
+const HTTP_PORT = Number(process.env.HTTP_PORT ?? 3030)
+const HTTP_AUTH_TOKEN = process.env.HTTP_AUTH_TOKEN ?? ''
 
 const DATA_DIR = process.env.DATA_DIR ?? '/app/data'
 
@@ -117,8 +121,23 @@ async function main() {
 
   const bot = createBot(TELEGRAM_BOT_TOKEN, capture)
 
+  // Optional HTTP capture endpoint (used by desktop capture-agent and ad-hoc clients)
+  let http: { stop: () => void } | null = null
+  if (HTTP_AUTH_TOKEN) {
+    const server = createHttpServer({
+      port: HTTP_PORT,
+      authToken: HTTP_AUTH_TOKEN,
+      capture,
+    })
+    http = server.serve()
+    console.log(`📡 HTTP capture endpoint listening on :${HTTP_PORT}`)
+  } else {
+    console.warn('⚠️ HTTP_AUTH_TOKEN not set — HTTP capture endpoint disabled')
+  }
+
   const shutdown = async () => {
     console.log('🛑 Shutting down...')
+    if (http) http.stop()
     for (const ch of channels) {
       try {
         await ch.stop()
