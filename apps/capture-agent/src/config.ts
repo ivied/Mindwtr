@@ -37,5 +37,15 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): AgentCo
     pauseFlagPath: env.AGENT_PAUSE_FLAG ?? join(homedir(), '.gtd-paused'),
     minOcrLength: Number(env.AGENT_MIN_OCR_LENGTH ?? 30),
     ocrLang: env.AGENT_OCR_LANG ?? 'eng',
+    audio: {
+      enabled: env.AGENT_AUDIO_ENABLED === 'true',
+      openaiApiKey: env.AGENT_OPENAI_API_KEY ?? env.OPENAI_API_KEY ?? '',
+      openaiBaseUrl: env.AGENT_OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
+      whisperLanguage: env.AGENT_WHISPER_LANGUAGE ?? '',
+      chunkMs: Number(env.AGENT_AUDIO_CHUNK_MS ?? 30_000),
+      energyThreshold: Number(env.AGENT_AUDIO_ENERGY_THRESHOLD ?? 0.005),
+      ffmpegPath: env.AGENT_FFMPEG_PATH ?? 'ffmpeg',
+      inputDevice: env.AGENT_AUDIO_INPUT_DEVICE ?? ':default',
+    },
   }
 }

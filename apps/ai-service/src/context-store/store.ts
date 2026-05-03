@@ -24,6 +24,7 @@ import { DEFAULT_CONTEXT_STORE_CONFIG } from './types'
 
 const PULL_CHANNELS = new Set<CapturedItem['sourceChannel']>([
   'screen_capture',
+  'audio_capture',
 ])
 
 const L3_SIMILARITY_THRESHOLD = 0.95

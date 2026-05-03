@@ -23,6 +23,7 @@ import { toTaskSuggestion } from './normalizer'
 
 const PULL_CHANNELS = new Set<CapturedItem['sourceChannel']>([
   'screen_capture',
+  'audio_capture',
 ])
 
 function isPull(item: CapturedItem): boolean {

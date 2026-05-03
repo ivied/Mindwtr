@@ -15,8 +15,9 @@ export interface CapturedItem {
     | 'slack_channel'
     | 'notion_page'
     | 'screen_capture'
+    | 'audio_capture'
   /** Original message type */
-  type: 'text' | 'voice' | 'forward' | 'photo' | 'document' | 'page'
+  type: 'text' | 'voice' | 'forward' | 'photo' | 'document' | 'page' | 'audio'
   /** ISO timestamp of the original message */
   timestamp: string
   /** Channel-specific metadata */

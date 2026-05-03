@@ -44,4 +44,26 @@ export class AiServiceClient {
       throw new Error(`AI Service capture failed: ${res.status} ${text}`)
     }
   }
+
+  async sendAudioTranscript(
+    transcript: string,
+    sourceMeta?: Record<string, unknown>
+  ): Promise<void> {
+    const res = await fetch(`${this.base}/v1/capture`, {
+      method: 'POST',
+      headers: this.headers,
+      body: JSON.stringify({
+        text: transcript,
+        sourceChannel: 'audio_capture',
+        type: 'audio',
+        timestamp: new Date().toISOString(),
+        sourceMeta: sourceMeta ?? {},
+        extraTags: ['audio-capture'],
+      }),
+    })
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`AI Service audio capture failed: ${res.status} ${text}`)
+    }
+  }
 }

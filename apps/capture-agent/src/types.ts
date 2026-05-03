@@ -41,4 +41,25 @@ export interface AgentConfig {
   minOcrLength: number
   /** OCR language code(s), e.g. 'eng', 'eng+rus' */
   ocrLang: string
+  /** Audio capture (off by default) */
+  audio: AudioConfig
+}
+
+export interface AudioConfig {
+  /** Master toggle. False = audio capture not started. */
+  enabled: boolean
+  /** OpenAI API key for Whisper. Empty disables audio even when enabled=true. */
+  openaiApiKey: string
+  /** Optional Whisper baseUrl (proxies / compatible endpoints). */
+  openaiBaseUrl: string
+  /** Whisper hint language (e.g. 'en', 'ru'). Empty = auto-detect. */
+  whisperLanguage: string
+  /** Chunk length in ms (default 30s). */
+  chunkMs: number
+  /** RMS threshold for silence gating (0..1). */
+  energyThreshold: number
+  /** ffmpeg binary path. */
+  ffmpegPath: string
+  /** macOS avfoundation input device (":default" or ":<idx>"). */
+  inputDevice: string
 }

@@ -13,8 +13,11 @@ import { defaultScreenshotProvider } from './capture/screenshot'
 import { TesseractOcrProvider } from './capture/ocr'
 import { defaultActiveWindowProvider } from './capture/active-window'
 import { startLoop } from './runner'
+import { startAudioLoop } from './audio-runner'
 import { AiServiceClient } from './client/ai-service'
 import { CaptureDeduper } from './filter/dedup'
+import { AudioRecorder } from './capture/audio-recorder'
+import { WhisperClient } from './capture/whisper'
 
 async function main() {
   const config = loadConfigFromEnv()
@@ -32,6 +35,48 @@ async function main() {
   console.log(`   pause flag: ${config.pauseFlagPath}`)
 
   const dedup = new CaptureDeduper()
+
+  // --- Audio loop (Phase 4c, opt-in) ---
+  let audioController: { stop: () => Promise<void> } | null = null
+  if (config.audio.enabled) {
+    if (!config.audio.openaiApiKey) {
+      console.warn('⚠️ AGENT_AUDIO_ENABLED=true but no OPENAI/AGENT_OPENAI_API_KEY — audio disabled')
+    } else {
+      const recorder = new AudioRecorder({
+        ffmpegPath: config.audio.ffmpegPath,
+        sampleRate: 16000,
+        inputDevice: config.audio.inputDevice,
+      })
+      const whisper = new WhisperClient({
+        apiKey: config.audio.openaiApiKey,
+        baseUrl: config.audio.openaiBaseUrl,
+        language: config.audio.whisperLanguage,
+      })
+      audioController = startAudioLoop(
+        {
+          recorder,
+          whisper,
+          window: defaultActiveWindowProvider,
+          rules: {
+            excludedApps: config.excludedApps,
+            excludedTitles: config.excludedTitles,
+          },
+          pauseFlagPath: config.pauseFlagPath,
+          send: (text) =>
+            client.sendAudioTranscript(text, { source: 'mic', device: config.audio.inputDevice }),
+          log: (msg) => console.log(`[audio] ${msg}`),
+        },
+        {
+          chunkMs: config.audio.chunkMs,
+          energyThreshold: config.audio.energyThreshold,
+          minTranscriptLength: 8,
+        }
+      )
+      console.log(
+        `🎤 Audio capture enabled (chunk ${config.audio.chunkMs}ms, threshold ${config.audio.energyThreshold}, lang "${config.audio.whisperLanguage || 'auto'}")`
+      )
+    }
+  }
 
   const loop = startLoop(
     {
@@ -54,6 +99,7 @@ async function main() {
   const shutdown = async () => {
     console.log('🛑 Shutting down agent...')
     await loop.stop()
+    if (audioController) await audioController.stop()
     await ocr.shutdown()
     process.exit(0)
   }
