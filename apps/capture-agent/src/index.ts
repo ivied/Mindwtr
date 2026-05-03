@@ -14,6 +14,7 @@ import { TesseractOcrProvider } from './capture/ocr'
 import { defaultActiveWindowProvider } from './capture/active-window'
 import { startLoop } from './runner'
 import { AiServiceClient } from './client/ai-service'
+import { CaptureDeduper } from './filter/dedup'
 
 async function main() {
   const config = loadConfigFromEnv()
@@ -30,6 +31,8 @@ async function main() {
   console.log(`   excluded titles: ${config.excludedTitles.length}`)
   console.log(`   pause flag: ${config.pauseFlagPath}`)
 
+  const dedup = new CaptureDeduper()
+
   const loop = startLoop(
     {
       screenshot: defaultScreenshotProvider,
@@ -42,6 +45,7 @@ async function main() {
       pauseFlagPath: config.pauseFlagPath,
       minOcrLength: config.minOcrLength,
       sink: (capture) => client.sendCapture(capture),
+      dedup,
       log: (msg) => console.log(`[agent] ${msg}`),
     },
     config.intervalMs

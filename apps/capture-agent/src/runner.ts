@@ -9,6 +9,7 @@ import type { ActiveWindowProvider } from './capture/active-window'
 import type { ExclusionRules } from './filter/exclusion'
 import { shouldSkip } from './filter/exclusion'
 import { isPaused } from './filter/pause'
+import type { CaptureDeduper } from './filter/dedup'
 import { composeCapture } from './capture/composer'
 import type { DesktopCapture } from './types'
 
@@ -20,6 +21,7 @@ export interface RunnerDeps {
   pauseFlagPath: string
   minOcrLength: number
   sink: (capture: DesktopCapture) => Promise<void>
+  dedup?: CaptureDeduper
   log?: (msg: string) => void
 }
 
@@ -28,6 +30,7 @@ export type SkipReason =
   | 'no-window'
   | 'excluded'
   | 'low-ocr'
+  | 'duplicate'
   | null
 
 /**
@@ -48,7 +51,24 @@ export async function runOnce(deps: RunnerDeps): Promise<SkipReason> {
   if (text.length < deps.minOcrLength) return 'low-ocr'
 
   const capture = composeCapture({ window, ocrText: text })
+
+  if (
+    deps.dedup &&
+    deps.dedup.isDuplicate({
+      app: capture.app,
+      windowTitle: capture.windowTitle,
+      ocrText: capture.ocrText,
+    })
+  ) {
+    return 'duplicate'
+  }
+
   await deps.sink(capture)
+  deps.dedup?.markSent({
+    app: capture.app,
+    windowTitle: capture.windowTitle,
+    ocrText: capture.ocrText,
+  })
   deps.log?.(`captured ${capture.app} · ${capture.windowTitle}`)
   return null
 }

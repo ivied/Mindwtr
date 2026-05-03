@@ -1,5 +1,6 @@
 import { describe, it, expect, mock } from 'bun:test'
 import { runOnce, type RunnerDeps } from './runner'
+import { CaptureDeduper } from './filter/dedup'
 
 function deps(overrides: Partial<RunnerDeps> = {}): RunnerDeps {
   return {
@@ -65,6 +66,23 @@ describe('runOnce', () => {
     )
     expect(result).toBe('low-ocr')
     expect(sink).not.toHaveBeenCalled()
+  })
+
+  it('returns "duplicate" when dedup considers it a repeat', async () => {
+    const sink = mock(async () => {})
+    let now = 1_000_000
+    const dedup = new CaptureDeduper(undefined, () => now)
+
+    // First run sends and marks
+    const first = await runOnce(deps({ sink, dedup }))
+    expect(first).toBeNull()
+    expect(sink).toHaveBeenCalledTimes(1)
+
+    // Second run with identical inputs is detected
+    now += 1_000
+    const second = await runOnce(deps({ sink, dedup }))
+    expect(second).toBe('duplicate')
+    expect(sink).toHaveBeenCalledTimes(1)
   })
 
   it('propagates errors from sink', async () => {
