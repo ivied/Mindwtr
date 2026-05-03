@@ -1,7 +1,11 @@
-import { describe, it, expect, mock } from 'bun:test'
+import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createCaptureSink } from './sink'
 import type { MindwtrClient } from '../api/mindwtr-client'
 import type { ClassificationQueue } from '../ai/queue'
+import { ContextStore } from '../context-store/store'
 import type { CapturedItem } from './normalizer'
 
 function makeItem(overrides: Partial<CapturedItem> = {}): CapturedItem {
@@ -14,71 +18,131 @@ function makeItem(overrides: Partial<CapturedItem> = {}): CapturedItem {
   }
 }
 
+let dir: string
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'gtd-sink-'))
+})
+
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true })
+})
+
 describe('createCaptureSink', () => {
-  it('creates task in inbox via mindwtr client', async () => {
+  it('push channel: writes to Context Store + creates Mindwtr inbox task', async () => {
     const mindwtr = {
       createTask: mock().mockResolvedValue({ id: 't1', title: 'Do something' }),
     } as unknown as MindwtrClient
+    const store = ContextStore.open({ dbPath: join(dir, 'cs.db') })
 
-    const capture = createCaptureSink(mindwtr, null)
-    await capture(makeItem())
+    const capture = createCaptureSink({ mindwtr, queue: null, contextStore: store })
+    await capture(makeItem({ sourceChannel: 'telegram_dm' }))
 
-    const calls = (mindwtr.createTask as unknown as { mock: { calls: [Record<string, unknown>][] } }).mock.calls
-    expect(calls[0][0]).toMatchObject({ title: 'Do something', status: 'inbox' })
+    expect(mindwtr.createTask).toHaveBeenCalledTimes(1)
+    expect(store.size()).toBe(1)
+    store.close()
   })
 
-  it('enqueues classification when queue is provided', async () => {
+  it('pull channel (screen_capture): writes to Context Store but NOT to Mindwtr', async () => {
     const mindwtr = {
       createTask: mock().mockResolvedValue({ id: 't1', title: 'X' }),
     } as unknown as MindwtrClient
-    const queue = {
-      enqueue: mock(),
-    } as unknown as ClassificationQueue
+    const store = ContextStore.open({ dbPath: join(dir, 'cs.db') })
 
-    const capture = createCaptureSink(mindwtr, queue)
-    await capture(makeItem({ sourceChannel: 'slack_dm' }))
+    const capture = createCaptureSink({ mindwtr, queue: null, contextStore: store })
+    await capture(makeItem({ sourceChannel: 'screen_capture' }))
 
-    expect(queue.enqueue).toHaveBeenCalledTimes(1)
-    const calls = (queue.enqueue as unknown as { mock: { calls: [{ taskId: string; input: { sourceChannel: string } }][] } }).mock.calls
-    expect(calls[0][0].taskId).toBe('t1')
-    expect(calls[0][0].input.sourceChannel).toBe('slack_dm')
+    expect(mindwtr.createTask).not.toHaveBeenCalled()
+    expect(store.size()).toBe(1)
+    store.close()
   })
 
-  it('skips queue when null', async () => {
+  it('L2 dedup: duplicate push capture skips Mindwtr task creation', async () => {
     const mindwtr = {
       createTask: mock().mockResolvedValue({ id: 't1', title: 'X' }),
     } as unknown as MindwtrClient
+    const store = ContextStore.open({ dbPath: join(dir, 'cs.db') })
 
-    const capture = createCaptureSink(mindwtr, null)
+    const capture = createCaptureSink({ mindwtr, queue: null, contextStore: store })
     await capture(makeItem())
-    // no throw = success
+    await capture(makeItem())
+
+    expect(mindwtr.createTask).toHaveBeenCalledTimes(1)
+    expect(store.size()).toBe(1)
+    store.close()
+  })
+
+  it('contextOnly option skips Mindwtr even for push channels', async () => {
+    const mindwtr = {
+      createTask: mock().mockResolvedValue({ id: 't1', title: 'X' }),
+    } as unknown as MindwtrClient
+    const store = ContextStore.open({ dbPath: join(dir, 'cs.db') })
+
+    const capture = createCaptureSink({ mindwtr, queue: null, contextStore: store })
+    await capture(makeItem(), { contextOnly: true })
+
+    expect(mindwtr.createTask).not.toHaveBeenCalled()
+    expect(store.size()).toBe(1)
+    store.close()
+  })
+
+  it('null contextStore: still creates Mindwtr task for push (legacy behavior)', async () => {
+    const mindwtr = {
+      createTask: mock().mockResolvedValue({ id: 't1', title: 'Hi' }),
+    } as unknown as MindwtrClient
+    const capture = createCaptureSink({ mindwtr, queue: null, contextStore: null })
+    await capture(makeItem())
     expect(mindwtr.createTask).toHaveBeenCalledTimes(1)
   })
 
-  it('invokes onTaskCreated callback', async () => {
-    const mindwtr = {
-      createTask: mock().mockResolvedValue({ id: 't1', title: 'Hello' }),
-    } as unknown as MindwtrClient
-    const onTaskCreated = mock()
-
-    const capture = createCaptureSink(mindwtr, null)
-    await capture(makeItem(), { onTaskCreated })
-
-    expect(onTaskCreated).toHaveBeenCalledTimes(1)
-    const calls = (onTaskCreated as unknown as { mock: { calls: [string, string][] } }).mock.calls
-    expect(calls[0][0]).toBe('t1')
-    expect(calls[0][1]).toBe('Hello')
-  })
-
-  it('passes extraTags to createTask', async () => {
+  it('null contextStore + pull channel: no-op (nothing stored, nothing inbox)', async () => {
     const mindwtr = {
       createTask: mock().mockResolvedValue({ id: 't1', title: 'X' }),
     } as unknown as MindwtrClient
+    const capture = createCaptureSink({ mindwtr, queue: null, contextStore: null })
+    await capture(makeItem({ sourceChannel: 'screen_capture' }))
+    expect(mindwtr.createTask).not.toHaveBeenCalled()
+  })
 
-    const capture = createCaptureSink(mindwtr, null)
+  it('enqueues classification only for push channels', async () => {
+    const mindwtr = {
+      createTask: mock().mockResolvedValue({ id: 't1', title: 'X' }),
+    } as unknown as MindwtrClient
+    const queue = { enqueue: mock() } as unknown as ClassificationQueue
+    const store = ContextStore.open({ dbPath: join(dir, 'cs.db') })
+
+    const capture = createCaptureSink({ mindwtr, queue, contextStore: store })
+    await capture(makeItem({ sourceChannel: 'telegram_dm' }))
+    await capture(makeItem({ text: 'OCR text', sourceChannel: 'screen_capture' }))
+
+    expect(queue.enqueue).toHaveBeenCalledTimes(1)
+    store.close()
+  })
+
+  it('passes extraTags to createTask for push channels', async () => {
+    const mindwtr = {
+      createTask: mock().mockResolvedValue({ id: 't1', title: 'X' }),
+    } as unknown as MindwtrClient
+    const store = ContextStore.open({ dbPath: join(dir, 'cs.db') })
+
+    const capture = createCaptureSink({ mindwtr, queue: null, contextStore: store })
     await capture(makeItem(), { extraTags: ['forwarded'] })
 
     const calls = (mindwtr.createTask as unknown as { mock: { calls: [{ tags?: string[] }][] } }).mock.calls
     expect(calls[0][0].tags).toEqual(['forwarded'])
+    store.close()
+  })
+
+  it('invokes onTaskCreated callback for push channels', async () => {
+    const mindwtr = {
+      createTask: mock().mockResolvedValue({ id: 'tid', title: 'Hello' }),
+    } as unknown as MindwtrClient
+    const store = ContextStore.open({ dbPath: join(dir, 'cs.db') })
+    const onTaskCreated = mock()
+
+    const capture = createCaptureSink({ mindwtr, queue: null, contextStore: store })
+    await capture(makeItem(), { onTaskCreated })
+    expect(onTaskCreated).toHaveBeenCalledTimes(1)
+    store.close()
   })
 })

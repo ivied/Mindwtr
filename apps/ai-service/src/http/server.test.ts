@@ -7,6 +7,7 @@ function setup(captureImpl: CaptureFn) {
     port: 0,
     authToken: 'test-token',
     capture: captureImpl,
+    contextStore: null,
   })
   return server.handler
 }

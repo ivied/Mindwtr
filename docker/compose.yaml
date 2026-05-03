@@ -1,9 +1,9 @@
 services:
   mindwtr-cloud:
-    image: ghcr.io/dongdongbh/mindwtr-cloud:latest
     build:
       context: ..
       dockerfile: docker/cloud/Dockerfile
+    image: gtd-automation-cloud:local
     container_name: mindwtr-cloud
     hostname: mindwtr-cloud
     restart: always
@@ -66,6 +66,10 @@ services:
       - NOTION_POLL_INTERVAL_MS=${NOTION_POLL_INTERVAL_MS:-300000}
       - HTTP_PORT=${HTTP_PORT:-3030}
       - HTTP_AUTH_TOKEN=${HTTP_AUTH_TOKEN:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - EMBEDDINGS_MODEL=${EMBEDDINGS_MODEL:-text-embedding-3-small}
+      - CONTEXT_STORE_TTL_DAYS=${CONTEXT_STORE_TTL_DAYS:-7}
       - DATA_DIR=/app/data
     ports:
       - "${HTTP_PORT:-3030}:3030"

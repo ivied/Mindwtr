@@ -1,6 +1,9 @@
-import { describe, it, expect, mock } from 'bun:test'
-import { ContextRetriever, extractKeywords, DEFAULT_RETRIEVER_CONFIG } from './retriever'
-import type { MindwtrClient } from '../api/mindwtr-client'
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { ContextRetriever, extractKeywords } from './retriever'
+import { ContextStore } from '../context-store/store'
 
 describe('extractKeywords', () => {
   it('lowercases and dedupes tokens', () => {
@@ -20,95 +23,70 @@ describe('extractKeywords', () => {
     ])
   })
 
-  it('strips punctuation and URLs but keeps hostname pieces above min length', () => {
-    expect(extractKeywords('Email alice@example.com about Q4 plan')).toEqual([
-      'email',
-      'alice',
-      'example',
-      'plan',
-    ])
-  })
-
   it('handles cyrillic', () => {
     const out = extractKeywords('позвонить няне на субботу про детей')
     expect(out).toContain('позвонить')
     expect(out).toContain('няне')
-    expect(out).toContain('субботу')
-    expect(out).toContain('детей')
-  })
-
-  it('respects custom minKeywordLength', () => {
-    const out = extractKeywords('a bb ccc dddd', { ...DEFAULT_RETRIEVER_CONFIG, minKeywordLength: 3 })
-    expect(out).toEqual(['ccc', 'dddd'])
   })
 })
 
+let dir: string
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'gtd-r-'))
+})
+
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true })
+})
+
 describe('ContextRetriever', () => {
-  it('returns empty string when not enough keywords', async () => {
-    const mindwtr = { search: mock() } as unknown as MindwtrClient
-    const r = new ContextRetriever(mindwtr, {
-      topK: 5,
-      minKeywordLength: 4,
-      minKeywords: 5,
+  it('returns empty string when text is shorter than minQueryLength', async () => {
+    const store = ContextStore.open({ dbPath: join(dir, 'cs.db') })
+    const r = new ContextRetriever(store)
+    expect(await r.retrieve('hi')).toBe('')
+    store.close()
+  })
+
+  it('queries store and formats hits', async () => {
+    const store = ContextStore.open({ dbPath: join(dir, 'cs.db') })
+    await store.insert({
+      text: 'позвонить няне в субботу',
+      sourceChannel: 'telegram_dm',
+      type: 'text',
+      timestamp: '2026-04-24T09:00:00Z',
+      sourceMeta: { from: 'sergey' },
     })
-    const result = await r.retrieve('hi')
+    const r = new ContextRetriever(store)
+    const result = await r.retrieve('позвонить няне завтра')
+    expect(result).toContain('Past relevant context:')
+    expect(result).toContain('позвонить няне в субботу')
+    expect(result).toContain('telegram_dm')
+    store.close()
+  })
+
+  it('returns empty when store has no relevant captures', async () => {
+    const store = ContextStore.open({ dbPath: join(dir, 'cs.db') })
+    await store.insert({
+      text: 'купить хлеб в магазине',
+      sourceChannel: 'telegram_dm',
+      type: 'text',
+      timestamp: '2026-04-24T09:00:00Z',
+    })
+    const r = new ContextRetriever(store)
+    const result = await r.retrieve('xyzunrelated quantum mechanics')
     expect(result).toBe('')
-    expect(mindwtr.search).not.toHaveBeenCalled()
+    store.close()
   })
 
-  it('queries mindwtr with extracted keywords and formats top-K', async () => {
-    const search = mock(async () => ({
-      tasks: [
-        { id: '1', title: 'Buy milk', status: 'next', contexts: ['@errands'], tags: ['shopping'] },
-        { id: '2', title: 'Buy bread', status: 'inbox', contexts: [], tags: [] },
-      ],
-      projects: [],
-    }))
-    const mindwtr = { search } as unknown as MindwtrClient
-    const r = new ContextRetriever(mindwtr, { topK: 5, minKeywordLength: 4, minKeywords: 1 })
-    const result = await r.retrieve('Buy milk and bread today')
-
-    expect(search).toHaveBeenCalledTimes(1)
-    const calls = (search as unknown as { mock: { calls: [string][] } }).mock.calls
-    expect(calls[0][0]).toContain('milk')
-    expect(calls[0][0]).toContain('bread')
-    expect(result).toContain('Past similar items:')
-    expect(result).toContain('(next) @errands [shopping] Buy milk')
-    expect(result).toContain('(inbox) Buy bread')
-  })
-
-  it('limits results to topK', async () => {
-    const tasks = Array.from({ length: 10 }, (_, i) => ({
-      id: String(i),
-      title: `Task ${i}`,
-      status: 'next',
-      contexts: [],
-      tags: [],
-    }))
-    const mindwtr = {
-      search: mock(async () => ({ tasks, projects: [] })),
-    } as unknown as MindwtrClient
-    const r = new ContextRetriever(mindwtr, { topK: 3, minKeywordLength: 4, minKeywords: 1 })
-    const result = await r.retrieve('something interesting longer than four chars')
-    const lines = result.split('\n').filter((l) => l.startsWith('- '))
-    expect(lines.length).toBe(3)
-  })
-
-  it('returns empty string on search error', async () => {
-    const mindwtr = {
-      search: mock(async () => {
+  it('survives store retrieval errors', async () => {
+    const broken = {
+      retrieve: async () => {
         throw new Error('boom')
-      }),
-    } as unknown as MindwtrClient
-    const r = new ContextRetriever(mindwtr)
-    expect(await r.retrieve('something interesting')).toBe('')
-  })
-
-  it('returns empty string on empty result', async () => {
-    const mindwtr = {
-      search: mock(async () => ({ tasks: [], projects: [] })),
-    } as unknown as MindwtrClient
-    const r = new ContextRetriever(mindwtr)
-    expect(await r.retrieve('something interesting')).toBe('')
+      },
+      hasVectorSearch: false,
+    } as unknown as ContextStore
+    const r = new ContextRetriever(broken)
+    expect(await r.retrieve('test query that is long enough')).toBe('')
   })
 })

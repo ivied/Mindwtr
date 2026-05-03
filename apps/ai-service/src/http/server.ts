@@ -7,6 +7,7 @@ import { Hono } from 'hono'
 import { bearerAuth } from 'hono/bearer-auth'
 import type { CaptureFn } from '../capture/sink'
 import type { CapturedItem } from '../capture/normalizer'
+import type { ContextStore } from '../context-store/store'
 
 const MAX_TEXT_LENGTH = 10_000
 
@@ -23,6 +24,7 @@ export interface HttpServerConfig {
   port: number
   authToken: string
   capture: CaptureFn
+  contextStore: ContextStore | null
 }
 
 export function createHttpServer(config: HttpServerConfig) {
@@ -62,6 +64,36 @@ export function createHttpServer(config: HttpServerConfig) {
     } catch (err) {
       console.error('[http] Capture failed:', err)
       return c.json({ error: 'Capture failed' }, 500)
+    }
+  })
+
+  app.get('/v1/context/search', async (c) => {
+    if (!config.contextStore) {
+      return c.json({ error: 'Context Store not configured' }, 503)
+    }
+    const query = c.req.query('q')
+    if (!query) return c.json({ error: 'q is required' }, 400)
+    const topK = Number(c.req.query('topK') ?? 10)
+
+    try {
+      const hits = await config.contextStore.retrieve(query, { topK })
+      return c.json({
+        query,
+        topK,
+        size: config.contextStore.size(),
+        hits: hits.map((h) => ({
+          id: h.capture.id,
+          text: h.capture.text,
+          sourceChannel: h.capture.sourceChannel,
+          sourceMeta: h.capture.sourceMeta,
+          capturedAt: h.capture.capturedAt,
+          score: h.score,
+          via: h.via,
+        })),
+      })
+    } catch (err) {
+      console.error('[http] context search failed:', err)
+      return c.json({ error: 'Search failed' }, 500)
     }
   })
 

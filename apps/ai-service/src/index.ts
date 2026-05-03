@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { MindwtrClient } from './api/mindwtr-client'
 import { LLMClient } from './ai/client'
 import { Classifier } from './ai/classifier'
@@ -9,6 +10,8 @@ import type { Channel } from './channels/types'
 import { SlackChannel } from './channels/slack'
 import { NotionChannel } from './channels/notion'
 import { FileStateStore, channelStateFile } from './channels/state-store'
+import { ContextStore } from './context-store/store'
+import { OpenAIEmbeddings } from './context-store/embeddings'
 import { createHttpServer } from './http/server'
 
 const MINDWTR_CLOUD_URL = process.env.MINDWTR_CLOUD_URL ?? 'http://localhost:8787'
@@ -29,7 +32,12 @@ const NOTION_POLL_INTERVAL_MS = Number(process.env.NOTION_POLL_INTERVAL_MS ?? 5 
 const HTTP_PORT = Number(process.env.HTTP_PORT ?? 3030)
 const HTTP_AUTH_TOKEN = process.env.HTTP_AUTH_TOKEN ?? ''
 
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? ''
+const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1'
+const EMBEDDINGS_MODEL = process.env.EMBEDDINGS_MODEL ?? 'text-embedding-3-small'
+
 const DATA_DIR = process.env.DATA_DIR ?? '/app/data'
+const CONTEXT_STORE_TTL_DAYS = Number(process.env.CONTEXT_STORE_TTL_DAYS ?? 7)
 
 if (!TELEGRAM_BOT_TOKEN) {
   console.error('TELEGRAM_BOT_TOKEN is required')
@@ -46,18 +54,42 @@ const mindwtr = new MindwtrClient({
   authToken: MINDWTR_AUTH_TOKEN,
 })
 
+// --- Context Store + Embeddings ---
+const embeddings = OPENAI_API_KEY
+  ? new OpenAIEmbeddings({
+      apiKey: OPENAI_API_KEY,
+      model: EMBEDDINGS_MODEL,
+      baseUrl: OPENAI_BASE_URL,
+    })
+  : null
+if (!embeddings) {
+  console.warn('⚠️ OPENAI_API_KEY not set — embeddings disabled, retrieval will use FTS only')
+}
+
+const contextStore = ContextStore.open(
+  {
+    dbPath: join(DATA_DIR, 'context.db'),
+    ttlMs: CONTEXT_STORE_TTL_DAYS * 24 * 60 * 60 * 1000,
+  },
+  embeddings
+)
+console.log(
+  `📚 Context Store opened (${contextStore.hasVectorSearch ? 'vec+FTS' : 'FTS only'}, TTL ${CONTEXT_STORE_TTL_DAYS}d, current size ${contextStore.size()})`
+)
+
+// --- AI Classification ---
 let queue: ClassificationQueue | null = null
 if (LLM_BASE_URL && LLM_API_KEY) {
   const llm = new LLMClient(LLM_BASE_URL, LLM_API_KEY, LLM_MODEL)
   const classifier = new Classifier(llm)
-  const retriever = new ContextRetriever(mindwtr)
+  const retriever = new ContextRetriever(contextStore)
   queue = new ClassificationQueue(classifier, mindwtr, retriever)
-  console.log(`🧠 AI Classification enabled (${LLM_MODEL}) with FTS context retriever`)
+  console.log(`🧠 AI Classification enabled (${LLM_MODEL}) with Context Store retriever`)
 } else {
   console.warn('⚠️ LLM_BASE_URL or LLM_API_KEY not set — classification disabled')
 }
 
-const capture = createCaptureSink(mindwtr, queue)
+const capture = createCaptureSink({ mindwtr, queue, contextStore })
 
 function buildChannels(): Channel[] {
   const channels: Channel[] = []
@@ -110,6 +142,16 @@ async function main() {
     console.log('🔄 Classification queue started')
   }
 
+  // Periodic Context Store TTL purge (once per hour)
+  const purgeTimer = setInterval(() => {
+    try {
+      const purged = contextStore.purgeExpired()
+      if (purged > 0) console.log(`🧹 Context Store: purged ${purged} expired captures`)
+    } catch (err) {
+      console.error('[context-store] purge failed:', err)
+    }
+  }, 60 * 60 * 1000)
+
   // Start additional channels
   const channels = buildChannels()
   for (const ch of channels) {
@@ -130,15 +172,17 @@ async function main() {
       port: HTTP_PORT,
       authToken: HTTP_AUTH_TOKEN,
       capture,
+      contextStore,
     })
     http = server.serve()
-    console.log(`📡 HTTP capture endpoint listening on :${HTTP_PORT}`)
+    console.log(`📡 HTTP endpoint listening on :${HTTP_PORT} (POST /v1/capture, GET /v1/context/search)`)
   } else {
-    console.warn('⚠️ HTTP_AUTH_TOKEN not set — HTTP capture endpoint disabled')
+    console.warn('⚠️ HTTP_AUTH_TOKEN not set — HTTP endpoint disabled')
   }
 
   const shutdown = async () => {
     console.log('🛑 Shutting down...')
+    clearInterval(purgeTimer)
     if (http) http.stop()
     for (const ch of channels) {
       try {
@@ -149,6 +193,7 @@ async function main() {
     }
     if (queue) await queue.stop()
     await bot.stop()
+    contextStore.close()
     process.exit(0)
   }
   process.on('SIGTERM', shutdown)

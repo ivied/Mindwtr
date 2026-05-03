@@ -17,13 +17,17 @@ import { createHash } from 'node:crypto'
 export interface DedupConfig {
   /** Re-send the same fingerprint after this many ms even if unchanged. */
   cooldownMs: number
-  /** Number of leading OCR chars used in the fingerprint (cursor/scroll noise reduces beyond this). */
+  /**
+   * If > 0, include first N OCR chars in the fingerprint (catches "user
+   * stayed in window but content changed"). For dynamic UIs (chat, IDE)
+   * keep this at 0 so window-stickiness alone gates re-capture.
+   */
   ocrPrefixChars: number
 }
 
 export const DEFAULT_DEDUP_CONFIG: DedupConfig = {
   cooldownMs: 30 * 60 * 1000, // 30 min
-  ocrPrefixChars: 200,
+  ocrPrefixChars: 0,
 }
 
 export interface DedupInput {

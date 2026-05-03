@@ -15,7 +15,8 @@ ENV MINDWTR_CLOUD_DATA_DIR=/app/cloud_data
 COPY --chown=1000:1000 . .
 RUN chown bun:bun /app
 USER bun
-RUN bun install
+# --ignore-scripts: cloud does not need native modules; saves a slow native build
+RUN bun install --ignore-scripts
 
 EXPOSE 8787/tcp
 HEALTHCHECK --interval=1m30s --timeout=10s --start-period=30s --retries=3 CMD curl -fsS http://localhost:8787/health >/dev/null || exit 1

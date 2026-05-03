@@ -16,7 +16,8 @@
     "@slack/socket-mode": "^2.0.3",
     "@slack/web-api": "^7.10.0",
     "grammy": "^1.41.0",
-    "hono": "^4.12.8"
+    "hono": "^4.12.8",
+    "sqlite-vec": "^0.1.7-alpha.2"
   },
   "devDependencies": {
     "typescript": "^5.9.2",
