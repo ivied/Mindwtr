@@ -30,7 +30,7 @@ describe('MindwtrClient', () => {
           'Content-Type': 'application/json',
           Authorization: 'Bearer test-token',
         },
-        body: JSON.stringify({ title: 'Test', status: 'inbox' }),
+        body: JSON.stringify({ title: 'Test', props: { status: 'inbox' } }),
       })
       expect(task.title).toBe('Test')
     })

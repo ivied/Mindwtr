@@ -57,10 +57,14 @@ export class MindwtrClient {
   }
 
   async createTask(params: CreateTaskParams): Promise<Task> {
+    // Mindwtr Cloud expects { title, props: { ...rest } } shape, not flat.
+    // Anything outside title/input goes into props.
+    const { title, ...rest } = params
+    const body: Record<string, unknown> = { title, props: rest }
     const res = await fetch(`${this.baseUrl}/v1/tasks`, {
       method: 'POST',
       headers: this.headers,
-      body: JSON.stringify(params),
+      body: JSON.stringify(body),
     })
     if (!res.ok) throw new Error(`createTask failed: ${res.status} ${await res.text()}`)
     const data = (await res.json()) as Task | { task: Task }

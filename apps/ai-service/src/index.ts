@@ -12,6 +12,9 @@ import { NotionChannel } from './channels/notion'
 import { FileStateStore, channelStateFile } from './channels/state-store'
 import { ContextStore } from './context-store/store'
 import { OpenAIEmbeddings } from './context-store/embeddings'
+import { Proposer } from './commitment/proposer'
+import { ProposalWriter } from './commitment/writer'
+import { CommitmentPipeline } from './commitment/pipeline'
 import { createHttpServer } from './http/server'
 
 const MINDWTR_CLOUD_URL = process.env.MINDWTR_CLOUD_URL ?? 'http://localhost:8787'
@@ -77,19 +80,30 @@ console.log(
   `📚 Context Store opened (${contextStore.hasVectorSearch ? 'vec+FTS' : 'FTS only'}, TTL ${CONTEXT_STORE_TTL_DAYS}d, current size ${contextStore.size()})`
 )
 
-// --- AI Classification ---
+// --- AI Classification + Commitment Detector ---
 let queue: ClassificationQueue | null = null
+let commitmentPipeline: CommitmentPipeline | null = null
 if (LLM_BASE_URL && LLM_API_KEY) {
   const llm = new LLMClient(LLM_BASE_URL, LLM_API_KEY, LLM_MODEL)
   const classifier = new Classifier(llm)
   const retriever = new ContextRetriever(contextStore)
   queue = new ClassificationQueue(classifier, mindwtr, retriever)
   console.log(`🧠 AI Classification enabled (${LLM_MODEL}) with Context Store retriever`)
+
+  const proposer = new Proposer(llm)
+  const writer = new ProposalWriter(mindwtr)
+  commitmentPipeline = new CommitmentPipeline(proposer, writer)
+  console.log('🎯 Commitment Detector enabled (pull captures → inbox proposals)')
 } else {
-  console.warn('⚠️ LLM_BASE_URL or LLM_API_KEY not set — classification disabled')
+  console.warn('⚠️ LLM_BASE_URL or LLM_API_KEY not set — classification & commitment detection disabled')
 }
 
-const capture = createCaptureSink({ mindwtr, queue, contextStore })
+const capture = createCaptureSink({
+  mindwtr,
+  queue,
+  contextStore,
+  commitmentPipeline,
+})
 
 function buildChannels(): Channel[] {
   const channels: Channel[] = []
