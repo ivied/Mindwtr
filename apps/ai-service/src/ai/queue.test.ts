@@ -2,6 +2,7 @@ import { describe, it, expect, mock } from 'bun:test'
 import { ClassificationQueue } from './queue'
 import type { Classifier } from './classifier'
 import type { MindwtrClient } from '../api/mindwtr-client'
+import type { ContextRetriever } from './retriever'
 import type { ClassificationResult, ClassifierInput } from './types'
 
 function makeResult(overrides: Partial<ClassificationResult> = {}): ClassificationResult {
@@ -126,6 +127,79 @@ describe('ClassificationQueue', () => {
     const updates = calls[0][1] as { status: string; tags: string[] }
     expect(updates.status).toBe('next')
     expect(updates.tags).toContain('2min')
+  })
+
+  it('uses retriever to inject priorContext when not provided', async () => {
+    const classifier = {
+      classify: mock().mockResolvedValue(makeResult()),
+    } as unknown as Classifier
+    const mindwtr = {
+      updateTask: mock().mockResolvedValue({ id: 'task-1' }),
+    } as unknown as MindwtrClient
+    const retriever = {
+      retrieve: mock(async () => 'Past similar items:\n- (next) @work Buy stuff'),
+    } as unknown as ContextRetriever
+
+    const queue = new ClassificationQueue(classifier, mindwtr, retriever)
+    queue.start()
+    queue.enqueue({ taskId: 'task-1', input: makeInput() })
+
+    await new Promise((r) => setTimeout(r, 700))
+    await queue.stop()
+
+    expect(retriever.retrieve).toHaveBeenCalledTimes(1)
+    const calls = (classifier.classify as unknown as { mock: { calls: [{ priorContext?: string }][] } }).mock.calls
+    expect(calls[0][0].priorContext).toContain('Past similar items')
+  })
+
+  it('still classifies when retriever throws', async () => {
+    const classifier = {
+      classify: mock().mockResolvedValue(makeResult()),
+    } as unknown as Classifier
+    const mindwtr = {
+      updateTask: mock().mockResolvedValue({ id: 'task-1' }),
+    } as unknown as MindwtrClient
+    const retriever = {
+      retrieve: mock(async () => {
+        throw new Error('search down')
+      }),
+    } as unknown as ContextRetriever
+
+    const queue = new ClassificationQueue(classifier, mindwtr, retriever)
+    queue.start()
+    queue.enqueue({ taskId: 'task-1', input: makeInput() })
+
+    await new Promise((r) => setTimeout(r, 700))
+    await queue.stop()
+
+    expect(classifier.classify).toHaveBeenCalledTimes(1)
+    expect(mindwtr.updateTask).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not overwrite existing priorContext on the job', async () => {
+    const classifier = {
+      classify: mock().mockResolvedValue(makeResult()),
+    } as unknown as Classifier
+    const mindwtr = {
+      updateTask: mock().mockResolvedValue({ id: 'task-1' }),
+    } as unknown as MindwtrClient
+    const retriever = {
+      retrieve: mock(async () => 'should-not-be-used'),
+    } as unknown as ContextRetriever
+
+    const queue = new ClassificationQueue(classifier, mindwtr, retriever)
+    queue.start()
+    queue.enqueue({
+      taskId: 'task-1',
+      input: { ...makeInput(), priorContext: 'caller-supplied' },
+    })
+
+    await new Promise((r) => setTimeout(r, 700))
+    await queue.stop()
+
+    expect(retriever.retrieve).not.toHaveBeenCalled()
+    const calls = (classifier.classify as unknown as { mock: { calls: [{ priorContext?: string }][] } }).mock.calls
+    expect(calls[0][0].priorContext).toBe('caller-supplied')
   })
 
   it('continues processing after a job fails', async () => {

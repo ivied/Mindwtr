@@ -2,6 +2,7 @@ import { MindwtrClient } from './api/mindwtr-client'
 import { LLMClient } from './ai/client'
 import { Classifier } from './ai/classifier'
 import { ClassificationQueue } from './ai/queue'
+import { ContextRetriever } from './ai/retriever'
 import { createBot } from './bot'
 import { createCaptureSink } from './capture/sink'
 import type { Channel } from './channels/types'
@@ -49,8 +50,9 @@ let queue: ClassificationQueue | null = null
 if (LLM_BASE_URL && LLM_API_KEY) {
   const llm = new LLMClient(LLM_BASE_URL, LLM_API_KEY, LLM_MODEL)
   const classifier = new Classifier(llm)
-  queue = new ClassificationQueue(classifier, mindwtr)
-  console.log(`🧠 AI Classification enabled (${LLM_MODEL})`)
+  const retriever = new ContextRetriever(mindwtr)
+  queue = new ClassificationQueue(classifier, mindwtr, retriever)
+  console.log(`🧠 AI Classification enabled (${LLM_MODEL}) with FTS context retriever`)
 } else {
   console.warn('⚠️ LLM_BASE_URL or LLM_API_KEY not set — classification disabled')
 }

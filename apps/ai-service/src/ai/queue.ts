@@ -5,6 +5,7 @@
 
 import type { Classifier } from './classifier'
 import type { MindwtrClient } from '../api/mindwtr-client'
+import type { ContextRetriever } from './retriever'
 import type { ClassifierInput, ClassificationResult, TaskMetadata } from './types'
 
 export interface ClassificationJob {
@@ -21,7 +22,8 @@ export class ClassificationQueue {
 
   constructor(
     private classifier: Classifier,
-    private mindwtr: MindwtrClient
+    private mindwtr: MindwtrClient,
+    private retriever: ContextRetriever | null = null
   ) {}
 
   enqueue(job: ClassificationJob): void {
@@ -59,7 +61,16 @@ export class ClassificationQueue {
   }
 
   private async process(job: ClassificationJob): Promise<void> {
-    const result = await this.classifier.classify(job.input)
+    let input = job.input
+    if (this.retriever && !input.priorContext) {
+      try {
+        const priorContext = await this.retriever.retrieve(input.text)
+        if (priorContext) input = { ...input, priorContext }
+      } catch (err) {
+        console.error('[queue] Retriever failed, classifying without context:', err)
+      }
+    }
+    const result = await this.classifier.classify(input)
     await this.applyClassification(job.taskId, job.input, result)
     if (job.onComplete) {
       await job.onComplete(result, job.taskId)

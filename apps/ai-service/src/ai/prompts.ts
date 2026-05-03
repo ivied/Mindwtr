@@ -50,4 +50,14 @@ Confidence:
 - 0.5-0.7 = plausible but could be interpreted differently
 - <0.5 = mostly guessing, user should review
 
+Using prior context (when present):
+- The user's message may include a "Past similar items" block listing past tasks
+  with their status, contexts, and tags.
+- Treat it as evidence of the user's habits — match contexts/tags they
+  already use rather than inventing new ones.
+- If past similar items are mostly noise, lean toward is_noise=true for
+  the new one too.
+- Do NOT cite the past items in your reasoning; just let them inform the
+  decision.
+
 Always call the classify_gtd_item function with your classification. Be concise in reasoning.`
