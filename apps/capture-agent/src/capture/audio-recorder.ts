@@ -101,10 +101,24 @@ export class AudioRecorder {
     const inputFormat = isDarwin ? 'avfoundation' : 'pulse'
     const input = isDarwin ? this.config.inputDevice : 'default'
 
-    const args = [
+    // Wall-clock timestamps are critical: macOS avfoundation often reports
+    // a sample rate (e.g. 96kHz) higher than the device actually delivers,
+    // which makes ffmpeg compress the buffer (0.5x duration, 2x perceived
+    // playback speed). `-use_wallclock_as_timestamps 1 -fflags +genpts`
+    // forces ffmpeg to time samples by real elapsed time, and the
+    // `aresample=async=1000` filter smooths any resulting drift.
+    const filter = this.config.audioFilter
+      ? `aresample=async=1000,${this.config.audioFilter}`
+      : 'aresample=async=1000'
+
+    return [
       '-hide_banner',
       '-loglevel',
       'error',
+      '-use_wallclock_as_timestamps',
+      '1',
+      '-fflags',
+      '+genpts',
       '-f',
       inputFormat,
       '-i',
@@ -113,14 +127,13 @@ export class AudioRecorder {
       '1', // mono — Whisper prefers mono
       '-ar',
       String(this.config.sampleRate),
+      '-af',
+      filter,
       '-t',
       seconds,
+      '-y',
+      outputPath,
     ]
-    if (this.config.audioFilter) {
-      args.push('-af', this.config.audioFilter)
-    }
-    args.push('-y', outputPath)
-    return args
   }
 
   private runFfmpeg(args: string[]): Promise<void> {
