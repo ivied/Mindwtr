@@ -54,6 +54,10 @@ export interface AudioConfig {
   openaiBaseUrl: string
   /** Whisper hint language (e.g. 'en', 'ru'). Empty = auto-detect. */
   whisperLanguage: string
+  /** Whisper model: whisper-1 | gpt-4o-mini-transcribe | gpt-4o-transcribe */
+  whisperModel: string
+  /** Whisper prompt to bias vocabulary (e.g. "GTD tasks, deadlines, names") */
+  whisperPrompt: string
   /** Chunk length in ms (default 30s). */
   chunkMs: number
   /** RMS threshold for silence gating (0..1). */

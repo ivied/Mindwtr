@@ -51,6 +51,8 @@ async function main() {
         apiKey: config.audio.openaiApiKey,
         baseUrl: config.audio.openaiBaseUrl,
         language: config.audio.whisperLanguage,
+        model: config.audio.whisperModel,
+        prompt: config.audio.whisperPrompt,
       })
       audioController = startAudioLoop(
         {
@@ -73,7 +75,7 @@ async function main() {
         }
       )
       console.log(
-        `🎤 Audio capture enabled (chunk ${config.audio.chunkMs}ms, threshold ${config.audio.energyThreshold}, lang "${config.audio.whisperLanguage || 'auto'}")`
+        `🎤 Audio capture enabled (model ${config.audio.whisperModel}, chunk ${config.audio.chunkMs}ms, threshold ${config.audio.energyThreshold}, lang "${config.audio.whisperLanguage || 'auto'}")`
       )
     }
   }
