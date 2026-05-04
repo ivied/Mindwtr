@@ -29,13 +29,20 @@ export interface AudioRecorderConfig {
   inputDevice: string
   /** Working directory for temp WAV files. */
   tmpDir: string
+  /** Apply ffmpeg audio filters before writing WAV.
+   *  Default chain: highpass→denoise→loudness normalize. Disable with empty string. */
+  audioFilter: string
 }
+
+export const DEFAULT_AUDIO_FILTER =
+  'highpass=f=80,afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11'
 
 export const DEFAULT_AUDIO_RECORDER_CONFIG: AudioRecorderConfig = {
   ffmpegPath: 'ffmpeg',
   sampleRate: 16000,
   inputDevice: ':default',
   tmpDir: tmpdir(),
+  audioFilter: DEFAULT_AUDIO_FILTER,
 }
 
 export interface RecordedChunk {
@@ -94,7 +101,7 @@ export class AudioRecorder {
     const inputFormat = isDarwin ? 'avfoundation' : 'pulse'
     const input = isDarwin ? this.config.inputDevice : 'default'
 
-    return [
+    const args = [
       '-hide_banner',
       '-loglevel',
       'error',
@@ -108,9 +115,12 @@ export class AudioRecorder {
       String(this.config.sampleRate),
       '-t',
       seconds,
-      '-y', // overwrite if exists
-      outputPath,
     ]
+    if (this.config.audioFilter) {
+      args.push('-af', this.config.audioFilter)
+    }
+    args.push('-y', outputPath)
+    return args
   }
 
   private runFfmpeg(args: string[]): Promise<void> {

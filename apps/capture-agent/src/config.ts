@@ -48,6 +48,9 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): AgentCo
       energyThreshold: Number(env.AGENT_AUDIO_ENERGY_THRESHOLD ?? 0.005),
       ffmpegPath: env.AGENT_FFMPEG_PATH ?? 'ffmpeg',
       inputDevice: env.AGENT_AUDIO_INPUT_DEVICE ?? ':default',
+      audioFilter:
+        env.AGENT_AUDIO_FILTER ??
+        'highpass=f=80,afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11',
     },
   }
 }

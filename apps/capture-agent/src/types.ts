@@ -66,4 +66,6 @@ export interface AudioConfig {
   ffmpegPath: string
   /** macOS avfoundation input device (":default" or ":<idx>"). */
   inputDevice: string
+  /** ffmpeg -af filter chain (denoise + loudnorm). Empty string = disable. */
+  audioFilter: string
 }

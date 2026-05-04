@@ -1,0 +1,16 @@
+Notion → mindwtr import — dry-run summary
+Generated: 2026-05-04T00:21:27.939Z
+
+Areas:    8
+Projects: 609
+  by status: {"archived":504,"active":34,"someday":71}
+  isSequential=true: 14
+Tasks:    9961
+  by source DB: {"Tasks":5354,"Inbox":4256,"Someday":237,"Reference":53,"Archive":61}
+  by status:    {"done":9197,"inbox":346,"waiting":92,"next":9,"someday":203,"reference":53,"archived":61}
+  with projectId: 1578
+  with assignedTo: 1324
+
+Mapping file:  /Users/sergeykurdyuk/Projects/GTD_mindwtr/migration/notion-mapping.json
+AppData file:  /Users/sergeykurdyuk/Projects/GTD_mindwtr/migration/imported-app-data.json
+   size: 6.95 MB

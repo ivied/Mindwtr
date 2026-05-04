@@ -46,6 +46,7 @@ async function main() {
         ffmpegPath: config.audio.ffmpegPath,
         sampleRate: 16000,
         inputDevice: config.audio.inputDevice,
+        audioFilter: config.audio.audioFilter,
       })
       const whisper = new WhisperClient({
         apiKey: config.audio.openaiApiKey,
