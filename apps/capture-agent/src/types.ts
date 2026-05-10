@@ -43,6 +43,19 @@ export interface AgentConfig {
   ocrLang: string
   /** Audio capture (off by default) */
   audio: AudioConfig
+  /** Append-only capture log on disk (off when dir is empty). */
+  wiki: WikiConfig
+}
+
+export interface WikiConfig {
+  /** Root dir for the wiki. Empty string disables archiving. */
+  dir: string
+  /** Persist screenshot images alongside MD entries. */
+  saveImage: boolean
+  /** Resize the longest edge of each screenshot to this many pixels (0 = no resize). */
+  imageMaxEdge: number
+  /** JPEG quality 1–100 when imageMaxEdge > 0. */
+  imageQuality: number
 }
 
 export interface AudioConfig {

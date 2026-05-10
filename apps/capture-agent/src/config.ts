@@ -52,5 +52,12 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): AgentCo
         env.AGENT_AUDIO_FILTER ??
         'highpass=f=80,afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11',
     },
+    wiki: {
+      dir: env.AGENT_WIKI_DIR ?? '',
+      saveImage:
+        (env.AGENT_WIKI_SAVE_IMAGE ?? env.AGENT_WIKI_SAVE_PNG ?? 'true') !== 'false',
+      imageMaxEdge: Number(env.AGENT_WIKI_IMAGE_MAX_EDGE ?? 1920),
+      imageQuality: Number(env.AGENT_WIKI_IMAGE_QUALITY ?? 70),
+    },
   }
 }
