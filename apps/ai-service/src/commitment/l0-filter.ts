@@ -31,14 +31,25 @@ const COMMITMENT_VERBS = [
   'should ',
   'must ',
   'todo',
-  // RU verbs (1st person + imperative-ish + future)
+  'let me',
+  "let's",
+  'lets ',
+  'meeting',
+  'sync up',
+  // RU first-person commitments
   'сделаю',
   'сделать ',
   'переведу',
+  'перевести',
   'отправлю',
+  'отправить',
   'отвечу',
+  'ответить',
+  'ответить',
   'позвоню',
+  'позвонить',
   'напишу',
+  'написать',
   'напомнить',
   'напомни',
   'купить',
@@ -54,9 +65,45 @@ const COMMITMENT_VERBS = [
   'оплачу',
   'оплатить',
   'забронир',
+  'договорить',
+  'договоримся',
+  'согласовать',
+  'согласуем',
+  'обсудить',
+  'обсудим',
+  'решить',
+  'решим',
   'нужно ',
   'надо ',
   'не забыть',
+  // RU collective / planning
+  'давайте',
+  'давай ',
+  'встретимся',
+  'встретиться',
+  'встреча',
+  'созвон',
+  'созвониться',
+  'созвонимся',
+  'перенести',
+  'перенесём',
+  'перенесем',
+  'запишем',
+  'запиши',
+  'поговорим',
+  'поговорить',
+  'обсудим',
+  'обсудить',
+  'разобраться',
+  'разобрать',
+  'разобрался',
+  'выяснить',
+  'уточнить',
+  // RU question forms that often signal request
+  'когда ',
+  'может',
+  'можешь',
+  'сможешь',
 ]
 
 const DEADLINE_WORDS = [
@@ -109,8 +156,8 @@ export interface L0Result {
  * Returns whether the text passes L0. When pass=true, `reasons` lists
  * which lexicons matched — useful for debugging/calibration logs.
  */
-export function l0Filter(text: string): L0Result {
-  if (!text || text.length < 20) return { pass: false, reasons: ['too-short'] }
+export function l0Filter(text: string, minLength = 12): L0Result {
+  if (!text || text.length < minLength) return { pass: false, reasons: ['too-short'] }
 
   const lower = text.toLowerCase()
   const reasons: string[] = []
