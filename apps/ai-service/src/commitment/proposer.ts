@@ -16,17 +16,39 @@
 import type { LLMClient } from '../ai/client'
 
 export type WhoOwes = 'user' | 'other' | 'unclear'
+export type Recipient = 'user' | 'other' | 'unclear'
+export type SuggestedCategory = 'next' | 'waiting' | 'someday' | 'reference' | 'two_minute'
+
+export interface UserIdentity {
+  /** Primary display name of the user (e.g. "Sergey Kurdyuk"). */
+  name: string
+  /** Alternative spellings, usernames, handles that may appear in OCR / transcripts. */
+  aliases: string[]
+}
 
 export interface Proposal {
   is_actionable: boolean
   title: string
   who_owes: WhoOwes
+  /** Who the action is OWED TO — relevant when who_owes='other' (someone else
+   *  promised something to user → waiting). 'unclear' or 'other' for third-party. */
+  recipient: Recipient
   who_to: string | null
   what: string
   by_when: string | null
   confidence: number
+  /** GTD category hint for the task. All proposals still land in inbox status;
+   *  this is metadata for downstream triage / Enricher / user. */
+  suggested_category: SuggestedCategory
   /** One-line summary of the decision (back-compat short reasoning). */
   reasoning: string
+  /**
+   * Title of an existing inbox task that this proposal semantically duplicates.
+   * Empty when not a duplicate. When set, is_actionable MUST be false so the
+   * pipeline reports outcome 'duplicate-of-existing' instead of creating a
+   * second card for the same intent.
+   */
+  duplicate_of_title: string
   /**
    * Exact verbatim quote from the source text that triggered the decision.
    * Empty when nothing was clearly quotable (e.g. the cue was structural,
@@ -62,7 +84,13 @@ const PROPOSER_TOOL = {
           type: 'string',
           enum: ['user', 'other', 'unclear'],
           description:
-            'Whose obligation is this? user = the person whose machine the capture came from. other = someone else (skip — not actionable for user). unclear = ambiguous (still consider actionable only if user is most likely target).',
+            'Whose obligation is this? user = the user identified in YOU ARE WORKING FOR. other = someone else. unclear = ambiguous.',
+        },
+        recipient: {
+          type: 'string',
+          enum: ['user', 'other', 'unclear'],
+          description:
+            'Who the obligation is owed TO. When who_owes=other AND recipient=user, the user is WAITING for someone else (set suggested_category=waiting). When who_owes=other AND recipient=other, it is a third-party conversation (set is_actionable=false). When who_owes=user, recipient is whoever the user owes (use "unclear" if no one specific).',
         },
         who_to: {
           type: 'string',
@@ -108,11 +136,23 @@ const PROPOSER_TOOL = {
           description:
             'Ordered 2-5 step train-of-thought. Each step is one short sentence. Sequence: (1) what concrete text you spotted, (2) how you interpreted it (request? observation? past-tense?), (3) who owns the action, (4) why this is/isn\'t a personal commitment for the user, (5) confidence justification. Skip steps that don\'t apply.',
         },
+        duplicate_of_title: {
+          type: 'string',
+          description:
+            'When the proposed task is semantically the same as an existing inbox item from the RECENT_INBOX list in the user message (different wording but same intent / target / deadline), set this to the exact title of that existing item AND set is_actionable=false. Use this to suppress paraphrase duplicates. Empty string when no match.',
+        },
+        suggested_category: {
+          type: 'string',
+          enum: ['next', 'waiting', 'someday', 'reference', 'two_minute'],
+          description:
+            'GTD category hint after the user processes inbox. Decision order: two_minute (<2 min do-now) → waiting (who_owes=other AND recipient=user; user is blocked on someone else) → someday (vague intent without deadline) → reference (info, not action) → next (default for concrete user actions with target/deadline).',
+        },
       },
       required: [
         'is_actionable',
         'title',
         'who_owes',
+        'recipient',
         'who_to',
         'what',
         'by_when',
@@ -121,6 +161,8 @@ const PROPOSER_TOOL = {
         'evidence_quote',
         'cues_detected',
         'reasoning_steps',
+        'duplicate_of_title',
+        'suggested_category',
       ],
     },
   },
@@ -149,10 +191,21 @@ NOT actionable (be ruthless):
 - Marketing, ads, promo emails, newsletters
 - Mentions in a group chat that don't address the user directly
 
-Role disambiguation (who_owes):
-- "user" = obligation belongs to the user (their machine, they typed it, addressed to them)
-- "other" = obligation belongs to someone else seen in the capture (skip — not actionable for user)
-- "unclear" = ambiguous (only mark actionable if context clearly suggests the user)
+Role disambiguation (who_owes / recipient):
+The capture is from THE USER's machine. Other names visible in screenshots/transcripts
+(message authors in chats, emails, etc.) are NOT the user unless they match the
+identity given in YOU ARE WORKING FOR. First-person pronouns ("I", "я") inside a
+message authored by someone else refer to THAT person, not the user.
+
+- who_owes=user: the user (per YOU ARE WORKING FOR) made the commitment.
+- who_owes=other: another person made a commitment.
+- who_owes=unclear: ambiguous.
+
+When who_owes=other, set recipient correctly:
+- recipient=user → user is WAITING for that person → still actionable as a "waiting"
+  card (suggested_category=waiting). Example: "Amir: По Flutter я завтра скажу" addressed
+  to Sergey → user (Sergey) waits for Amir's Flutter answer.
+- recipient=other → conversation between third parties → is_actionable=false.
 
 Title format (when actionable): short imperative GTD next action.
 - Good: "Pay Acme invoice", "Reply to Alice re Q4 plan", "Send weekly report"
@@ -166,6 +219,21 @@ Explain your work:
 - reasoning_steps — 2-5 short sentences in order: (1) what concrete text/structure you spotted, (2) how you interpreted it, (3) who owns the action, (4) why this IS or ISN'T a personal commitment for the user, (5) confidence justification. Skip steps that don't apply.
 - reasoning — one-sentence summary; use the same tone as a PR title.
 
+DUPLICATE SUPPRESSION:
+The user message MAY include a RECENT_INBOX block — current inbox titles, one per line.
+If the action you'd propose is essentially the same as one of those (different wording but
+same target person/object, same intent, same deadline window), set is_actionable=false,
+duplicate_of_title to the EXACT existing title, and reasoning to a one-liner like
+"Duplicate of: <existing>". Be liberal here — the user already has the card. Examples
+of semantic match:
+- "Send Polina's hours to Dylan" ≡ "Forward Polina's timesheet to Dylan Feeney"
+- "Reply to Alice about Q4 plan" ≡ "Get back to Alice re Q4 strategy email"
+- "Pay Acme invoice" ≡ "Settle Acme invoice $500"
+NOT a match (don't dedup):
+- Different recipient ("Reply to Alice" vs "Reply to Bob")
+- Different timeframe (this Friday vs next Friday)
+- Different scope (one-off task vs an open recurring project)
+
 Always call propose_inbox_item with all fields filled (use empty string / empty array when N/A).`
 
 export class Proposer {
@@ -174,14 +242,28 @@ export class Proposer {
     private model?: string
   ) {}
 
-  async propose(text: string, sourceMeta?: Record<string, unknown>): Promise<Proposal> {
-    const userMessage = sourceMeta
-      ? `Capture context: ${JSON.stringify(sourceMeta)}\n\nText:\n${text}`
-      : `Text:\n${text}`
+  async propose(
+    text: string,
+    sourceMeta?: Record<string, unknown>,
+    recentInboxTitles?: string[],
+    userIdentity?: UserIdentity | null
+  ): Promise<Proposal> {
+    const systemPrompt = buildSystemPrompt(userIdentity)
+    const parts: string[] = []
+    if (sourceMeta) parts.push(`Capture context: ${JSON.stringify(sourceMeta)}`)
+    if (recentInboxTitles && recentInboxTitles.length > 0) {
+      const lines = recentInboxTitles
+        .slice(0, 50)
+        .map((t) => `- ${t}`)
+        .join('\n')
+      parts.push(`RECENT_INBOX (existing items — dedup against these):\n${lines}`)
+    }
+    parts.push(`Text:\n${text}`)
+    const userMessage = parts.join('\n\n')
 
     const response = await this.llm.chatCompletion({
       messages: [
-        { role: 'system', content: PROPOSER_PROMPT },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: userMessage },
       ],
       tools: [PROPOSER_TOOL],
@@ -215,6 +297,20 @@ export class Proposer {
       typeof (parsed as { evidence_quote?: unknown }).evidence_quote === 'string'
         ? ((parsed as { evidence_quote: string }).evidence_quote || '').slice(0, 240)
         : ''
+    const duplicateOf =
+      typeof (parsed as { duplicate_of_title?: unknown }).duplicate_of_title === 'string'
+        ? ((parsed as { duplicate_of_title: string }).duplicate_of_title || '').slice(0, 240)
+        : ''
+    const recipientRaw = (parsed as { recipient?: unknown }).recipient
+    const recipient: Recipient = ['user', 'other', 'unclear'].includes(recipientRaw as string)
+      ? (recipientRaw as Recipient)
+      : 'unclear'
+    const categoryRaw = (parsed as { suggested_category?: unknown }).suggested_category
+    const suggestedCategory: SuggestedCategory = (
+      ['next', 'waiting', 'someday', 'reference', 'two_minute'] as const
+    ).includes(categoryRaw as SuggestedCategory)
+      ? (categoryRaw as SuggestedCategory)
+      : 'next'
 
     return {
       is_actionable: Boolean(parsed.is_actionable),
@@ -222,6 +318,7 @@ export class Proposer {
       who_owes: ['user', 'other', 'unclear'].includes(parsed.who_owes as string)
         ? (parsed.who_owes as WhoOwes)
         : 'unclear',
+      recipient,
       who_to: typeof parsed.who_to === 'string' && parsed.who_to.length > 0 ? parsed.who_to : null,
       what: typeof parsed.what === 'string' ? parsed.what : '',
       by_when: typeof parsed.by_when === 'string' && parsed.by_when.length > 0 ? parsed.by_when : null,
@@ -230,6 +327,23 @@ export class Proposer {
       evidence_quote: evidence,
       cues_detected: cues,
       reasoning_steps: steps,
+      duplicate_of_title: duplicateOf,
+      suggested_category: suggestedCategory,
     }
   }
+}
+
+function buildSystemPrompt(identity: UserIdentity | null | undefined): string {
+  if (!identity || !identity.name) return PROPOSER_PROMPT
+  const aliases = identity.aliases.filter((a) => a && a.length > 0)
+  const aliasList = aliases.length > 0 ? aliases.join(', ') : '(none)'
+  const block = [
+    'YOU ARE WORKING FOR:',
+    `- Name: ${identity.name}`,
+    `- Aliases on screen (handles, nicknames, transliterations): ${aliasList}`,
+    'When OCR/transcript shows these names — that is THE USER. Other names are NOT the user.',
+    'First-person pronouns ("I", "я") inside a message authored by someone else refer to THAT author, never to the user.',
+    '',
+  ].join('\n')
+  return `${block}${PROPOSER_PROMPT}`
 }

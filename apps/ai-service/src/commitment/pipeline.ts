@@ -12,15 +12,17 @@
  */
 
 import type { CaptureRecord } from '../context-store/types'
-import type { Proposer } from './proposer'
+import type { Proposer, UserIdentity } from './proposer'
 import type { ProposalWriter } from './writer'
 import type { ProposalNotifier } from '../bot/proposal-notifier'
+import type { InboxTitlesProvider } from './inbox-titles'
 import { l0Filter } from './l0-filter'
 import {
   evaluateSourceDeny,
   type SourceDenyConfig,
   DEFAULT_DENY_APPS,
   DEFAULT_DENY_URL_PATTERNS,
+  DEFAULT_DENY_WINDOW_TITLE_PATTERNS,
 } from './source-deny'
 
 export interface CommitmentPipelineConfig {
@@ -38,6 +40,7 @@ export const DEFAULT_PIPELINE_CONFIG: CommitmentPipelineConfig = {
   sourceDeny: {
     apps: [...DEFAULT_DENY_APPS],
     urlPatterns: [...DEFAULT_DENY_URL_PATTERNS],
+    windowTitlePatterns: [...DEFAULT_DENY_WINDOW_TITLE_PATTERNS],
   },
 }
 
@@ -49,10 +52,13 @@ export type PipelineOutcome =
   | { kind: 'wrong-role'; whoOwes: string; reasoning: string }
   | { kind: 'proposed'; proposalId: string; title: string; confidence: number }
   | { kind: 'duplicate'; existingProposalId: string }
+  | { kind: 'duplicate-of-existing'; existingTitle: string; reasoning: string }
   | { kind: 'error'; error: Error }
 
 export class CommitmentPipeline {
   private notifier: ProposalNotifier | null = null
+  private inboxTitlesProvider: InboxTitlesProvider | null = null
+  private userIdentity: UserIdentity | null = null
 
   constructor(
     private proposer: Proposer,
@@ -64,6 +70,18 @@ export class CommitmentPipeline {
   /** Late-binding for the notifier so wiring code can resolve the bot→pipeline→notifier cycle. */
   setNotifier(notifier: ProposalNotifier | null): void {
     this.notifier = notifier
+  }
+
+  /** Optional: when set, recent inbox titles are passed to the Proposer for
+   *  semantic dedup against existing user-known cards. */
+  setInboxTitlesProvider(provider: InboxTitlesProvider | null): void {
+    this.inboxTitlesProvider = provider
+  }
+
+  /** Identity anchor — Proposer uses it to map first-person pronouns to the
+   *  right person and decide who_owes / recipient correctly. */
+  setUserIdentity(identity: UserIdentity | null): void {
+    this.userIdentity = identity
   }
 
   async run(capture: CaptureRecord): Promise<PipelineOutcome> {
@@ -91,12 +109,44 @@ export class CommitmentPipeline {
       }
     }
 
+    // Best-effort inbox titles for semantic dedup. Failures are logged and
+    // ignored — we'd rather risk a duplicate proposal than miss a real one.
+    let inboxTitles: string[] | undefined
+    if (this.inboxTitlesProvider) {
+      try {
+        inboxTitles = await this.inboxTitlesProvider.recentTitles(50)
+      } catch (err) {
+        this.log(
+          `[commitment] inbox titles fetch failed (${capture.id}): ${(err as Error).message}`
+        )
+      }
+    }
+
     let proposal
     try {
-      proposal = await this.proposer.propose(capture.text, capture.sourceMeta ?? undefined)
+      proposal = await this.proposer.propose(
+        capture.text,
+        capture.sourceMeta ?? undefined,
+        inboxTitles,
+        this.userIdentity
+      )
     } catch (err) {
       this.log(`[commitment] proposer failed (${capture.id}): ${(err as Error).message}`)
       return { kind: 'error', error: err as Error }
+    }
+
+    // Semantic dedup against existing inbox items. Proposer sets is_actionable
+    // false AND duplicate_of_title together — treat as a distinct outcome so
+    // telemetry can tell "agent was wrong" from "user already has this card".
+    if (proposal.duplicate_of_title) {
+      this.log(
+        `[commitment] duplicate-of-existing (${capture.id}): "${proposal.duplicate_of_title}"`
+      )
+      return {
+        kind: 'duplicate-of-existing',
+        existingTitle: proposal.duplicate_of_title,
+        reasoning: proposal.reasoning,
+      }
     }
 
     if (!proposal.is_actionable) {
@@ -104,8 +154,14 @@ export class CommitmentPipeline {
       return { kind: 'not-actionable', reasoning: proposal.reasoning }
     }
 
-    if (proposal.who_owes === 'other') {
-      this.log(`[commitment] wrong-role other (${capture.id}): ${proposal.reasoning}`)
+    // who_owes='other' is only a real skip when the recipient is also not the
+    // user (third-party conversation). When OTHER promises something TO the
+    // user, it's a legitimate waiting-for card — proceed as normal; the
+    // Proposer should already have set suggested_category='waiting'.
+    if (proposal.who_owes === 'other' && proposal.recipient !== 'user') {
+      this.log(
+        `[commitment] wrong-role other→other (${capture.id}): ${proposal.reasoning}`
+      )
       return { kind: 'wrong-role', whoOwes: proposal.who_owes, reasoning: proposal.reasoning }
     }
 

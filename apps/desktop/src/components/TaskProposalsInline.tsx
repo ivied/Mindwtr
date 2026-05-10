@@ -10,7 +10,7 @@
  * Silent when AI Service is not configured or no pending proposals exist.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Sparkles, Check, X, MessageSquare, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import {
     isProposalsAvailable,
@@ -76,7 +76,37 @@ function ProposalCard({ summary, onResolved }: CardProps) {
     const [detail, setDetail] = useState<ProposalDetail | null>(null);
     const [busy, setBusy] = useState(false);
     const [comment, setComment] = useState('');
+    const [rejectMode, setRejectMode] = useState(false);
+    const [rejectReason, setRejectReason] = useState('');
     const [error, setError] = useState<string | null>(null);
+
+    // For modify proposals: extract the diff field names so the user can
+    // partially approve (uncheck a row to omit that field from apply).
+    const modifyFieldNames = useMemo(() => {
+        const p = summary.currentPayload as { kind?: string; diff?: { field?: unknown }[] } | null;
+        if (!p || p.kind !== 'modify' || !Array.isArray(p.diff)) return null;
+        return p.diff
+            .map((d) => d?.field)
+            .filter((f): f is string => typeof f === 'string' && f.length > 0);
+    }, [summary.currentPayload]);
+
+    const [selectedFields, setSelectedFields] = useState<Set<string>>(
+        () => new Set(modifyFieldNames ?? [])
+    );
+
+    const totalFieldCount = modifyFieldNames?.length ?? 0;
+    const selectedCount = selectedFields.size;
+    const isPartial = totalFieldCount > 0 && selectedCount > 0 && selectedCount < totalFieldCount;
+    const nothingSelected = totalFieldCount > 0 && selectedCount === 0;
+
+    const toggleField = useCallback((field: string) => {
+        setSelectedFields((prev) => {
+            const next = new Set(prev);
+            if (next.has(field)) next.delete(field);
+            else next.add(field);
+            return next;
+        });
+    }, []);
 
     useEffect(() => {
         if (!expanded) return;
@@ -96,10 +126,17 @@ function ProposalCard({ summary, onResolved }: CardProps) {
     const onApprove = useCallback(
         async (event: React.MouseEvent) => {
             event.stopPropagation();
+            if (nothingSelected) {
+                setError('Select at least one field to approve');
+                return;
+            }
             setBusy(true);
             setError(null);
             try {
-                const result = await approveProposal(summary.id);
+                const result = await approveProposal(
+                    summary.id,
+                    isPartial ? { includeFields: Array.from(selectedFields) } : {}
+                );
                 if (!result.ok) {
                     setError(`${result.reason}: ${result.details ?? ''}`);
                     return;
@@ -111,26 +148,43 @@ function ProposalCard({ summary, onResolved }: CardProps) {
                 setBusy(false);
             }
         },
-        [summary.id, onResolved]
+        [summary.id, isPartial, nothingSelected, selectedFields, onResolved]
     );
 
-    const onReject = useCallback(
-        async (event: React.MouseEvent) => {
-            event.stopPropagation();
-            const reason = window.prompt('Reason (optional):') ?? undefined;
+    const onRejectClick = useCallback((event: React.MouseEvent) => {
+        event.stopPropagation();
+        setRejectMode(true);
+        setExpanded(true);
+        setError(null);
+    }, []);
+
+    const performReject = useCallback(
+        async (reason: string | undefined) => {
             setBusy(true);
             setError(null);
             try {
-                await rejectProposal(summary.id, reason && reason.trim() ? reason.trim() : undefined);
+                await rejectProposal(summary.id, reason);
                 onResolved();
             } catch (err) {
                 setError((err as Error).message);
             } finally {
                 setBusy(false);
+                setRejectMode(false);
+                setRejectReason('');
             }
         },
         [summary.id, onResolved]
     );
+
+    const onConfirmReject = useCallback(
+        () => performReject(rejectReason.trim() || undefined),
+        [performReject, rejectReason]
+    );
+    const onSkipReason = useCallback(() => performReject(undefined), [performReject]);
+    const onCancelReject = useCallback(() => {
+        setRejectMode(false);
+        setRejectReason('');
+    }, []);
 
     const onSendComment = useCallback(
         async (event: React.MouseEvent) => {
@@ -170,14 +224,22 @@ function ProposalCard({ summary, onResolved }: CardProps) {
                 <button
                     type="button"
                     onClick={onApprove}
-                    disabled={busy}
+                    disabled={busy || nothingSelected}
+                    title={
+                        nothingSelected
+                            ? 'Select at least one field'
+                            : isPartial
+                              ? `Approve ${selectedCount} of ${totalFieldCount} fields`
+                              : 'Approve'
+                    }
                     className="inline-flex items-center gap-0.5 rounded bg-emerald-600 px-2 py-0.5 text-xs text-white hover:bg-emerald-700 disabled:opacity-50"
                 >
-                    <Check className="h-3 w-3" /> Approve
+                    <Check className="h-3 w-3" />
+                    {isPartial ? `Approve ${selectedCount}/${totalFieldCount}` : 'Approve'}
                 </button>
                 <button
                     type="button"
-                    onClick={onReject}
+                    onClick={onRejectClick}
                     disabled={busy}
                     className="inline-flex items-center gap-0.5 rounded border border-border px-2 py-0.5 text-xs hover:bg-muted disabled:opacity-50"
                 >
@@ -190,7 +252,7 @@ function ProposalCard({ summary, onResolved }: CardProps) {
                         setExpanded((v) => !v);
                     }}
                     className="rounded p-0.5 hover:bg-muted"
-                    title={expanded ? 'Collapse' : 'Expand'}
+                    title={expanded ? 'Hide details' : 'Show details'}
                 >
                     {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                 </button>
@@ -200,13 +262,68 @@ function ProposalCard({ summary, onResolved }: CardProps) {
 
             {expanded ? (
                 <div className="mt-2 space-y-2 border-t pt-2">
+                    <DiffPreview
+                        payload={summary.currentPayload}
+                        selectedFields={selectedFields}
+                        onToggleField={toggleField}
+                    />
+                    {rejectMode ? (
+                        <div className="rounded border border-rose-500/40 bg-rose-500/5 p-2">
+                            <div className="mb-1 text-xs font-medium text-rose-700 dark:text-rose-300">
+                                Why doesn't this fit?
+                            </div>
+                            <textarea
+                                autoFocus
+                                value={rejectReason}
+                                onChange={(e) => setRejectReason(e.target.value)}
+                                rows={2}
+                                placeholder="Optional (e.g. 'wrong target', 'mockup not real')"
+                                className="w-full resize-none rounded border bg-background px-2 py-1 text-xs"
+                                disabled={busy}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                                        e.preventDefault();
+                                        if (!busy) onConfirmReject();
+                                    } else if (e.key === 'Escape') {
+                                        e.preventDefault();
+                                        onCancelReject();
+                                    }
+                                }}
+                            />
+                            <div className="mt-1 flex justify-end gap-1">
+                                <button
+                                    type="button"
+                                    onClick={onCancelReject}
+                                    disabled={busy}
+                                    className="rounded border border-border px-2 py-0.5 text-xs hover:bg-muted disabled:opacity-50"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={onSkipReason}
+                                    disabled={busy}
+                                    className="rounded border border-border px-2 py-0.5 text-xs hover:bg-muted disabled:opacity-50"
+                                >
+                                    Reject without reason
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={onConfirmReject}
+                                    disabled={busy || !rejectReason.trim()}
+                                    className="rounded bg-rose-600 px-2 py-0.5 text-xs text-white hover:bg-rose-700 disabled:opacity-50"
+                                >
+                                    Reject with reason
+                                </button>
+                            </div>
+                        </div>
+                    ) : null}
                     {!detail ? (
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
                             <Loader2 className="h-3 w-3 animate-spin" /> Loading…
                         </div>
                     ) : (
                         <>
-                            <DiffPreview payload={detail.currentPayload} />
                             {detail.messages.length > 0 ? (
                                 <div className="space-y-1">
                                     {detail.messages.map((m) => (
@@ -250,27 +367,53 @@ function ProposalCard({ summary, onResolved }: CardProps) {
     );
 }
 
-function DiffPreview({ payload }: { payload: unknown }) {
+interface DiffPreviewProps {
+    payload: unknown;
+    /** When provided, render a checkbox per modify-diff entry to allow partial approval. */
+    selectedFields?: Set<string>;
+    onToggleField?: (field: string) => void;
+}
+
+function DiffPreview({ payload, selectedFields, onToggleField }: DiffPreviewProps) {
     if (typeof payload !== 'object' || payload === null) return null;
     const p = payload as { kind?: string } & Record<string, unknown>;
 
     if (p.kind === 'modify') {
         const diff = (p.diff as Array<{ field: string; from: unknown; to: unknown }>) ?? [];
+        const checkable = Boolean(selectedFields && onToggleField);
         return (
             <div className="space-y-1">
-                {diff.map((d, i) => (
-                    <div key={i} className="rounded bg-background p-1.5 text-xs">
-                        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                            {d.field}
-                        </div>
-                        <div className="text-rose-600 line-through dark:text-rose-300">
-                            − {String(d.from ?? '')}
-                        </div>
-                        <div className="text-emerald-600 dark:text-emerald-300">
-                            + {String(d.to ?? '')}
-                        </div>
-                    </div>
-                ))}
+                {diff.map((d, i) => {
+                    const checked = selectedFields ? selectedFields.has(d.field) : true;
+                    return (
+                        <label
+                            key={i}
+                            className={`flex gap-2 rounded bg-background p-1.5 text-xs ${
+                                checkable ? 'cursor-pointer hover:bg-background/70' : ''
+                            } ${checkable && !checked ? 'opacity-50' : ''}`}
+                        >
+                            {checkable ? (
+                                <input
+                                    type="checkbox"
+                                    className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-emerald-600"
+                                    checked={checked}
+                                    onChange={() => onToggleField!(d.field)}
+                                />
+                            ) : null}
+                            <div className="min-w-0 flex-1">
+                                <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                                    {d.field}
+                                </div>
+                                <div className="break-words text-rose-600 line-through dark:text-rose-300">
+                                    − {formatDiffValue(d.from)}
+                                </div>
+                                <div className="break-words text-emerald-600 dark:text-emerald-300">
+                                    + {formatDiffValue(d.to)}
+                                </div>
+                            </div>
+                        </label>
+                    );
+                })}
             </div>
         );
     }
@@ -320,6 +463,17 @@ function DiffPreview({ payload }: { payload: unknown }) {
             {JSON.stringify(payload, null, 2)}
         </pre>
     );
+}
+
+function formatDiffValue(value: unknown): string {
+    if (value === null || value === undefined) return '';
+    if (Array.isArray(value)) {
+        if (value.length === 0) return '(empty)';
+        return value.map((v) => String(v)).join(', ');
+    }
+    if (typeof value === 'object') return JSON.stringify(value);
+    const s = String(value);
+    return s === '' ? '(empty)' : s;
 }
 
 function labelFor(p: ProposalSummary): string {

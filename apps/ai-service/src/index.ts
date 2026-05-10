@@ -22,6 +22,7 @@ import { Reviser } from './commitment/reviser'
 import { ProposalWriter } from './commitment/writer'
 import { CommitmentPipeline, DEFAULT_PIPELINE_CONFIG } from './commitment/pipeline'
 import { denyConfigFromEnv } from './commitment/source-deny'
+import { MindwtrInboxTitles } from './commitment/inbox-titles'
 import { ProposalNotifier } from './bot/proposal-notifier'
 import { createHttpServer } from './http/server'
 
@@ -52,6 +53,16 @@ const TG_NOTIFY_CHAT_ID = process.env.TG_NOTIFY_CHAT_ID ?? ''
 // Mindwtr web UI base URL — used for TG deep-links from notification cards
 // and from /proposals list rows. Default points at local docker exposed port.
 const MINDWTR_WEB_URL = process.env.MINDWTR_WEB_URL ?? 'http://localhost:5173'
+
+// Identity anchor — Proposer maps first-person pronouns / message authors
+// against this when deciding who_owes / recipient. Without it, OCR of a chat
+// where "я Flutter завтра скажу" is authored by someone else gets mis-attributed
+// to the user.
+const USER_IDENTITY_NAME = process.env.USER_IDENTITY_NAME ?? ''
+const USER_IDENTITY_ALIASES = (process.env.USER_IDENTITY_ALIASES ?? '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? ''
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1'
@@ -127,8 +138,19 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     ...DEFAULT_PIPELINE_CONFIG,
     sourceDeny,
   })
+  // Feed recent Mindwtr inbox titles to Proposer so it can suppress
+  // paraphrase duplicates of cards the user already has.
+  commitmentPipeline.setInboxTitlesProvider(new MindwtrInboxTitles({ client: mindwtr }))
+  // Identity anchor for role disambiguation. Empty USER_IDENTITY_NAME = no
+  // anchor (Proposer reverts to "user = machine owner" heuristic).
+  if (USER_IDENTITY_NAME) {
+    commitmentPipeline.setUserIdentity({
+      name: USER_IDENTITY_NAME,
+      aliases: USER_IDENTITY_ALIASES,
+    })
+  }
   console.log(
-    `🎯 Commitment Detector enabled (deny apps:${sourceDeny.apps.length}, deny urls:${sourceDeny.urlPatterns.length})`
+    `🎯 Commitment Detector enabled (deny apps:${sourceDeny.apps.length}, deny urls:${sourceDeny.urlPatterns.length}, inbox-dedup on, identity:${USER_IDENTITY_NAME || 'unset'})`
   )
 
   const reviser = new Reviser(llm)

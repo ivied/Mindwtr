@@ -169,6 +169,148 @@ describe('POST /v1/proposals/:id/approve', () => {
     expect(store.get(p.id)!.status).toBe('approved')
   })
 
+  it('partial approval: includeFields filters modify diff before apply', async () => {
+    const handler = setupServer()
+    const p = store.create({
+      type: 'modify',
+      targetTaskIds: ['task-x'],
+      sourceAgent: 'enricher',
+      payload: {
+        kind: 'modify',
+        taskId: 'task-x',
+        diff: [
+          { field: 'title', from: 'old', to: 'new' },
+          { field: 'status', from: 'inbox', to: 'next' },
+          { field: 'tags', from: [], to: ['@phone'] },
+        ],
+      },
+      originSnapshot: { taskId: 'task-x', title: 'old', tags: [] },
+    })
+    mindwtr = makeMindwtr({
+      getTask: mock(async () => taskOf({ id: 'task-x', title: 'old', tags: [] })),
+    } as Partial<MindwtrClient>)
+    // Rebuild server so the new mindwtr stub is used by the applier.
+    const applier = new ProposalApplier(store, mindwtr)
+    const commentHandler = new CommentHandler({
+      store,
+      reviser: reviserReturning({ kind: 'clarify', agentMessage: 'x' }),
+      mindwtr,
+      contextStore,
+    })
+    const taskChangeProcessor = new TaskChangeProcessor(store)
+    const server = createHttpServer({
+      port: 0,
+      authToken: TOKEN,
+      capture: async () => {},
+      contextStore: null,
+      proposals: { store, applier, commentHandler, taskChangeProcessor },
+    })
+
+    const res = await server.handler(
+      new Request(`http://x/v1/proposals/${p.id}/approve`, {
+        method: 'POST',
+        headers: AUTH,
+        body: JSON.stringify({ includeFields: ['title', 'status'] }),
+      })
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean }
+    expect(body.ok).toBe(true)
+
+    const updateCalls = (mindwtr.updateTask as unknown as { mock: { calls: [string, Record<string, unknown>][] } }).mock.calls
+    const patch = updateCalls[0][1]
+    expect(patch).toHaveProperty('title', 'new')
+    expect(patch).toHaveProperty('status', 'next')
+    expect(patch).not.toHaveProperty('tags')
+
+    const detail = store.getDetail(p.id)!
+    expect(detail.versions.length).toBe(2)
+    expect(detail.versions[1]!.author).toBe('user')
+    expect(detail.versions[1]!.summary).toContain('partial approval')
+  })
+
+  it('partial approval: rejects 400 when modify payload has none of the listed fields', async () => {
+    const handler = setupServer()
+    const p = store.create({
+      type: 'modify',
+      targetTaskIds: ['t'],
+      sourceAgent: 'enricher',
+      payload: {
+        kind: 'modify',
+        taskId: 't',
+        diff: [{ field: 'title', from: 'a', to: 'b' }],
+      },
+    })
+    const res = await handler(
+      new Request(`http://x/v1/proposals/${p.id}/approve`, {
+        method: 'POST',
+        headers: AUTH,
+        body: JSON.stringify({ includeFields: ['status'] }),
+      })
+    )
+    expect(res.status).toBe(400)
+    expect(store.get(p.id)!.status).toBe('pending')
+  })
+
+  it('partial approval: 400 when proposal is not modify type', async () => {
+    const handler = setupServer()
+    const p = store.create({
+      type: 'create',
+      targetTaskIds: [],
+      sourceAgent: 'a',
+      payload: baseCreatePayload,
+    })
+    const res = await handler(
+      new Request(`http://x/v1/proposals/${p.id}/approve`, {
+        method: 'POST',
+        headers: AUTH,
+        body: JSON.stringify({ includeFields: ['title'] }),
+      })
+    )
+    expect(res.status).toBe(400)
+  })
+
+  it('full approve still works (no includeFields → applies whole diff)', async () => {
+    const handler = setupServer()
+    const p = store.create({
+      type: 'modify',
+      targetTaskIds: ['task-y'],
+      sourceAgent: 'enricher',
+      payload: {
+        kind: 'modify',
+        taskId: 'task-y',
+        diff: [
+          { field: 'title', from: 'a', to: 'b' },
+          { field: 'status', from: 'inbox', to: 'next' },
+        ],
+      },
+      originSnapshot: { taskId: 'task-y', title: 'a' },
+    })
+    mindwtr = makeMindwtr({
+      getTask: mock(async () => taskOf({ id: 'task-y', title: 'a' })),
+    } as Partial<MindwtrClient>)
+    const applier = new ProposalApplier(store, mindwtr)
+    const commentHandler = new CommentHandler({
+      store,
+      reviser: reviserReturning({ kind: 'clarify', agentMessage: 'x' }),
+      mindwtr,
+      contextStore,
+    })
+    const taskChangeProcessor = new TaskChangeProcessor(store)
+    const server = createHttpServer({
+      port: 0,
+      authToken: TOKEN,
+      capture: async () => {},
+      contextStore: null,
+      proposals: { store, applier, commentHandler, taskChangeProcessor },
+    })
+    const res = await server.handler(
+      new Request(`http://x/v1/proposals/${p.id}/approve`, { method: 'POST', headers: AUTH })
+    )
+    expect(res.status).toBe(200)
+    expect(store.getDetail(p.id)!.versions.length).toBe(1)
+  })
+
   it('returns 409 on stale (drift detected)', async () => {
     const handler = setupServer()
     mindwtr = makeMindwtr({

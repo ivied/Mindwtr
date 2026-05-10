@@ -21,7 +21,12 @@ function record(meta: Record<string, unknown> | null): CaptureRecord {
   }
 }
 
-const DEFAULTS = { apps: [...DEFAULT_DENY_APPS], urlPatterns: [...DEFAULT_DENY_URL_PATTERNS] }
+import { DEFAULT_DENY_WINDOW_TITLE_PATTERNS } from './source-deny'
+const DEFAULTS = {
+  apps: [...DEFAULT_DENY_APPS],
+  urlPatterns: [...DEFAULT_DENY_URL_PATTERNS],
+  windowTitlePatterns: [...DEFAULT_DENY_WINDOW_TITLE_PATTERNS],
+}
 
 describe('evaluateSourceDeny', () => {
   it('denies Telegram app (TG self-loop guard)', () => {
@@ -81,9 +86,38 @@ describe('evaluateSourceDeny', () => {
   })
 
   it('honors custom config — extra apps appended to defaults', () => {
-    const cfg = { apps: ['Linear'], urlPatterns: [] }
+    const cfg = { apps: ['Linear'], urlPatterns: [], windowTitlePatterns: [] }
     expect(evaluateSourceDeny(record({ app: 'Linear' }), cfg).denied).toBe(true)
     expect(evaluateSourceDeny(record({ app: 'Telegram' }), cfg).denied).toBe(false)
+  })
+
+  it('denies via windowTitle when the host app is allowed but the title leaks Mindwtr UI', () => {
+    // The real bug: VSCode rendering localhost:5173 → app=Code (allowed),
+    // url undefined, windowTitle contains "Mindwtr (localhost:5173)".
+    const out = evaluateSourceDeny(
+      record({
+        app: 'Code',
+        windowTitle: 'Mindwtr (localhost:5173) — GTD_automation',
+      }),
+      DEFAULTS
+    )
+    expect(out.denied).toBe(true)
+    expect(out.reason).toMatch(/windowTitle:/)
+  })
+
+  it('denies via windowTitle matching "AI Proposals" (any host)', () => {
+    expect(
+      evaluateSourceDeny(record({ app: 'Chrome', windowTitle: 'AI Proposals' }), DEFAULTS).denied
+    ).toBe(true)
+  })
+
+  it('windowTitle pattern is case-insensitive', () => {
+    expect(
+      evaluateSourceDeny(
+        record({ app: 'Code', windowTitle: 'MINDWTR (LOCALHOST:5173)' }),
+        DEFAULTS
+      ).denied
+    ).toBe(true)
   })
 })
 

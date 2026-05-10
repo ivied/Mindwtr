@@ -77,6 +77,9 @@ services:
       - TG_NOTIFY_CHAT_ID=${TG_NOTIFY_CHAT_ID:-}
       # Mindwtr web UI base URL — used for deep-links from TG cards.
       - MINDWTR_WEB_URL=${MINDWTR_WEB_URL:-http://localhost:5173}
+      # User identity for Proposer role disambiguation. Empty disables anchor.
+      - USER_IDENTITY_NAME=${USER_IDENTITY_NAME:-}
+      - USER_IDENTITY_ALIASES=${USER_IDENTITY_ALIASES:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       - EMBEDDINGS_MODEL=${EMBEDDINGS_MODEL:-text-embedding-3-small}

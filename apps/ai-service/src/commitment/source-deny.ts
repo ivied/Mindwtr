@@ -21,6 +21,13 @@ export interface SourceDenyConfig {
   apps: string[]
   /** Substrings matched (case-insensitive) against sourceMeta.url. */
   urlPatterns: string[]
+  /**
+   * Substrings matched (case-insensitive) against sourceMeta.windowTitle.
+   * Catches cases where a deny-worthy URL is embedded in a host app
+   * (e.g. VSCode rendering localhost:5173 — `app=Code`, `url=undefined`,
+   * `windowTitle="Mindwtr (localhost:5173) — ..."`).
+   */
+  windowTitlePatterns: string[]
 }
 
 export const DEFAULT_DENY_APPS: ReadonlyArray<string> = [
@@ -39,6 +46,16 @@ export const DEFAULT_DENY_APPS: ReadonlyArray<string> = [
   'OmniGraffle',
   'Affinity Designer',
   'Affinity Photo',
+]
+
+/** Patterns matched against sourceMeta.windowTitle — closes self-OCR loops
+ *  where the Mindwtr web UI itself ends up in screenshots of host apps
+ *  (VSCode, browsers, etc.) that don't expose a separate url field. */
+export const DEFAULT_DENY_WINDOW_TITLE_PATTERNS: ReadonlyArray<string> = [
+  'Mindwtr (localhost',
+  'Mindwtr — ',
+  'AI Proposals',
+  'localhost:5173',
 ]
 
 export const DEFAULT_DENY_URL_PATTERNS: ReadonlyArray<string> = [
@@ -79,6 +96,7 @@ export function evaluateSourceDeny(
 
   const app = typeof meta.app === 'string' ? meta.app : ''
   const url = typeof meta.url === 'string' ? meta.url : ''
+  const windowTitle = typeof meta.windowTitle === 'string' ? meta.windowTitle : ''
 
   if (app) {
     const appLower = app.toLowerCase()
@@ -100,16 +118,30 @@ export function evaluateSourceDeny(
     }
   }
 
+  if (windowTitle) {
+    const titleLower = windowTitle.toLowerCase()
+    for (const needle of config.windowTitlePatterns) {
+      if (!needle) continue
+      if (titleLower.includes(needle.toLowerCase())) {
+        return { denied: true, reason: `windowTitle:${needle}` }
+      }
+    }
+  }
+
   return { denied: false }
 }
 
 export function denyConfigFromEnv(env: NodeJS.ProcessEnv = process.env): SourceDenyConfig {
   const customApps = parseList(env.COMMITMENT_DENY_APPS)
   const customUrls = parseList(env.COMMITMENT_DENY_URL_PATTERNS)
+  const customTitles = parseList(env.COMMITMENT_DENY_WINDOW_TITLE_PATTERNS)
   const useDefaults = env.COMMITMENT_DENY_USE_DEFAULTS !== 'false'
   return {
     apps: useDefaults ? [...DEFAULT_DENY_APPS, ...customApps] : customApps,
     urlPatterns: useDefaults ? [...DEFAULT_DENY_URL_PATTERNS, ...customUrls] : customUrls,
+    windowTitlePatterns: useDefaults
+      ? [...DEFAULT_DENY_WINDOW_TITLE_PATTERNS, ...customTitles]
+      : customTitles,
   }
 }
 

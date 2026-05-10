@@ -25,7 +25,8 @@ import type {
   TaskChangeEvent,
   TaskFieldsSnapshot,
 } from '../proposal-store/task-change-processor'
-import type { ProposalType } from '../proposal-store/types'
+import type { ProposalRecord, ProposalType } from '../proposal-store/types'
+import type { FieldDiff, ModifyPayload } from '../proposal-store/payloads'
 
 const MAX_TEXT_LENGTH = 10_000
 
@@ -178,6 +179,27 @@ function mountProposalRoutes(app: Hono, deps: ProposalsHttpDeps): void {
     const proposal = deps.store.get(id)
     if (!proposal) return c.json({ error: 'not found' }, 404)
 
+    // Optional partial approval for type=modify: only apply the listed fields.
+    // Body: { includeFields?: string[] }. When present and non-empty, we
+    // synthesize a filtered version (author=user, summary='partial approval')
+    // and the applier then reads that filtered payload from the store.
+    let includeFields: string[] | undefined
+    try {
+      const body = (await c.req.json()) as { includeFields?: unknown }
+      if (Array.isArray(body?.includeFields)) {
+        includeFields = body.includeFields.filter(
+          (f): f is string => typeof f === 'string' && f.length > 0
+        )
+      }
+    } catch {
+      // No body / not JSON — fine, treated as full approval.
+    }
+
+    if (includeFields && includeFields.length > 0) {
+      const partialErr = applyPartialFilter(deps.store, proposal, includeFields)
+      if (partialErr) return c.json({ error: partialErr }, 400)
+    }
+
     const result = await deps.applier.apply(id)
     if (!result.ok) {
       // For stale we already transitioned; for other errors we leave pending.
@@ -271,6 +293,44 @@ interface TaskChangeWebhookBody {
   kind?: string
   taskId?: string
   fields?: TaskFieldsSnapshot
+}
+
+/**
+ * Apply a partial-approval filter to a pending modify proposal: filter the
+ * payload.diff to only the listed fields and append a new version (author=user)
+ * so the applier picks it up. Returns an error string when the proposal is not
+ * a modify, the filter selects nothing, or all listed fields are unknown.
+ */
+function applyPartialFilter(
+  store: ProposalStore,
+  proposal: ProposalRecord,
+  includeFields: string[]
+): string | null {
+  const payload = proposal.currentPayload as { kind?: string } | null
+  if (!payload || payload.kind !== 'modify') {
+    return 'partial approval (includeFields) only supported for type=modify'
+  }
+  const modify = payload as unknown as ModifyPayload
+  const fieldSet = new Set(includeFields)
+  const filtered = modify.diff.filter((entry: FieldDiff) => fieldSet.has(entry.field))
+  if (filtered.length === 0) {
+    return 'includeFields matched no diff entries'
+  }
+  if (filtered.length === modify.diff.length) {
+    // Full set selected — no-op (avoid pointless extra version).
+    return null
+  }
+  const filteredPayload: ModifyPayload = {
+    ...modify,
+    diff: filtered,
+  }
+  store.addVersion({
+    proposalId: proposal.id,
+    payload: filteredPayload,
+    author: 'user',
+    summary: `partial approval: ${filtered.map((d) => d.field).join(', ')}`,
+  })
+  return null
 }
 
 function parseTaskChangeEvent(body: TaskChangeWebhookBody): TaskChangeEvent | null {

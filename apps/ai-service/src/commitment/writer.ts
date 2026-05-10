@@ -78,9 +78,13 @@ export class ProposalWriter {
         ai_confidence: input.proposal.confidence,
         ai_reasoning: input.proposal.reasoning,
         ai_who_owes: input.proposal.who_owes,
+        ai_recipient: input.proposal.recipient,
         ai_who_to: input.proposal.who_to,
         ai_what: input.proposal.what,
         ai_by_when: input.proposal.by_when,
+        // Hint for downstream triage / Enricher / UI badge. Task still lands
+        // in inbox status — this is just where it WOULD belong after processing.
+        ai_suggested_category: input.proposal.suggested_category,
         source_channel: input.sourceChannel,
         source_capture_id: input.sourceCaptureId,
       },

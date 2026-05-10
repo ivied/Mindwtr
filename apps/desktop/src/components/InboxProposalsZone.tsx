@@ -26,6 +26,7 @@ import {
     type ProposalSummary,
     type ProposalDetail,
 } from '../lib/proposals-client';
+import { SyncService } from '../lib/sync-service';
 
 const POLL_INTERVAL_MS = 30_000;
 
@@ -142,11 +143,42 @@ function renderExcerpt(excerpt: string, quote: string): ReactNode {
     );
 }
 
+function SuggestedCategoryBadge({
+    category,
+}: {
+    category: 'waiting' | 'someday' | 'reference' | 'two_minute' | 'next';
+}) {
+    const styles: Record<string, string> = {
+        waiting: 'bg-amber-500/15 text-amber-700 dark:text-amber-300',
+        someday: 'bg-sky-500/15 text-sky-700 dark:text-sky-300',
+        reference: 'bg-slate-500/15 text-slate-700 dark:text-slate-300',
+        two_minute: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
+        next: 'bg-violet-500/15 text-violet-700 dark:text-violet-300',
+    };
+    const label: Record<string, string> = {
+        waiting: '→ waiting',
+        someday: '→ someday',
+        reference: '→ reference',
+        two_minute: '→ 2-min',
+        next: '→ next',
+    };
+    return (
+        <span
+            className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium uppercase ${styles[category] ?? ''}`}
+            title={`AI suggests this should land in ${category} after processing`}
+        >
+            {label[category]}
+        </span>
+    );
+}
+
 function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
     const [expanded, setExpanded] = useState(startExpanded);
     const [detail, setDetail] = useState<ProposalDetail | null>(null);
     const [busy, setBusy] = useState(false);
     const [comment, setComment] = useState('');
+    const [rejectMode, setRejectMode] = useState(false);
+    const [rejectReason, setRejectReason] = useState('');
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
@@ -182,6 +214,13 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
     const steps = payload?.traceback?.reasoningSteps ?? [];
     const confidence = payload?.task?.metadata?.ai_confidence;
     const oneLineReason = payload?.task?.metadata?.ai_reasoning;
+    const suggestedCategory = payload?.task?.metadata?.ai_suggested_category as
+        | 'next'
+        | 'waiting'
+        | 'someday'
+        | 'reference'
+        | 'two_minute'
+        | undefined;
 
     const onApprove = useCallback(async () => {
         setBusy(true);
@@ -192,6 +231,15 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
                 setError(`${result.reason}: ${result.details ?? ''}`);
                 return;
             }
+            // Apply created the Mindwtr task in cloud — kick a local sync so the
+            // inbox list above this zone picks it up without waiting for the
+            // periodic sync interval. Best-effort: if cloud sync fails the
+            // task will still arrive on the next cycle.
+            try {
+                await SyncService.performSync();
+            } catch (syncErr) {
+                console.warn('[proposals] post-approve sync failed:', (syncErr as Error).message);
+            }
             onResolved();
         } catch (err) {
             setError((err as Error).message);
@@ -200,19 +248,42 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
         }
     }, [summary.id, onResolved]);
 
-    const onReject = useCallback(async () => {
-        const reason = window.prompt('Reason (optional):') ?? undefined;
-        setBusy(true);
+    const onRejectClick = useCallback(() => {
+        // Open the inline reject form inside the card; actual reject happens
+        // when the user confirms via the form below. Native window.prompt
+        // looked alien against Mindwtr's styled UI.
+        setRejectMode(true);
+        setExpanded(true);
         setError(null);
-        try {
-            await rejectProposal(summary.id, reason && reason.trim() ? reason.trim() : undefined);
-            onResolved();
-        } catch (err) {
-            setError((err as Error).message);
-        } finally {
-            setBusy(false);
-        }
-    }, [summary.id, onResolved]);
+    }, []);
+
+    const performReject = useCallback(
+        async (reason: string | undefined) => {
+            setBusy(true);
+            setError(null);
+            try {
+                await rejectProposal(summary.id, reason);
+                onResolved();
+            } catch (err) {
+                setError((err as Error).message);
+            } finally {
+                setBusy(false);
+                setRejectMode(false);
+                setRejectReason('');
+            }
+        },
+        [summary.id, onResolved]
+    );
+
+    const onConfirmReject = useCallback(
+        () => performReject(rejectReason.trim() || undefined),
+        [performReject, rejectReason]
+    );
+    const onSkipReason = useCallback(() => performReject(undefined), [performReject]);
+    const onCancelReject = useCallback(() => {
+        setRejectMode(false);
+        setRejectReason('');
+    }, []);
 
     const onSendComment = useCallback(async () => {
         const text = comment.trim();
@@ -235,7 +306,12 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
             <div className="flex items-start gap-2">
                 <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-violet-600 dark:text-violet-300" />
                 <div className="min-w-0 flex-1">
-                    <div className="font-medium">{title}</div>
+                    <div className="flex items-center gap-1.5 font-medium">
+                        <span className="truncate">{title}</span>
+                        {suggestedCategory && suggestedCategory !== 'next' ? (
+                            <SuggestedCategoryBadge category={suggestedCategory} />
+                        ) : null}
+                    </div>
                     <div className="mt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
                         {summary.sourceAgent} {sourceChannel ? `· ${sourceChannel}` : ''}
                         {summary.currentVersion > 1 ? ` · v${summary.currentVersion}` : ''}
@@ -251,7 +327,7 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
                 </button>
                 <button
                     type="button"
-                    onClick={onReject}
+                    onClick={onRejectClick}
                     disabled={busy}
                     className="inline-flex items-center gap-0.5 rounded border border-border px-2 py-0.5 text-xs hover:bg-muted disabled:opacity-50"
                 >
@@ -271,6 +347,57 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
 
             {expanded ? (
                 <div className="ml-5 mt-2 space-y-2 border-t border-violet-500/20 pt-2">
+                    {rejectMode ? (
+                        <div className="rounded border border-rose-500/40 bg-rose-500/5 p-2">
+                            <div className="mb-1 text-xs font-medium text-rose-700 dark:text-rose-300">
+                                Why doesn't this fit?
+                            </div>
+                            <textarea
+                                autoFocus
+                                value={rejectReason}
+                                onChange={(e) => setRejectReason(e.target.value)}
+                                rows={2}
+                                placeholder="Optional — helps the agent learn (e.g. 'wrong recipient', 'mockup not real')"
+                                className="w-full resize-none rounded border bg-background px-2 py-1 text-xs"
+                                disabled={busy}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                                        e.preventDefault();
+                                        if (!busy) onConfirmReject();
+                                    } else if (e.key === 'Escape') {
+                                        e.preventDefault();
+                                        onCancelReject();
+                                    }
+                                }}
+                            />
+                            <div className="mt-1 flex justify-end gap-1">
+                                <button
+                                    type="button"
+                                    onClick={onCancelReject}
+                                    disabled={busy}
+                                    className="rounded border border-border px-2 py-0.5 text-xs hover:bg-muted disabled:opacity-50"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={onSkipReason}
+                                    disabled={busy}
+                                    className="rounded border border-border px-2 py-0.5 text-xs hover:bg-muted disabled:opacity-50"
+                                >
+                                    Reject without reason
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={onConfirmReject}
+                                    disabled={busy || !rejectReason.trim()}
+                                    className="rounded bg-rose-600 px-2 py-0.5 text-xs text-white hover:bg-rose-700 disabled:opacity-50"
+                                >
+                                    Reject with reason
+                                </button>
+                            </div>
+                        </div>
+                    ) : null}
                     {!detail ? (
                         <div className="flex items-center gap-2 text-xs text-muted-foreground">
                             <Loader2 className="h-3 w-3 animate-spin" /> Loading…

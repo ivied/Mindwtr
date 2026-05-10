@@ -140,8 +140,18 @@ export async function getProposal(id: string): Promise<ProposalDetail> {
     return apiFetch<ProposalDetail>(`/v1/proposals/${id}`);
 }
 
-export async function approveProposal(id: string): Promise<ApproveResult> {
-    return apiFetch<ApproveResult>(`/v1/proposals/${id}/approve`, { method: 'POST' });
+export async function approveProposal(
+    id: string,
+    options: { includeFields?: string[] } = {}
+): Promise<ApproveResult> {
+    const body =
+        options.includeFields && options.includeFields.length > 0
+            ? JSON.stringify({ includeFields: options.includeFields })
+            : undefined;
+    return apiFetch<ApproveResult>(`/v1/proposals/${id}/approve`, {
+        method: 'POST',
+        body,
+    });
 }
 
 export async function rejectProposal(id: string, reason?: string): Promise<{ ok: boolean }> {

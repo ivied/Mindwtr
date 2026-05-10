@@ -13,6 +13,7 @@ function makeProposal(overrides: Partial<Proposal> = {}): Proposal {
     is_actionable: true,
     title: 'Pay Acme invoice',
     who_owes: 'user',
+    recipient: 'unclear',
     who_to: 'Acme',
     what: 'Pay $500 invoice from Acme by Friday',
     by_when: 'Friday',
@@ -24,6 +25,8 @@ function makeProposal(overrides: Partial<Proposal> = {}): Proposal {
       'Spotted "Invoice from Acme due Friday" in capture.',
       'Concrete money + deadline → personal commitment.',
     ],
+    duplicate_of_title: '',
+    suggested_category: 'next',
     ...overrides,
   }
 }

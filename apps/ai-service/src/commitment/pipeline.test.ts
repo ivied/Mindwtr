@@ -24,6 +24,7 @@ function makeProposal(overrides: Partial<Proposal> = {}): Proposal {
     is_actionable: true,
     title: 'Send Q4 report to Alice',
     who_owes: 'user',
+    recipient: 'other',
     who_to: 'Alice',
     what: 'Send Q4 report',
     by_when: 'Friday',
@@ -35,6 +36,8 @@ function makeProposal(overrides: Partial<Proposal> = {}): Proposal {
       'Spotted explicit "I\'ll send" commitment from user.',
       'Named recipient and deadline make it actionable.',
     ],
+    duplicate_of_title: '',
+    suggested_category: 'next',
     ...overrides,
   }
 }
@@ -50,7 +53,11 @@ describe('CommitmentPipeline', () => {
     const p = new CommitmentPipeline(
       proposer,
       writer,
-      { minConfidence: 0.7, useL0: true, sourceDeny: { apps: ['Telegram'], urlPatterns: [] } },
+      {
+        minConfidence: 0.7,
+        useL0: true,
+        sourceDeny: { apps: ['Telegram'], urlPatterns: [], windowTitlePatterns: [] },
+      },
       silent()
     )
     const out = await p.run(record({ sourceMeta: { app: 'Telegram', windowTitle: '' } }))
@@ -68,7 +75,7 @@ describe('CommitmentPipeline', () => {
       {
         minConfidence: 0.7,
         useL0: true,
-        sourceDeny: { apps: [], urlPatterns: ['claude.ai/design'] },
+        sourceDeny: { apps: [], urlPatterns: ['claude.ai/design'], windowTitlePatterns: [] },
       },
       silent()
     )
@@ -117,9 +124,34 @@ describe('CommitmentPipeline', () => {
     expect(writer.write).not.toHaveBeenCalled()
   })
 
-  it('skips when commitment belongs to someone else', async () => {
+  it('proceeds for who_owes=other when recipient=user (waiting-for card)', async () => {
     const proposer = {
-      propose: mock(async () => makeProposal({ who_owes: 'other' })),
+      propose: mock(async () =>
+        makeProposal({
+          who_owes: 'other',
+          recipient: 'user',
+          suggested_category: 'waiting',
+          title: 'Waiting for Amir on Flutter answer',
+        })
+      ),
+    } as unknown as Proposer
+    const writer = {
+      write: mock(async () => ({
+        proposalId: 'p-waiting',
+        version: 1,
+        title: 'Waiting for Amir on Flutter answer',
+        proposal: {} as unknown,
+      })),
+    } as unknown as ProposalWriter
+    const p = new CommitmentPipeline(proposer, writer, undefined, silent())
+    const out = await p.run(record())
+    expect(out.kind).toBe('proposed')
+    expect(writer.write).toHaveBeenCalledTimes(1)
+  })
+
+  it('skips when commitment belongs to someone else AND recipient is also other (third-party)', async () => {
+    const proposer = {
+      propose: mock(async () => makeProposal({ who_owes: 'other', recipient: 'other' })),
     } as unknown as Proposer
     const writer = { write: mock() } as unknown as ProposalWriter
     const p = new CommitmentPipeline(proposer, writer, undefined, silent())
@@ -174,6 +206,72 @@ describe('CommitmentPipeline', () => {
     const result = await p.run(record())
     expect(result.kind).toBe('error')
     if (result.kind === 'error') expect(result.error.message).toBe('LLM down')
+  })
+
+  it('returns duplicate-of-existing when Proposer flags semantic match against inbox', async () => {
+    const proposer = {
+      propose: mock(async () =>
+        makeProposal({
+          is_actionable: false,
+          duplicate_of_title: 'Send Q4 report — final draft',
+          reasoning: 'Duplicate of: Send Q4 report — final draft',
+        })
+      ),
+    } as unknown as Proposer
+    const writer = { write: mock() } as unknown as ProposalWriter
+    const p = new CommitmentPipeline(proposer, writer, undefined, silent())
+    p.setInboxTitlesProvider({
+      recentTitles: mock(async () => ['Send Q4 report — final draft', 'Pay rent']),
+    })
+    const out = await p.run(record())
+    expect(out.kind).toBe('duplicate-of-existing')
+    if (out.kind === 'duplicate-of-existing') {
+      expect(out.existingTitle).toBe('Send Q4 report — final draft')
+    }
+    expect(writer.write).not.toHaveBeenCalled()
+  })
+
+  it('passes userIdentity into proposer.propose when set', async () => {
+    const proposer = { propose: mock(async () => makeProposal()) } as unknown as Proposer
+    const writer = {
+      write: mock(async () => ({ proposalId: 'p', version: 1, title: 'X', proposal: {} as unknown })),
+    } as unknown as ProposalWriter
+    const p = new CommitmentPipeline(proposer, writer, undefined, silent())
+    const identity = { name: 'Sergey Kurdyuk', aliases: ['sergey', 'Серёжа'] }
+    p.setUserIdentity(identity)
+    await p.run(record())
+    const args = (proposer.propose as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]
+    expect(args[3]).toEqual(identity)
+  })
+
+  it('passes recent inbox titles into proposer.propose when provider is set', async () => {
+    const proposer = { propose: mock(async () => makeProposal()) } as unknown as Proposer
+    const writer = {
+      write: mock(async () => ({ proposalId: 'p-1', version: 1, title: 'X', proposal: {} as unknown })),
+    } as unknown as ProposalWriter
+    const p = new CommitmentPipeline(proposer, writer, undefined, silent())
+    const titles = ['Existing item 1', 'Existing item 2']
+    p.setInboxTitlesProvider({ recentTitles: mock(async () => titles) })
+    await p.run(record())
+    const args = (proposer.propose as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]
+    expect(args[2]).toEqual(titles)
+  })
+
+  it('proceeds without inbox titles when provider throws', async () => {
+    const proposer = { propose: mock(async () => makeProposal()) } as unknown as Proposer
+    const writer = {
+      write: mock(async () => ({ proposalId: 'p-1', version: 1, title: 'X', proposal: {} as unknown })),
+    } as unknown as ProposalWriter
+    const p = new CommitmentPipeline(proposer, writer, undefined, silent())
+    p.setInboxTitlesProvider({
+      recentTitles: mock(async () => {
+        throw new Error('mindwtr down')
+      }),
+    })
+    const out = await p.run(record())
+    expect(out.kind).toBe('proposed')
+    const args = (proposer.propose as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]
+    expect(args[2]).toBeUndefined()
   })
 
   it('returns error when writer throws', async () => {
