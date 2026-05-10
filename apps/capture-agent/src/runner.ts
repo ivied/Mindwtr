@@ -21,6 +21,8 @@ export interface RunnerDeps {
   pauseFlagPath: string
   minOcrLength: number
   sink: (capture: DesktopCapture) => Promise<void>
+  /** Optional fail-open hook for persistence (wiki MD + optional PNG). */
+  archive?: (capture: DesktopCapture, png: Buffer) => Promise<void>
   dedup?: CaptureDeduper
   log?: (msg: string) => void
 }
@@ -61,6 +63,14 @@ export async function runOnce(deps: RunnerDeps): Promise<SkipReason> {
     })
   ) {
     return 'duplicate'
+  }
+
+  if (deps.archive) {
+    try {
+      await deps.archive(capture, png)
+    } catch (err) {
+      deps.log?.(`archive-error (non-fatal): ${(err as Error).message}`)
+    }
   }
 
   await deps.sink(capture)

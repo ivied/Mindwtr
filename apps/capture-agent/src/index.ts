@@ -18,6 +18,8 @@ import { AiServiceClient } from './client/ai-service'
 import { CaptureDeduper } from './filter/dedup'
 import { AudioRecorder } from './capture/audio-recorder'
 import { WhisperClient } from './capture/whisper'
+import { MdWikiWriter, type ImageAttachment } from './wiki/md-writer'
+import { resizeToJpeg } from './wiki/image-processor'
 
 async function main() {
   const config = loadConfigFromEnv()
@@ -33,6 +35,14 @@ async function main() {
   console.log(`   excluded apps: ${config.excludedApps.length}`)
   console.log(`   excluded titles: ${config.excludedTitles.length}`)
   console.log(`   pause flag: ${config.pauseFlagPath}`)
+
+  const wikiWriter = config.wiki.dir ? new MdWikiWriter(config.wiki.dir) : null
+  if (wikiWriter) {
+    const img = config.wiki.saveImage
+      ? `JPEG@${config.wiki.imageQuality}, max ${config.wiki.imageMaxEdge}px`
+      : 'off'
+    console.log(`📝 Wiki archive: ${config.wiki.dir} (image: ${img})`)
+  }
 
   const dedup = new CaptureDeduper()
 
@@ -67,6 +77,22 @@ async function main() {
           pauseFlagPath: config.pauseFlagPath,
           send: (text) =>
             client.sendAudioTranscript(text, { source: 'mic', device: config.audio.inputDevice }),
+          archive: wikiWriter
+            ? async (ctx) => {
+                await wikiWriter.write({
+                  source: 'audio',
+                  ts: ctx.ts,
+                  app: ctx.window?.app ?? 'unknown',
+                  title: ctx.window?.title ?? '',
+                  url: ctx.window?.url,
+                  device: config.audio.inputDevice,
+                  durationMs: ctx.durationMs,
+                  model: config.audio.whisperModel,
+                  rms: ctx.rms,
+                  body: ctx.text,
+                })
+              }
+            : undefined,
           log: (msg) => console.log(`[audio] ${msg}`),
         },
         {
@@ -93,6 +119,38 @@ async function main() {
       pauseFlagPath: config.pauseFlagPath,
       minOcrLength: config.minOcrLength,
       sink: (capture) => client.sendCapture(capture),
+      archive: wikiWriter
+        ? async (capture, png) => {
+            let image: ImageAttachment | undefined
+            if (config.wiki.saveImage) {
+              if (config.wiki.imageMaxEdge > 0) {
+                try {
+                  const jpg = await resizeToJpeg(png, {
+                    maxEdge: config.wiki.imageMaxEdge,
+                    quality: config.wiki.imageQuality,
+                  })
+                  image = { bytes: jpg, ext: 'jpg' }
+                } catch (err) {
+                  console.warn(`[wiki] resize failed, saving raw PNG: ${(err as Error).message}`)
+                  image = { bytes: png, ext: 'png' }
+                }
+              } else {
+                image = { bytes: png, ext: 'png' }
+              }
+            }
+            await wikiWriter.write(
+              {
+                source: 'screen',
+                ts: new Date(capture.capturedAt),
+                app: capture.app,
+                title: capture.windowTitle,
+                url: capture.url,
+                body: capture.ocrText,
+              },
+              { image }
+            )
+          }
+        : undefined,
       dedup,
       log: (msg) => console.log(`[agent] ${msg}`),
     },

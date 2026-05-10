@@ -13,6 +13,15 @@ import type { ActiveWindowProvider } from './capture/active-window'
 import { computeEnergy } from './capture/audio-energy'
 import { isPaused } from './filter/pause'
 import { shouldSkip, type ExclusionRules } from './filter/exclusion'
+import type { ActiveWindowInfo } from './types'
+
+export interface AudioArchiveContext {
+  text: string
+  ts: Date
+  window: ActiveWindowInfo | null
+  durationMs: number
+  rms: number
+}
 
 export interface AudioRunnerDeps {
   recorder: AudioRecorder
@@ -23,6 +32,8 @@ export interface AudioRunnerDeps {
   pauseFlagPath: string
   /** Send the transcribed text to AI Service. */
   send: (text: string) => Promise<void>
+  /** Optional fail-open hook called between transcribe and send. */
+  archive?: (ctx: AudioArchiveContext) => Promise<void>
   log?: (msg: string) => void
 }
 
@@ -64,9 +75,10 @@ export async function runAudioOnce(
 ): Promise<AudioSkipReason> {
   if (await isPaused(deps.pauseFlagPath)) return 'paused'
 
+  let activeWindow: ActiveWindowInfo | null = null
   if (deps.window) {
-    const win = await deps.window.current()
-    if (win && shouldSkip(win, deps.rules)) return 'excluded'
+    activeWindow = await deps.window.current()
+    if (activeWindow && shouldSkip(activeWindow, deps.rules)) return 'excluded'
   }
 
   let chunk
@@ -94,6 +106,20 @@ export async function runAudioOnce(
   if (text.length < config.minTranscriptLength) {
     deps.log?.(`short-transcript (${text.length} chars): "${text}"`)
     return 'short-transcript'
+  }
+
+  if (deps.archive) {
+    try {
+      await deps.archive({
+        text,
+        ts: new Date(),
+        window: activeWindow,
+        durationMs: chunk.durationMs,
+        rms: energy.rms,
+      })
+    } catch (err) {
+      deps.log?.(`archive-error (non-fatal): ${(err as Error).message}`)
+    }
   }
 
   try {
