@@ -9,6 +9,7 @@ import { ListEmptyState } from './list/ListEmptyState';
 import { ListControlsPanel } from './list/ListControlsPanel';
 import { PromptModal } from '../PromptModal';
 import { InboxProcessor } from './InboxProcessor';
+import { InboxProposalsZone } from '../InboxProposalsZone';
 import { useLanguage } from '../../contexts/language-context';
 import { useKeybindings } from '../../contexts/keybinding-context';
 import { useListCopilot } from './list/useListCopilot';
@@ -958,6 +959,7 @@ export const ListView = memo(function ListView({ title, statusFilter }: ListView
                         ))}
                     </div>
                 )}
+                {statusFilter === 'inbox' ? <InboxProposalsZone /> : null}
             </div>
         </div>
         <PromptModal

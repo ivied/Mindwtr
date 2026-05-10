@@ -12,9 +12,17 @@ import { NotionChannel } from './channels/notion'
 import { FileStateStore, channelStateFile } from './channels/state-store'
 import { ContextStore } from './context-store/store'
 import { OpenAIEmbeddings } from './context-store/embeddings'
+import { ProposalStore } from './proposal-store/store'
+import { ProposalApplier } from './proposal-store/apply'
+import { CommentHandler } from './proposal-store/comment-handler'
+import { TaskChangeProcessor } from './proposal-store/task-change-processor'
+import { ProposalExpiryJob } from './proposal-store/expiry'
 import { Proposer } from './commitment/proposer'
+import { Reviser } from './commitment/reviser'
 import { ProposalWriter } from './commitment/writer'
-import { CommitmentPipeline } from './commitment/pipeline'
+import { CommitmentPipeline, DEFAULT_PIPELINE_CONFIG } from './commitment/pipeline'
+import { denyConfigFromEnv } from './commitment/source-deny'
+import { ProposalNotifier } from './bot/proposal-notifier'
 import { createHttpServer } from './http/server'
 
 const MINDWTR_CLOUD_URL = process.env.MINDWTR_CLOUD_URL ?? 'http://localhost:8787'
@@ -34,6 +42,16 @@ const NOTION_POLL_INTERVAL_MS = Number(process.env.NOTION_POLL_INTERVAL_MS ?? 5 
 
 const HTTP_PORT = Number(process.env.HTTP_PORT ?? 3030)
 const HTTP_AUTH_TOKEN = process.env.HTTP_AUTH_TOKEN ?? ''
+const HTTP_CORS_ORIGINS = (process.env.HTTP_CORS_ORIGINS ?? 'http://localhost:5173')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)
+
+// Telegram chat to push proposal notifications to. Empty disables push.
+const TG_NOTIFY_CHAT_ID = process.env.TG_NOTIFY_CHAT_ID ?? ''
+// Mindwtr web UI base URL — used for TG deep-links from notification cards
+// and from /proposals list rows. Default points at local docker exposed port.
+const MINDWTR_WEB_URL = process.env.MINDWTR_WEB_URL ?? 'http://localhost:5173'
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? ''
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1'
@@ -80,9 +98,16 @@ console.log(
   `📚 Context Store opened (${contextStore.hasVectorSearch ? 'vec+FTS' : 'FTS only'}, TTL ${CONTEXT_STORE_TTL_DAYS}d, current size ${contextStore.size()})`
 )
 
-// --- AI Classification + Commitment Detector ---
+// Proposal Store shares the same SQLite handle as Context Store so that
+// proposal creation can reference capture rows transactionally.
+const proposalStore = new ProposalStore(contextStore.rawDb)
+const proposalApplier = new ProposalApplier(proposalStore, mindwtr)
+const taskChangeProcessor = new TaskChangeProcessor(proposalStore)
+
+// --- AI Classification + Commitment Detector + Reviser ---
 let queue: ClassificationQueue | null = null
 let commitmentPipeline: CommitmentPipeline | null = null
+let commentHandler: CommentHandler | null = null
 if (LLM_BASE_URL && LLM_API_KEY) {
   const llm = new LLMClient(LLM_BASE_URL, LLM_API_KEY, LLM_MODEL)
   const classifier = new Classifier(llm)
@@ -91,9 +116,24 @@ if (LLM_BASE_URL && LLM_API_KEY) {
   console.log(`🧠 AI Classification enabled (${LLM_MODEL}) with Context Store retriever`)
 
   const proposer = new Proposer(llm)
-  const writer = new ProposalWriter(mindwtr)
-  commitmentPipeline = new CommitmentPipeline(proposer, writer)
-  console.log('🎯 Commitment Detector enabled (pull captures → inbox proposals)')
+  const writer = new ProposalWriter(proposalStore)
+  const sourceDeny = denyConfigFromEnv()
+  commitmentPipeline = new CommitmentPipeline(proposer, writer, {
+    ...DEFAULT_PIPELINE_CONFIG,
+    sourceDeny,
+  })
+  console.log(
+    `🎯 Commitment Detector enabled (deny apps:${sourceDeny.apps.length}, deny urls:${sourceDeny.urlPatterns.length})`
+  )
+
+  const reviser = new Reviser(llm)
+  commentHandler = new CommentHandler({
+    store: proposalStore,
+    reviser,
+    mindwtr,
+    contextStore,
+  })
+  console.log('💬 Proposal dialogue enabled (Reviser)')
 } else {
   console.warn('⚠️ LLM_BASE_URL or LLM_API_KEY not set — classification & commitment detection disabled')
 }
@@ -104,6 +144,24 @@ const capture = createCaptureSink({
   contextStore,
   commitmentPipeline,
 })
+
+// Bot is created at module load (Bot ctor doesn't connect — only bot.start() does)
+// so we can wire handlers + notifier before main() spins up.
+const bot = createBot(TELEGRAM_BOT_TOKEN, capture, {
+  proposals: { store: proposalStore, webBaseUrl: MINDWTR_WEB_URL },
+})
+
+const proposalNotifier = new ProposalNotifier({
+  bot,
+  notifyChatId: TG_NOTIFY_CHAT_ID,
+  webBaseUrl: MINDWTR_WEB_URL,
+})
+if (proposalNotifier.enabled) {
+  console.log(`📣 TG proposal notifications → chat ${TG_NOTIFY_CHAT_ID} (links to ${MINDWTR_WEB_URL})`)
+  commitmentPipeline?.setNotifier(proposalNotifier)
+} else if (TG_NOTIFY_CHAT_ID === '') {
+  console.log('ℹ️ TG_NOTIFY_CHAT_ID not set — proposal notifications disabled')
+}
 
 function buildChannels(): Channel[] {
   const channels: Channel[] = []
@@ -166,6 +224,24 @@ async function main() {
     }
   }, 60 * 60 * 1000)
 
+  // Daily Proposal expiry job (default 7-day idle window).
+  const expiryJob = new ProposalExpiryJob(contextStore.rawDb, proposalStore)
+  const expiryTimer = setInterval(
+    () => {
+      try {
+        const result = expiryJob.run()
+        if (result.expired.length > 0) {
+          console.log(
+            `⏳ Proposals: expired ${result.expired.length}/${result.scanned} pending (idle > 7d)`
+          )
+        }
+      } catch (err) {
+        console.error('[proposal-expiry] failed:', err)
+      }
+    },
+    24 * 60 * 60 * 1000
+  )
+
   // Start additional channels
   const channels = buildChannels()
   for (const ch of channels) {
@@ -177,7 +253,7 @@ async function main() {
     }
   }
 
-  const bot = createBot(TELEGRAM_BOT_TOKEN, capture)
+  // bot is constructed at module load above; nothing to do here.
 
   // Optional HTTP capture endpoint (used by desktop capture-agent and ad-hoc clients)
   let http: { stop: () => void } | null = null
@@ -187,9 +263,22 @@ async function main() {
       authToken: HTTP_AUTH_TOKEN,
       capture,
       contextStore,
+      corsOrigins: HTTP_CORS_ORIGINS,
+      proposals: commentHandler
+        ? {
+            store: proposalStore,
+            applier: proposalApplier,
+            commentHandler,
+            taskChangeProcessor,
+          }
+        : null,
     })
     http = server.serve()
-    console.log(`📡 HTTP endpoint listening on :${HTTP_PORT} (POST /v1/capture, GET /v1/context/search)`)
+    console.log(
+      `📡 HTTP endpoint listening on :${HTTP_PORT} (capture, context search${
+        commentHandler ? ', proposals' : ''
+      })`
+    )
   } else {
     console.warn('⚠️ HTTP_AUTH_TOKEN not set — HTTP endpoint disabled')
   }
@@ -197,6 +286,7 @@ async function main() {
   const shutdown = async () => {
     console.log('🛑 Shutting down...')
     clearInterval(purgeTimer)
+    clearInterval(expiryTimer)
     if (http) http.stop()
     for (const ch of channels) {
       try {

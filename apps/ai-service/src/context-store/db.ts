@@ -10,7 +10,7 @@ import { dirname } from 'node:path'
 
 export type DB = Database
 
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS captures (
@@ -43,6 +43,61 @@ END;
 CREATE TRIGGER IF NOT EXISTS captures_fts_ad AFTER DELETE ON captures BEGIN
   INSERT INTO captures_fts(captures_fts, rowid, text) VALUES('delete', old.rowid, old.text);
 END;
+
+-- Proposals: first-class entity for AI-suggested changes (replaces legacy
+-- 'proposal-ai'-tagged Mindwtr inbox tasks). See architecture-addendum-
+-- proposal-entity-2026-05-05.md.
+CREATE TABLE IF NOT EXISTS proposals (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,                   -- create|modify|delete|merge|split|move
+  target_task_ids TEXT NOT NULL,        -- JSON array of Mindwtr task ids; [] for create
+  source_capture_id TEXT REFERENCES captures(id) ON DELETE SET NULL,
+  source_agent TEXT NOT NULL,
+  status TEXT NOT NULL,                 -- pending|approved|rejected|superseded|stale|expired
+  current_payload TEXT NOT NULL,        -- JSON: latest diff/payload (mirrors latest version)
+  current_version INTEGER NOT NULL DEFAULT 1,
+  origin_snapshot TEXT,                 -- JSON: snapshot of target tasks at creation
+  created_at TEXT NOT NULL,
+  resolved_at TEXT,
+  resolved_by TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_proposals_status ON proposals(status);
+CREATE INDEX IF NOT EXISTS idx_proposals_source_agent ON proposals(source_agent);
+CREATE INDEX IF NOT EXISTS idx_proposals_created_at ON proposals(created_at);
+
+CREATE TABLE IF NOT EXISTS proposal_versions (
+  proposal_id TEXT NOT NULL REFERENCES proposals(id) ON DELETE CASCADE,
+  version INTEGER NOT NULL,
+  payload TEXT NOT NULL,                -- JSON snapshot of payload at this version
+  author TEXT NOT NULL,                 -- agent|user
+  summary TEXT,                         -- one-liner explaining what changed
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (proposal_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS proposal_messages (
+  id TEXT PRIMARY KEY,
+  proposal_id TEXT NOT NULL REFERENCES proposals(id) ON DELETE CASCADE,
+  role TEXT NOT NULL,                   -- user|agent
+  text TEXT NOT NULL,
+  ref_version INTEGER,                  -- which version the message refers to
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_proposal_messages_proposal ON proposal_messages(proposal_id, created_at);
+
+CREATE TABLE IF NOT EXISTS proposal_audit (
+  id TEXT PRIMARY KEY,
+  proposal_id TEXT NOT NULL REFERENCES proposals(id) ON DELETE CASCADE,
+  event TEXT NOT NULL,                  -- created|revised|commented|approved|rejected
+                                        -- |superseded|stale|expired|applied|apply_failed
+  event_meta TEXT,                      -- JSON
+  actor TEXT NOT NULL,                  -- agent|user|system
+  ts TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_proposal_audit_proposal ON proposal_audit(proposal_id, ts);
 
 CREATE TABLE IF NOT EXISTS schema_migrations (
   version INTEGER PRIMARY KEY,

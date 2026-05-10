@@ -29,6 +29,12 @@ function makeProposal(overrides: Partial<Proposal> = {}): Proposal {
     by_when: 'Friday',
     confidence: 0.85,
     reasoning: 'User committed via "I will" cue',
+    evidence_quote: "I'll send the Q4 report to Alice by Friday",
+    cues_detected: ['direct first-person verb', 'named recipient', 'deadline phrase'],
+    reasoning_steps: [
+      'Spotted explicit "I\'ll send" commitment from user.',
+      'Named recipient and deadline make it actionable.',
+    ],
     ...overrides,
   }
 }
@@ -38,6 +44,40 @@ function silent() {
 }
 
 describe('CommitmentPipeline', () => {
+  it('returns source-denied when sourceMeta matches deny app, never calls LLM', async () => {
+    const proposer = { propose: mock() } as unknown as Proposer
+    const writer = { write: mock() } as unknown as ProposalWriter
+    const p = new CommitmentPipeline(
+      proposer,
+      writer,
+      { minConfidence: 0.7, useL0: true, sourceDeny: { apps: ['Telegram'], urlPatterns: [] } },
+      silent()
+    )
+    const out = await p.run(record({ sourceMeta: { app: 'Telegram', windowTitle: '' } }))
+    expect(out.kind).toBe('source-denied')
+    expect(proposer.propose).not.toHaveBeenCalled()
+    expect(writer.write).not.toHaveBeenCalled()
+  })
+
+  it('returns source-denied when URL matches a deny pattern', async () => {
+    const proposer = { propose: mock() } as unknown as Proposer
+    const writer = { write: mock() } as unknown as ProposalWriter
+    const p = new CommitmentPipeline(
+      proposer,
+      writer,
+      {
+        minConfidence: 0.7,
+        useL0: true,
+        sourceDeny: { apps: [], urlPatterns: ['claude.ai/design'] },
+      },
+      silent()
+    )
+    const out = await p.run(
+      record({ sourceMeta: { app: 'Chrome', url: 'https://claude.ai/design/foo' } })
+    )
+    expect(out.kind).toBe('source-denied')
+  })
+
   it('returns l0-skip for noise text and never calls LLM', async () => {
     const proposer = { propose: mock() } as unknown as Proposer
     const writer = { write: mock() } as unknown as ProposalWriter
@@ -52,15 +92,15 @@ describe('CommitmentPipeline', () => {
   it('writes proposal when actionable + user role + confidence above threshold', async () => {
     const proposer = { propose: mock(async () => makeProposal()) } as unknown as Proposer
     const writer = {
-      write: mock(async () => ({ taskId: 't1', title: '[AI] Send Q4 report to Alice' })),
+      write: mock(async () => ({ proposalId: 'p-1', version: 1, title: 'Send Q4 report to Alice' })),
     } as unknown as ProposalWriter
     const p = new CommitmentPipeline(proposer, writer, undefined, silent())
 
     const result = await p.run(record())
     expect(result.kind).toBe('proposed')
     if (result.kind === 'proposed') {
-      expect(result.taskId).toBe('t1')
-      expect(result.title).toContain('[AI]')
+      expect(result.proposalId).toBe('p-1')
+      expect(result.title).toBe('Send Q4 report to Alice')
     }
     expect(writer.write).toHaveBeenCalledTimes(1)
   })

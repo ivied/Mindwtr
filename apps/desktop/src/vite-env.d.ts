@@ -4,6 +4,8 @@ interface ImportMetaEnv {
     readonly VITE_ANALYTICS_HEARTBEAT_URL?: string;
     readonly VITE_DISABLE_HEARTBEAT?: string;
     readonly VITE_DROPBOX_APP_KEY?: string;
+    readonly VITE_AI_SERVICE_URL?: string;
+    readonly VITE_AI_SERVICE_TOKEN?: string;
 }
 
 interface ImportMeta {

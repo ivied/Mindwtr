@@ -194,6 +194,27 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
     const rateLimitCleanupMs = Number(process.env.MINDWTR_CLOUD_RATE_CLEANUP_MS || 60_000);
     const requestTimeoutMs = Number(options.requestTimeoutMs ?? process.env.MINDWTR_CLOUD_REQUEST_TIMEOUT_MS ?? 30_000);
 
+    // Optional webhook to ai-service so it can react to manual task edits/deletes
+    // (implicit signals on Proposal entities). Fire-and-forget: errors are logged
+    // but never propagate to the caller. Skipped when the request itself came
+    // from ai-service (X-Mindwtr-Source: ai-service) to avoid feedback loops.
+    const taskWebhookUrl = String(process.env.MINDWTR_TASK_WEBHOOK_URL || '').trim();
+    const taskWebhookToken = String(process.env.MINDWTR_TASK_WEBHOOK_TOKEN || '').trim();
+    const fireTaskWebhook = (
+        kind: 'edit' | 'delete',
+        taskId: string,
+        fields?: Record<string, unknown>
+    ): void => {
+        if (!taskWebhookUrl) return;
+        const body = JSON.stringify(kind === 'edit' ? { kind, taskId, fields } : { kind, taskId });
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (taskWebhookToken) headers.Authorization = `Bearer ${taskWebhookToken}`;
+        // Don't await — webhook is best-effort.
+        fetch(taskWebhookUrl, { method: 'POST', headers, body }).catch((err) => {
+            console.warn('[task-webhook] fire failed:', (err as Error).message);
+        });
+    };
+
     const pruneExpiredRateLimits = (now: number) => {
         for (const [key, state] of rateLimits.entries()) {
             if (now > state.resetAt) {
@@ -505,6 +526,7 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                                 return errorResponse('Invalid task status', 400);
                             }
 
+                            const requestSource = req.headers.get('x-mindwtr-source') || '';
                             return await withWriteLock(key, async () => {
                                 throwIfRequestAborted(requestAbortController.signal);
                                 const data = loadAppData(filePath);
@@ -527,11 +549,21 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                                 if (nextRecurringTask) data.tasks.push(nextRecurringTask);
                                 throwIfRequestAborted(requestAbortController.signal);
                                 writeData(filePath, data);
+                                if (requestSource !== 'ai-service') {
+                                    fireTaskWebhook('edit', taskId, {
+                                        title: updatedTask.title,
+                                        description: updatedTask.description,
+                                        status: updatedTask.status,
+                                        tags: updatedTask.tags,
+                                        projectId: updatedTask.projectId ?? null,
+                                    });
+                                }
                                 return jsonResponse({ task: updatedTask });
                             });
                         }
 
                         if (req.method === 'DELETE') {
+                            const requestSource = req.headers.get('x-mindwtr-source') || '';
                             return await withWriteLock(key, async () => {
                                 throwIfRequestAborted(requestAbortController.signal);
                                 const data = loadAppData(filePath);
@@ -549,6 +581,9 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                                 };
                                 throwIfRequestAborted(requestAbortController.signal);
                                 writeData(filePath, data);
+                                if (requestSource !== 'ai-service') {
+                                    fireTaskWebhook('delete', taskId);
+                                }
                                 return jsonResponse({ ok: true });
                             });
                         }

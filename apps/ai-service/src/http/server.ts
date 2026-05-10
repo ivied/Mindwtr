@@ -1,13 +1,31 @@
 /**
  * HTTP endpoint for desktop capture agent (and other external clients).
  * Receives normalized capture items and routes them through the standard sink.
+ *
+ * Also exposes the Proposals REST surface used by the Mindwtr UI:
+ *   GET    /v1/proposals                  — list pending (filters: type, sourceAgent, targetTaskId, limit)
+ *   GET    /v1/proposals/:id              — full detail incl. versions, messages, audit
+ *   POST   /v1/proposals/:id/approve      — apply → mark approved (or stale on drift)
+ *   POST   /v1/proposals/:id/reject       — mark rejected (optional body { reason })
+ *   POST   /v1/proposals/:id/comments     — append comment + run Reviser
+ *   POST   /v1/proposals/task-changes     — webhook from Mindwtr cloud (edit/delete events)
  */
 
 import { Hono } from 'hono'
 import { bearerAuth } from 'hono/bearer-auth'
+import { cors } from 'hono/cors'
 import type { CaptureFn } from '../capture/sink'
 import type { CapturedItem } from '../capture/normalizer'
 import type { ContextStore } from '../context-store/store'
+import type { ProposalStore } from '../proposal-store/store'
+import type { ProposalApplier } from '../proposal-store/apply'
+import type { CommentHandler } from '../proposal-store/comment-handler'
+import type {
+  TaskChangeProcessor,
+  TaskChangeEvent,
+  TaskFieldsSnapshot,
+} from '../proposal-store/task-change-processor'
+import type { ProposalType } from '../proposal-store/types'
 
 const MAX_TEXT_LENGTH = 10_000
 
@@ -20,17 +38,40 @@ interface CapturePayload {
   extraTags?: string[]
 }
 
+export interface ProposalsHttpDeps {
+  store: ProposalStore
+  applier: ProposalApplier
+  commentHandler: CommentHandler
+  taskChangeProcessor: TaskChangeProcessor
+}
+
 export interface HttpServerConfig {
   port: number
   authToken: string
   capture: CaptureFn
   contextStore: ContextStore | null
+  proposals: ProposalsHttpDeps | null
+  /** Allowed origins for CORS. Default ['http://localhost:5173']. */
+  corsOrigins?: string[]
 }
 
 export function createHttpServer(config: HttpServerConfig) {
   const app = new Hono()
 
   app.get('/health', (c) => c.json({ ok: true }))
+
+  // CORS must precede bearerAuth: browser preflight OPTIONS arrives without
+  // an Authorization header and would otherwise be rejected with 401.
+  const corsOrigins = config.corsOrigins ?? ['http://localhost:5173']
+  app.use(
+    '/v1/*',
+    cors({
+      origin: corsOrigins,
+      allowHeaders: ['Authorization', 'Content-Type'],
+      allowMethods: ['GET', 'POST', 'OPTIONS'],
+      maxAge: 86400,
+    })
+  )
 
   app.use('/v1/*', bearerAuth({ token: config.authToken }))
 
@@ -97,6 +138,10 @@ export function createHttpServer(config: HttpServerConfig) {
     }
   })
 
+  if (config.proposals) {
+    mountProposalRoutes(app, config.proposals)
+  }
+
   return {
     serve(): { stop: () => void } {
       const server = Bun.serve({
@@ -109,4 +154,133 @@ export function createHttpServer(config: HttpServerConfig) {
     },
     handler: app.fetch,
   }
+}
+
+function mountProposalRoutes(app: Hono, deps: ProposalsHttpDeps): void {
+  app.get('/v1/proposals', (c) => {
+    const type = c.req.query('type') as ProposalType | undefined
+    const sourceAgent = c.req.query('sourceAgent') ?? undefined
+    const targetTaskId = c.req.query('targetTaskId') ?? undefined
+    const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined
+    const items = deps.store.listPending({ type, sourceAgent, targetTaskId, limit })
+    return c.json({ items })
+  })
+
+  app.get('/v1/proposals/:id', (c) => {
+    const id = c.req.param('id')
+    const detail = deps.store.getDetail(id)
+    if (!detail) return c.json({ error: 'not found' }, 404)
+    return c.json(detail)
+  })
+
+  app.post('/v1/proposals/:id/approve', async (c) => {
+    const id = c.req.param('id')
+    const proposal = deps.store.get(id)
+    if (!proposal) return c.json({ error: 'not found' }, 404)
+
+    const result = await deps.applier.apply(id)
+    if (!result.ok) {
+      // For stale we already transitioned; for other errors we leave pending.
+      const status = result.reason === 'stale' ? 409 : result.reason === 'not_pending' ? 409 : 500
+      return c.json(
+        {
+          ok: false,
+          reason: result.reason,
+          details: result.details,
+          proposal: deps.store.get(id),
+        },
+        status
+      )
+    }
+
+    // Apply succeeded → flip to approved with the applied task ids in audit meta.
+    deps.store.transition(id, 'approved', 'user', { appliedTaskIds: result.appliedTaskIds })
+    return c.json({
+      ok: true,
+      appliedTaskIds: result.appliedTaskIds,
+      proposal: deps.store.get(id),
+    })
+  })
+
+  app.post('/v1/proposals/:id/reject', async (c) => {
+    const id = c.req.param('id')
+    const proposal = deps.store.get(id)
+    if (!proposal) return c.json({ error: 'not found' }, 404)
+    if (proposal.status !== 'pending') {
+      return c.json({ error: `proposal is ${proposal.status}, cannot reject` }, 409)
+    }
+
+    let reason: string | undefined
+    try {
+      const body = (await c.req.json()) as { reason?: string }
+      reason = typeof body?.reason === 'string' ? body.reason.trim() : undefined
+    } catch {
+      // No body — that's fine, reject without reason.
+    }
+    if (reason) {
+      deps.store.addMessage({ proposalId: id, role: 'user', text: reason })
+    }
+    deps.store.transition(id, 'rejected', 'user', reason ? { reason } : undefined)
+    return c.json({ ok: true, proposal: deps.store.get(id) })
+  })
+
+  app.post('/v1/proposals/:id/comments', async (c) => {
+    const id = c.req.param('id')
+    const proposal = deps.store.get(id)
+    if (!proposal) return c.json({ error: 'not found' }, 404)
+
+    let body: { text?: string }
+    try {
+      body = (await c.req.json()) as { text?: string }
+    } catch {
+      return c.json({ error: 'invalid JSON' }, 400)
+    }
+    const text = (body.text ?? '').trim()
+    if (!text) return c.json({ error: 'text is required' }, 400)
+
+    try {
+      const result = await deps.commentHandler.handle({ proposalId: id, text })
+      return c.json({
+        ok: result.ok,
+        outcome: result.outcome,
+        error: result.error,
+        proposal: deps.store.getDetail(id),
+      })
+    } catch (err) {
+      const msg = (err as Error).message
+      const status = /resolved|rejected|approved|expired|superseded|stale/.test(msg) ? 409 : 400
+      return c.json({ error: msg }, status)
+    }
+  })
+
+  app.post('/v1/proposals/task-changes', async (c) => {
+    let body: TaskChangeWebhookBody
+    try {
+      body = (await c.req.json()) as TaskChangeWebhookBody
+    } catch {
+      return c.json({ error: 'invalid JSON' }, 400)
+    }
+    const event = parseTaskChangeEvent(body)
+    if (!event) return c.json({ error: 'invalid event shape' }, 400)
+    const outcomes = deps.taskChangeProcessor.process(event)
+    return c.json({ ok: true, outcomes })
+  })
+}
+
+interface TaskChangeWebhookBody {
+  kind?: string
+  taskId?: string
+  fields?: TaskFieldsSnapshot
+}
+
+function parseTaskChangeEvent(body: TaskChangeWebhookBody): TaskChangeEvent | null {
+  if (typeof body?.taskId !== 'string' || !body.taskId) return null
+  if (body.kind === 'delete') {
+    return { kind: 'delete', taskId: body.taskId }
+  }
+  if (body.kind === 'edit') {
+    if (typeof body.fields !== 'object' || body.fields === null) return null
+    return { kind: 'edit', taskId: body.taskId, fields: body.fields }
+  }
+  return null
 }

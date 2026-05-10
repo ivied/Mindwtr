@@ -20,7 +20,7 @@ interface CreateTaskParams {
   metadata?: Record<string, unknown>
 }
 
-interface Task {
+export interface Task {
   id: string
   title: string
   status: string
@@ -53,6 +53,9 @@ export class MindwtrClient {
     this.headers = {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${config.authToken}`,
+      // Marks all writes as originating from ai-service so the cloud's
+      // task-change webhook can suppress feedback loops on our own applies.
+      'X-Mindwtr-Source': 'ai-service',
     }
   }
 
@@ -102,6 +105,17 @@ export class MindwtrClient {
     if (!res.ok) throw new Error(`updateTask failed: ${res.status} ${await res.text()}`)
     const data = (await res.json()) as Task | { task: Task }
     return 'task' in data ? data.task : data
+  }
+
+  /** Delete task. Returns true on 2xx, false on 404 (already gone). Throws on other errors. */
+  async deleteTask(id: string): Promise<boolean> {
+    const res = await fetch(`${this.baseUrl}/v1/tasks/${id}`, {
+      method: 'DELETE',
+      headers: this.headers,
+    })
+    if (res.ok) return true
+    if (res.status === 404) return false
+    throw new Error(`deleteTask failed: ${res.status} ${await res.text()}`)
   }
 
   async completeTask(id: string): Promise<Task> {

@@ -21,11 +21,17 @@ services:
       - MINDWTR_CLOUD_AUTH_TOKENS=${MINDWTR_CLOUD_AUTH_TOKENS:?MINDWTR_CLOUD_AUTH_TOKENS must be set}
       - MINDWTR_CLOUD_ALLOW_ANY_TOKEN=${MINDWTR_CLOUD_ALLOW_ANY_TOKEN:-false}
       - MINDWTR_CLOUD_CORS_ORIGIN=${MINDWTR_CLOUD_CORS_ORIGIN:-http://localhost:5173}
+      - MINDWTR_CLOUD_MAX_BODY_BYTES=${MINDWTR_CLOUD_MAX_BODY_BYTES:-20000000}
+      # Fire-and-forget webhook to ai-service on user-originated task edits/deletes
+      # so implicit Proposal signals (approved-by-edit, superseded, etc.) fire.
+      # Suppressed when the request carries X-Mindwtr-Source: ai-service.
+      - MINDWTR_TASK_WEBHOOK_URL=${MINDWTR_TASK_WEBHOOK_URL:-http://ai-service:3030/v1/proposals/task-changes}
+      - MINDWTR_TASK_WEBHOOK_TOKEN=${MINDWTR_TASK_WEBHOOK_TOKEN:-${HTTP_AUTH_TOKEN:-}}
     volumes:
       - ./data:/app/cloud_data
 
   mindwtr-app:
-    image: ghcr.io/dongdongbh/mindwtr-app:latest
+    image: gtd-automation-app:local
     build:
       context: ..
       dockerfile: docker/app/Dockerfile
@@ -66,6 +72,11 @@ services:
       - NOTION_POLL_INTERVAL_MS=${NOTION_POLL_INTERVAL_MS:-300000}
       - HTTP_PORT=${HTTP_PORT:-3030}
       - HTTP_AUTH_TOKEN=${HTTP_AUTH_TOKEN:-}
+      # TG chat that receives push notifications about new proposals.
+      # Empty disables push (in-app + /proposals command still work).
+      - TG_NOTIFY_CHAT_ID=${TG_NOTIFY_CHAT_ID:-}
+      # Mindwtr web UI base URL — used for deep-links from TG cards.
+      - MINDWTR_WEB_URL=${MINDWTR_WEB_URL:-http://localhost:5173}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       - EMBEDDINGS_MODEL=${EMBEDDINGS_MODEL:-text-embedding-3-small}

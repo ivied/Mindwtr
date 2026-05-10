@@ -25,7 +25,18 @@ export interface Proposal {
   what: string
   by_when: string | null
   confidence: number
+  /** One-line summary of the decision (back-compat short reasoning). */
   reasoning: string
+  /**
+   * Exact verbatim quote from the source text that triggered the decision.
+   * Empty when nothing was clearly quotable (e.g. the cue was structural,
+   * not a sentence). Used by the writer to build a smart excerpt window.
+   */
+  evidence_quote: string
+  /** Short tags for cues the Proposer noticed ("direct request", "named recipient", "deadline phrase", ...). */
+  cues_detected: string[]
+  /** Ordered 2–5 step rationale: what was observed, how it was interpreted, why actionable. */
+  reasoning_steps: string[]
 }
 
 const PROPOSER_TOOL = {
@@ -78,7 +89,24 @@ const PROPOSER_TOOL = {
         reasoning: {
           type: 'string',
           description:
-            'One sentence explaining the decision. Reference the cue you saw ("user typed I will send X to Y", "screen showed invoice with due date").',
+            'One sentence summary of the decision (the short headline reason). The detailed train-of-thought goes in reasoning_steps.',
+        },
+        evidence_quote: {
+          type: 'string',
+          description:
+            'Exact verbatim quote (≤200 chars) from the source text that triggered the decision. Use the raw substring as-it-appears, including any OCR artefacts. Empty string when nothing was quotable (the cue was structural, e.g. an invoice line with a date column).',
+        },
+        cues_detected: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Short tags for sniffed cues, 1-5 items. Examples: "direct request", "named recipient", "explicit action verb", "deadline phrase", "due date", "money amount", "self-reminder phrasing", "imperative tone", "past tense (NOT cue)", "structural cue (invoice line)". Include cues against actionability too when relevant.',
+        },
+        reasoning_steps: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Ordered 2-5 step train-of-thought. Each step is one short sentence. Sequence: (1) what concrete text you spotted, (2) how you interpreted it (request? observation? past-tense?), (3) who owns the action, (4) why this is/isn\'t a personal commitment for the user, (5) confidence justification. Skip steps that don\'t apply.',
         },
       },
       required: [
@@ -90,6 +118,9 @@ const PROPOSER_TOOL = {
         'by_when',
         'confidence',
         'reasoning',
+        'evidence_quote',
+        'cues_detected',
+        'reasoning_steps',
       ],
     },
   },
@@ -129,7 +160,13 @@ Title format (when actionable): short imperative GTD next action.
 
 When uncertain, lean toward is_actionable=false.
 
-Always call propose_inbox_item with all fields filled (use empty string when N/A).`
+Explain your work:
+- evidence_quote — copy the EXACT substring from the source that drove your decision (≤200 chars). Don't paraphrase. Empty string only when the cue is structural, not textual (e.g. an invoice line in a table).
+- cues_detected — 1-5 short tags. Use specific shapes: "direct request", "named recipient", "explicit first-person verb", "deadline phrase", "due date", "money amount", "self-reminder phrasing", "imperative tone", "past tense (NOT cue)", "structural cue (form / invoice line)", "design mockup language", "third-party conversation".
+- reasoning_steps — 2-5 short sentences in order: (1) what concrete text/structure you spotted, (2) how you interpreted it, (3) who owns the action, (4) why this IS or ISN'T a personal commitment for the user, (5) confidence justification. Skip steps that don't apply.
+- reasoning — one-sentence summary; use the same tone as a PR title.
+
+Always call propose_inbox_item with all fields filled (use empty string / empty array when N/A).`
 
 export class Proposer {
   constructor(
@@ -166,6 +203,19 @@ export class Proposer {
       throw new Error(`Proposer: failed to parse tool call args: ${(err as Error).message}`)
     }
 
+    const cues = Array.isArray((parsed as { cues_detected?: unknown }).cues_detected)
+      ? ((parsed as { cues_detected: unknown[] }).cues_detected
+          .filter((c) => typeof c === 'string' && c.length > 0) as string[])
+      : []
+    const steps = Array.isArray((parsed as { reasoning_steps?: unknown }).reasoning_steps)
+      ? ((parsed as { reasoning_steps: unknown[] }).reasoning_steps
+          .filter((s) => typeof s === 'string' && s.length > 0) as string[])
+      : []
+    const evidence =
+      typeof (parsed as { evidence_quote?: unknown }).evidence_quote === 'string'
+        ? ((parsed as { evidence_quote: string }).evidence_quote || '').slice(0, 240)
+        : ''
+
     return {
       is_actionable: Boolean(parsed.is_actionable),
       title: typeof parsed.title === 'string' ? parsed.title.slice(0, 120) : '',
@@ -177,6 +227,9 @@ export class Proposer {
       by_when: typeof parsed.by_when === 'string' && parsed.by_when.length > 0 ? parsed.by_when : null,
       confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0,
       reasoning: typeof parsed.reasoning === 'string' ? parsed.reasoning : '',
+      evidence_quote: evidence,
+      cues_detected: cues,
+      reasoning_steps: steps,
     }
   }
 }

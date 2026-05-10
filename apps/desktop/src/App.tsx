@@ -55,8 +55,14 @@ const SettingsView = lazy(wrapSettingsOpenImport(
 ));
 
 function App() {
-    const [currentView, setCurrentView] = useState('inbox');
-    const [activeView, setActiveView] = useState('inbox');
+    // Honor `?view=<name>` from the URL on first mount (TG deep-links land here).
+    const initialView = (() => {
+        if (typeof window === 'undefined') return 'inbox';
+        const v = new URLSearchParams(window.location.search).get('view');
+        return v && v.trim() ? v.trim() : 'inbox';
+    })();
+    const [currentView, setCurrentView] = useState(initialView);
+    const [activeView, setActiveView] = useState(initialView);
     const [, startTransition] = useTransition();
     const fetchData = useTaskStore((state) => state.fetchData);
     const isLoading = useTaskStore((state) => state.isLoading);

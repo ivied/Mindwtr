@@ -1244,3 +1244,127 @@ describe('cloud server api', () => {
         expect(mergedTask?.updatedAt).toBe('2026-01-01T00:00:00.000Z');
     });
 });
+
+describe('cloud server task-change webhook', () => {
+    let dataDir = '';
+    let baseUrl = '';
+    let stopServer: (() => void) | null = null;
+    interface WebhookSink {
+        stop: () => void;
+        url: string;
+        calls: Array<{ url: string; body: unknown }>;
+    }
+    let webhookServer: WebhookSink | null = null;
+    const integrationToken = 'integration-token-1234567890';
+    const authHeaders = { Authorization: `Bearer ${integrationToken}` };
+
+    function startWebhookSink(): WebhookSink {
+        const calls: Array<{ url: string; body: unknown }> = [];
+        const handle = Bun.serve({
+            port: 0,
+            fetch: async (req) => {
+                if (req.method === 'POST') {
+                    const body = await req.json().catch(() => null);
+                    calls.push({ url: req.url, body });
+                    return new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } });
+                }
+                return new Response('{"ok":true}');
+            },
+        });
+        return {
+            calls,
+            stop: () => handle.stop(),
+            url: `http://${handle.hostname}:${handle.port}/hook`,
+        };
+    }
+
+    beforeEach(async () => {
+        dataDir = mkdtempSync(join(tmpdir(), 'mindwtr-cloud-wh-'));
+        webhookServer = startWebhookSink();
+        process.env.MINDWTR_TASK_WEBHOOK_URL = webhookServer.url;
+        process.env.MINDWTR_TASK_WEBHOOK_TOKEN = 'wh-token';
+        const server = await startCloudServer({
+            host: '127.0.0.1',
+            port: 0,
+            dataDir,
+            allowedAuthTokens: new Set([integrationToken]),
+        });
+        baseUrl = `http://127.0.0.1:${server.port}`;
+        stopServer = server.stop;
+    });
+
+    afterEach(() => {
+        stopServer?.();
+        stopServer = null;
+        webhookServer?.stop();
+        webhookServer = null;
+        delete process.env.MINDWTR_TASK_WEBHOOK_URL;
+        delete process.env.MINDWTR_TASK_WEBHOOK_TOKEN;
+        if (dataDir) rmSync(dataDir, { recursive: true, force: true });
+        dataDir = '';
+        baseUrl = '';
+    });
+
+    async function createTask(): Promise<string> {
+        const res = await fetch(`${baseUrl}/v1/tasks`, {
+            method: 'POST',
+            headers: { ...authHeaders, 'content-type': 'application/json' },
+            body: JSON.stringify({ title: 'WebhookTask' }),
+        });
+        const json = await res.json();
+        return json.task.id as string;
+    }
+
+    test('PATCH from non-ai-service origin fires edit webhook', async () => {
+        const taskId = await createTask();
+        await fetch(`${baseUrl}/v1/tasks/${taskId}`, {
+            method: 'PATCH',
+            headers: { ...authHeaders, 'content-type': 'application/json' },
+            body: JSON.stringify({ title: 'Edited by user' }),
+        });
+        // Webhook is fire-and-forget; allow microtask flush.
+        await new Promise((r) => setTimeout(r, 50));
+        const calls = webhookServer!.calls;
+        expect(calls.length).toBe(1);
+        const body = calls[0]!.body as { kind: string; taskId: string; fields: { title: string } };
+        expect(body.kind).toBe('edit');
+        expect(body.taskId).toBe(taskId);
+        expect(body.fields.title).toBe('Edited by user');
+    });
+
+    test('PATCH with X-Mindwtr-Source=ai-service does NOT fire webhook', async () => {
+        const taskId = await createTask();
+        await fetch(`${baseUrl}/v1/tasks/${taskId}`, {
+            method: 'PATCH',
+            headers: {
+                ...authHeaders,
+                'content-type': 'application/json',
+                'x-mindwtr-source': 'ai-service',
+            },
+            body: JSON.stringify({ title: 'Edited by ai' }),
+        });
+        await new Promise((r) => setTimeout(r, 50));
+        expect(webhookServer!.calls.length).toBe(0);
+    });
+
+    test('DELETE from non-ai-service origin fires delete webhook', async () => {
+        const taskId = await createTask();
+        await fetch(`${baseUrl}/v1/tasks/${taskId}`, { method: 'DELETE', headers: authHeaders });
+        await new Promise((r) => setTimeout(r, 50));
+        const calls = webhookServer!.calls;
+        expect(calls.length).toBe(1);
+        const body = calls[0]!.body as { kind: string; taskId: string };
+        expect(body.kind).toBe('delete');
+        expect(body.taskId).toBe(taskId);
+    });
+
+    test('DELETE with X-Mindwtr-Source=ai-service does NOT fire webhook', async () => {
+        const taskId = await createTask();
+        await fetch(`${baseUrl}/v1/tasks/${taskId}`, {
+            method: 'DELETE',
+            headers: { ...authHeaders, 'x-mindwtr-source': 'ai-service' },
+        });
+        await new Promise((r) => setTimeout(r, 50));
+        expect(webhookServer!.calls.length).toBe(0);
+    });
+});

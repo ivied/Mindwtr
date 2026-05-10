@@ -74,6 +74,12 @@ export class ContextStore {
     return this.vecAvailable && this.embeddings !== null
   }
 
+  /** Underlying SQLite handle. Exposed so sibling stores (e.g. ProposalStore) can
+   *  share the same connection for transactional consistency. */
+  get rawDb(): DB {
+    return this.db
+  }
+
   /**
    * Insert a capture. Performs L2 dedup (content hash within window). When
    * embeddings are configured AND vec is available, also runs L3 (semantic

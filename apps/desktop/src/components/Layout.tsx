@@ -22,6 +22,7 @@ import {
     BookOpen,
     type LucideIcon,
 } from 'lucide-react';
+import { SafeReloadButton } from './SafeReloadButton';
 import { cn } from '../lib/utils';
 import { shallow, useTaskStore, safeParseDate, safeFormatDate, translateWithFallback } from '@mindwtr/core';
 import { useLanguage } from '../contexts/language-context';
@@ -492,11 +493,12 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
                         </div>
                     )}
                     <div className="border-t border-border" />
-                    <div className="px-2 pb-2 pt-2">
+                    <div className="flex items-center gap-1 px-2 pb-2 pt-2">
+                        <SafeReloadButton isCollapsed={isCollapsed} showToast={showToast} />
                         <button
                             onClick={() => onViewChange('settings')}
                             className={cn(
-                                "w-full rounded-md border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-inset text-xs font-medium h-9 px-3 flex items-center",
+                                "flex-1 rounded-md border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-inset text-xs font-medium h-9 px-3 flex items-center",
                                 isCollapsed ? "justify-center" : "justify-between",
                                 currentView === 'settings'
                                     ? "border-primary/50 bg-primary/10 text-primary"

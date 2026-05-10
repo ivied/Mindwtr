@@ -29,6 +29,7 @@ describe('MindwtrClient', () => {
         headers: {
           'Content-Type': 'application/json',
           Authorization: 'Bearer test-token',
+          'X-Mindwtr-Source': 'ai-service',
         },
         body: JSON.stringify({ title: 'Test', props: { status: 'inbox' } }),
       })

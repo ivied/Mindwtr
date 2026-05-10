@@ -22,6 +22,7 @@ import {
     getRecurrenceStrategyValue,
     toDateTimeLocalValue,
 } from './Task/task-item-helpers';
+import { TaskProposalsInline } from './TaskProposalsInline';
 import { useTaskItemAttachments } from './Task/useTaskItemAttachments';
 import { useTaskItemRecurrence } from './Task/useTaskItemRecurrence';
 import { useTaskItemAi } from './Task/useTaskItemAi';
@@ -930,6 +931,7 @@ export const TaskItem = memo(function TaskItem({
                     isHighlighted && "ring-2 ring-inset ring-primary/70 bg-primary/5"
                 )}
             >
+                <TaskProposalsInline taskId={task.id} />
                 <div className={cn("flex items-start", isCompact ? "gap-2" : "gap-3")}>
                     {selectionMode && (
                         <input
