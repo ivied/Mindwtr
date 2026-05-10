@@ -12,6 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Sparkles, Check, X, MessageSquare, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
+import { useTaskStore, type Task } from '@mindwtr/core';
 import {
     isProposalsAvailable,
     listPendingProposals,
@@ -141,6 +142,14 @@ function ProposalCard({ summary, onResolved }: CardProps) {
                     setError(`${result.reason}: ${result.details ?? ''}`);
                     return;
                 }
+                // Mirror the applied diff into the local task store so the
+                // card updates immediately. Without this, ai-service has the
+                // new state but the desktop store still shows the old values
+                // until the next cloud-sync cycle.
+                applyDiffToLocalStore(
+                    summary,
+                    isPartial ? selectedFields : null
+                );
                 onResolved();
             } catch (err) {
                 setError((err as Error).message);
@@ -463,6 +472,57 @@ function DiffPreview({ payload, selectedFields, onToggleField }: DiffPreviewProp
             {JSON.stringify(payload, null, 2)}
         </pre>
     );
+}
+
+/**
+ * After approve, propagate the diff into the local task store so the UI
+ * reflects the new task fields immediately (otherwise the user has to wait
+ * for the next cloud-sync cycle or reload the page).
+ *
+ * Only `modify` payloads are handled — `create/delete/split/merge/move` either
+ * don't have a single targetTask, or change task identity in ways the cloud
+ * sync is better equipped to resolve.
+ */
+function applyDiffToLocalStore(
+    summary: ProposalSummary,
+    selectedFields: Set<string> | null
+): void {
+    const payload = summary.currentPayload as { kind?: string; diff?: Array<{ field: string; to: unknown }>; taskId?: string } | null;
+    if (!payload || payload.kind !== 'modify') return;
+    const taskId = payload.taskId ?? summary.targetTaskIds[0];
+    if (!taskId) return;
+
+    const patch: Partial<Task> = {};
+    for (const entry of payload.diff ?? []) {
+        if (selectedFields && !selectedFields.has(entry.field)) continue;
+        switch (entry.field) {
+            case 'title':
+                if (typeof entry.to === 'string') patch.title = entry.to;
+                break;
+            case 'description':
+                if (typeof entry.to === 'string') patch.description = entry.to;
+                break;
+            case 'status':
+                if (typeof entry.to === 'string')
+                    patch.status = entry.to as Task['status'];
+                break;
+            case 'tags':
+                if (Array.isArray(entry.to))
+                    patch.tags = entry.to.filter((t): t is string => typeof t === 'string');
+                break;
+            case 'project':
+                if (entry.to === null || typeof entry.to === 'string')
+                    patch.projectId = (entry.to as string | null) ?? undefined;
+                break;
+            // `metadata` field is internal to ai-service; not exposed on Task.
+        }
+    }
+    if (Object.keys(patch).length === 0) return;
+    try {
+        void useTaskStore.getState().updateTask(taskId, patch);
+    } catch (err) {
+        console.warn('[proposals] local task patch failed:', err);
+    }
 }
 
 function formatDiffValue(value: unknown): string {
