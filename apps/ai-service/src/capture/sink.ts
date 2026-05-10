@@ -3,20 +3,19 @@
  *
  * Push/pull semantics (FR55):
  *   - Push channels (TG/Slack/Notion DM): write to Context Store + create
- *     Mindwtr inbox task + run AI classification
- *   - Pull/passive channels (screen_capture, future audio): write to
- *     Context Store ONLY. Inbox proposals come later via Commitment
- *     Detector (Phase 4b). For now they just accumulate in Context Store.
+ *     Mindwtr inbox task + fire-and-forget Enricher pipeline (which writes a
+ *     modify-or-split Proposal for the user to review in the desktop web UI).
+ *   - Pull/passive channels (screen_capture, audio_capture): write to
+ *     Context Store ONLY. Inbox proposals come later via Commitment Detector.
  *
  * Dedup is owned by ContextStore.insert() — it returns inserted=false when L2/L3
  * matches, in which case we skip downstream side effects (no inbox task, no LLM).
  */
 
 import type { MindwtrClient } from '../api/mindwtr-client'
-import type { ClassificationQueue } from '../ai/queue'
-import type { ClassificationResult } from '../ai/types'
 import type { ContextStore } from '../context-store/store'
 import type { CommitmentPipeline } from '../commitment/pipeline'
+import type { EnricherPipeline } from '../commitment/enricher-pipeline'
 import type { CaptureRecord } from '../context-store/types'
 import type { CapturedItem } from './normalizer'
 import { toTaskSuggestion } from './normalizer'
@@ -33,15 +32,15 @@ function isPull(item: CapturedItem): boolean {
 export interface CaptureOptions {
   extraTags?: string[]
   onTaskCreated?: (taskId: string, title: string) => Promise<void>
-  onClassified?: (taskId: string, result: ClassificationResult) => Promise<void>
   /** When true, skip inbox creation even for push (used for backfill / replay). */
   contextOnly?: boolean
 }
 
 export interface CaptureSinkDeps {
   mindwtr: MindwtrClient
-  queue: ClassificationQueue | null
   contextStore: ContextStore | null
+  /** Push-channel enrichment. Fire-and-forget; writes Proposals. */
+  enricherPipeline?: EnricherPipeline | null
   /** When set, pull captures fire through this pipeline (async, fire-and-forget). */
   commitmentPipeline?: CommitmentPipeline | null
 }
@@ -72,31 +71,36 @@ export function createCaptureSink(deps: CaptureSinkDeps) {
       return
     }
 
-    // 3. Push channel: create inbox task + classify
+    // 3. Push channel: create inbox task + fire-and-forget Enricher.
     const suggestion = toTaskSuggestion(item)
+    const initialTags = options.extraTags ?? []
     const task = await deps.mindwtr.createTask({
       title: suggestion.title,
       status: 'inbox',
       description: suggestion.description,
-      tags: options.extraTags,
+      tags: initialTags,
     })
 
     if (options.onTaskCreated) {
       await options.onTaskCreated(task.id, task.title)
     }
 
-    if (deps.queue) {
-      deps.queue.enqueue({
-        taskId: task.id,
-        input: {
+    if (deps.enricherPipeline) {
+      const sourceCaptureId = storedRecord?.id ?? null
+      void deps
+        .enricherPipeline
+        .run({
+          taskId: task.id,
+          taskTitle: task.title,
+          taskTags: initialTags,
           text: item.text,
           sourceChannel: item.sourceChannel,
-          capturedAt: item.timestamp,
-        },
-        onComplete: options.onClassified
-          ? async (result) => options.onClassified!(task.id, result)
-          : undefined,
-      })
+          sourceMeta: item.sourceMeta ?? null,
+          sourceCaptureId,
+        })
+        .catch((err) =>
+          console.error(`[sink] enricher pipeline failed for task ${task.id}:`, err)
+        )
     }
   }
 }

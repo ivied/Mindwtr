@@ -1,8 +1,6 @@
 import { join } from 'node:path'
 import { MindwtrClient } from './api/mindwtr-client'
 import { LLMClient } from './ai/client'
-import { Classifier } from './ai/classifier'
-import { ClassificationQueue } from './ai/queue'
 import { ContextRetriever } from './ai/retriever'
 import { createBot } from './bot'
 import { createCaptureSink } from './capture/sink'
@@ -18,6 +16,8 @@ import { CommentHandler } from './proposal-store/comment-handler'
 import { TaskChangeProcessor } from './proposal-store/task-change-processor'
 import { ProposalExpiryJob } from './proposal-store/expiry'
 import { Proposer } from './commitment/proposer'
+import { Enricher } from './commitment/enricher'
+import { EnricherPipeline } from './commitment/enricher-pipeline'
 import { Reviser } from './commitment/reviser'
 import { ProposalWriter } from './commitment/writer'
 import { CommitmentPipeline, DEFAULT_PIPELINE_CONFIG } from './commitment/pipeline'
@@ -104,16 +104,21 @@ const proposalStore = new ProposalStore(contextStore.rawDb)
 const proposalApplier = new ProposalApplier(proposalStore, mindwtr)
 const taskChangeProcessor = new TaskChangeProcessor(proposalStore)
 
-// --- AI Classification + Commitment Detector + Reviser ---
-let queue: ClassificationQueue | null = null
+// --- AI Enricher (push) + Commitment Detector (pull) + Reviser ---
+let enricherPipeline: EnricherPipeline | null = null
 let commitmentPipeline: CommitmentPipeline | null = null
 let commentHandler: CommentHandler | null = null
 if (LLM_BASE_URL && LLM_API_KEY) {
   const llm = new LLMClient(LLM_BASE_URL, LLM_API_KEY, LLM_MODEL)
-  const classifier = new Classifier(llm)
   const retriever = new ContextRetriever(contextStore)
-  queue = new ClassificationQueue(classifier, mindwtr, retriever)
-  console.log(`🧠 AI Classification enabled (${LLM_MODEL}) with Context Store retriever`)
+
+  const enricher = new Enricher(llm)
+  enricherPipeline = new EnricherPipeline({
+    enricher,
+    proposalStore,
+    retriever,
+  })
+  console.log(`🪄 Enricher enabled (${LLM_MODEL}) — push captures → modify/split proposals`)
 
   const proposer = new Proposer(llm)
   const writer = new ProposalWriter(proposalStore)
@@ -135,12 +140,12 @@ if (LLM_BASE_URL && LLM_API_KEY) {
   })
   console.log('💬 Proposal dialogue enabled (Reviser)')
 } else {
-  console.warn('⚠️ LLM_BASE_URL or LLM_API_KEY not set — classification & commitment detection disabled')
+  console.warn('⚠️ LLM_BASE_URL or LLM_API_KEY not set — Enricher & Commitment Detector disabled')
 }
 
 const capture = createCaptureSink({
   mindwtr,
-  queue,
+  enricherPipeline,
   contextStore,
   commitmentPipeline,
 })
@@ -159,6 +164,7 @@ const proposalNotifier = new ProposalNotifier({
 if (proposalNotifier.enabled) {
   console.log(`📣 TG proposal notifications → chat ${TG_NOTIFY_CHAT_ID} (links to ${MINDWTR_WEB_URL})`)
   commitmentPipeline?.setNotifier(proposalNotifier)
+  enricherPipeline?.setNotifier(proposalNotifier)
 } else if (TG_NOTIFY_CHAT_ID === '') {
   console.log('ℹ️ TG_NOTIFY_CHAT_ID not set — proposal notifications disabled')
 }
@@ -208,11 +214,6 @@ async function main() {
   }
 
   console.log(`✅ Connected to Mindwtr Cloud at ${MINDWTR_CLOUD_URL}`)
-
-  if (queue) {
-    queue.start()
-    console.log('🔄 Classification queue started')
-  }
 
   // Periodic Context Store TTL purge (once per hour)
   const purgeTimer = setInterval(() => {
@@ -295,7 +296,6 @@ async function main() {
         console.error(`Failed to stop ${ch.name}:`, err)
       }
     }
-    if (queue) await queue.stop()
     await bot.stop()
     contextStore.close()
     process.exit(0)

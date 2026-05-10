@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createCaptureSink } from './sink'
 import type { MindwtrClient } from '../api/mindwtr-client'
-import type { ClassificationQueue } from '../ai/queue'
+import type { EnricherPipeline } from '../commitment/enricher-pipeline'
 import { ContextStore } from '../context-store/store'
 import type { CapturedItem } from './normalizer'
 
@@ -35,7 +35,7 @@ describe('createCaptureSink', () => {
     } as unknown as MindwtrClient
     const store = ContextStore.open({ dbPath: join(dir, 'cs.db') })
 
-    const capture = createCaptureSink({ mindwtr, queue: null, contextStore: store })
+    const capture = createCaptureSink({ mindwtr, contextStore: store })
     await capture(makeItem({ sourceChannel: 'telegram_dm' }))
 
     expect(mindwtr.createTask).toHaveBeenCalledTimes(1)
@@ -49,7 +49,7 @@ describe('createCaptureSink', () => {
     } as unknown as MindwtrClient
     const store = ContextStore.open({ dbPath: join(dir, 'cs.db') })
 
-    const capture = createCaptureSink({ mindwtr, queue: null, contextStore: store })
+    const capture = createCaptureSink({ mindwtr, contextStore: store })
     await capture(makeItem({ sourceChannel: 'screen_capture' }))
 
     expect(mindwtr.createTask).not.toHaveBeenCalled()
@@ -63,7 +63,7 @@ describe('createCaptureSink', () => {
     } as unknown as MindwtrClient
     const store = ContextStore.open({ dbPath: join(dir, 'cs.db') })
 
-    const capture = createCaptureSink({ mindwtr, queue: null, contextStore: store })
+    const capture = createCaptureSink({ mindwtr, contextStore: store })
     await capture(makeItem())
     await capture(makeItem())
 
@@ -78,7 +78,7 @@ describe('createCaptureSink', () => {
     } as unknown as MindwtrClient
     const store = ContextStore.open({ dbPath: join(dir, 'cs.db') })
 
-    const capture = createCaptureSink({ mindwtr, queue: null, contextStore: store })
+    const capture = createCaptureSink({ mindwtr, contextStore: store })
     await capture(makeItem(), { contextOnly: true })
 
     expect(mindwtr.createTask).not.toHaveBeenCalled()
@@ -90,7 +90,7 @@ describe('createCaptureSink', () => {
     const mindwtr = {
       createTask: mock().mockResolvedValue({ id: 't1', title: 'Hi' }),
     } as unknown as MindwtrClient
-    const capture = createCaptureSink({ mindwtr, queue: null, contextStore: null })
+    const capture = createCaptureSink({ mindwtr, contextStore: null })
     await capture(makeItem())
     expect(mindwtr.createTask).toHaveBeenCalledTimes(1)
   })
@@ -99,37 +99,51 @@ describe('createCaptureSink', () => {
     const mindwtr = {
       createTask: mock().mockResolvedValue({ id: 't1', title: 'X' }),
     } as unknown as MindwtrClient
-    const capture = createCaptureSink({ mindwtr, queue: null, contextStore: null })
+    const capture = createCaptureSink({ mindwtr, contextStore: null })
     await capture(makeItem({ sourceChannel: 'screen_capture' }))
     expect(mindwtr.createTask).not.toHaveBeenCalled()
   })
 
-  it('enqueues classification only for push channels', async () => {
+  it('runs EnricherPipeline only for push channels', async () => {
     const mindwtr = {
       createTask: mock().mockResolvedValue({ id: 't1', title: 'X' }),
     } as unknown as MindwtrClient
-    const queue = { enqueue: mock() } as unknown as ClassificationQueue
+    const enricherPipeline = {
+      run: mock(async () => ({ kind: 'proposed', proposalId: 'p1', type: 'modify' })),
+    } as unknown as EnricherPipeline
     const store = ContextStore.open({ dbPath: join(dir, 'cs.db') })
 
-    const capture = createCaptureSink({ mindwtr, queue, contextStore: store })
+    const capture = createCaptureSink({ mindwtr, enricherPipeline, contextStore: store })
     await capture(makeItem({ sourceChannel: 'telegram_dm' }))
     await capture(makeItem({ text: 'OCR text', sourceChannel: 'screen_capture' }))
 
-    expect(queue.enqueue).toHaveBeenCalledTimes(1)
+    // Allow fire-and-forget microtask to run.
+    await new Promise((r) => setTimeout(r, 0))
+    expect(enricherPipeline.run).toHaveBeenCalledTimes(1)
+    const calls = (enricherPipeline.run as unknown as { mock: { calls: [{ taskId: string; sourceChannel: string }][] } }).mock.calls
+    expect(calls[0][0].taskId).toBe('t1')
+    expect(calls[0][0].sourceChannel).toBe('telegram_dm')
     store.close()
   })
 
-  it('passes extraTags to createTask for push channels', async () => {
+  it('passes extraTags to createTask and forwards them as taskTags to the enricher', async () => {
     const mindwtr = {
       createTask: mock().mockResolvedValue({ id: 't1', title: 'X' }),
     } as unknown as MindwtrClient
+    const enricherPipeline = {
+      run: mock(async () => ({ kind: 'proposed', proposalId: 'p1', type: 'modify' })),
+    } as unknown as EnricherPipeline
     const store = ContextStore.open({ dbPath: join(dir, 'cs.db') })
 
-    const capture = createCaptureSink({ mindwtr, queue: null, contextStore: store })
+    const capture = createCaptureSink({ mindwtr, enricherPipeline, contextStore: store })
     await capture(makeItem(), { extraTags: ['forwarded'] })
 
-    const calls = (mindwtr.createTask as unknown as { mock: { calls: [{ tags?: string[] }][] } }).mock.calls
-    expect(calls[0][0].tags).toEqual(['forwarded'])
+    const taskCalls = (mindwtr.createTask as unknown as { mock: { calls: [{ tags?: string[] }][] } }).mock.calls
+    expect(taskCalls[0][0].tags).toEqual(['forwarded'])
+
+    await new Promise((r) => setTimeout(r, 0))
+    const enrichCalls = (enricherPipeline.run as unknown as { mock: { calls: [{ taskTags: string[] }][] } }).mock.calls
+    expect(enrichCalls[0][0].taskTags).toEqual(['forwarded'])
     store.close()
   })
 
@@ -140,9 +154,28 @@ describe('createCaptureSink', () => {
     const store = ContextStore.open({ dbPath: join(dir, 'cs.db') })
     const onTaskCreated = mock()
 
-    const capture = createCaptureSink({ mindwtr, queue: null, contextStore: store })
+    const capture = createCaptureSink({ mindwtr, contextStore: store })
     await capture(makeItem(), { onTaskCreated })
     expect(onTaskCreated).toHaveBeenCalledTimes(1)
+    store.close()
+  })
+
+  it('does not crash when enricher pipeline rejects', async () => {
+    const mindwtr = {
+      createTask: mock().mockResolvedValue({ id: 't1', title: 'X' }),
+    } as unknown as MindwtrClient
+    const enricherPipeline = {
+      run: mock(async () => {
+        throw new Error('enricher boom')
+      }),
+    } as unknown as EnricherPipeline
+    const store = ContextStore.open({ dbPath: join(dir, 'cs.db') })
+
+    const capture = createCaptureSink({ mindwtr, enricherPipeline, contextStore: store })
+    await expect(capture(makeItem())).resolves.toBeUndefined()
+
+    // Fire-and-forget rejection — let microtask resolve so logger runs.
+    await new Promise((r) => setTimeout(r, 0))
     store.close()
   })
 })
