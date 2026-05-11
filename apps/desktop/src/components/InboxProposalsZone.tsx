@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Sparkles, Check, X, MessageSquare, ChevronDown, ChevronUp, Loader2, RefreshCw } from 'lucide-react';
+import { useTaskStore, type Task } from '@mindwtr/core';
 import {
     isProposalsAvailable,
     listPendingProposals,
@@ -257,10 +258,17 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
                 setError(`${result.reason}: ${result.details ?? ''}`);
                 return;
             }
-            // Apply created the Mindwtr task in cloud — kick a local sync so the
-            // inbox list above this zone picks it up without waiting for the
-            // periodic sync interval. Best-effort: if cloud sync fails the
-            // task will still arrive on the next cycle.
+            // Apply created the Mindwtr task in cloud. Two things need to
+            // happen in the local store for the user to actually see it in
+            // their inbox:
+            //   1) Inject the task directly with the cloud-returned id so the
+            //      web (non-Tauri) store, which has no continuous cloud-sync,
+            //      doesn't lag behind.
+            //   2) Best-effort SyncService.performSync() so that in Tauri /
+            //      properly-synced contexts the rest of the cloud state
+            //      (other concurrent edits) also lands.
+            const appliedTaskIds = result.appliedTaskIds ?? [];
+            injectCreatedTaskLocally(summary, appliedTaskIds);
             try {
                 await SyncService.performSync();
             } catch (syncErr) {
@@ -272,7 +280,7 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
         } finally {
             setBusy(false);
         }
-    }, [summary.id, onResolved]);
+    }, [summary.id, onResolved, summary]);
 
     const onRejectClick = useCallback(() => {
         // Open the inline reject form inside the card; actual reject happens
@@ -522,4 +530,55 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
             ) : null}
         </div>
     );
+}
+
+/**
+ * Inject the just-applied create proposal as a task into useTaskStore so
+ * the inbox re-renders with the new card immediately. In the Tauri
+ * desktop this is redundant (auto-sync would catch the cloud-side
+ * createTask within seconds) but in the web build there is no continuous
+ * cloud-sync — without this the user does not see the card until they
+ * reload the page.
+ *
+ * Uses the cloud-returned task id so we don't duplicate on the next
+ * bootstrap from cloud.
+ */
+function injectCreatedTaskLocally(summary: ProposalSummary, appliedTaskIds: string[]): void {
+    if (appliedTaskIds.length === 0) return;
+    const payload = summary.currentPayload as
+        | {
+              kind?: string;
+              task?: {
+                  title?: string;
+                  status?: string;
+                  tags?: string[];
+                  description?: string;
+                  metadata?: Record<string, unknown>;
+              };
+          }
+        | null;
+    if (!payload || payload.kind !== 'create' || !payload.task) return;
+    const id = appliedTaskIds[0]!;
+    const t = payload.task;
+    const now = new Date().toISOString();
+    const task: Task = {
+        id,
+        title: t.title ?? '',
+        status: (t.status as Task['status']) ?? 'inbox',
+        tags: Array.isArray(t.tags) ? t.tags.filter((x): x is string => typeof x === 'string') : [],
+        contexts: [],
+        description: typeof t.description === 'string' ? t.description : '',
+        metadata: t.metadata && typeof t.metadata === 'object' ? t.metadata : undefined,
+        createdAt: now,
+        updatedAt: now,
+    };
+    useTaskStore.setState((state) => {
+        // Guard against double-injection (e.g. if sync raced ahead and the
+        // task is already in _allTasks).
+        if (state._allTasks.some((existing) => existing.id === id)) return state;
+        return {
+            _allTasks: [...state._allTasks, task],
+            lastDataChangeAt: Date.now(),
+        };
+    });
 }
