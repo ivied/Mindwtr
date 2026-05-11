@@ -1,16 +1,18 @@
 // gtd-audio-capture
 //
-// Capture mic via AVAudioEngine. We call setVoiceProcessingEnabled(true)
-// PURELY for its side effect of switching the input bus into the device's
-// native multi-channel raw mode (MBP built-in mic = 7-9 beam-forming
-// taps). We do NOT attach the silent-player → mainMixer → output
-// scaffolding that VPIO uses for echo cancellation — that's what grabs
-// the system output device and makes macOS duck Zoom/notifications.
+// Capture mic via AVCaptureSession (the framework used by camera apps,
+// also works for audio). Unlike AVAudioEngine + VPIO, AVCaptureSession
+// does NOT register us as a voice-chat session consumer, so it coexists
+// with Zoom / Google Meet / Teams without any ducking or interference.
 //
-// What we lose: Apple's hardware AGC. Compensated by software gain.
-// What we keep: multi-channel raw, downmixed to mono manually = crude
-// beam-form-like aggregation that's still much cleaner than ffmpeg's
-// single-channel raw avfoundation pull.
+// We also set `preferredMicrophoneMode = .voiceIsolation` on the device,
+// which asks macOS to apply system-level voice isolation (neural denoise,
+// AGC) to OUR audio stream specifically — without grabbing the exclusive
+// VPIO session that other apps need.
+//
+// Pattern lifted from ambient-voice
+// (https://github.com/Marvinngg/ambient-voice), which uses the same
+// approach for continuous background capture alongside meeting apps.
 //
 // Output: 16 kHz / mono / Int16 little-endian PCM to stdout.
 
@@ -19,8 +21,7 @@ import Darwin
 
 // ---------- args ----------
 var duration: Double = 30.0
-var gain: Float = 10.0
-var enableVP = true
+var requestVoiceIsolation = true
 let args = CommandLine.arguments
 var argIdx = 1
 while argIdx < args.count {
@@ -28,14 +29,11 @@ while argIdx < args.count {
     case "--duration":
         if argIdx + 1 < args.count, let d = Double(args[argIdx + 1]) { duration = d }
         argIdx += 2
-    case "--gain":
-        if argIdx + 1 < args.count, let g = Float(args[argIdx + 1]) { gain = g }
-        argIdx += 2
-    case "--no-vp":
-        enableVP = false
+    case "--no-voice-isolation", "--no-vp":
+        requestVoiceIsolation = false
         argIdx += 1
     case "--help", "-h":
-        print("Usage: gtd-audio-capture --duration <seconds> [--gain <multiplier>] [--no-vp]")
+        print("Usage: gtd-audio-capture --duration <seconds> [--no-voice-isolation]")
         exit(0)
     default:
         argIdx += 1
@@ -48,19 +46,21 @@ func eprint(_ s: String) {
     }
 }
 
-// ---------- engine ----------
-let engine = AVAudioEngine()
-let input = engine.inputNode
-
-if enableVP {
-    do {
-        try input.setVoiceProcessingEnabled(true)
-    } catch {
-        eprint("warning: setVoiceProcessingEnabled failed: \(error.localizedDescription)")
-    }
+// ---------- locate device ----------
+guard let device = AVCaptureDevice.default(for: .audio) else {
+    eprint("error: no default audio capture device")
+    exit(1)
 }
-eprint("input format: \(input.outputFormat(forBus: 0)), gain=\(gain), vp=\(enableVP)")
+eprint("device: \(device.localizedName)")
 
+// `preferredMicrophoneMode` is get-only — macOS only lets the USER
+// change the mic mode via Control Center → Microphone. We just log what
+// the user currently has set so we can see whether voice isolation is
+// in effect at runtime. AVCaptureSession itself already avoids the
+// VPIO-session contention that breaks Zoom coexistence.
+eprint("microphone mode (user-chosen): \(AVCaptureDevice.preferredMicrophoneMode)")
+
+// ---------- target format ----------
 guard
     let targetFormat = AVAudioFormat(
         commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true
@@ -70,91 +70,131 @@ else {
     exit(1)
 }
 
-let stdoutHandle = FileHandle.standardOutput
-let writeQueue = DispatchQueue(label: "stdout-writer")
+// ---------- delegate ----------
+final class StdoutCaptureDelegate: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
+    let targetFormat: AVAudioFormat
+    private var converter: AVAudioConverter?
+    private var sourceFormat: AVAudioFormat?
+    let stdoutHandle = FileHandle.standardOutput
+    let writeQueue = DispatchQueue(label: "stdout-writer")
 
-var converter: AVAudioConverter?
-var monoSourceFormat: AVAudioFormat?
-
-// ---------- tap ----------
-input.installTap(onBus: 0, bufferSize: 4_096, format: nil) { buffer, _ in
-    let bufFormat = buffer.format
-    let nFrames = Int(buffer.frameLength)
-    let nChans = Int(bufFormat.channelCount)
-    guard nFrames > 0, let channels = buffer.floatChannelData else { return }
-
-    // Manual downmix N → 1 with software gain applied. Clip to ±1.0
-    // before downstream Int16 conversion to avoid wrap-around distortion.
-    let invChans = 1.0 / Float(nChans)
-    var monoSamples = [Float](repeating: 0, count: nFrames)
-    for i in 0..<nFrames {
-        var s: Float = 0
-        for ch in 0..<nChans {
-            s += channels[ch][i]
-        }
-        let v = (s * invChans) * gain
-        monoSamples[i] = max(-1.0, min(1.0, v))
+    init(targetFormat: AVAudioFormat) {
+        self.targetFormat = targetFormat
     }
 
-    if monoSourceFormat == nil {
-        monoSourceFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32, sampleRate: bufFormat.sampleRate, channels: 1,
-            interleaved: false
+    func captureOutput(
+        _ output: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from connection: AVCaptureConnection
+    ) {
+        guard let pcm = pcmBuffer(from: sampleBuffer) else { return }
+        let converted = convert(pcm) ?? pcm
+        emit(converted)
+    }
+
+    private func pcmBuffer(from sb: CMSampleBuffer) -> AVAudioPCMBuffer? {
+        guard
+            let fmtDesc = CMSampleBufferGetFormatDescription(sb),
+            let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(fmtDesc)?.pointee
+        else { return nil }
+        var asbdCopy = asbd
+        guard let avFormat = AVAudioFormat(streamDescription: &asbdCopy) else { return nil }
+        let nFrames = AVAudioFrameCount(CMSampleBufferGetNumSamples(sb))
+        guard
+            let buf = AVAudioPCMBuffer(pcmFormat: avFormat, frameCapacity: nFrames)
+        else { return nil }
+        buf.frameLength = nFrames
+
+        var blockBuffer: CMBlockBuffer?
+        var audioBufferList = AudioBufferList(
+            mNumberBuffers: 1,
+            mBuffers: AudioBuffer(mNumberChannels: avFormat.channelCount, mDataByteSize: 0, mData: nil)
         )
-        converter = AVAudioConverter(from: monoSourceFormat!, to: targetFormat)
-        if converter == nil {
-            eprint("error: converter init failed")
-            return
-        }
-    }
-
-    guard
-        let inMono = AVAudioPCMBuffer(
-            pcmFormat: monoSourceFormat!, frameCapacity: AVAudioFrameCount(nFrames)
+        let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sb,
+            bufferListSizeNeededOut: nil,
+            bufferListOut: &audioBufferList,
+            bufferListSize: MemoryLayout<AudioBufferList>.size,
+            blockBufferAllocator: nil,
+            blockBufferMemoryAllocator: nil,
+            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
+            blockBufferOut: &blockBuffer
         )
-    else { return }
-    inMono.frameLength = AVAudioFrameCount(nFrames)
-    if let dst = inMono.floatChannelData?[0] {
-        monoSamples.withUnsafeBufferPointer { src in
-            dst.update(from: src.baseAddress!, count: nFrames)
-        }
+        guard status == noErr,
+              let src = audioBufferList.mBuffers.mData
+        else { return nil }
+        let byteCount = Int(audioBufferList.mBuffers.mDataByteSize)
+        memcpy(buf.audioBufferList.pointee.mBuffers.mData, src, byteCount)
+        return buf
     }
 
-    let ratio = targetFormat.sampleRate / bufFormat.sampleRate
-    let capacity = AVAudioFrameCount((Double(nFrames) * ratio).rounded(.up)) + 64
-    guard let outBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else {
-        return
-    }
-    var error: NSError?
-    var provided = false
-    let status = converter!.convert(to: outBuffer, error: &error) { _, outStatus in
-        if provided {
-            outStatus.pointee = .noDataNow
+    private func convert(_ input: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        if input.format == targetFormat { return input }
+        if converter == nil || sourceFormat != input.format {
+            converter = AVAudioConverter(from: input.format, to: targetFormat)
+            sourceFormat = input.format
+            if converter == nil {
+                eprint("converter init failed: \(input.format) → \(targetFormat)")
+                return nil
+            }
+        }
+        let ratio = targetFormat.sampleRate / input.format.sampleRate
+        let capacity = AVAudioFrameCount((Double(input.frameLength) * ratio).rounded(.up)) + 64
+        guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity)
+        else { return nil }
+        var error: NSError?
+        var provided = false
+        let status = converter!.convert(to: out, error: &error) { _, outStatus in
+            if provided { outStatus.pointee = .noDataNow; return nil }
+            provided = true
+            outStatus.pointee = .haveData
+            return input
+        }
+        if status == .error {
+            eprint("convert error: \(error?.localizedDescription ?? "unknown")")
             return nil
         }
-        provided = true
-        outStatus.pointee = .haveData
-        return inMono
+        return out
     }
-    if status == .error {
-        eprint("convert error: \(error?.localizedDescription ?? "unknown")")
-        return
-    }
-    guard let chan = outBuffer.int16ChannelData?[0], outBuffer.frameLength > 0 else { return }
-    let byteCount = Int(outBuffer.frameLength) * 2
-    let data = Data(bytes: chan, count: byteCount)
-    writeQueue.async {
-        stdoutHandle.write(data)
+
+    private func emit(_ buf: AVAudioPCMBuffer) {
+        guard let chan = buf.int16ChannelData?[0], buf.frameLength > 0 else { return }
+        let byteCount = Int(buf.frameLength) * 2
+        let data = Data(bytes: chan, count: byteCount)
+        writeQueue.async { [stdoutHandle] in
+            stdoutHandle.write(data)
+        }
     }
 }
 
-// ---------- run ----------
+let delegate = StdoutCaptureDelegate(targetFormat: targetFormat)
+
+// ---------- session ----------
+let session = AVCaptureSession()
 do {
-    try engine.start()
+    let deviceInput = try AVCaptureDeviceInput(device: device)
+    if session.canAddInput(deviceInput) {
+        session.addInput(deviceInput)
+    } else {
+        eprint("error: cannot add audio input")
+        exit(1)
+    }
 } catch {
-    eprint("error: engine.start() failed: \(error.localizedDescription)")
-    exit(2)
+    eprint("error: AVCaptureDeviceInput failed: \(error.localizedDescription)")
+    exit(1)
 }
+
+let audioOutput = AVCaptureAudioDataOutput()
+let captureQueue = DispatchQueue(label: "audio-capture")
+audioOutput.setSampleBufferDelegate(delegate, queue: captureQueue)
+if session.canAddOutput(audioOutput) {
+    session.addOutput(audioOutput)
+} else {
+    eprint("error: cannot add audio output")
+    exit(1)
+}
+
+session.startRunning()
 
 var stopRequested = false
 signal(SIGINT) { _ in stopRequested = true }
@@ -165,6 +205,5 @@ while Date() < deadline && !stopRequested {
     Thread.sleep(forTimeInterval: 0.05)
 }
 
-engine.stop()
-input.removeTap(onBus: 0)
-writeQueue.sync { }
+session.stopRunning()
+delegate.writeQueue.sync { }
