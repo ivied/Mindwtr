@@ -3,9 +3,16 @@
  */
 
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { AgentConfig } from './types'
 import { DEFAULT_EXCLUDED_APPS, DEFAULT_EXCLUDED_TITLES } from './filter/exclusion'
+
+function defaultNativeBinaryPath(): string {
+  // Resolve relative to this file: src/config.ts → ../audio-helper/gtd-audio-capture
+  const here = dirname(fileURLToPath(import.meta.url))
+  return resolve(here, '..', 'audio-helper', 'gtd-audio-capture')
+}
 
 function parseList(value: string | undefined): string[] {
   if (!value) return []
@@ -51,6 +58,9 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): AgentCo
       audioFilter:
         env.AGENT_AUDIO_FILTER ??
         'highpass=f=80,afftdn=nf=-25,loudnorm=I=-16:TP=-1.5:LRA=11',
+      backend: (env.AGENT_AUDIO_BACKEND ?? 'native') === 'ffmpeg' ? 'ffmpeg' : 'native',
+      nativeBinaryPath: env.AGENT_AUDIO_HELPER_PATH ?? defaultNativeBinaryPath(),
+      nativeNoVoiceProcessing: env.AGENT_AUDIO_NO_VP === 'true',
     },
     wiki: {
       dir: env.AGENT_WIKI_DIR ?? '',

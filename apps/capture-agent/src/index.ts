@@ -16,7 +16,8 @@ import { startLoop } from './runner'
 import { startAudioLoop } from './audio-runner'
 import { AiServiceClient } from './client/ai-service'
 import { CaptureDeduper } from './filter/dedup'
-import { AudioRecorder } from './capture/audio-recorder'
+import { FfmpegAudioRecorder, type AudioRecorder } from './capture/audio-recorder'
+import { NativeAudioRecorder } from './capture/audio-recorder-native'
 import { WhisperClient } from './capture/whisper'
 import { MdWikiWriter, type ImageAttachment } from './wiki/md-writer'
 import { resizeToJpeg } from './wiki/image-processor'
@@ -55,12 +56,24 @@ async function main() {
     if (!config.audio.openaiApiKey) {
       console.warn('⚠️ AGENT_AUDIO_ENABLED=true but no OPENAI/AGENT_OPENAI_API_KEY — audio disabled')
     } else {
-      const recorder = new AudioRecorder({
-        ffmpegPath: config.audio.ffmpegPath,
-        sampleRate: 16000,
-        inputDevice: config.audio.inputDevice,
-        audioFilter: config.audio.audioFilter,
-      })
+      let recorder: AudioRecorder
+      if (config.audio.backend === 'native') {
+        const native = new NativeAudioRecorder({
+          binaryPath: config.audio.nativeBinaryPath,
+          noVoiceProcessing: config.audio.nativeNoVoiceProcessing,
+        })
+        await native.ensureAvailable()
+        recorder = native
+        console.log(`🎙  audio backend: native (${config.audio.nativeBinaryPath})`)
+      } else {
+        recorder = new FfmpegAudioRecorder({
+          ffmpegPath: config.audio.ffmpegPath,
+          sampleRate: 16000,
+          inputDevice: config.audio.inputDevice,
+          audioFilter: config.audio.audioFilter,
+        })
+        console.log(`🎙  audio backend: ffmpeg (${config.audio.inputDevice})`)
+      }
       const whisper = new WhisperClient({
         apiKey: config.audio.openaiApiKey,
         baseUrl: config.audio.openaiBaseUrl,

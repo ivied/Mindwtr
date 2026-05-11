@@ -48,14 +48,20 @@ export const DEFAULT_AUDIO_RECORDER_CONFIG: AudioRecorderConfig = {
 export interface RecordedChunk {
   /** PCM/WAV bytes */
   data: Buffer
-  /** Path that was used (already deleted by record()) */
+  /** Path that was used (already deleted by record()), or '' if no temp file. */
   tempPath: string
-  /** Actual duration in ms (may differ from requested if ffmpeg cut short) */
+  /** Actual duration in ms (may differ from requested if recorder cut short) */
   durationMs: number
   sampleRate: number
 }
 
-export class AudioRecorder {
+export interface AudioRecorder {
+  record(durationMs: number): Promise<RecordedChunk>
+}
+
+/** Legacy ffmpeg backend — keep for fallback, but the native backend is
+ *  better on macOS multi-mic arrays (built-in MBP mic especially). */
+export class FfmpegAudioRecorder implements AudioRecorder {
   private config: AudioRecorderConfig
 
   constructor(config: Partial<AudioRecorderConfig> = {}) {
