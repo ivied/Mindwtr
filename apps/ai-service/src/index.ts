@@ -33,6 +33,7 @@ import {
   HybridRetriever,
   FocusContextAssembler,
   DailySummaryJob,
+  MemoryProposerContext,
 } from './memory'
 
 const MINDWTR_CLOUD_URL = process.env.MINDWTR_CLOUD_URL ?? 'http://localhost:8787'
@@ -184,6 +185,14 @@ if (LLM_BASE_URL && LLM_API_KEY) {
   // slugs so waiting-for tasks stay consistent across captures.
   if (personsProvider) {
     commitmentPipeline.setPersonsProvider(personsProvider)
+  }
+  // Historical context from the memory module — when events are present,
+  // top-K related events + active facts are passed to the Proposer as
+  // RECENT_CONTEXT. Costs one embedding call per capture; SQL is local.
+  if (embeddings) {
+    commitmentPipeline.setMemoryContextProvider(
+      new MemoryProposerContext({ store: memoryStore, retriever: memoryRetriever })
+    )
   }
   console.log(
     `🎯 Commitment Detector enabled (deny apps:${sourceDeny.apps.length}, deny urls:${sourceDeny.urlPatterns.length}, inbox-dedup on, identity:${USER_IDENTITY_NAME || 'unset'}, persons:${personsProvider ? 'wiki' : 'unset'})`

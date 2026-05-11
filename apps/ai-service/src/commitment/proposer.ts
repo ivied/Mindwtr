@@ -273,7 +273,13 @@ export class Proposer {
     sourceMeta?: Record<string, unknown>,
     recentInboxTitles?: string[],
     userIdentity?: UserIdentity | null,
-    knownPersons?: KnownPerson[]
+    knownPersons?: KnownPerson[],
+    /** Optional pre-assembled summary of relevant past context. Goes into
+     *  the user-message as a RECENT_CONTEXT block so the Proposer can
+     *  factor open threads / waiting-fors / prior decisions into its
+     *  is_actionable / suggested_category / duplicate_of_title verdict.
+     *  Plain text, ≤ ~400 chars expected. */
+    recentContext?: string | null
   ): Promise<Proposal> {
     const systemPrompt = buildSystemPrompt(userIdentity)
     const parts: string[] = []
@@ -297,6 +303,11 @@ export class Proposer {
         .map((t) => `- ${t}`)
         .join('\n')
       parts.push(`RECENT_INBOX (existing items — dedup against these):\n${lines}`)
+    }
+    if (recentContext && recentContext.trim().length > 0) {
+      parts.push(
+        `RECENT_CONTEXT (relevant facts and recent events from the user's history — use to spot duplicates, recognize ongoing threads, attribute roles correctly):\n${recentContext.trim()}`
+      )
     }
     parts.push(`Text:\n${text}`)
     const userMessage = parts.join('\n\n')

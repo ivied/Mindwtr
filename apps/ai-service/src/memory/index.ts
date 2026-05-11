@@ -29,6 +29,8 @@ export { FocusContextAssembler } from './focus-context'
 export type { AssembleArgs } from './focus-context'
 export { DailySummaryJob } from './daily-summary'
 export type { DailySummaryResult } from './daily-summary'
+export { MemoryProposerContext } from './proposer-context'
+export type { ProposerContextProvider } from './proposer-context'
 export type {
   Event,
   NewEventInput,

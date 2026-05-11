@@ -17,6 +17,7 @@ import type { ProposalWriter } from './writer'
 import type { ProposalNotifier } from '../bot/proposal-notifier'
 import type { InboxTitlesProvider } from './inbox-titles'
 import type { PersonsProvider } from '../wiki/persons-reader'
+import type { ProposerContextProvider } from '../memory/proposer-context'
 import { l0Filter } from './l0-filter'
 import {
   evaluateSourceDeny,
@@ -61,6 +62,7 @@ export class CommitmentPipeline {
   private inboxTitlesProvider: InboxTitlesProvider | null = null
   private userIdentity: UserIdentity | null = null
   private personsProvider: PersonsProvider | null = null
+  private memoryContextProvider: ProposerContextProvider | null = null
 
   constructor(
     private proposer: Proposer,
@@ -90,6 +92,14 @@ export class CommitmentPipeline {
    *  to the Proposer so who_to gets normalized to a canonical slug. */
   setPersonsProvider(provider: PersonsProvider | null): void {
     this.personsProvider = provider
+  }
+
+  /** Optional: when set, a compact RECENT_CONTEXT block (active facts + top
+   *  related events from the memory module) is appended to the Proposer
+   *  user-message. Fail-open: errors are logged and the capture is still
+   *  proposed without the extra context. */
+  setMemoryContextProvider(provider: ProposerContextProvider | null): void {
+    this.memoryContextProvider = provider
   }
 
   async run(capture: CaptureRecord): Promise<PipelineOutcome> {
@@ -143,6 +153,21 @@ export class CommitmentPipeline {
       }
     }
 
+    // Optional historical context from the memory module — folds active
+    // facts + top related events from the user's history into the Proposer's
+    // user-message. Best-effort: failure means no RECENT_CONTEXT block, the
+    // capture still gets proposed.
+    let recentContext: string | null = null
+    if (this.memoryContextProvider) {
+      try {
+        recentContext = await this.memoryContextProvider.getRecentContext(capture.text)
+      } catch (err) {
+        this.log(
+          `[commitment] memory context fetch failed (${capture.id}): ${(err as Error).message}`
+        )
+      }
+    }
+
     let proposal
     try {
       proposal = await this.proposer.propose(
@@ -150,7 +175,8 @@ export class CommitmentPipeline {
         capture.sourceMeta ?? undefined,
         inboxTitles,
         this.userIdentity,
-        knownPersons
+        knownPersons,
+        recentContext
       )
     } catch (err) {
       this.log(`[commitment] proposer failed (${capture.id}): ${(err as Error).message}`)
