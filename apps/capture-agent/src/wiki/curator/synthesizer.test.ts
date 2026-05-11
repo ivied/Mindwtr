@@ -3,7 +3,7 @@ import { mkdir, writeFile, readFile, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { runSynthesizer, spliceAbout, sanitizeAbout } from './synthesizer'
+import { runSynthesizer, spliceAbout, spliceSection, sanitizeAbout, parseSynthOutput } from './synthesizer'
 import { parseEntityMd } from './entity-frontmatter'
 import type { LlmClient } from '../llm-client'
 
@@ -92,6 +92,77 @@ describe('sanitizeAbout', () => {
   })
 })
 
+describe('parseSynthOutput', () => {
+  it('extracts both About and Timeline sections', () => {
+    const raw = [
+      '## About',
+      '',
+      'A summary.',
+      '',
+      '## Timeline',
+      '- 2026-05-01: started',
+      '- 2026-05-10: shipped',
+    ].join('\n')
+    const p = parseSynthOutput(raw)
+    expect(p.about).toBe('A summary.')
+    expect(p.timeline).toContain('- 2026-05-01: started')
+    expect(p.timeline).toContain('- 2026-05-10: shipped')
+  })
+
+  it('returns empty when only About is present', () => {
+    const p = parseSynthOutput('## About\n\nJust the about.')
+    expect(p.about).toBe('Just the about.')
+    expect(p.timeline).toBe('')
+  })
+
+  it('drops Timeline bullets that lack a date prefix', () => {
+    const raw = ['## Timeline', '- 2026-05-01: ok', '- no date here', '- 2026-05-10: ok'].join('\n')
+    const p = parseSynthOutput(raw)
+    expect(p.timeline).toContain('- 2026-05-01: ok')
+    expect(p.timeline).toContain('- 2026-05-10: ok')
+    expect(p.timeline).not.toContain('no date here')
+  })
+
+  it('SKIP yields empty for both', () => {
+    expect(parseSynthOutput('SKIP')).toEqual({ about: '', timeline: '' })
+  })
+
+  it('falls back to whole text as About when no headers present', () => {
+    expect(parseSynthOutput('Just plain text.')).toEqual({ about: 'Just plain text.', timeline: '' })
+  })
+})
+
+describe('spliceSection', () => {
+  it('inserts About then Timeline in stable order', () => {
+    const body = '# X\n\n## Related\n\n- [[a]]\n'
+    const afterAbout = spliceSection(body, 'X', 'About', 'A summary.')
+    const final = spliceSection(afterAbout, 'X', 'Timeline', '- 2026-05-01: ok')
+    expect(final).toMatch(/## About[\s\S]*## Timeline[\s\S]*## Related/)
+  })
+
+  it('replaces existing Timeline in place', () => {
+    const body = [
+      '# X',
+      '',
+      '## About',
+      '',
+      'A.',
+      '',
+      '## Timeline',
+      '- 2026-04-01: old',
+      '',
+      '## Related',
+      '',
+      '- [[a]]',
+    ].join('\n')
+    const out = spliceSection(body, 'X', 'Timeline', '- 2026-05-10: new')
+    expect(out).not.toContain('old')
+    expect(out).toContain('- 2026-05-10: new')
+    expect(out).toContain('## About')
+    expect(out).toContain('## Related')
+  })
+})
+
 describe('spliceAbout', () => {
   it('inserts About after the title', () => {
     const body = '# GTD Mindwtr\n\n## Related\n\n- [[x]]\n'
@@ -144,7 +215,7 @@ describe('runSynthesizer', () => {
       '{"ts":"2026-05-10T00:00:00.000Z","source":"screen","app":"Claude","excerpt":"Claude opens a new chat"}',
       '{"ts":"2026-05-09T00:00:00.000Z","source":"screen","app":"Claude","excerpt":"asks Claude to summarize"}',
     ])
-    const llm = new FakeLlm(() => 'Claude is Anthropic\'s AI assistant.')
+    const llm = new FakeLlm(() => '## About\n\nClaude is Anthropic\'s AI assistant.')
     const r = await runSynthesizer({
       wikiDir: testDir,
       llm: llm as unknown as LlmClient,
@@ -158,11 +229,33 @@ describe('runSynthesizer', () => {
     expect(p.body).toContain('Claude is Anthropic')
   })
 
+  it('writes both About and Timeline when LLM emits both', async () => {
+    await seedEntity('proj', 10, [
+      '{"ts":"2026-05-10T00:00:00.000Z","excerpt":"shipped v1"}',
+      '{"ts":"2026-05-01T00:00:00.000Z","excerpt":"started"}',
+    ])
+    const llm = new FakeLlm(
+      () =>
+        '## About\n\nA project the user works on.\n\n## Timeline\n- 2026-05-01: started\n- 2026-05-10: shipped v1'
+    )
+    await runSynthesizer({
+      wikiDir: testDir,
+      llm: llm as unknown as LlmClient,
+      now: () => NOW,
+    })
+    const text = await readFile(join(entitiesDir, 'proj.md'), 'utf-8')
+    expect(text).toContain('## About')
+    expect(text).toContain('A project the user works on.')
+    expect(text).toContain('## Timeline')
+    expect(text).toContain('- 2026-05-01: started')
+    expect(text).toContain('- 2026-05-10: shipped v1')
+  })
+
   it('writes state file with mention_count snapshot', async () => {
     await seedEntity('x', 5, [
       '{"ts":"2026-05-10T00:00:00.000Z","excerpt":"x"}',
     ])
-    const llm = new FakeLlm(() => 'A thing.')
+    const llm = new FakeLlm(() => '## About\n\nA thing.')
     await runSynthesizer({
       wikiDir: testDir,
       llm: llm as unknown as LlmClient,
@@ -218,7 +311,7 @@ describe('runSynthesizer', () => {
         },
       })
     )
-    const llm = new FakeLlm(() => 'A thing.')
+    const llm = new FakeLlm(() => '## About\n\nA thing.')
     const r = await runSynthesizer({
       wikiDir: testDir,
       llm: llm as unknown as LlmClient,
@@ -234,7 +327,7 @@ describe('runSynthesizer', () => {
         `{"ts":"2026-05-10T00:00:00.000Z","excerpt":"${slug}"}`,
       ])
     }
-    const llm = new FakeLlm(() => 'Summary.')
+    const llm = new FakeLlm(() => '## About\n\nSummary.')
     const r = await runSynthesizer({
       wikiDir: testDir,
       llm: llm as unknown as LlmClient,

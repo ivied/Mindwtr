@@ -224,7 +224,7 @@ async function mergeAndWriteEntity(wikiRoot: string, rec: EntityRecord): Promise
   await mkdir(dir, { recursive: true })
   const path = join(dir, `${rec.slug}.md`)
 
-  let existing: { firstSeen?: string; mentionCount?: number; related?: Map<string, number>; aliases?: Set<string> } = {}
+  let existing: { firstSeen?: string; mentionCount?: number; related?: Map<string, number>; aliases?: Set<string>; customBody?: string } = {}
   try {
     const text = await readFile(path, 'utf8')
     existing = parseExistingEntity(text)
@@ -241,7 +241,7 @@ async function mergeAndWriteEntity(wikiRoot: string, rec: EntityRecord): Promise
   }
   const totalMentionCount = (existing.mentionCount ?? 0) + rec.mentions.length
 
-  const md = renderEntityPage(rec, totalMentionCount, wikiRoot, path)
+  const md = renderEntityPage(rec, totalMentionCount, wikiRoot, path, existing.customBody)
   await writeFile(path, md, 'utf8')
 
   // Append new mentions to a separate _mentions.jsonl file (sourced for re-render later)
@@ -260,11 +260,14 @@ function parseExistingEntity(text: string): {
   mentionCount?: number
   related?: Map<string, number>
   aliases?: Set<string>
+  customBody?: string
 } {
-  const out: { firstSeen?: string; mentionCount?: number; related?: Map<string, number>; aliases?: Set<string> } = {}
-  const fmMatch = text.match(/^---\n([\s\S]*?)\n---/)
+  const out: { firstSeen?: string; mentionCount?: number; related?: Map<string, number>; aliases?: Set<string>; customBody?: string } = {}
+  const fmMatch = text.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/)
   if (!fmMatch) return out
   const fm = fmMatch[1]!
+  const body = fmMatch[2] ?? ''
+  out.customBody = extractCustomSections(body)
 
   const firstSeen = fm.match(/^first_seen:\s*(.+)$/m)
   if (firstSeen) out.firstSeen = firstSeen[1]!.trim()
@@ -295,11 +298,48 @@ function parseExistingEntity(text: string): {
   return out
 }
 
+/**
+ * Pulls out body sections we want to preserve across rollup regenerations.
+ * Rollup owns frontmatter, `# Title`, `## Related`, and `## Recent mentions`;
+ * everything else (`## About`, `## Timeline`, user notes…) is round-tripped
+ * verbatim. Without this, the curator's synthesized prose would be wiped on
+ * the next rollup pass.
+ */
+export function extractCustomSections(body: string): string {
+  const protectedHeaders = /^##\s+(Related|Recent mentions\b)/i
+  const lines = body.split('\n')
+  const out: string[] = []
+  let inProtected = false
+  let started = false
+  for (const line of lines) {
+    if (/^##\s+/.test(line)) {
+      inProtected = protectedHeaders.test(line)
+      if (!inProtected) {
+        started = true
+        out.push(line)
+      }
+      continue
+    }
+    if (/^#\s+/.test(line)) {
+      // top-level title — skip; rollup re-emits it
+      inProtected = false
+      continue
+    }
+    if (inProtected) continue
+    if (!started) continue
+    out.push(line)
+  }
+  // trim trailing blank lines
+  while (out.length > 0 && out[out.length - 1]!.trim() === '') out.pop()
+  return out.join('\n')
+}
+
 function renderEntityPage(
   rec: EntityRecord,
   totalMentionCount: number,
   wikiRoot: string,
-  pagePath: string
+  pagePath: string,
+  customBody?: string
 ): string {
   const aliases = [...rec.aliases].slice(0, 10)
   const related = [...rec.related.entries()]
@@ -325,6 +365,10 @@ function renderEntityPage(
   ].join('\n')
 
   const lines: string[] = [fm, '', `# ${rec.name}`, '']
+
+  if (customBody && customBody.trim().length > 0) {
+    lines.push(customBody, '')
+  }
 
   if (related.length) {
     lines.push('## Related', '')

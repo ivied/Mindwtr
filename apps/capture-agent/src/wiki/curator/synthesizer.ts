@@ -197,8 +197,8 @@ export async function runSynthesizer(
     }
 
     try {
-      const aboutText = await synthesizeAbout(options.llm, c.parsed!.frontmatter, mentions)
-      if (!aboutText) {
+      const sections = await synthesizeEntity(options.llm, c.parsed!.frontmatter, mentions)
+      if (!sections.about && !sections.timeline) {
         result.decisions.push({
           slug: c.slug,
           action: 'synth',
@@ -206,7 +206,13 @@ export async function runSynthesizer(
         })
         continue
       }
-      const updatedBody = spliceAbout(c.parsed!.body, fm.name, aboutText)
+      let updatedBody = c.parsed!.body
+      if (sections.about) {
+        updatedBody = spliceSection(updatedBody, fm.name, 'About', sections.about)
+      }
+      if (sections.timeline) {
+        updatedBody = spliceSection(updatedBody, fm.name, 'Timeline', sections.timeline)
+      }
       const newDoc = serializeEntityMd({ frontmatter: fm, body: updatedBody })
       await writeFile(c.path, newDoc, 'utf-8')
       synthState[c.slug] = {
@@ -214,10 +220,16 @@ export async function runSynthesizer(
         mentionCountAtSynth: fm.mentionCount,
       }
       result.synthesized += 1
+      const wroteParts = [
+        sections.about ? `${sections.about.length}-char About` : '',
+        sections.timeline ? `${sections.timeline.split('\n').filter((l) => l.trim()).length}-line Timeline` : '',
+      ]
+        .filter(Boolean)
+        .join(' + ')
       result.decisions.push({
         slug: c.slug,
         action: 'synth',
-        rationale: `wrote ${aboutText.length}-char About`,
+        rationale: `wrote ${wroteParts}`,
       })
     } catch (err) {
       result.errors += 1
@@ -234,20 +246,35 @@ export async function runSynthesizer(
 
 // ---------------- LLM ----------------
 
-const SYSTEM_PROMPT = `You write very short "About" descriptions for entities in a developer's personal knowledge graph.
+const SYSTEM_PROMPT = `You write two short sections for an entity in a developer's personal knowledge graph.
+
+Output exactly this format (omit a section if there's nothing meaningful to say there):
+
+## About
+<1-3 sentences describing what the entity IS and why it shows up in the user's captures>
+
+## Timeline
+- YYYY-MM-DD: <event in 1 short clause>
+- YYYY-MM-DD: <event in 1 short clause>
+(3-8 milestones max — only events clearly grounded in the mentions; skip if there's no clear timeline arc)
 
 Rules:
-- 1 to 3 sentences. Plain text, no markdown, no headers, no bullet points.
-- Describe what the entity IS and why it shows up in the user's captures, based ONLY on the mentions provided.
-- Do not speculate, invent names, or add details that aren't in the input.
-- If mentions are OCR-garbled noise with no clear meaning, output exactly: SKIP
-- Output ONLY the About text or SKIP — no preamble, no quoting, no "Here is...".`
+- Use ONLY information from the mentions. No speculation, no invented names/dates.
+- Plain text inside About — no bullets or sub-headers.
+- Timeline dates come from the timestamps in the mentions; group nearby events into one milestone if they describe the same thing.
+- If mentions are OCR-garbled noise with no meaning, output exactly: SKIP
+- Output ONLY the section blocks above. No preamble, no closing summary, no quoting, no fences.`
 
-async function synthesizeAbout(
+interface SynthSections {
+  about: string
+  timeline: string
+}
+
+export async function synthesizeEntity(
   llm: LlmClient,
   fm: { name: string; type: string; aliases: string[] },
   mentions: string[]
-): Promise<string> {
+): Promise<SynthSections> {
   const userPrompt = [
     `Entity: ${fm.name}`,
     `Type: ${fm.type}`,
@@ -263,19 +290,54 @@ async function synthesizeAbout(
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'user', content: userPrompt },
   ])
-  return sanitizeAbout(raw)
+  return parseSynthOutput(raw)
 }
 
-export function sanitizeAbout(raw: string): string {
+export function parseSynthOutput(raw: string): SynthSections {
   const cleaned = raw
     .replace(/^```[a-z]*\s*/i, '')
     .replace(/```\s*$/i, '')
     .trim()
-  if (!cleaned) return ''
-  if (/^SKIP\b/i.test(cleaned)) return ''
-  // reject anything that looks like a JSON/tool dump
-  if (cleaned.startsWith('{') || cleaned.startsWith('[')) return ''
-  return cleaned.slice(0, MAX_ABOUT_CHARS)
+  if (!cleaned || /^SKIP\b/i.test(cleaned)) return { about: '', timeline: '' }
+  if (cleaned.startsWith('{') || cleaned.startsWith('[')) return { about: '', timeline: '' }
+
+  const about = extractSection(cleaned, 'about')
+  const timeline = extractSection(cleaned, 'timeline')
+  return {
+    about: about.slice(0, MAX_ABOUT_CHARS),
+    timeline: sanitizeTimeline(timeline),
+  }
+}
+
+function extractSection(text: string, name: string): string {
+  const re = new RegExp(`^##\\s+${name}\\s*$`, 'im')
+  const m = text.match(re)
+  if (!m) {
+    // If there's no header at all and the response is just prose, assume it's the About text.
+    if (name === 'about' && !/^##\s+/m.test(text)) return text.trim()
+    return ''
+  }
+  const start = m.index! + m[0].length
+  const rest = text.slice(start)
+  const nextHeader = rest.search(/^##\s+/m)
+  const body = nextHeader >= 0 ? rest.slice(0, nextHeader) : rest
+  return body.trim()
+}
+
+function sanitizeTimeline(raw: string): string {
+  if (!raw) return ''
+  const lines = raw
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0)
+  // keep only lines that look like "- YYYY-MM-DD: ..." or "- YYYY-MM: ..."
+  const kept = lines.filter((l) => /^-\s*\d{4}(-\d{2}){0,2}\s*[:·—-]/.test(l))
+  return kept.join('\n')
+}
+
+/** @deprecated — kept for backwards-compat with older tests that imported it. */
+export function sanitizeAbout(raw: string): string {
+  return parseSynthOutput(raw).about
 }
 
 async function readMentions(path: string, max: number): Promise<string[]> {
@@ -303,29 +365,42 @@ function prettifyMention(jsonLine: string): string {
 
 // ---------------- body splice ----------------
 
-export function spliceAbout(body: string, name: string, aboutText: string): string {
+/**
+ * Insert (or replace) a `## <sectionName>` block in `body`, anchored just
+ * after the `# <title>` heading. Each curator-owned section is updated
+ * independently; rollup's `extractCustomSections` round-trips everything
+ * between the title and `## Related` so these blocks survive.
+ *
+ * Ordering for new inserts: synthesizer writes About first, then Timeline,
+ * so calling spliceSection twice produces "## About, ## Timeline" in that
+ * order. Replacement is in-place at the existing header position.
+ */
+export function spliceSection(
+  body: string,
+  name: string,
+  sectionName: string,
+  sectionText: string
+): string {
   const text = body.replace(/^\n+/, '')
   const lines = text.split('\n')
+  const headerEsc = sectionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const headerRe = new RegExp(`^##\\s+${headerEsc}\\b`, 'i')
 
-  // Find header line "# <name>" (allow any case/whitespace)
   let titleIdx = lines.findIndex((l) => /^#\s+\S/.test(l))
   if (titleIdx < 0) {
-    // No title — prepend a synthesized one.
-    return `# ${name}\n\n## About\n\n${aboutText}\n\n${text}`
+    return `# ${name}\n\n## ${sectionName}\n\n${sectionText}\n\n${text}`
   }
 
-  // Find existing ## About section (case-insensitive).
-  const aboutHeaderRe = /^##\s+about\b/i
-  let aboutStart = -1
-  let aboutEnd = -1
+  // Find existing block.
+  let blockStart = -1
+  let blockEnd = -1
   for (let i = titleIdx + 1; i < lines.length; i++) {
-    if (aboutHeaderRe.test(lines[i]!)) {
-      aboutStart = i
-      // find next ## or end
-      aboutEnd = lines.length
+    if (headerRe.test(lines[i]!)) {
+      blockStart = i
+      blockEnd = lines.length
       for (let j = i + 1; j < lines.length; j++) {
         if (/^##\s+/.test(lines[j]!)) {
-          aboutEnd = j
+          blockEnd = j
           break
         }
       }
@@ -333,22 +408,36 @@ export function spliceAbout(body: string, name: string, aboutText: string): stri
     }
   }
 
-  const aboutBlock = ['## About', '', aboutText, '']
-  if (aboutStart >= 0) {
-    // Replace existing block.
-    const before = lines.slice(0, aboutStart)
-    const after = lines.slice(aboutEnd)
-    return [...before, ...aboutBlock, ...after].join('\n').replace(/\n{3,}/g, '\n\n')
+  const block = [`## ${sectionName}`, '', sectionText, '']
+  if (blockStart >= 0) {
+    const before = lines.slice(0, blockStart)
+    const after = lines.slice(blockEnd)
+    return [...before, ...block, ...after].join('\n').replace(/\n{3,}/g, '\n\n')
   }
 
-  // Insert after title (skip a blank line after title if present).
-  let insertAt = titleIdx + 1
-  if (insertAt < lines.length && lines[insertAt] === '') insertAt += 1
+  // New insert: place the new block just before the first rollup-owned
+  // section (Related / Recent mentions). Curator-owned sections (About,
+  // Timeline, …) thus accumulate in call order between the title and the
+  // rollup-owned tail.
+  const rollupOwnedRe = /^##\s+(Related|Recent mentions\b)/i
+  let insertAt = lines.length
+  for (let i = titleIdx + 1; i < lines.length; i++) {
+    if (rollupOwnedRe.test(lines[i]!)) {
+      insertAt = i
+      break
+    }
+  }
   const before = lines.slice(0, insertAt)
   const after = lines.slice(insertAt)
-  // Ensure single blank line before About
-  if (before.length > 0 && before[before.length - 1] !== '') before.push('')
-  return [...before, ...aboutBlock, ...after].join('\n').replace(/\n{3,}/g, '\n\n')
+  // trim trailing blank lines on `before`
+  while (before.length > 0 && before[before.length - 1] === '') before.pop()
+  if (before.length > 0) before.push('')
+  return [...before, ...block, ...after].join('\n').replace(/\n{3,}/g, '\n\n')
+}
+
+/** @deprecated — kept for backwards-compat with older tests. Prefer spliceSection. */
+export function spliceAbout(body: string, name: string, aboutText: string): string {
+  return spliceSection(body, name, 'About', aboutText)
 }
 
 // ---------------- state ----------------
