@@ -11,7 +11,8 @@
 import type { ProposalStore } from '../proposal-store/store'
 import type { CreatePayload, MindwtrTaskBlueprint, ProposalPayload } from '../proposal-store/payloads'
 import type { ProposalRecord } from '../proposal-store/types'
-import type { Proposal } from './proposer'
+import type { Proposal, SuggestedCategory } from './proposer'
+import type { EnrichedProposal } from './enricher'
 import { smartExcerpt } from './smart-excerpt'
 
 export interface WriteProposalInput {
@@ -24,6 +25,13 @@ export interface WriteProposalInput {
   sourceChannel: string
   /** Optional metadata from capture (window title, app, etc.) */
   sourceMeta?: Record<string, unknown> | null
+  /**
+   * Optional Enricher output. When present, fills in fields Proposer doesn't
+   * produce (contexts, tags, SMART) and decides task status from Proposer's
+   * suggested_category. Absent for backward-compat (older callers that haven't
+   * been wired through Enricher yet).
+   */
+  enrichment?: EnrichedProposal | null
 }
 
 export interface WriteProposalResult {
@@ -68,26 +76,40 @@ export class ProposalWriter {
     }
 
     const description = buildDescription(input)
+    const status = deriveStatus(input.proposal.suggested_category)
+    const tags = deriveTags(input.proposal, input.enrichment)
+    const metadata: Record<string, unknown> = {
+      ai_origin: true,
+      ai_confidence: input.proposal.confidence,
+      ai_reasoning: input.proposal.reasoning,
+      ai_who_owes: input.proposal.who_owes,
+      ai_recipient: input.proposal.recipient,
+      ai_who_to: input.proposal.who_to,
+      ai_what: input.proposal.what,
+      ai_by_when: input.proposal.by_when,
+      ai_suggested_category: input.proposal.suggested_category,
+      source_channel: input.sourceChannel,
+      source_capture_id: input.sourceCaptureId,
+    }
+    if (input.enrichment) {
+      metadata.ai_enricher_confidence = input.enrichment.confidence
+      metadata.ai_specific = input.enrichment.smart.specific
+      metadata.ai_measurable = input.enrichment.smart.measurable
+      metadata.ai_time_bound = input.enrichment.smart.time_bound
+      if (input.enrichment.is_project) {
+        metadata.ai_is_project = true
+        metadata.ai_project_name = input.enrichment.project_name
+        if (input.enrichment.sub_actions.length > 0) {
+          metadata.ai_sub_actions = input.enrichment.sub_actions
+        }
+      }
+    }
     const task: MindwtrTaskBlueprint = {
       title,
-      status: 'inbox',
-      tags: [],
+      status,
+      tags,
       description,
-      metadata: {
-        ai_origin: true,
-        ai_confidence: input.proposal.confidence,
-        ai_reasoning: input.proposal.reasoning,
-        ai_who_owes: input.proposal.who_owes,
-        ai_recipient: input.proposal.recipient,
-        ai_who_to: input.proposal.who_to,
-        ai_what: input.proposal.what,
-        ai_by_when: input.proposal.by_when,
-        // Hint for downstream triage / Enricher / UI badge. Task still lands
-        // in inbox status — this is just where it WOULD belong after processing.
-        ai_suggested_category: input.proposal.suggested_category,
-        source_channel: input.sourceChannel,
-        source_capture_id: input.sourceCaptureId,
-      },
+      metadata,
     }
 
     const payload: CreatePayload = {
@@ -145,7 +167,69 @@ function buildDescription(input: WriteProposalInput): string {
   if (input.proposal.who_to) {
     lines.push(`With/to: ${input.proposal.who_to}`)
   }
+  if (input.enrichment) {
+    const e = input.enrichment
+    if (e.smart.specific && e.smart.specific !== input.proposal.what) {
+      lines.push(`Outcome: ${e.smart.specific}`)
+    }
+    if (
+      e.smart.measurable &&
+      e.smart.measurable !== e.smart.specific &&
+      e.is_project
+    ) {
+      lines.push(`Done when: ${e.smart.measurable}`)
+    }
+    if (e.is_project && e.sub_actions.length > 0) {
+      lines.push('Next actions:')
+      for (const sa of e.sub_actions) {
+        lines.push(`  - ${sa.title}`)
+      }
+    }
+  }
   return lines.join('\n')
+}
+
+/**
+ * Map Proposer's GTD category hint to the Mindwtr task status the proposal
+ * will create. two_minute and next both land in 'next' (two_minute is just a
+ * tag); waiting/someday/reference map directly. Falls back to 'inbox' so the
+ * user has an explicit review point when the category is genuinely unknown.
+ */
+function deriveStatus(
+  category: SuggestedCategory | undefined
+): MindwtrTaskBlueprint['status'] {
+  switch (category) {
+    case 'next':
+    case 'two_minute':
+      return 'next'
+    case 'waiting':
+      return 'waiting'
+    case 'someday':
+      return 'someday'
+    case 'reference':
+      return 'reference'
+    default:
+      return 'inbox'
+  }
+}
+
+/**
+ * Build the tag list for the would-be task. Without enrichment we still emit
+ * the convenience tags Proposer's category implies (two_minute → '2min',
+ * waiting → 'delegated'). With enrichment we additionally merge suggested
+ * contexts/tags and the 'project' tag when the Enricher flagged the item as
+ * multi-step.
+ */
+function deriveTags(proposal: Proposal, enrichment: EnrichedProposal | null | undefined): string[] {
+  const set = new Set<string>()
+  if (enrichment) {
+    for (const c of enrichment.suggested_contexts) set.add(c)
+    for (const t of enrichment.suggested_tags) set.add(t)
+    if (enrichment.is_project) set.add('project')
+  }
+  if (proposal.suggested_category === 'two_minute') set.add('2min')
+  if (proposal.who_owes === 'other' && proposal.recipient === 'user') set.add('delegated')
+  return [...set]
 }
 
 

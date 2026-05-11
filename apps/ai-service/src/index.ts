@@ -138,6 +138,9 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     ...DEFAULT_PIPELINE_CONFIG,
     sourceDeny,
   })
+  // Second-stage enrichment for actionable pull captures: same Enricher as
+  // push, plugged in late so Proposer stays the sole gatekeeper.
+  commitmentPipeline.setEnricher(enricher)
   // Feed recent Mindwtr inbox titles to Proposer so it can suppress
   // paraphrase duplicates of cards the user already has.
   commitmentPipeline.setInboxTitlesProvider(new MindwtrInboxTitles({ client: mindwtr }))
