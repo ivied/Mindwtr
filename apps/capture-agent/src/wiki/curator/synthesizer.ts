@@ -219,6 +219,9 @@ export async function runSynthesizer(
         lastSynthAt: now.toISOString(),
         mentionCountAtSynth: fm.mentionCount,
       }
+      // Persist progress per-entity so a long run that crashes mid-way
+      // doesn't lose what's already been written.
+      await saveState(options.wikiDir, { ...state, synth: synthState })
       result.synthesized += 1
       const wroteParts = [
         sections.about ? `${sections.about.length}-char About` : '',
