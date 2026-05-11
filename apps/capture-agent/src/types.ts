@@ -109,4 +109,10 @@ export interface AudioConfig {
   inputDevice: string
   /** ffmpeg -af filter chain (denoise + loudnorm). Empty string = disable. */
   audioFilter: string
+  /** Recorder backend: "native" (AVAudioEngine via Swift helper) or "ffmpeg". */
+  backend: 'native' | 'ffmpeg'
+  /** Path to the native gtd-audio-capture binary (used when backend=native). */
+  nativeBinaryPath: string
+  /** Disable VoiceProcessingIO setup in the native helper (debug fallback). */
+  nativeNoVoiceProcessing: boolean
 }
