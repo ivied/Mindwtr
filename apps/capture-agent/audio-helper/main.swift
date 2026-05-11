@@ -1,50 +1,44 @@
 // gtd-audio-capture
 //
-// Capture microphone audio through AVAudioEngine and emit 16 kHz / mono /
-// Int16 little-endian PCM to stdout. The bun recorder wraps it in a WAV
-// header and ships to Whisper.
+// Capture mic via AVAudioEngine. We call setVoiceProcessingEnabled(true)
+// PURELY for its side effect of switching the input bus into the device's
+// native multi-channel raw mode (MBP built-in mic = 7-9 beam-forming
+// taps). We do NOT attach the silent-player → mainMixer → output
+// scaffolding that VPIO uses for echo cancellation — that's what grabs
+// the system output device and makes macOS duck Zoom/notifications.
 //
-// Why not ffmpeg? Raw ffmpeg → avfoundation grabs a single channel of the
-// MacBook's multi-mic array (typically 7-9 channels with beam-forming) and
-// produces noisy unusable audio. AVAudioEngine here:
-//   1. Pulls all channels (deinterleaved Float32).
-//   2. Manually averages them to mono — a simple beam-forming-lite that
-//      already cleans up MBP mic noticeably.
-//   3. Resamples to 16 kHz mono Int16 via AVAudioConverter (1ch→1ch only;
-//      the converter silently zeroes out when asked to reduce channels
-//      from a deinterleaved multi-channel source).
+// What we lose: Apple's hardware AGC. Compensated by software gain.
+// What we keep: multi-channel raw, downmixed to mono manually = crude
+// beam-form-like aggregation that's still much cleaner than ffmpeg's
+// single-channel raw avfoundation pull.
 //
-// We also enable AVAudio's VoiceProcessingIO (Apple's neural noise
-// suppression / AGC / echo cancellation). VP only fully engages on signed
-// binaries with the audio-input entitlement — without that, macOS reports
-// it as "enabled" but the input still arrives raw multi-channel. The
-// manual downmix above already gives us a usable signal regardless; if we
-// later codesign the binary, VP turns on transparently.
-//
-// Usage:
-//   gtd-audio-capture --duration 30.0 [--no-vp]
+// Output: 16 kHz / mono / Int16 little-endian PCM to stdout.
 
 import AVFoundation
 import Darwin
 
 // ---------- args ----------
 var duration: Double = 30.0
+var gain: Float = 10.0
 var enableVP = true
 let args = CommandLine.arguments
-var i = 1
-while i < args.count {
-    switch args[i] {
+var argIdx = 1
+while argIdx < args.count {
+    switch args[argIdx] {
     case "--duration":
-        if i + 1 < args.count, let d = Double(args[i + 1]) { duration = d }
-        i += 2
+        if argIdx + 1 < args.count, let d = Double(args[argIdx + 1]) { duration = d }
+        argIdx += 2
+    case "--gain":
+        if argIdx + 1 < args.count, let g = Float(args[argIdx + 1]) { gain = g }
+        argIdx += 2
     case "--no-vp":
         enableVP = false
-        i += 1
+        argIdx += 1
     case "--help", "-h":
-        print("Usage: gtd-audio-capture --duration <seconds> [--no-vp]")
+        print("Usage: gtd-audio-capture --duration <seconds> [--gain <multiplier>] [--no-vp]")
         exit(0)
     default:
-        i += 1
+        argIdx += 1
     }
 }
 
@@ -60,33 +54,18 @@ let input = engine.inputNode
 
 if enableVP {
     do {
-        // VPIO needs a complete graph (something feeding the output node)
-        // before start() will succeed and before macOS engages the
-        // hardware AGC / voice clarity pipeline. Attach a silent player →
-        // mainMixer → output route as scaffolding; muted so no speaker
-        // bleed. With the audio-input entitlement (see build.sh
-        // codesign step) macOS treats us as a peer voice-chat app and
-        // coordinates VPIO with other voice apps (Zoom etc.) instead of
-        // ducking them.
-        let silentPlayer = AVAudioPlayerNode()
-        engine.attach(silentPlayer)
-        let outFormat = engine.outputNode.inputFormat(forBus: 0)
-        engine.connect(silentPlayer, to: engine.mainMixerNode, format: outFormat)
-        engine.mainMixerNode.outputVolume = 0
         try input.setVoiceProcessingEnabled(true)
-        eprint("VP enabled (output route: \(outFormat))")
     } catch {
         eprint("warning: setVoiceProcessingEnabled failed: \(error.localizedDescription)")
     }
 }
-eprint("input format: \(input.outputFormat(forBus: 0))")
+eprint("input format: \(input.outputFormat(forBus: 0)), gain=\(gain), vp=\(enableVP)")
 
-guard let targetFormat = AVAudioFormat(
-    commonFormat: .pcmFormatInt16,
-    sampleRate: 16_000,
-    channels: 1,
-    interleaved: true
-) else {
+guard
+    let targetFormat = AVAudioFormat(
+        commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true
+    )
+else {
     eprint("error: failed to create target format")
     exit(1)
 }
@@ -104,24 +83,22 @@ input.installTap(onBus: 0, bufferSize: 4_096, format: nil) { buffer, _ in
     let nChans = Int(bufFormat.channelCount)
     guard nFrames > 0, let channels = buffer.floatChannelData else { return }
 
-    // Manual downmix to mono Float32. AVAudioConverter on macOS produces
-    // silence when reducing channels from a deinterleaved multi-channel
-    // mic, so we average channels ourselves.
-    var monoSamples = [Float](repeating: 0, count: nFrames)
+    // Manual downmix N → 1 with software gain applied. Clip to ±1.0
+    // before downstream Int16 conversion to avoid wrap-around distortion.
     let invChans = 1.0 / Float(nChans)
+    var monoSamples = [Float](repeating: 0, count: nFrames)
     for i in 0..<nFrames {
         var s: Float = 0
         for ch in 0..<nChans {
             s += channels[ch][i]
         }
-        monoSamples[i] = s * invChans
+        let v = (s * invChans) * gain
+        monoSamples[i] = max(-1.0, min(1.0, v))
     }
 
     if monoSourceFormat == nil {
         monoSourceFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: bufFormat.sampleRate,
-            channels: 1,
+            commonFormat: .pcmFormatFloat32, sampleRate: bufFormat.sampleRate, channels: 1,
             interleaved: false
         )
         converter = AVAudioConverter(from: monoSourceFormat!, to: targetFormat)
@@ -133,8 +110,7 @@ input.installTap(onBus: 0, bufferSize: 4_096, format: nil) { buffer, _ in
 
     guard
         let inMono = AVAudioPCMBuffer(
-            pcmFormat: monoSourceFormat!,
-            frameCapacity: AVAudioFrameCount(nFrames)
+            pcmFormat: monoSourceFormat!, frameCapacity: AVAudioFrameCount(nFrames)
         )
     else { return }
     inMono.frameLength = AVAudioFrameCount(nFrames)
@@ -191,6 +167,4 @@ while Date() < deadline && !stopRequested {
 
 engine.stop()
 input.removeTap(onBus: 0)
-
-// Drain any pending stdout writes before exit.
 writeQueue.sync { }
