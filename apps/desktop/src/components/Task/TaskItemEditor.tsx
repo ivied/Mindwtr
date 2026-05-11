@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type FormEvent, type ReactNode } from 'react';
-import { Loader2, Sparkles } from 'lucide-react';
+import { Loader2, Sparkles, X } from 'lucide-react';
 import {
     filterProjectsBySelectedArea,
     resolveAutoTextDirection,
@@ -182,8 +182,27 @@ export function TaskItemEditor({
             }}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
-            className="flex flex-col gap-3 max-h-[80vh]"
+            className="flex flex-col gap-2 max-h-[80vh]"
         >
+            {/* Top close button — same behavior as the footer Cancel, but
+                always visible at the top of the editor so the user can
+                dismiss without scrolling past long descriptions or chasing
+                the buttons at the bottom. Lives outside the scrollable area
+                so it stays in view regardless of scroll position. */}
+            <div className="flex justify-end -mb-1">
+                <button
+                    type="button"
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        onCancel();
+                    }}
+                    aria-label={t('common.cancel') || 'Close'}
+                    title={t('common.cancel') || 'Close'}
+                    className="rounded-md p-1 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                >
+                    <X className="h-4 w-4" />
+                </button>
+            </div>
             <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3">
                 <div className="flex items-start gap-2">
                     <TaskInput
