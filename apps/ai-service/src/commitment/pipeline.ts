@@ -13,7 +13,6 @@
 
 import type { CaptureRecord } from '../context-store/types'
 import type { Proposer, UserIdentity } from './proposer'
-import type { Enricher, EnrichedProposal } from './enricher'
 import type { ProposalWriter } from './writer'
 import type { ProposalNotifier } from '../bot/proposal-notifier'
 import type { InboxTitlesProvider } from './inbox-titles'
@@ -60,7 +59,6 @@ export class CommitmentPipeline {
   private notifier: ProposalNotifier | null = null
   private inboxTitlesProvider: InboxTitlesProvider | null = null
   private userIdentity: UserIdentity | null = null
-  private enricher: Enricher | null = null
 
   constructor(
     private proposer: Proposer,
@@ -68,13 +66,6 @@ export class CommitmentPipeline {
     private config: CommitmentPipelineConfig = DEFAULT_PIPELINE_CONFIG,
     private log: (msg: string) => void = console.log
   ) {}
-
-  /** Optional: when set, actionable Proposer outputs get a second-stage
-   *  enrichment pass to fill in contexts/tags/SMART/project decomposition
-   *  before the proposal is written. Late-binding so wiring can stay loose. */
-  setEnricher(enricher: Enricher | null): void {
-    this.enricher = enricher
-  }
 
   /** Late-binding for the notifier so wiring code can resolve the bot→pipeline→notifier cycle. */
   setNotifier(notifier: ProposalNotifier | null): void {
@@ -181,28 +172,9 @@ export class CommitmentPipeline {
       return { kind: 'low-confidence', confidence: proposal.confidence, reasoning: proposal.reasoning }
     }
 
-    // Stage 2 enrichment: contexts, tags, SMART, project decomposition. The
-    // Proposer already gated and gave us a title + category; Enricher fills
-    // in the rest. Failures are non-fatal — we still create a (less rich)
-    // proposal because losing the user-visible commitment is worse than
-    // losing tags.
-    let enrichment: EnrichedProposal | null = null
-    if (this.enricher) {
-      try {
-        enrichment = await this.enricher.enrich(capture.text, {
-          sourceMeta: capture.sourceMeta ?? undefined,
-        })
-      } catch (err) {
-        this.log(
-          `[commitment] enricher failed (${capture.id}): ${(err as Error).message}`
-        )
-      }
-    }
-
     try {
       const written = await this.writer.write({
         proposal,
-        enrichment,
         captureText: capture.text,
         sourceCaptureId: capture.id,
         sourceChannel: capture.sourceChannel,

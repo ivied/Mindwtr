@@ -83,10 +83,8 @@ describe('ProposalWriter', () => {
     expect(payload.kind).toBe('create')
     expect(payload.task.title).toBe('Pay Acme invoice')
     expect(payload.task.title.startsWith('[AI]')).toBe(false)
-    // Writer derives status from Proposer's suggested_category ('next' in fixture).
-    // Tags stay empty here because no Enricher output is wired in (back-compat path).
     expect(payload.task.tags).toEqual([])
-    expect(payload.task.status).toBe('next')
+    expect(payload.task.status).toBe('inbox')
     expect(payload.task.metadata.ai_origin).toBe(true)
     expect(payload.task.metadata.ai_confidence).toBe(0.88)
     expect(payload.task.metadata.source_capture_id).toBe('cap-uuid')
@@ -283,88 +281,6 @@ describe('ProposalWriter — dedup', () => {
     })
     expect(second.duplicate).toBeUndefined()
     expect(store.listRecentByAgent('commitment-detector', 60_000)).toHaveLength(2)
-  })
-
-  it('uses enrichment fields when provided: status from category, contexts+tags merged, SMART in description, project tag', async () => {
-    const writer = new ProposalWriter(store)
-    const result = await writer.write({
-      proposal: makeProposal({
-        title: 'Renovate bathroom',
-        suggested_category: 'next',
-      }),
-      enrichment: {
-        is_actionable: true,
-        proposed_title: 'Renovate bathroom',
-        category: 'next',
-        suggested_contexts: ['@home'],
-        suggested_tags: ['renovation'],
-        is_project: true,
-        project_name: 'Bathroom renovation',
-        sub_actions: [
-          { title: 'Measure bathroom', suggested_category: 'next' },
-          { title: 'Get 3 contractor quotes', suggested_category: 'next' },
-        ],
-        smart: {
-          specific: 'Bathroom fully renovated',
-          time_bound: 'no deadline',
-          measurable: 'All rooms repainted, contractor paid',
-        },
-        is_noise: false,
-        noise_reason: '',
-        is_delegation: false,
-        delegate_to: '',
-        confidence: 0.9,
-        reasoning: 'Multi-step home project',
-      },
-      captureText: 'renovate the bathroom this summer',
-      sourceCaptureId: 'cap-default',
-      sourceChannel: 'screen_capture',
-    })
-    const payload = store.get(result.proposalId)!.currentPayload as CreatePayload
-    expect(payload.task.status).toBe('next')
-    expect(payload.task.tags).toContain('@home')
-    expect(payload.task.tags).toContain('renovation')
-    expect(payload.task.tags).toContain('project')
-    expect(payload.task.description).toContain('Outcome: Bathroom fully renovated')
-    expect(payload.task.description).toContain('Done when: All rooms repainted, contractor paid')
-    expect(payload.task.description).toContain('Measure bathroom')
-    expect(payload.task.metadata.ai_is_project).toBe(true)
-    expect(payload.task.metadata.ai_project_name).toBe('Bathroom renovation')
-  })
-
-  it('two_minute category lands in status=next with 2min tag', async () => {
-    const writer = new ProposalWriter(store)
-    const result = await writer.write({
-      proposal: makeProposal({
-        title: 'Text nanny',
-        suggested_category: 'two_minute',
-      }),
-      captureText: 'позвать няню',
-      sourceCaptureId: 'cap-default',
-      sourceChannel: 'screen_capture',
-    })
-    const payload = store.get(result.proposalId)!.currentPayload as CreatePayload
-    expect(payload.task.status).toBe('next')
-    expect(payload.task.tags).toContain('2min')
-  })
-
-  it('waiting-for proposal (other → user) tags as delegated and lands in waiting', async () => {
-    const writer = new ProposalWriter(store)
-    const result = await writer.write({
-      proposal: makeProposal({
-        title: 'Wait for Amir on Flutter answer',
-        suggested_category: 'waiting',
-        who_owes: 'other',
-        recipient: 'user',
-        who_to: 'Amir',
-      }),
-      captureText: 'Amir said he will reply tomorrow',
-      sourceCaptureId: 'cap-default',
-      sourceChannel: 'screen_capture',
-    })
-    const payload = store.get(result.proposalId)!.currentPayload as CreatePayload
-    expect(payload.task.status).toBe('waiting')
-    expect(payload.task.tags).toContain('delegated')
   })
 
   it('does NOT dedup when by_when differs', async () => {
