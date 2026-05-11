@@ -229,6 +229,12 @@ function ProposalCard({ summary, onResolved }: CardProps) {
                             v{summary.currentVersion}
                         </span>
                     ) : null}
+                    <span
+                        className="ml-2 text-xs text-muted-foreground"
+                        title={new Date(summary.createdAt).toLocaleString()}
+                    >
+                        · {formatRelativeTime(summary.createdAt)}
+                    </span>
                 </div>
                 <button
                     type="button"
@@ -523,6 +529,25 @@ function applyDiffToLocalStore(
     } catch (err) {
         console.warn('[proposals] local task patch failed:', err);
     }
+}
+
+/**
+ * Render an ISO timestamp as a compact relative-time string ("2m ago",
+ * "3h ago"). For >24h falls back to a short locale date. The exact instant
+ * is preserved on the surrounding span's title attribute for hover.
+ */
+function formatRelativeTime(iso: string): string {
+    const then = new Date(iso).getTime();
+    if (!Number.isFinite(then)) return '';
+    const seconds = Math.max(0, Math.round((Date.now() - then) / 1000));
+    if (seconds < 45) return 'just now';
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.round(hours / 24);
+    if (days < 7) return `${days}d ago`;
+    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function formatDiffValue(value: unknown): string {

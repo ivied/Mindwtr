@@ -40,11 +40,27 @@ interface TaskSnapshot {
   projectId?: string | null
 }
 
+/**
+ * Optional hook fired after a `create` proposal has successfully created a
+ * new Mindwtr task. Used by index.ts to kick off the Enricher pipeline so
+ * the freshly-created task gets a follow-up modify proposal (status/tags/
+ * SMART). Late-binding via setter so we don't introduce a circular dep
+ * between proposal-store and commitment/enricher-pipeline.
+ */
+export type PostCreateHook = (taskId: string, proposal: ProposalRecord) => void
+
 export class ProposalApplier {
+  private postCreateHook: PostCreateHook | null = null
+
   constructor(
     private store: ProposalStore,
     private mindwtr: MindwtrClient
   ) {}
+
+  /** Late-bind a hook to run after every successful `create` apply. */
+  setPostCreateHook(hook: PostCreateHook | null): void {
+    this.postCreateHook = hook
+  }
 
   async apply(proposalId: string): Promise<ApplyResult> {
     const proposal = this.store.get(proposalId)
@@ -81,6 +97,18 @@ export class ProposalApplier {
         actor: 'system',
         meta: { appliedTaskIds },
       })
+      // For pull captures (Proposer-originated `create` proposals) we want a
+      // second-stage enrichment pass once the task is alive in Mindwtr: hand
+      // the new taskId off so the Enricher can produce a modify proposal
+      // (status/tags/SMART/sub-actions). Hook is optional and fire-and-forget;
+      // failures inside it are the hook's responsibility, not ours.
+      if (payload.kind === 'create' && this.postCreateHook && appliedTaskIds.length > 0) {
+        try {
+          this.postCreateHook(appliedTaskIds[0]!, proposal)
+        } catch (err) {
+          console.error('[applier] post-create hook threw:', (err as Error).message)
+        }
+      }
       return { ok: true, appliedTaskIds }
     } catch (err) {
       const details = (err as Error).message

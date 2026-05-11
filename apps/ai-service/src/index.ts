@@ -161,6 +161,36 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     contextStore,
   })
   console.log('💬 Proposal dialogue enabled (Reviser)')
+
+  // Two-stage pull pattern: after a Proposer create-proposal lands a task in
+  // Mindwtr inbox, kick the Enricher pipeline on it so the user gets a
+  // follow-up modify proposal with category/contexts/tags/SMART. Pull
+  // becomes symmetric with push (TG → inbox task → Enricher → modify).
+  const enricherForApplier = enricherPipeline
+  if (enricherForApplier) {
+    proposalApplier.setPostCreateHook((taskId, proposal) => {
+      const payload = proposal.currentPayload as
+        | { kind?: string; task?: { title?: string; description?: string; tags?: string[] }; traceback?: { sourceChannel?: string; sourceMeta?: Record<string, unknown> | null } }
+        | null
+      if (!payload || payload.kind !== 'create' || !payload.task) return
+      const task = payload.task
+      const text = (task.title ?? '') + (task.description ? '\n' + task.description : '')
+      void enricherForApplier
+        .run({
+          taskId,
+          taskTitle: task.title ?? '',
+          taskTags: task.tags ?? [],
+          text,
+          sourceChannel: payload.traceback?.sourceChannel ?? 'screen_capture',
+          sourceMeta: payload.traceback?.sourceMeta ?? null,
+          sourceCaptureId: proposal.sourceCaptureId,
+        })
+        .catch((err) =>
+          console.error(`[applier→enricher] failed for task ${taskId}:`, (err as Error).message)
+        )
+    })
+    console.log('🔗 Applier→Enricher hook enabled (pull create → modify follow-up)')
+  }
 } else {
   console.warn('⚠️ LLM_BASE_URL or LLM_API_KEY not set — Enricher & Commitment Detector disabled')
 }
