@@ -61,18 +61,25 @@ let input = engine.inputNode
 if enableVP {
     do {
         // VPIO needs a complete graph (something feeding the output node)
-        // before start() will succeed. Attach a silent player → mainMixer
-        // → output route purely as scaffolding; speakers stay quiet.
+        // before start() will succeed and before macOS engages the
+        // hardware AGC / voice clarity pipeline. Attach a silent player →
+        // mainMixer → output route as scaffolding; muted so no speaker
+        // bleed. With the audio-input entitlement (see build.sh
+        // codesign step) macOS treats us as a peer voice-chat app and
+        // coordinates VPIO with other voice apps (Zoom etc.) instead of
+        // ducking them.
         let silentPlayer = AVAudioPlayerNode()
         engine.attach(silentPlayer)
         let outFormat = engine.outputNode.inputFormat(forBus: 0)
         engine.connect(silentPlayer, to: engine.mainMixerNode, format: outFormat)
         engine.mainMixerNode.outputVolume = 0
         try input.setVoiceProcessingEnabled(true)
+        eprint("VP enabled (output route: \(outFormat))")
     } catch {
         eprint("warning: setVoiceProcessingEnabled failed: \(error.localizedDescription)")
     }
 }
+eprint("input format: \(input.outputFormat(forBus: 0))")
 
 guard let targetFormat = AVAudioFormat(
     commonFormat: .pcmFormatInt16,
