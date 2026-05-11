@@ -143,7 +143,15 @@ const memoryStore = new MemoryStore({
   vecAvailable: contextStore.hasVectorSearch,
 })
 const memoryRetriever = new HybridRetriever(memoryStore, embeddings)
-let memoryIngest: IngestService | null = null
+// Ingest with NO extractor: live captures embed + insert; per-capture LLM
+// extraction is intentionally NOT wired in the hot path (keeps the
+// inbox-proposal latency budget the Proposer already owns). Facts will be
+// filled in by a background pass / future on-demand sweep.
+let memoryIngest: IngestService | null = new IngestService({
+  store: memoryStore,
+  embeddings,
+  extractor: null,
+})
 let memoryFocusContext: FocusContextAssembler | null = null
 let dailySummaryJob: DailySummaryJob | null = null
 
@@ -266,6 +274,7 @@ const capture = createCaptureSink({
   enricherPipeline,
   contextStore,
   commitmentPipeline,
+  memoryIngest,
 })
 
 // Bot is created at module load (Bot ctor doesn't connect — only bot.start() does)

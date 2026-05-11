@@ -17,6 +17,7 @@ import type { ContextStore } from '../context-store/store'
 import type { CommitmentPipeline } from '../commitment/pipeline'
 import type { EnricherPipeline } from '../commitment/enricher-pipeline'
 import type { CaptureRecord } from '../context-store/types'
+import type { IngestService } from '../memory'
 import type { CapturedItem } from './normalizer'
 import { toTaskSuggestion } from './normalizer'
 
@@ -43,6 +44,10 @@ export interface CaptureSinkDeps {
   enricherPipeline?: EnricherPipeline | null
   /** When set, pull captures fire through this pipeline (async, fire-and-forget). */
   commitmentPipeline?: CommitmentPipeline | null
+  /** When set, every persisted capture is also fire-and-forget ingested into
+   *  the long-lived memory module (events + LLM-extracted facts). Independent
+   *  of the short-TTL Context Store. */
+  memoryIngest?: IngestService | null
 }
 
 export function createCaptureSink(deps: CaptureSinkDeps) {
@@ -54,6 +59,33 @@ export function createCaptureSink(deps: CaptureSinkDeps) {
       const result = await deps.contextStore.insert(item)
       if (!result.inserted) return
       storedRecord = result.capture
+    }
+
+    // 1b. Memory module ingest. Fire-and-forget — failure here must not
+    //     block the inbox / commitment path. Persists the event (with
+    //     embedding) and runs the unified extractor for entities + facts.
+    if (deps.memoryIngest && storedRecord) {
+      const captured = storedRecord
+      const src = item.sourceChannel === 'audio_capture' ? 'audio' : 'screen'
+      const meta = (item.sourceMeta ?? {}) as Record<string, unknown>
+      const app =
+        (typeof meta.app === 'string' ? meta.app : undefined) ?? item.sourceChannel
+      const title = typeof meta.title === 'string' ? meta.title : ''
+      const url = typeof meta.url === 'string' ? meta.url : undefined
+      void deps.memoryIngest
+        .live({
+          id: captured.id,
+          ts: captured.capturedAt,
+          source: src,
+          app,
+          title,
+          url,
+          body: captured.text,
+          meta,
+        })
+        .catch((err) =>
+          console.error(`[sink] memory ingest failed for ${captured.id}:`, err)
+        )
     }
 
     // 2. Pull channels: fire-and-forget Commitment Detector, then stop.
