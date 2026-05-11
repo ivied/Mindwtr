@@ -3,21 +3,35 @@
  * payload ready for the AI Service. Pure function for easy testing.
  */
 
-import type { ActiveWindowInfo, DesktopCapture } from '../types'
+import type { ActiveWindowInfo, DesktopCapture, DisplayInfo } from '../types'
 
 export interface ComposeInput {
   window: ActiveWindowInfo
   ocrText: string
   capturedAt?: string
+  display?: DisplayInfo
+  isActiveDisplay?: boolean
 }
 
-export function composeCapture({ window, ocrText, capturedAt }: ComposeInput): DesktopCapture {
+export function composeCapture({
+  window,
+  ocrText,
+  capturedAt,
+  display,
+  isActiveDisplay,
+}: ComposeInput): DesktopCapture {
+  // Non-active displays don't get the focused window's metadata — that
+  // would be misleading. We mark them generically; per-display frontmost
+  // detection is future work.
+  const onActive = isActiveDisplay !== false
   return {
-    app: window.app,
-    windowTitle: window.title,
-    url: window.url,
+    app: onActive ? window.app : 'background',
+    windowTitle: onActive ? window.title : '',
+    url: onActive ? window.url : undefined,
     ocrText: ocrText.trim(),
     capturedAt: capturedAt ?? new Date().toISOString(),
+    display,
+    isActiveDisplay,
   }
 }
 

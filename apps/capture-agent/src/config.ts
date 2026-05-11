@@ -59,5 +59,10 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): AgentCo
       imageMaxEdge: Number(env.AGENT_WIKI_IMAGE_MAX_EDGE ?? 1920),
       imageQuality: Number(env.AGENT_WIKI_IMAGE_QUALITY ?? 70),
     },
+    wikiOnlyApps:
+      env.AGENT_WIKI_ONLY_APPS !== undefined
+        ? parseList(env.AGENT_WIKI_ONLY_APPS)
+        : ['Code', 'Cursor', 'Claude', 'Windsurf', 'Zed', 'Xcode'],
+    multiDisplay: env.AGENT_MULTI_DISPLAY !== 'false',
   }
 }

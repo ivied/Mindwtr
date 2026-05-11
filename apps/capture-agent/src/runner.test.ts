@@ -1,16 +1,47 @@
 import { describe, it, expect, mock } from 'bun:test'
 import { runOnce, type RunnerDeps } from './runner'
 import { CaptureDeduper } from './filter/dedup'
+import type { DisplayCapture, ScreenshotProvider } from './capture/screenshot'
+
+function makeScreenshotProvider(
+  displays: Array<{ primary?: boolean; width?: number; height?: number; name?: string }> = [
+    { primary: true, width: 3456, height: 2234, name: 'primary' },
+  ]
+): ScreenshotProvider {
+  const captures: DisplayCapture[] = displays.map((d, i) => ({
+    display: {
+      index: i,
+      id: i,
+      name: d.name ?? `display-${i}`,
+      primary: d.primary ?? i === 0,
+      width: d.width ?? 1920,
+      height: d.height ?? 1080,
+    },
+    png: Buffer.from(`png-${i}`),
+  }))
+  return {
+    capture: async () => captures[0]!.png,
+    captureAll: async () => captures,
+  }
+}
 
 function deps(overrides: Partial<RunnerDeps> = {}): RunnerDeps {
   return {
-    screenshot: { capture: async () => Buffer.from('png') },
+    screenshot: makeScreenshotProvider(),
     ocr: { recognize: async () => 'plenty of text here', shutdown: async () => {} },
-    window: { current: async () => ({ app: 'Safari', title: 'BBC News' }) },
+    window: {
+      current: async () => ({
+        app: 'Safari',
+        title: 'BBC News',
+        bounds: { x: 100, y: 100, width: 800, height: 600 },
+      }),
+    },
     rules: { excludedApps: [], excludedTitles: [] },
     pauseFlagPath: '',
     minOcrLength: 5,
     sink: mock(async () => {}),
+    multiDisplay: true,
+    wikiOnlyApps: [],
     ...overrides,
   }
 }
@@ -21,7 +52,8 @@ describe('runOnce', () => {
     const result = await runOnce(deps({ sink }))
     expect(result).toBeNull()
     expect(sink).toHaveBeenCalledTimes(1)
-    const calls = (sink as unknown as { mock: { calls: [{ app: string; ocrText: string }][] } }).mock.calls
+    const calls = (sink as unknown as { mock: { calls: [{ app: string; ocrText: string }][] } })
+      .mock.calls
     expect(calls[0][0]).toMatchObject({ app: 'Safari', ocrText: 'plenty of text here' })
   })
 
@@ -73,12 +105,10 @@ describe('runOnce', () => {
     let now = 1_000_000
     const dedup = new CaptureDeduper(undefined, () => now)
 
-    // First run sends and marks
     const first = await runOnce(deps({ sink, dedup }))
     expect(first).toBeNull()
     expect(sink).toHaveBeenCalledTimes(1)
 
-    // Second run with identical inputs is detected
     now += 1_000
     const second = await runOnce(deps({ sink, dedup }))
     expect(second).toBe('duplicate')
@@ -90,5 +120,92 @@ describe('runOnce', () => {
       throw new Error('network down')
     })
     await expect(runOnce(deps({ sink }))).rejects.toThrow('network down')
+  })
+
+  it('archives all displays but only sends the active one', async () => {
+    const sink = mock(async () => {})
+    const archive = mock(async () => {})
+    const result = await runOnce(
+      deps({
+        sink,
+        archive,
+        screenshot: makeScreenshotProvider([
+          { primary: true, width: 3456, height: 2234, name: 'built-in' },
+          { primary: false, width: 1920, height: 1080, name: 'external' },
+        ]),
+      })
+    )
+    expect(result).toBeNull()
+    expect(archive).toHaveBeenCalledTimes(2)
+    expect(sink).toHaveBeenCalledTimes(1)
+  })
+
+  it('marks non-active display capture as background', async () => {
+    const sink = mock(async () => {})
+    const archive = mock(async (_capture: unknown, _png: unknown) => {})
+    await runOnce(
+      deps({
+        sink,
+        archive,
+        screenshot: makeScreenshotProvider([
+          { primary: true, width: 3456, height: 2234, name: 'built-in' },
+          { primary: false, width: 1920, height: 1080, name: 'external' },
+        ]),
+      })
+    )
+    const calls = (archive as unknown as { mock: { calls: [{ app: string; isActiveDisplay: boolean }, Buffer][] } })
+      .mock.calls
+    const active = calls.find((c) => c[0].isActiveDisplay)!
+    const inactive = calls.find((c) => !c[0].isActiveDisplay)!
+    expect(active[0].app).toBe('Safari')
+    expect(inactive[0].app).toBe('background')
+  })
+
+  it('returns "wiki-only" when focused app matches wikiOnlyApps', async () => {
+    const sink = mock(async () => {})
+    const archive = mock(async () => {})
+    const result = await runOnce(
+      deps({
+        sink,
+        archive,
+        window: {
+          current: async () => ({
+            app: 'Code',
+            title: 'project.ts — GTD_automation',
+            bounds: { x: 100, y: 100, width: 800, height: 600 },
+          }),
+        },
+        wikiOnlyApps: ['Code', 'Cursor'],
+      })
+    )
+    expect(result).toBe('wiki-only')
+    expect(archive).toHaveBeenCalledTimes(1)
+    expect(sink).not.toHaveBeenCalled()
+  })
+
+  it('routes only the active display through wiki-only filter (background still archives)', async () => {
+    const sink = mock(async () => {})
+    const archive = mock(async () => {})
+    const result = await runOnce(
+      deps({
+        sink,
+        archive,
+        window: {
+          current: async () => ({
+            app: 'Code',
+            title: 'editor',
+            bounds: { x: 100, y: 100, width: 800, height: 600 },
+          }),
+        },
+        wikiOnlyApps: ['Code'],
+        screenshot: makeScreenshotProvider([
+          { primary: true, width: 3456, height: 2234, name: 'built-in' },
+          { primary: false, width: 1920, height: 1080, name: 'external' },
+        ]),
+      })
+    )
+    expect(result).toBe('wiki-only')
+    expect(archive).toHaveBeenCalledTimes(2)
+    expect(sink).not.toHaveBeenCalled()
   })
 })

@@ -21,6 +21,10 @@ export const defaultActiveWindowProvider: ActiveWindowProvider = {
         url: 'url' in win ? (win as { url?: string }).url : undefined,
         bundleId: 'bundleId' in win.owner ? (win.owner as { bundleId?: string }).bundleId : undefined,
         pid: win.owner.processId,
+        bounds:
+          'bounds' in win
+            ? (win as { bounds?: { x: number; y: number; width: number; height: number } }).bounds
+            : undefined,
       }
     } catch {
       return null

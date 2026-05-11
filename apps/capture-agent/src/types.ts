@@ -9,12 +9,27 @@ export interface ActiveWindowInfo {
   url?: string
   bundleId?: string
   pid?: number
+  /** Window pixel rect; used to figure out which display the window is on. */
+  bounds?: { x: number; y: number; width: number; height: number }
+}
+
+export interface DisplayInfo {
+  /** Stable index in the captureAll() array (0-based). */
+  index: number
+  /** Raw display id from screenshot-desktop. */
+  id: number
+  /** Display name, e.g. "Color LCD", "LS27D300G". */
+  name: string
+  primary: boolean
+  /** Source PNG dimensions (before any wiki resize). */
+  width: number
+  height: number
 }
 
 export interface DesktopCapture {
-  /** Active window app name */
+  /** Active window app name (or "background" for non-active displays). */
   app: string
-  /** Window title */
+  /** Window title (empty for non-active displays). */
   windowTitle: string
   /** Optional URL when active app is a browser */
   url?: string
@@ -22,6 +37,10 @@ export interface DesktopCapture {
   ocrText: string
   /** When the snapshot was taken */
   capturedAt: string
+  /** Which display this capture is from. Optional for back-compat with single-display callers. */
+  display?: DisplayInfo
+  /** True when the active window was on this display at capture time. */
+  isActiveDisplay?: boolean
 }
 
 export interface AgentConfig {
@@ -45,6 +64,15 @@ export interface AgentConfig {
   audio: AudioConfig
   /** Append-only capture log on disk (off when dir is empty). */
   wiki: WikiConfig
+  /**
+   * Apps where screen captures are written to the wiki but NOT sent to AI
+   * Service (case-insensitive substring match). Typical entries: code
+   * editors, LLM chat clients — content is useful for history/context but
+   * rarely a real "task to put in inbox". Audio is unaffected.
+   */
+  wikiOnlyApps: string[]
+  /** Capture all displays (true) or only the primary (false). */
+  multiDisplay: boolean
 }
 
 export interface WikiConfig {
