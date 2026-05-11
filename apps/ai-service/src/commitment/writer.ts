@@ -51,6 +51,12 @@ export class ProposalWriter {
 
   async write(input: WriteProposalInput): Promise<WriteProposalResult> {
     const title = cleanTitle(input.proposal.title)
+    // For waiting cards, Mindwtr's native assignedTo field is the right place
+    // for the person we're waiting on — Organize > Waiting groups by it.
+    const assignedTo =
+      input.proposal.suggested_category === 'waiting' && input.proposal.who_to
+        ? input.proposal.who_to
+        : undefined
     const signature = buildSignature(title, input.proposal.who_to, input.proposal.by_when)
 
     // Dedup: if a recent proposal from the same agent has the same normalized
@@ -73,6 +79,7 @@ export class ProposalWriter {
       status: 'inbox',
       tags: [],
       description,
+      ...(assignedTo ? { assignedTo } : {}),
       metadata: {
         ai_origin: true,
         ai_confidence: input.proposal.confidence,
@@ -80,6 +87,10 @@ export class ProposalWriter {
         ai_who_owes: input.proposal.who_owes,
         ai_recipient: input.proposal.recipient,
         ai_who_to: input.proposal.who_to,
+        // Canonical wiki slug when who_to matched a KNOWN_PERSONS entry.
+        // Empty string means new/unknown person (capture-wiki rollup will
+        // promote them to canonical on next pass).
+        ai_who_to_slug: input.proposal.who_to_slug,
         ai_what: input.proposal.what,
         ai_by_when: input.proposal.by_when,
         // Hint for downstream triage / Enricher / UI badge. Task still lands

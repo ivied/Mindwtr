@@ -16,6 +16,7 @@ import type { Proposer, UserIdentity } from './proposer'
 import type { ProposalWriter } from './writer'
 import type { ProposalNotifier } from '../bot/proposal-notifier'
 import type { InboxTitlesProvider } from './inbox-titles'
+import type { PersonsProvider } from '../wiki/persons-reader'
 import { l0Filter } from './l0-filter'
 import {
   evaluateSourceDeny,
@@ -59,6 +60,7 @@ export class CommitmentPipeline {
   private notifier: ProposalNotifier | null = null
   private inboxTitlesProvider: InboxTitlesProvider | null = null
   private userIdentity: UserIdentity | null = null
+  private personsProvider: PersonsProvider | null = null
 
   constructor(
     private proposer: Proposer,
@@ -82,6 +84,12 @@ export class CommitmentPipeline {
    *  right person and decide who_owes / recipient correctly. */
   setUserIdentity(identity: UserIdentity | null): void {
     this.userIdentity = identity
+  }
+
+  /** Optional: when set, top known persons from the capture-wiki are passed
+   *  to the Proposer so who_to gets normalized to a canonical slug. */
+  setPersonsProvider(provider: PersonsProvider | null): void {
+    this.personsProvider = provider
   }
 
   async run(capture: CaptureRecord): Promise<PipelineOutcome> {
@@ -122,13 +130,27 @@ export class CommitmentPipeline {
       }
     }
 
+    // Best-effort known persons for who_to canonicalization. Same fail-safe
+    // posture: if wiki dir is unreadable, fall through to literal names.
+    let knownPersons: Awaited<ReturnType<PersonsProvider['recentPersons']>> | undefined
+    if (this.personsProvider) {
+      try {
+        knownPersons = await this.personsProvider.recentPersons(50)
+      } catch (err) {
+        this.log(
+          `[commitment] persons fetch failed (${capture.id}): ${(err as Error).message}`
+        )
+      }
+    }
+
     let proposal
     try {
       proposal = await this.proposer.propose(
         capture.text,
         capture.sourceMeta ?? undefined,
         inboxTitles,
-        this.userIdentity
+        this.userIdentity,
+        knownPersons
       )
     } catch (err) {
       this.log(`[commitment] proposer failed (${capture.id}): ${(err as Error).message}`)

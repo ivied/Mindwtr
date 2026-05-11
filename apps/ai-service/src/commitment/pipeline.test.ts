@@ -38,6 +38,7 @@ function makeProposal(overrides: Partial<Proposal> = {}): Proposal {
     ],
     duplicate_of_title: '',
     suggested_category: 'next',
+    who_to_slug: '',
     ...overrides,
   }
 }
@@ -229,6 +230,39 @@ describe('CommitmentPipeline', () => {
       expect(out.existingTitle).toBe('Send Q4 report — final draft')
     }
     expect(writer.write).not.toHaveBeenCalled()
+  })
+
+  it('passes knownPersons into proposer.propose when provider is set', async () => {
+    const proposer = { propose: mock(async () => makeProposal()) } as unknown as Proposer
+    const writer = {
+      write: mock(async () => ({ proposalId: 'p', version: 1, title: 'X', proposal: {} as unknown })),
+    } as unknown as ProposalWriter
+    const p = new CommitmentPipeline(proposer, writer, undefined, silent())
+    const persons = [
+      { slug: 'amir-red', name: 'Amir Red', aliases: ['Amir', 'Амир'], mentionCount: 5 },
+      { slug: 'polina', name: 'Polina', aliases: ['Полина'], mentionCount: 14 },
+    ]
+    p.setPersonsProvider({ recentPersons: mock(async () => persons) })
+    await p.run(record())
+    const args = (proposer.propose as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]
+    expect(args[4]).toEqual(persons)
+  })
+
+  it('proceeds with empty persons list when provider throws', async () => {
+    const proposer = { propose: mock(async () => makeProposal()) } as unknown as Proposer
+    const writer = {
+      write: mock(async () => ({ proposalId: 'p', version: 1, title: 'X', proposal: {} as unknown })),
+    } as unknown as ProposalWriter
+    const p = new CommitmentPipeline(proposer, writer, undefined, silent())
+    p.setPersonsProvider({
+      recentPersons: mock(async () => {
+        throw new Error('wiki gone')
+      }),
+    })
+    const out = await p.run(record())
+    expect(out.kind).toBe('proposed')
+    const args = (proposer.propose as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]
+    expect(args[4]).toBeUndefined()
   })
 
   it('passes userIdentity into proposer.propose when set', async () => {

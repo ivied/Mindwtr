@@ -172,6 +172,30 @@ function SuggestedCategoryBadge({
     );
 }
 
+function PersonBadge({ slug, name }: { slug: string; name: string }) {
+    // Canonical slug → tighter pill (the person is in the wiki registry).
+    // Literal name fallback → muted style so the user can spot "AI saw a new
+    // person, capture-wiki rollup will canonicalize next pass".
+    const isCanonical = slug.length > 0;
+    const label = isCanonical ? `@${slug}` : name;
+    return (
+        <span
+            className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                isCanonical
+                    ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                    : 'bg-amber-500/5 text-amber-700/80 italic dark:text-amber-300/80'
+            }`}
+            title={
+                isCanonical
+                    ? `Waiting on ${name} (canonical wiki entry: ${slug})`
+                    : `Waiting on ${name} — not in wiki yet; will be canonicalized after the next rollup`
+            }
+        >
+            {label}
+        </span>
+    );
+}
+
 function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
     const [expanded, setExpanded] = useState(startExpanded);
     const [detail, setDetail] = useState<ProposalDetail | null>(null);
@@ -221,6 +245,8 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
         | 'reference'
         | 'two_minute'
         | undefined;
+    const whoTo = (payload?.task?.metadata?.ai_who_to as string | undefined) ?? '';
+    const whoToSlug = (payload?.task?.metadata?.ai_who_to_slug as string | undefined) ?? '';
 
     const onApprove = useCallback(async () => {
         setBusy(true);
@@ -310,6 +336,9 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
                         <span className="truncate">{title}</span>
                         {suggestedCategory && suggestedCategory !== 'next' ? (
                             <SuggestedCategoryBadge category={suggestedCategory} />
+                        ) : null}
+                        {suggestedCategory === 'waiting' && (whoToSlug || whoTo) ? (
+                            <PersonBadge slug={whoToSlug} name={whoTo} />
                         ) : null}
                     </div>
                     <div className="mt-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">

@@ -80,6 +80,9 @@ services:
       # User identity for Proposer role disambiguation. Empty disables anchor.
       - USER_IDENTITY_NAME=${USER_IDENTITY_NAME:-}
       - USER_IDENTITY_ALIASES=${USER_IDENTITY_ALIASES:-}
+      # Path inside container to the capture-wiki root. Empty disables the
+      # persons registry feed into Proposer (who_to stays as literal OCR).
+      - WIKI_DIR=${WIKI_DIR:-/app/wiki}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       - EMBEDDINGS_MODEL=${EMBEDDINGS_MODEL:-text-embedding-3-small}
@@ -89,3 +92,7 @@ services:
       - "${HTTP_PORT:-3030}:3030"
     volumes:
       - ./ai-service-data:/app/data
+      # Read-only mount of the capture-wiki root so the Proposer can read
+      # wiki/entities/*.md for the KNOWN_PERSONS registry. Path is the user's
+      # local wiki dir; override WIKI_HOST_DIR when the wiki lives elsewhere.
+      - ${WIKI_HOST_DIR:-/Users/sergeykurdyuk/Projects/GTD_automation/wiki}:/app/wiki:ro

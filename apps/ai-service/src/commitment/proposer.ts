@@ -14,6 +14,7 @@
  */
 
 import type { LLMClient } from '../ai/client'
+import type { KnownPerson } from '../wiki/persons-reader'
 
 export type WhoOwes = 'user' | 'other' | 'unclear'
 export type Recipient = 'user' | 'other' | 'unclear'
@@ -34,6 +35,12 @@ export interface Proposal {
    *  promised something to user → waiting). 'unclear' or 'other' for third-party. */
   recipient: Recipient
   who_to: string | null
+  /**
+   * Canonical slug of who_to when it matched a KNOWN_PERSONS entry, empty
+   * otherwise. Writer uses this to deep-link from the proposal to the wiki
+   * entity and as the stable foreign key for downstream joins.
+   */
+  who_to_slug: string
   what: string
   by_when: string | null
   confidence: number
@@ -95,7 +102,12 @@ const PROPOSER_TOOL = {
         who_to: {
           type: 'string',
           description:
-            'Who the action involves (recipient/counterparty). E.g. "Alice", "wife", "my team". Empty string when not applicable.',
+            'Who the action involves (recipient/counterparty). E.g. "Alice", "wife", "my team". When this person matches a KNOWN_PERSONS entry, use the canonical Name from that entry (not the literal OCR spelling). Empty string when not applicable.',
+        },
+        who_to_slug: {
+          type: 'string',
+          description:
+            'When who_to matched a KNOWN_PERSONS entry, the bracketed slug from that entry (e.g. "amir-red"). Empty string when no match (new/unknown person) or when who_to is not applicable.',
         },
         what: {
           type: 'string',
@@ -154,6 +166,7 @@ const PROPOSER_TOOL = {
         'who_owes',
         'recipient',
         'who_to',
+        'who_to_slug',
         'what',
         'by_when',
         'confidence',
@@ -219,6 +232,19 @@ Explain your work:
 - reasoning_steps — 2-5 short sentences in order: (1) what concrete text/structure you spotted, (2) how you interpreted it, (3) who owns the action, (4) why this IS or ISN'T a personal commitment for the user, (5) confidence justification. Skip steps that don't apply.
 - reasoning — one-sentence summary; use the same tone as a PR title.
 
+PERSON NORMALIZATION:
+The user message MAY include a KNOWN_PERSONS block — canonical names with slug
+and aliases (transliterations, nicknames, OCR spellings) for people seen in past
+captures. When you set who_to, check if the person matches one of these entries:
+- Match (exact, alias, transliteration, or obvious shortening) →
+  - who_to = the canonical "Name" from the entry (e.g. "Amir Red"), not the OCR spelling
+  - who_to_slug = the bracketed slug (e.g. "amir-red")
+- No match (new/unknown person) →
+  - who_to = literal name from source text
+  - who_to_slug = "" (empty)
+Use this to keep the same person consistent across captures — "Эллисон", "Allison",
+"A. Walker" should all collapse to one canonical entity.
+
 DUPLICATE SUPPRESSION:
 The user message MAY include a RECENT_INBOX block — current inbox titles, one per line.
 If the action you'd propose is essentially the same as one of those (different wording but
@@ -246,11 +272,25 @@ export class Proposer {
     text: string,
     sourceMeta?: Record<string, unknown>,
     recentInboxTitles?: string[],
-    userIdentity?: UserIdentity | null
+    userIdentity?: UserIdentity | null,
+    knownPersons?: KnownPerson[]
   ): Promise<Proposal> {
     const systemPrompt = buildSystemPrompt(userIdentity)
     const parts: string[] = []
     if (sourceMeta) parts.push(`Capture context: ${JSON.stringify(sourceMeta)}`)
+    if (knownPersons && knownPersons.length > 0) {
+      const lines = knownPersons
+        .slice(0, 50)
+        .map((p) => {
+          const aliasesPart =
+            p.aliases.length > 0 ? ` (aliases: ${p.aliases.join(', ')})` : ''
+          return `- ${p.name} [${p.slug}]${aliasesPart}`
+        })
+        .join('\n')
+      parts.push(
+        `KNOWN_PERSONS (registry from past captures — normalize who_to to one of these when matched):\n${lines}`
+      )
+    }
     if (recentInboxTitles && recentInboxTitles.length > 0) {
       const lines = recentInboxTitles
         .slice(0, 50)
@@ -320,6 +360,10 @@ export class Proposer {
         : 'unclear',
       recipient,
       who_to: typeof parsed.who_to === 'string' && parsed.who_to.length > 0 ? parsed.who_to : null,
+      who_to_slug:
+        typeof (parsed as { who_to_slug?: unknown }).who_to_slug === 'string'
+          ? ((parsed as { who_to_slug: string }).who_to_slug || '').slice(0, 120)
+          : '',
       what: typeof parsed.what === 'string' ? parsed.what : '',
       by_when: typeof parsed.by_when === 'string' && parsed.by_when.length > 0 ? parsed.by_when : null,
       confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0,

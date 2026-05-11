@@ -23,6 +23,7 @@ import { ProposalWriter } from './commitment/writer'
 import { CommitmentPipeline, DEFAULT_PIPELINE_CONFIG } from './commitment/pipeline'
 import { denyConfigFromEnv } from './commitment/source-deny'
 import { MindwtrInboxTitles } from './commitment/inbox-titles'
+import { WikiPersonsProvider } from './wiki/persons-reader'
 import { ProposalNotifier } from './bot/proposal-notifier'
 import { createHttpServer } from './http/server'
 
@@ -63,6 +64,10 @@ const USER_IDENTITY_ALIASES = (process.env.USER_IDENTITY_ALIASES ?? '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean)
+
+// Path to capture-wiki root. Empty disables the persons-registry feed into
+// the Proposer (who_to stays as literal OCR strings instead of canonical slugs).
+const WIKI_DIR = process.env.WIKI_DIR ?? ''
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? ''
 const OPENAI_BASE_URL = process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1'
@@ -149,8 +154,13 @@ if (LLM_BASE_URL && LLM_API_KEY) {
       aliases: USER_IDENTITY_ALIASES,
     })
   }
+  // Persons registry — Proposer normalizes who_to against canonical wiki
+  // slugs so waiting-for tasks stay consistent across captures.
+  if (WIKI_DIR) {
+    commitmentPipeline.setPersonsProvider(new WikiPersonsProvider({ wikiDir: WIKI_DIR }))
+  }
   console.log(
-    `🎯 Commitment Detector enabled (deny apps:${sourceDeny.apps.length}, deny urls:${sourceDeny.urlPatterns.length}, inbox-dedup on, identity:${USER_IDENTITY_NAME || 'unset'})`
+    `🎯 Commitment Detector enabled (deny apps:${sourceDeny.apps.length}, deny urls:${sourceDeny.urlPatterns.length}, inbox-dedup on, identity:${USER_IDENTITY_NAME || 'unset'}, persons:${WIKI_DIR ? 'wiki' : 'unset'})`
   )
 
   const reviser = new Reviser(llm)

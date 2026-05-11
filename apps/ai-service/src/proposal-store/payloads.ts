@@ -10,6 +10,12 @@ export interface MindwtrTaskBlueprint {
   status: 'inbox' | 'next' | 'someday' | 'reference' | 'waiting' | 'scheduled'
   tags: string[]
   description: string
+  /**
+   * Person this task is waiting on (Mindwtr's native field — surfaces in the
+   * Organize > Waiting view). Set by the Proposer when suggested_category=
+   * waiting; ignored for other categories.
+   */
+  assignedTo?: string
   /** Free-form metadata stored on the Mindwtr task. */
   metadata: Record<string, unknown>
 }

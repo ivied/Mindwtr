@@ -27,6 +27,7 @@ function makeProposal(overrides: Partial<Proposal> = {}): Proposal {
     ],
     duplicate_of_title: '',
     suggested_category: 'next',
+    who_to_slug: '',
     ...overrides,
   }
 }
@@ -206,6 +207,35 @@ describe('ProposalWriter', () => {
     const tb = (store.get(result.proposalId)!.currentPayload as { traceback: { cuesDetected?: string[]; reasoningSteps?: string[] } }).traceback
     expect(tb.cuesDetected).toEqual(['direct request', 'named recipient'])
     expect(tb.reasoningSteps).toEqual(['Spotted X', 'Therefore Y'])
+  })
+
+  it('sets task.assignedTo when suggested_category=waiting and who_to is set', async () => {
+    const writer = new ProposalWriter(store)
+    const result = await writer.write({
+      proposal: makeProposal({
+        suggested_category: 'waiting',
+        who_to: 'Amir Red',
+        who_to_slug: 'amir-red',
+      }),
+      captureText: 'x',
+      sourceCaptureId: 'cap-default',
+      sourceChannel: 'screen_capture',
+    })
+    const payload = store.get(result.proposalId)!.currentPayload as CreatePayload
+    expect(payload.task.assignedTo).toBe('Amir Red')
+    expect(payload.task.metadata.ai_who_to_slug).toBe('amir-red')
+  })
+
+  it('does NOT set assignedTo for non-waiting categories', async () => {
+    const writer = new ProposalWriter(store)
+    const result = await writer.write({
+      proposal: makeProposal({ suggested_category: 'next', who_to: 'Amir Red' }),
+      captureText: 'x',
+      sourceCaptureId: 'cap-default',
+      sourceChannel: 'screen_capture',
+    })
+    const payload = store.get(result.proposalId)!.currentPayload as CreatePayload
+    expect(payload.task.assignedTo).toBeUndefined()
   })
 
   it('records summary on initial version (uses Proposer reasoning)', async () => {

@@ -17,6 +17,8 @@ interface CreateTaskParams {
   priority?: string
   projectId?: string
   dueDate?: string
+  /** Person this task is waiting on — surfaces in Mindwtr's Organize > Waiting view. */
+  assignedTo?: string
   metadata?: Record<string, unknown>
 }
 

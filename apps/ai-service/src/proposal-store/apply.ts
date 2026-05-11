@@ -147,6 +147,7 @@ export class ProposalApplier {
       status: p.task.status,
       tags: p.task.tags,
       description: p.task.description,
+      ...(p.task.assignedTo ? { assignedTo: p.task.assignedTo } : {}),
       metadata: p.task.metadata,
     })
     return task.id
