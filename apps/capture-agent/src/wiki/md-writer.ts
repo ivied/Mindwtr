@@ -23,6 +23,14 @@ export interface CaptureEntry {
   durationMs?: number
   model?: string
   rms?: number
+  /** Screen-only: which display this capture is from. */
+  displayIndex?: number
+  displayName?: string
+  displayPrimary?: boolean
+  /** Screen-only: whether the focused window was on this display. */
+  isActiveDisplay?: boolean
+  /** Screen-only: whether this entry was sent to AI Service or wiki-only. */
+  sentToInbox?: boolean
 }
 
 export interface ImageAttachment {
@@ -82,6 +90,14 @@ export function render(entry: CaptureEntry, id: string, imageRef?: string): stri
   if (entry.model) fm.push(['model', yamlString(entry.model)])
   if (entry.rms !== undefined) fm.push(['rms', Number(entry.rms.toFixed(4))])
   if (imageRef) fm.push(['image', yamlString(imageRef)])
+  if (entry.displayIndex !== undefined) fm.push(['display_index', entry.displayIndex])
+  if (entry.displayName) fm.push(['display_name', yamlString(entry.displayName)])
+  if (entry.displayPrimary !== undefined)
+    fm.push(['display_primary', entry.displayPrimary ? 'true' : 'false'])
+  if (entry.isActiveDisplay !== undefined)
+    fm.push(['active_display', entry.isActiveDisplay ? 'true' : 'false'])
+  if (entry.sentToInbox !== undefined)
+    fm.push(['sent_to_inbox', entry.sentToInbox ? 'true' : 'false'])
 
   const frontmatter = ['---', ...fm.map(([k, v]) => `${k}: ${v}`), '---'].join('\n')
   return `${frontmatter}\n\n${entry.body.trim()}\n`

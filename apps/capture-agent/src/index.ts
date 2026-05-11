@@ -35,6 +35,9 @@ async function main() {
   console.log(`   excluded apps: ${config.excludedApps.length}`)
   console.log(`   excluded titles: ${config.excludedTitles.length}`)
   console.log(`   pause flag: ${config.pauseFlagPath}`)
+  console.log(`   multi-display: ${config.multiDisplay}`)
+  if (config.wikiOnlyApps.length)
+    console.log(`   wiki-only apps: ${config.wikiOnlyApps.join(', ')}`)
 
   const wikiWriter = config.wiki.dir ? new MdWikiWriter(config.wiki.dir) : null
   if (wikiWriter) {
@@ -138,6 +141,7 @@ async function main() {
                 image = { bytes: png, ext: 'png' }
               }
             }
+            const sent = (capture as { sentToInbox?: boolean }).sentToInbox
             await wikiWriter.write(
               {
                 source: 'screen',
@@ -146,12 +150,19 @@ async function main() {
                 title: capture.windowTitle,
                 url: capture.url,
                 body: capture.ocrText,
+                displayIndex: capture.display?.index,
+                displayName: capture.display?.name,
+                displayPrimary: capture.display?.primary,
+                isActiveDisplay: capture.isActiveDisplay,
+                sentToInbox: sent,
               },
               { image }
             )
           }
         : undefined,
       dedup,
+      multiDisplay: config.multiDisplay,
+      wikiOnlyApps: config.wikiOnlyApps,
       log: (msg) => console.log(`[agent] ${msg}`),
     },
     config.intervalMs
