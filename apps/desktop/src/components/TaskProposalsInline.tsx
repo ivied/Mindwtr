@@ -12,7 +12,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Sparkles, Check, X, MessageSquare, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
-import { useTaskStore, type Task } from '@mindwtr/core';
+import { useTaskStore, type Task, type Project } from '@mindwtr/core';
+import { useUiStore } from '../store/ui-store';
 import {
     isProposalsAvailable,
     listPendingProposals,
@@ -150,6 +151,15 @@ function ProposalCard({ summary, onResolved }: CardProps) {
                     summary,
                     isPartial ? selectedFields : null
                 );
+                // Split proposals create a real Project + N sub-action tasks
+                // (and optionally delete the source). Mirror that locally and
+                // show the user a toast — splits are a bigger change than a
+                // field edit; without explicit feedback they look like the
+                // proposal silently vanished.
+                if (result.projectId) {
+                    applySplitToLocalStore(summary, result);
+                    notifySplitApplied(result);
+                }
                 onResolved();
             } catch (err) {
                 setError((err as Error).message);
@@ -536,6 +546,112 @@ function applyDiffToLocalStore(
  * "3h ago"). For >24h falls back to a short locale date. The exact instant
  * is preserved on the surrounding span's title attribute for hover.
  */
+/**
+ * After approve of a split proposal, mirror the cloud-side result into the
+ * local store: inject the new Project, inject the sub-action tasks (linked
+ * via projectId), and remove the source task when deleteSource=true. Without
+ * this the user sees the source disappear and... nothing else, until the
+ * next cloud sync.
+ */
+function applySplitToLocalStore(
+    summary: ProposalSummary,
+    result: { projectId?: string; projectTitle?: string; appliedTaskIds?: string[] }
+): void {
+    if (!result.projectId || !result.projectTitle) return;
+    const payload = summary.currentPayload as
+        | {
+              kind?: string;
+              sourceTaskId?: string;
+              deleteSource?: boolean;
+              resultTasks?: Array<{
+                  title?: string;
+                  status?: string;
+                  tags?: string[];
+                  description?: string;
+                  metadata?: Record<string, unknown>;
+              }>;
+          }
+        | null;
+    if (!payload || payload.kind !== 'split' || !Array.isArray(payload.resultTasks)) return;
+
+    const now = new Date().toISOString();
+    const project: Project = {
+        id: result.projectId,
+        title: result.projectTitle,
+        status: 'active',
+        color: '#7c3aed',
+        order: 0,
+        tagIds: [],
+        createdAt: now,
+        updatedAt: now,
+    };
+
+    // resultTasks[0] is the umbrella → became the Project; rest are sub-actions.
+    const subActionBlueprints = payload.resultTasks.slice(1);
+    const subActionIds = result.appliedTaskIds ?? [];
+    const newTasks: Task[] = subActionBlueprints.map((bp, i) => ({
+        id: subActionIds[i] ?? `temp-${result.projectId}-${i}`,
+        title: bp.title ?? '',
+        status: (bp.status as Task['status']) ?? 'next',
+        tags: Array.isArray(bp.tags) ? bp.tags.filter((x): x is string => typeof x === 'string') : [],
+        contexts: [],
+        description: typeof bp.description === 'string' ? bp.description : '',
+        projectId: result.projectId,
+        metadata: bp.metadata && typeof bp.metadata === 'object' ? bp.metadata : undefined,
+        createdAt: now,
+        updatedAt: now,
+    }));
+
+    useTaskStore.setState((state) => {
+        const projectAlreadyThere = state._allProjects.some((p) => p.id === project.id);
+        const projects = projectAlreadyThere ? state._allProjects : [...state._allProjects, project];
+
+        const existingTaskIds = new Set(state._allTasks.map((t) => t.id));
+        const dedupedNewTasks = newTasks.filter((t) => !existingTaskIds.has(t.id));
+        const sourceId = payload.sourceTaskId;
+        const tasksAfterSource = payload.deleteSource && sourceId
+            ? state._allTasks.filter((t) => t.id !== sourceId)
+            : state._allTasks;
+
+        return {
+            _allProjects: projects,
+            _allTasks: [...tasksAfterSource, ...dedupedNewTasks],
+            lastDataChangeAt: Date.now(),
+        };
+    });
+}
+
+/**
+ * User-visible feedback after a split apply: "Created project X with N next
+ * actions" with an "Open" action that switches the UI to the new project's
+ * view. Without this, the inbox row vanishes and the project the user just
+ * created stays buried in the sidebar.
+ */
+function notifySplitApplied(result: {
+    projectId?: string;
+    projectTitle?: string;
+    appliedTaskIds?: string[];
+}): void {
+    if (!result.projectId || !result.projectTitle) return;
+    const taskCount = result.appliedTaskIds?.length ?? 0;
+    const message =
+        taskCount > 0
+            ? `Created project "${result.projectTitle}" with ${taskCount} next action${taskCount === 1 ? '' : 's'}`
+            : `Created project "${result.projectTitle}"`;
+    const projectId = result.projectId;
+    useUiStore.getState().showToast(
+        message,
+        'success',
+        6000,
+        {
+            label: 'Open',
+            onClick: () => {
+                useUiStore.getState().setProjectView({ selectedProjectId: projectId });
+            },
+        }
+    );
+}
+
 function formatRelativeTime(iso: string): string {
     const then = new Date(iso).getTime();
     if (!Number.isFinite(then)) return '';

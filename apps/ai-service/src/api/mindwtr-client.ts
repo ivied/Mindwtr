@@ -36,6 +36,33 @@ export interface Task {
   updatedAt: string
 }
 
+interface CreateProjectParams {
+  title: string
+  status?: 'active' | 'someday' | 'waiting' | 'archived'
+  color?: string
+  order?: number
+  tagIds?: string[]
+  areaId?: string
+  supportNotes?: string
+  dueDate?: string
+  isSequential?: boolean
+}
+
+export interface MindwtrProject {
+  id: string
+  title: string
+  status: 'active' | 'someday' | 'waiting' | 'archived'
+  color: string
+  order: number
+  tagIds: string[]
+  areaId?: string
+  supportNotes?: string
+  dueDate?: string
+  isSequential?: boolean
+  createdAt: string
+  updatedAt: string
+}
+
 interface ListTasksParams {
   status?: string
   projectId?: string
@@ -136,6 +163,20 @@ export class MindwtrClient {
     })
     if (!res.ok) throw new Error(`search failed: ${res.status} ${await res.text()}`)
     return res.json()
+  }
+
+  async createProject(params: CreateProjectParams): Promise<MindwtrProject> {
+    // Cloud expects { title, props: { ...rest } } shape, mirroring createTask.
+    const { title, ...rest } = params
+    const body: Record<string, unknown> = { title, props: rest }
+    const res = await fetch(`${this.baseUrl}/v1/projects`, {
+      method: 'POST',
+      headers: this.headers,
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) throw new Error(`createProject failed: ${res.status} ${await res.text()}`)
+    const data = (await res.json()) as MindwtrProject | { project: MindwtrProject }
+    return 'project' in data ? data.project : data
   }
 
   async healthCheck(): Promise<boolean> {

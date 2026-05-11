@@ -64,6 +64,9 @@ export interface ProposalDetail extends ProposalSummary {
 export interface ApproveResult {
     ok: boolean;
     appliedTaskIds?: string[];
+    /** Set when the apply created a Mindwtr Project (currently: split proposals). */
+    projectId?: string;
+    projectTitle?: string;
     reason?: string;
     details?: string;
     proposal: ProposalSummary | ProposalDetail | null;

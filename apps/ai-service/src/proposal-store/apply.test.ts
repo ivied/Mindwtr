@@ -29,6 +29,16 @@ function makeMindwtr(overrides: Partial<MindwtrClient> = {}): MindwtrClient {
     listTasks: mock(async () => []),
     search: mock(async () => ({ tasks: [], projects: [] })),
     healthCheck: mock(async () => true),
+    createProject: mock(async (params: { title: string }) => ({
+      id: 'new-project',
+      title: params.title,
+      status: 'active' as const,
+      color: '#7c3aed',
+      order: 0,
+      tagIds: [],
+      createdAt: '2026-04-01T00:00:00Z',
+      updatedAt: '2026-04-01T00:00:00Z',
+    })),
     ...overrides,
   } as unknown as MindwtrClient
 }
@@ -284,14 +294,87 @@ describe('ProposalApplier — merge', () => {
 })
 
 describe('ProposalApplier — split', () => {
-  it('replaces source via update + creates additional tasks when deleteSource=false', async () => {
-    let nextId = 0
+  it('creates a Project from the first resultTask, links sub-actions, deletes source', async () => {
+    let nextTaskId = 0
+    let nextProjectId = 0
+    const createdProjects: { title: string }[] = []
+    const createdTasks: { title: string; projectId?: string }[] = []
+    const deleted: string[] = []
     const mindwtr = makeMindwtr({
       getTask: mock(async (id: string) => taskOf({ id })),
-      updateTask: mock(async (id, params) => taskOf({ id, title: params.title ?? '' })),
       createTask: mock(async (params) => {
-        nextId += 1
-        return taskOf({ id: `split-${nextId}`, title: params.title })
+        nextTaskId += 1
+        createdTasks.push({ title: params.title, projectId: params.projectId })
+        return taskOf({ id: `task-${nextTaskId}`, title: params.title, projectId: params.projectId })
+      }),
+      createProject: mock(async (params) => {
+        nextProjectId += 1
+        createdProjects.push({ title: params.title })
+        return {
+          id: `proj-${nextProjectId}`,
+          title: params.title,
+          status: 'active' as const,
+          color: '#7c3aed',
+          order: 0,
+          tagIds: [],
+          createdAt: '2026-05-11T00:00:00Z',
+          updatedAt: '2026-05-11T00:00:00Z',
+        }
+      }),
+      deleteTask: mock(async (id) => {
+        deleted.push(id)
+        return true
+      }),
+    } as Partial<MindwtrClient>)
+    const applier = new ProposalApplier(store, mindwtr)
+    const payload: SplitPayload = {
+      kind: 'split',
+      sourceTaskId: 'src',
+      deleteSource: true,
+      resultTasks: [
+        { title: 'Renovation project', status: 'inbox', tags: ['@home', 'project'], description: 'Done when all rooms repainted', metadata: {} },
+        { title: 'Measure bathroom', status: 'next', tags: ['@home'], description: '', metadata: {} },
+        { title: 'Get quotes', status: 'next', tags: ['@home'], description: '', metadata: {} },
+      ],
+    }
+    const p = store.create({ type: 'split', targetTaskIds: ['src'], sourceAgent: 'a', payload })
+    const result = await applier.apply(p.id)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.projectId).toBe('proj-1')
+      expect(result.projectTitle).toBe('Renovation project')
+      expect(result.appliedTaskIds).toEqual(['task-1', 'task-2'])
+    }
+    expect(createdProjects).toEqual([{ title: 'Renovation project' }])
+    expect(createdTasks).toEqual([
+      { title: 'Measure bathroom', projectId: 'proj-1' },
+      { title: 'Get quotes', projectId: 'proj-1' },
+    ])
+    expect(deleted).toEqual(['src'])
+  })
+
+  it('keeps source and links it to the new project when deleteSource=false', async () => {
+    const createdProjects: { title: string }[] = []
+    const updatedTasks: Array<{ id: string; patch: Record<string, unknown> }> = []
+    const mindwtr = makeMindwtr({
+      getTask: mock(async (id: string) => taskOf({ id })),
+      updateTask: mock(async (id, patch) => {
+        updatedTasks.push({ id, patch: patch as Record<string, unknown> })
+        return taskOf({ id })
+      }),
+      createTask: mock(async (params) => taskOf({ id: 'task-1', title: params.title, projectId: params.projectId })),
+      createProject: mock(async (params) => {
+        createdProjects.push({ title: params.title })
+        return {
+          id: 'proj-1',
+          title: params.title,
+          status: 'active' as const,
+          color: '#7c3aed',
+          order: 0,
+          tagIds: [],
+          createdAt: '2026-05-11T00:00:00Z',
+          updatedAt: '2026-05-11T00:00:00Z',
+        }
       }),
     } as Partial<MindwtrClient>)
     const applier = new ProposalApplier(store, mindwtr)
@@ -300,16 +383,18 @@ describe('ProposalApplier — split', () => {
       sourceTaskId: 'src',
       deleteSource: false,
       resultTasks: [
-        { title: 'Part A', status: 'inbox', tags: [], description: '', metadata: {} },
-        { title: 'Part B', status: 'inbox', tags: [], description: '', metadata: {} },
+        { title: 'Project umbrella', status: 'inbox', tags: [], description: '', metadata: {} },
+        { title: 'Child action', status: 'next', tags: [], description: '', metadata: {} },
       ],
     }
     const p = store.create({ type: 'split', targetTaskIds: ['src'], sourceAgent: 'a', payload })
     const result = await applier.apply(p.id)
     expect(result.ok).toBe(true)
-    if (result.ok) expect(result.appliedTaskIds).toEqual(['src', 'split-1'])
-    expect(mindwtr.updateTask).toHaveBeenCalledTimes(1)
-    expect(mindwtr.createTask).toHaveBeenCalledTimes(1)
+    if (result.ok) {
+      expect(result.projectId).toBe('proj-1')
+      expect(result.appliedTaskIds).toEqual(['src', 'task-1'])
+    }
+    expect(updatedTasks).toEqual([{ id: 'src', patch: { projectId: 'proj-1' } }])
   })
 })
 

@@ -27,9 +27,20 @@ import type {
 import type { ProposalRecord } from './types'
 
 export type ApplyResult =
-  | { ok: true; appliedTaskIds: string[] }
+  | {
+      ok: true
+      appliedTaskIds: string[]
+      /** Set when applySplit (or future ops) created a real Project. */
+      projectId?: string
+      projectTitle?: string
+    }
   | { ok: false; reason: 'stale'; details: string }
   | { ok: false; reason: 'mindwtr_error' | 'invalid_payload' | 'not_pending'; details: string }
+
+interface ExecutionResult {
+  taskIds: string[]
+  project?: { id: string; title: string }
+}
 
 interface TaskSnapshot {
   id: string
@@ -90,26 +101,33 @@ export class ProposalApplier {
     }
 
     try {
-      const appliedTaskIds = await this.execute(payload)
+      const result = await this.execute(payload)
       this.store.audit({
         proposalId,
         event: 'applied',
         actor: 'system',
-        meta: { appliedTaskIds },
+        meta: {
+          appliedTaskIds: result.taskIds,
+          ...(result.project ? { projectId: result.project.id, projectTitle: result.project.title } : {}),
+        },
       })
       // For pull captures (Proposer-originated `create` proposals) we want a
       // second-stage enrichment pass once the task is alive in Mindwtr: hand
       // the new taskId off so the Enricher can produce a modify proposal
       // (status/tags/SMART/sub-actions). Hook is optional and fire-and-forget;
       // failures inside it are the hook's responsibility, not ours.
-      if (payload.kind === 'create' && this.postCreateHook && appliedTaskIds.length > 0) {
+      if (payload.kind === 'create' && this.postCreateHook && result.taskIds.length > 0) {
         try {
-          this.postCreateHook(appliedTaskIds[0]!, proposal)
+          this.postCreateHook(result.taskIds[0]!, proposal)
         } catch (err) {
           console.error('[applier] post-create hook threw:', (err as Error).message)
         }
       }
-      return { ok: true, appliedTaskIds }
+      return {
+        ok: true,
+        appliedTaskIds: result.taskIds,
+        ...(result.project ? { projectId: result.project.id, projectTitle: result.project.title } : {}),
+      }
     } catch (err) {
       const details = (err as Error).message
       this.store.audit({
@@ -124,20 +142,20 @@ export class ProposalApplier {
 
   // --- per-type execution ---
 
-  private async execute(payload: ProposalPayload): Promise<string[]> {
+  private async execute(payload: ProposalPayload): Promise<ExecutionResult> {
     switch (payload.kind) {
       case 'create':
-        return [await this.applyCreate(payload)]
+        return { taskIds: [await this.applyCreate(payload)] }
       case 'modify':
-        return [await this.applyModify(payload)]
+        return { taskIds: [await this.applyModify(payload)] }
       case 'delete':
-        return [await this.applyDelete(payload)]
+        return { taskIds: [await this.applyDelete(payload)] }
       case 'move':
-        return [await this.applyMove(payload)]
+        return { taskIds: [await this.applyMove(payload)] }
       case 'merge':
-        return await this.applyMerge(payload)
+        return { taskIds: await this.applyMerge(payload) }
       case 'split':
-        return await this.applySplit(payload)
+        return this.applySplit(payload)
     }
   }
 
@@ -186,47 +204,48 @@ export class ProposalApplier {
     return [created.id]
   }
 
-  private async applySplit(p: SplitPayload): Promise<string[]> {
-    const ids: string[] = []
+  private async applySplit(p: SplitPayload): Promise<ExecutionResult> {
+    // The Enricher produces split payloads when is_project=true: first
+    // resultTask is the umbrella (becomes a real Mindwtr Project), the rest
+    // are next-actions that get linked to the project via projectId. So the
+    // user sees a navigable project with real children, not flat siblings
+    // with a "project" tag.
+    const [umbrella, ...subActions] = p.resultTasks
+    if (!umbrella) {
+      throw new Error('split payload has empty resultTasks')
+    }
+
+    const project = await this.mindwtr.createProject({
+      title: umbrella.title,
+      color: '#7c3aed',
+      ...(umbrella.description ? { supportNotes: umbrella.description } : {}),
+    })
+
+    const taskIds: string[] = []
+    for (const blueprint of subActions) {
+      const t = await this.mindwtr.createTask({
+        title: blueprint.title,
+        status: blueprint.status,
+        tags: blueprint.tags,
+        description: blueprint.description,
+        metadata: blueprint.metadata,
+        projectId: project.id,
+      })
+      taskIds.push(t.id)
+    }
+
     if (p.deleteSource) {
-      // Create all result tasks first, then delete the source.
-      for (const blueprint of p.resultTasks) {
-        const t = await this.mindwtr.createTask({
-          title: blueprint.title,
-          status: blueprint.status,
-          tags: blueprint.tags,
-          description: blueprint.description,
-          metadata: blueprint.metadata,
-        })
-        ids.push(t.id)
-      }
       await this.mindwtr.deleteTask(p.sourceTaskId)
     } else {
-      // First result task replaces the source via update; rest are created.
-      const [first, ...rest] = p.resultTasks
-      if (!first) {
-        throw new Error('split payload has empty resultTasks')
-      }
-      await this.mindwtr.updateTask(p.sourceTaskId, {
-        title: first.title,
-        status: first.status,
-        tags: first.tags,
-        description: first.description,
-        metadata: first.metadata,
-      })
-      ids.push(p.sourceTaskId)
-      for (const blueprint of rest) {
-        const t = await this.mindwtr.createTask({
-          title: blueprint.title,
-          status: blueprint.status,
-          tags: blueprint.tags,
-          description: blueprint.description,
-          metadata: blueprint.metadata,
-        })
-        ids.push(t.id)
-      }
+      // Source stays: link it to the new project so it isn't orphaned.
+      await this.mindwtr.updateTask(p.sourceTaskId, { projectId: project.id })
+      taskIds.unshift(p.sourceTaskId)
     }
-    return ids
+
+    return {
+      taskIds,
+      project: { id: project.id, title: project.title },
+    }
   }
 
   // --- drift detection ---

@@ -194,19 +194,21 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
     const rateLimitCleanupMs = Number(process.env.MINDWTR_CLOUD_RATE_CLEANUP_MS || 60_000);
     const requestTimeoutMs = Number(options.requestTimeoutMs ?? process.env.MINDWTR_CLOUD_REQUEST_TIMEOUT_MS ?? 30_000);
 
-    // Optional webhook to ai-service so it can react to manual task edits/deletes
-    // (implicit signals on Proposal entities). Fire-and-forget: errors are logged
-    // but never propagate to the caller. Skipped when the request itself came
-    // from ai-service (X-Mindwtr-Source: ai-service) to avoid feedback loops.
+    // Optional webhook to ai-service so it can react to task creates, manual
+    // edits, and deletes (implicit signals on Proposal entities + entry point
+    // for Enricher on manually-added cards). Fire-and-forget: errors are
+    // logged but never propagate to the caller. Skipped when the request
+    // itself came from ai-service (X-Mindwtr-Source: ai-service) to avoid
+    // feedback loops.
     const taskWebhookUrl = String(process.env.MINDWTR_TASK_WEBHOOK_URL || '').trim();
     const taskWebhookToken = String(process.env.MINDWTR_TASK_WEBHOOK_TOKEN || '').trim();
     const fireTaskWebhook = (
-        kind: 'edit' | 'delete',
+        kind: 'create' | 'edit' | 'delete',
         taskId: string,
         fields?: Record<string, unknown>
     ): void => {
         if (!taskWebhookUrl) return;
-        const body = JSON.stringify(kind === 'edit' ? { kind, taskId, fields } : { kind, taskId });
+        const body = JSON.stringify(kind === 'delete' ? { kind, taskId } : { kind, taskId, fields });
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (taskWebhookToken) headers.Authorization = `Bearer ${taskWebhookToken}`;
         // Don't await — webhook is best-effort.
@@ -458,6 +460,20 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                             data.tasks.push(task);
                             throwIfRequestAborted(requestAbortController.signal);
                             writeData(filePath, data);
+
+                            // Notify ai-service so manually-added cards (Mindwtr UI quick-add,
+                            // sync from another device) flow through the Enricher pipeline.
+                            // ai-service-originated creates skip this branch via the source guard.
+                            const requestSource = req.headers.get('x-mindwtr-source') || '';
+                            if (requestSource !== 'ai-service') {
+                                fireTaskWebhook('create', task.id, {
+                                    title: task.title,
+                                    description: task.description,
+                                    status: task.status,
+                                    tags: task.tags,
+                                    projectId: task.projectId ?? null,
+                                });
+                            }
                             return jsonResponse({ task }, { status: 201 });
                         });
                     }
@@ -602,6 +618,66 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                             total,
                             limit: pagination.limit,
                             offset: pagination.offset,
+                        });
+                    }
+
+                    if (req.method === 'POST' && pathname === '/v1/projects') {
+                        // Used by ai-service applier when an Enricher split-proposal
+                        // gets approved: persist a real Project entity so the
+                        // sub-action tasks become navigable as children rather
+                        // than flat siblings with a "project" tag.
+                        const body = await readJsonBody(req, maxBodyBytes, requestAbortController.signal);
+                        if (isBodyReadError(body)) {
+                            const err = body.__mindwtrError;
+                            return errorResponse(String(err?.message || 'Payload too large'), Number(err?.status) || 413);
+                        }
+                        if (!body || typeof body !== 'object') return errorResponse('Invalid JSON body');
+
+                        return await withWriteLock(key, async () => {
+                            throwIfRequestAborted(requestAbortController.signal);
+                            const data = loadAppData(filePath);
+                            const nowIso = new Date().toISOString();
+
+                            const rawTitle = typeof (body as any).title === 'string' ? String((body as any).title) : '';
+                            const title = rawTitle.trim();
+                            if (!title) return errorResponse('Missing project title');
+                            if (title.length > MAX_TASK_TITLE_LENGTH) {
+                                return errorResponse(`Project title too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
+                            }
+
+                            const props = typeof (body as any).props === 'object' && (body as any).props
+                                ? (body as any).props
+                                : {};
+                            const status = ['active', 'someday', 'waiting', 'archived'].includes(props.status)
+                                ? props.status
+                                : 'active';
+                            const color = typeof props.color === 'string' ? props.color : '#7c3aed';
+                            const order = typeof props.order === 'number' ? props.order : data.projects.length;
+                            const tagIds = Array.isArray(props.tagIds) ? props.tagIds : [];
+                            const areaId = typeof props.areaId === 'string' ? props.areaId : undefined;
+                            const supportNotes = typeof props.supportNotes === 'string' ? props.supportNotes : undefined;
+                            const dueDate = typeof props.dueDate === 'string' ? props.dueDate : undefined;
+                            const isSequential = typeof props.isSequential === 'boolean' ? props.isSequential : undefined;
+
+                            const project: any = {
+                                id: generateUUID(),
+                                title,
+                                status,
+                                color,
+                                order,
+                                tagIds,
+                                createdAt: nowIso,
+                                updatedAt: nowIso,
+                            };
+                            if (areaId !== undefined) project.areaId = areaId;
+                            if (supportNotes !== undefined) project.supportNotes = supportNotes;
+                            if (dueDate !== undefined) project.dueDate = dueDate;
+                            if (isSequential !== undefined) project.isSequential = isSequential;
+
+                            data.projects.push(project);
+                            throwIfRequestAborted(requestAbortController.signal);
+                            writeData(filePath, data);
+                            return jsonResponse({ project }, { status: 201 });
                         });
                     }
 

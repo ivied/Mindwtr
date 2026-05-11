@@ -44,6 +44,7 @@ export interface TaskFieldsSnapshot {
 }
 
 export type TaskChangeEvent =
+  | { kind: 'create'; taskId: string; fields: TaskFieldsSnapshot }
   | { kind: 'edit'; taskId: string; fields: TaskFieldsSnapshot }
   | { kind: 'delete'; taskId: string }
 
@@ -59,6 +60,11 @@ export class TaskChangeProcessor {
 
   /** Process an event. Returns one outcome per affected proposal. */
   process(event: TaskChangeEvent): ProcessedOutcome[] {
+    // `create` events don't target existing proposals — they're a signal
+    // for the Enricher hook (wired in index.ts) to start a NEW enrichment
+    // proposal. Nothing to process here.
+    if (event.kind === 'create') return []
+
     const proposals = this.store.listPending({ targetTaskId: event.taskId })
     const outcomes: ProcessedOutcome[] = []
 

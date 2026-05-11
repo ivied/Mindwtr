@@ -46,6 +46,14 @@ export interface ProposalsHttpDeps {
   applier: ProposalApplier
   commentHandler: CommentHandler
   taskChangeProcessor: TaskChangeProcessor
+  /**
+   * Optional hook fired when the cloud webhook reports a task created
+   * outside ai-service (manual quick-add, sync from another device, etc.).
+   * Used by index.ts to spin up the Enricher pipeline so the user sees an
+   * AI suggestion on the manually-added card. Fire-and-forget; the webhook
+   * handler returns immediately.
+   */
+  onTaskCreated?: (taskId: string, fields: TaskFieldsSnapshot) => void
 }
 
 export interface MemoryHttpDeps {
@@ -242,6 +250,8 @@ function mountProposalRoutes(app: Hono, deps: ProposalsHttpDeps): void {
     return c.json({
       ok: true,
       appliedTaskIds: result.appliedTaskIds,
+      ...(result.projectId ? { projectId: result.projectId } : {}),
+      ...(result.projectTitle ? { projectTitle: result.projectTitle } : {}),
       proposal: deps.store.get(id),
     })
   })
@@ -306,6 +316,15 @@ function mountProposalRoutes(app: Hono, deps: ProposalsHttpDeps): void {
     }
     const event = parseTaskChangeEvent(body)
     if (!event) return c.json({ error: 'invalid event shape' }, 400)
+    // create events: dispatch to the Enricher hook. TaskChangeProcessor itself
+    // returns [] for create — it only handles supersession/staling on edit/delete.
+    if (event.kind === 'create' && deps.onTaskCreated) {
+      try {
+        deps.onTaskCreated(event.taskId, event.fields)
+      } catch (err) {
+        console.error('[task-changes] onTaskCreated hook threw:', (err as Error).message)
+      }
+    }
     const outcomes = deps.taskChangeProcessor.process(event)
     return c.json({ ok: true, outcomes })
   })
@@ -363,6 +382,10 @@ function parseTaskChangeEvent(body: TaskChangeWebhookBody): TaskChangeEvent | nu
   if (body.kind === 'edit') {
     if (typeof body.fields !== 'object' || body.fields === null) return null
     return { kind: 'edit', taskId: body.taskId, fields: body.fields }
+  }
+  if (body.kind === 'create') {
+    if (typeof body.fields !== 'object' || body.fields === null) return null
+    return { kind: 'create', taskId: body.taskId, fields: body.fields }
   }
   return null
 }

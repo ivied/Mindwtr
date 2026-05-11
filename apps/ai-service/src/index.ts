@@ -398,6 +398,28 @@ async function main() {
             applier: proposalApplier,
             commentHandler,
             taskChangeProcessor,
+            // Manual user adds in Mindwtr UI (and cross-device sync of new
+            // tasks) reach us through this webhook. Hand them to the same
+            // Enricher pipeline push captures use so the user gets an AI
+            // suggestion on the manually-added card within a few seconds.
+            onTaskCreated: enricherPipeline
+              ? (taskId, fields) => {
+                  const text = (fields.title ?? '') + (fields.description ? '\n' + fields.description : '')
+                  void enricherPipeline!
+                    .run({
+                      taskId,
+                      taskTitle: fields.title ?? '',
+                      taskTags: Array.isArray(fields.tags) ? fields.tags : [],
+                      text,
+                      sourceChannel: 'manual',
+                      sourceMeta: { origin: 'mindwtr-ui-or-sync' },
+                      sourceCaptureId: null,
+                    })
+                    .catch((err) =>
+                      console.error(`[webhook→enricher] failed for ${taskId}:`, (err as Error).message)
+                    )
+                }
+              : undefined,
           }
         : null,
       persons: personsProvider,
