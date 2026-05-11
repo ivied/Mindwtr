@@ -26,6 +26,14 @@ import { MindwtrInboxTitles } from './commitment/inbox-titles'
 import { WikiPersonsProvider } from './wiki/persons-reader'
 import { ProposalNotifier } from './bot/proposal-notifier'
 import { createHttpServer } from './http/server'
+import {
+  MemoryStore,
+  UnifiedExtractor,
+  IngestService,
+  HybridRetriever,
+  FocusContextAssembler,
+  DailySummaryJob,
+} from './memory'
 
 const MINDWTR_CLOUD_URL = process.env.MINDWTR_CLOUD_URL ?? 'http://localhost:8787'
 const MINDWTR_AUTH_TOKEN = process.env.MINDWTR_AUTH_TOKEN ?? ''
@@ -125,6 +133,19 @@ const taskChangeProcessor = new TaskChangeProcessor(proposalStore)
 // for the desktop AssignedToPicker autocomplete.
 const personsProvider = WIKI_DIR ? new WikiPersonsProvider({ wikiDir: WIKI_DIR }) : null
 
+// Memory module — long-lived events + LLM-extracted facts. Reuses the
+// Context Store SQLite handle (migration v3 adds the tables). Independent
+// of the existing short-TTL Context Store; powers /v1/memory/* and the
+// focus-context surface that future proactive features will consume.
+const memoryStore = new MemoryStore({
+  db: contextStore.rawDb,
+  vecAvailable: contextStore.hasVectorSearch,
+})
+const memoryRetriever = new HybridRetriever(memoryStore, embeddings)
+let memoryIngest: IngestService | null = null
+let memoryFocusContext: FocusContextAssembler | null = null
+let dailySummaryJob: DailySummaryJob | null = null
+
 // --- AI Enricher (push) + Commitment Detector (pull) + Reviser ---
 let enricherPipeline: EnricherPipeline | null = null
 let commitmentPipeline: CommitmentPipeline | null = null
@@ -176,6 +197,27 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     contextStore,
   })
   console.log('💬 Proposal dialogue enabled (Reviser)')
+
+  // Memory module wire-up requires the same LLM client.
+  const memoryExtractor = new UnifiedExtractor(llm)
+  memoryIngest = new IngestService({
+    store: memoryStore,
+    embeddings,
+    extractor: memoryExtractor,
+  })
+  memoryFocusContext = new FocusContextAssembler({
+    store: memoryStore,
+    retriever: memoryRetriever,
+    llm,
+  })
+  dailySummaryJob = new DailySummaryJob({
+    store: memoryStore,
+    llm,
+    embeddings,
+  })
+  console.log(
+    `🧠 Memory module enabled (${memoryStore.vecAvailable ? 'vec+FTS' : 'FTS only'}, ${memoryStore.countEvents()} events, ${memoryStore.countFacts()} facts)`
+  )
 
   // Two-stage pull pattern: after a Proposer create-proposal lands a task in
   // Mindwtr inbox, kick the Enricher pipeline on it so the user gets a
@@ -341,21 +383,53 @@ async function main() {
           }
         : null,
       persons: personsProvider,
+      memory: memoryFocusContext
+        ? {
+            store: memoryStore,
+            retriever: memoryRetriever,
+            focusContext: memoryFocusContext,
+            ingest: memoryIngest,
+          }
+        : null,
     })
     http = server.serve()
     console.log(
       `📡 HTTP endpoint listening on :${HTTP_PORT} (capture, context search${
         commentHandler ? ', proposals' : ''
-      }${personsProvider ? ', persons' : ''})`
+      }${personsProvider ? ', persons' : ''}${memoryFocusContext ? ', memory' : ''})`
     )
   } else {
     console.warn('⚠️ HTTP_AUTH_TOKEN not set — HTTP endpoint disabled')
   }
 
+  // Daily memory summary — one LLM call per day, summarizing yesterday's
+  // events. Runs every hour so server restarts at odd times still catch
+  // it; the job itself is idempotent (skips dates already summarized).
+  const dailySummaryTimer = dailySummaryJob
+    ? setInterval(
+        () => {
+          if (!dailySummaryJob) return
+          dailySummaryJob
+            .backfill(1)
+            .then((results) => {
+              const wrote = results.filter((r) => r.wrote).length
+              if (wrote > 0) {
+                console.log(
+                  `📝 Daily summary: wrote ${wrote} new day(s) (${results.map((r) => r.date).join(', ')})`
+                )
+              }
+            })
+            .catch((err) => console.error('[daily-summary] failed:', err))
+        },
+        60 * 60 * 1000
+      )
+    : null
+
   const shutdown = async () => {
     console.log('🛑 Shutting down...')
     clearInterval(purgeTimer)
     clearInterval(expiryTimer)
+    if (dailySummaryTimer) clearInterval(dailySummaryTimer)
     if (http) http.stop()
     for (const ch of channels) {
       try {

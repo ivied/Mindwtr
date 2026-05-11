@@ -28,6 +28,7 @@ import type {
 import type { ProposalRecord, ProposalType } from '../proposal-store/types'
 import type { FieldDiff, ModifyPayload } from '../proposal-store/payloads'
 import type { PersonsProvider } from '../wiki/persons-reader'
+import type { FocusContextAssembler, MemoryStore, HybridRetriever, IngestService } from '../memory'
 
 const MAX_TEXT_LENGTH = 10_000
 
@@ -47,6 +48,14 @@ export interface ProposalsHttpDeps {
   taskChangeProcessor: TaskChangeProcessor
 }
 
+export interface MemoryHttpDeps {
+  store: MemoryStore
+  retriever: HybridRetriever
+  focusContext: FocusContextAssembler
+  /** Live ingest service — exposed via POST /v1/memory/ingest for ad-hoc testing. */
+  ingest: IngestService | null
+}
+
 export interface HttpServerConfig {
   port: number
   authToken: string
@@ -55,6 +64,8 @@ export interface HttpServerConfig {
   proposals: ProposalsHttpDeps | null
   /** Optional persons registry — when set, exposes GET /v1/persons for UI autocomplete. */
   persons: PersonsProvider | null
+  /** Optional memory module deps — when set, exposes GET /v1/memory/* routes. */
+  memory?: MemoryHttpDeps | null
   /** Allowed origins for CORS. Default ['http://localhost:5173']. */
   corsOrigins?: string[]
 }
@@ -148,6 +159,10 @@ export function createHttpServer(config: HttpServerConfig) {
 
   if (config.persons) {
     mountPersonsRoutes(app, config.persons)
+  }
+
+  if (config.memory) {
+    mountMemoryRoutes(app, config.memory)
   }
 
   return {
@@ -384,3 +399,119 @@ function mountPersonsRoutes(app: Hono, provider: PersonsProvider): void {
     return c.json({ items: filtered.slice(0, limit) })
   })
 }
+
+function mountMemoryRoutes(app: Hono, deps: MemoryHttpDeps): void {
+  app.get('/v1/memory/stats', (c) => {
+    return c.json({
+      events: deps.store.countEvents(),
+      facts: deps.store.countFacts(),
+      activeFacts: deps.store.allActiveFacts(1000).length,
+      recentDailySummaries: deps.store.recentDailySummaries(30).length,
+      vecAvailable: deps.store.vecAvailable,
+    })
+  })
+
+  app.get('/v1/memory/search', async (c) => {
+    const query = c.req.query('q')
+    if (!query) return c.json({ error: 'q is required' }, 400)
+    const limit = Number(c.req.query('limit') ?? 10)
+    const withinDays = c.req.query('days') ? Number(c.req.query('days')) : undefined
+    const entitySlugs = c.req.query('entities')?.split(',').map((s) => s.trim()).filter(Boolean)
+
+    try {
+      const hits = await deps.retriever.retrieve({ query, limit, withinDays, entitySlugs })
+      return c.json({
+        query,
+        hits: hits.map((h) => ({
+          id: h.id,
+          ts: h.ts,
+          source: h.source,
+          app: h.app,
+          title: h.title,
+          excerpt: h.body.slice(0, 240),
+          score: h.score,
+          ranks: h.ranks,
+        })),
+      })
+    } catch (err) {
+      console.error('[http] memory search failed:', err)
+      return c.json({ error: 'search failed' }, 500)
+    }
+  })
+
+  app.get('/v1/memory/focus-context', async (c) => {
+    const query = c.req.query('q')
+    if (!query) return c.json({ error: 'q is required' }, 400)
+    const eventLimit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined
+    const withinDays = c.req.query('days') ? Number(c.req.query('days')) : undefined
+    const entitySlugs = c.req.query('entities')?.split(',').map((s) => s.trim()).filter(Boolean)
+    const withBriefing = c.req.query('briefing') === '1'
+
+    try {
+      const ctx = await deps.focusContext.assemble({
+        query,
+        eventLimit,
+        withinDays,
+        entitySlugs,
+        withBriefing,
+      })
+      return c.json({
+        query,
+        activeFacts: ctx.activeFacts,
+        recentEvents: ctx.recentEvents.map((e) => ({
+          id: e.id,
+          ts: e.ts,
+          source: e.source,
+          app: e.app,
+          title: e.title,
+          excerpt: e.body.slice(0, 320),
+          score: e.score,
+          ranks: e.ranks,
+        })),
+        relatedEntities: ctx.relatedEntities,
+        briefing: ctx.briefing,
+      })
+    } catch (err) {
+      console.error('[http] focus-context failed:', err)
+      return c.json({ error: 'focus-context failed' }, 500)
+    }
+  })
+
+  app.post('/v1/memory/ingest', async (c) => {
+    if (!deps.ingest) return c.json({ error: 'ingest not configured' }, 503)
+    let body: Record<string, unknown>
+    try {
+      body = (await c.req.json()) as Record<string, unknown>
+    } catch {
+      return c.json({ error: 'invalid JSON' }, 400)
+    }
+    const required = ['id', 'ts', 'source', 'app', 'title', 'body']
+    for (const k of required) {
+      if (typeof body[k] !== 'string') return c.json({ error: `missing ${k}` }, 400)
+    }
+    try {
+      const res = await deps.ingest.live({
+        id: body.id as string,
+        ts: body.ts as string,
+        source: body.source as 'screen' | 'audio',
+        app: body.app as string,
+        title: body.title as string,
+        url: typeof body.url === 'string' ? body.url : undefined,
+        body: body.body as string,
+        meta: (body.meta as Record<string, unknown> | undefined) ?? undefined,
+        capturePath: typeof body.capturePath === 'string' ? body.capturePath : undefined,
+      })
+      return c.json({
+        inserted: res.inserted,
+        duplicate: res.duplicate,
+        entityCount: res.extraction?.entities.length ?? 0,
+        factCount: res.extraction?.facts.length ?? 0,
+        factIdsInserted: res.factIdsInserted,
+      })
+    } catch (err) {
+      console.error('[http] memory ingest failed:', err)
+      return c.json({ error: 'ingest failed' }, 500)
+    }
+  })
+}
+

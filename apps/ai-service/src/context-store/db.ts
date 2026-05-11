@@ -10,7 +10,7 @@ import { dirname } from 'node:path'
 
 export type DB = Database
 
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS captures (
@@ -103,11 +103,106 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
   version INTEGER PRIMARY KEY,
   applied_at TEXT NOT NULL
 );
+
+-- ---------------- Memory module (event+facts) ----------------
+-- Distinct from \`captures\` (which is the short-TTL Context Store).
+-- Events are long-lived per-capture rows used as the LLM-context corpus.
+-- Backfilled once from wiki/captures/**/*.md, then appended at capture time.
+CREATE TABLE IF NOT EXISTS events (
+  id TEXT PRIMARY KEY,                  -- capture id (HHMMSS-source-<8hex> by convention)
+  ts TEXT NOT NULL,                     -- ISO timestamp the capture happened
+  source TEXT NOT NULL,                 -- screen|audio
+  app TEXT,
+  title TEXT,
+  body TEXT NOT NULL,                   -- OCR text or transcript (truncated upstream if huge)
+  meta TEXT,                            -- JSON: display_index, sent_to_inbox, etc.
+  capture_path TEXT,                    -- path to wiki/captures/.../*.md if known
+  content_hash TEXT NOT NULL,           -- sha256 of body for dedup
+  ingested_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+CREATE INDEX IF NOT EXISTS idx_events_source_app ON events(source, app);
+CREATE INDEX IF NOT EXISTS idx_events_content_hash ON events(content_hash);
+
+-- FTS over body+title. content='events' keeps storage contentless (no row duplication).
+CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
+  title,
+  body,
+  content='events',
+  content_rowid='rowid'
+);
+
+CREATE TRIGGER IF NOT EXISTS events_fts_ai AFTER INSERT ON events BEGIN
+  INSERT INTO events_fts(rowid, title, body) VALUES (new.rowid, COALESCE(new.title, ''), new.body);
+END;
+
+CREATE TRIGGER IF NOT EXISTS events_fts_ad AFTER DELETE ON events BEGIN
+  INSERT INTO events_fts(events_fts, rowid, title, body) VALUES ('delete', old.rowid, COALESCE(old.title, ''), old.body);
+END;
+
+CREATE TRIGGER IF NOT EXISTS events_fts_au AFTER UPDATE ON events BEGIN
+  INSERT INTO events_fts(events_fts, rowid, title, body) VALUES ('delete', old.rowid, COALESCE(old.title, ''), old.body);
+  INSERT INTO events_fts(rowid, title, body) VALUES (new.rowid, COALESCE(new.title, ''), new.body);
+END;
+
+-- Many-to-many: which entities are mentioned in which events. Slug-only
+-- pointer so this table doesn't bind us to the wiki .md format — entity
+-- definitions stay in wiki/entities/<slug>.md.
+CREATE TABLE IF NOT EXISTS event_entities (
+  event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  entity_slug TEXT NOT NULL,
+  PRIMARY KEY (event_id, entity_slug)
+);
+CREATE INDEX IF NOT EXISTS idx_event_entities_slug ON event_entities(entity_slug);
+
+-- Facts: typed LLM-extracted statements about an entity with validity
+-- windows. valid_to IS NULL → still active. fact_type is free-form (the
+-- extractor picks from a hint list: working_on | waiting_on | met_with |
+-- knows_about | location | role | status | other) — we don't enforce.
+CREATE TABLE IF NOT EXISTS facts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  statement TEXT NOT NULL,
+  entity_slug TEXT,
+  fact_type TEXT,
+  valid_from TEXT NOT NULL,
+  valid_to TEXT,
+  source_event_id TEXT REFERENCES events(id) ON DELETE SET NULL,
+  confidence REAL,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_facts_entity ON facts(entity_slug);
+CREATE INDEX IF NOT EXISTS idx_facts_valid_to ON facts(valid_to);
+
+-- One LLM-written summary per calendar day. Embedded for query, but
+-- mostly used as a cheap rollup so weekly/monthly context doesn't
+-- require pulling thousands of events.
+CREATE TABLE IF NOT EXISTS daily_summary (
+  date TEXT PRIMARY KEY,                -- YYYY-MM-DD (UTC)
+  summary TEXT NOT NULL,
+  event_count INTEGER NOT NULL,
+  facts_added INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+);
 `
 
 const VEC_SCHEMA_SQL = `
 CREATE VIRTUAL TABLE IF NOT EXISTS captures_vec USING vec0(
   capture_id TEXT PRIMARY KEY,
+  embedding FLOAT[1536]
+);
+
+-- Memory module: parallel vec table for events. Keyed by events.id so
+-- joins are direct. sqlite-vec's vec0 doesn't support FKs, so we rely
+-- on application-level cleanup (events ON DELETE → also remove vec row).
+CREATE VIRTUAL TABLE IF NOT EXISTS events_vec USING vec0(
+  event_id TEXT PRIMARY KEY,
+  embedding FLOAT[1536]
+);
+
+-- And one over daily_summary.summary so weekly/monthly context lookups
+-- can pull summary rows by semantic similarity.
+CREATE VIRTUAL TABLE IF NOT EXISTS daily_summary_vec USING vec0(
+  date TEXT PRIMARY KEY,
   embedding FLOAT[1536]
 );
 `
