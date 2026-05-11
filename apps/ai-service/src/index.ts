@@ -120,6 +120,11 @@ const proposalStore = new ProposalStore(contextStore.rawDb)
 const proposalApplier = new ProposalApplier(proposalStore, mindwtr)
 const taskChangeProcessor = new TaskChangeProcessor(proposalStore)
 
+// Persons registry — single shared instance: Proposer pipeline reads it
+// for who_to canonicalization, HTTP server exposes it at GET /v1/persons
+// for the desktop AssignedToPicker autocomplete.
+const personsProvider = WIKI_DIR ? new WikiPersonsProvider({ wikiDir: WIKI_DIR }) : null
+
 // --- AI Enricher (push) + Commitment Detector (pull) + Reviser ---
 let enricherPipeline: EnricherPipeline | null = null
 let commitmentPipeline: CommitmentPipeline | null = null
@@ -156,11 +161,11 @@ if (LLM_BASE_URL && LLM_API_KEY) {
   }
   // Persons registry — Proposer normalizes who_to against canonical wiki
   // slugs so waiting-for tasks stay consistent across captures.
-  if (WIKI_DIR) {
-    commitmentPipeline.setPersonsProvider(new WikiPersonsProvider({ wikiDir: WIKI_DIR }))
+  if (personsProvider) {
+    commitmentPipeline.setPersonsProvider(personsProvider)
   }
   console.log(
-    `🎯 Commitment Detector enabled (deny apps:${sourceDeny.apps.length}, deny urls:${sourceDeny.urlPatterns.length}, inbox-dedup on, identity:${USER_IDENTITY_NAME || 'unset'}, persons:${WIKI_DIR ? 'wiki' : 'unset'})`
+    `🎯 Commitment Detector enabled (deny apps:${sourceDeny.apps.length}, deny urls:${sourceDeny.urlPatterns.length}, inbox-dedup on, identity:${USER_IDENTITY_NAME || 'unset'}, persons:${personsProvider ? 'wiki' : 'unset'})`
   )
 
   const reviser = new Reviser(llm)
@@ -335,12 +340,13 @@ async function main() {
             taskChangeProcessor,
           }
         : null,
+      persons: personsProvider,
     })
     http = server.serve()
     console.log(
       `📡 HTTP endpoint listening on :${HTTP_PORT} (capture, context search${
         commentHandler ? ', proposals' : ''
-      })`
+      }${personsProvider ? ', persons' : ''})`
     )
   } else {
     console.warn('⚠️ HTTP_AUTH_TOKEN not set — HTTP endpoint disabled')

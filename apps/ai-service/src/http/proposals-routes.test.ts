@@ -66,6 +66,7 @@ function setupServer(reviser: Reviser = reviserReturning({ kind: 'clarify', agen
     capture: async () => {},
     contextStore: null,
     proposals: { store, applier, commentHandler, taskChangeProcessor },
+    persons: null,
   })
   return server.handler
 }
@@ -204,6 +205,7 @@ describe('POST /v1/proposals/:id/approve', () => {
       capture: async () => {},
       contextStore: null,
       proposals: { store, applier, commentHandler, taskChangeProcessor },
+      persons: null,
     })
 
     const res = await server.handler(
@@ -303,6 +305,7 @@ describe('POST /v1/proposals/:id/approve', () => {
       capture: async () => {},
       contextStore: null,
       proposals: { store, applier, commentHandler, taskChangeProcessor },
+      persons: null,
     })
     const res = await server.handler(
       new Request(`http://x/v1/proposals/${p.id}/approve`, { method: 'POST', headers: AUTH })
@@ -331,6 +334,7 @@ describe('POST /v1/proposals/:id/approve', () => {
       capture: async () => {},
       contextStore: null,
       proposals: { store, applier, commentHandler, taskChangeProcessor },
+      persons: null,
     })
     const p = store.create({
       type: 'modify',

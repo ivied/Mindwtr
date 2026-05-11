@@ -1,6 +1,7 @@
 import type { TaskEnergyLevel, TaskPriority, TaskStatus, TimeEstimate } from '@mindwtr/core';
 
 import { cn } from '../../../lib/utils';
+import { AssignedToPicker } from '../../AssignedToPicker';
 
 function ToggleTokenField({
     ariaLabel,
@@ -157,13 +158,12 @@ export function AssignedToField({
     return (
         <div className="flex flex-col gap-1">
             <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.assignedTo')}</label>
-            <input
-                type="text"
+            <AssignedToPicker
                 value={value}
-                aria-label={t('taskEdit.assignedTo')}
-                onChange={(event) => onChange(event.target.value)}
+                onChange={onChange}
+                ariaLabel={t('taskEdit.assignedTo')}
                 placeholder={t('taskEdit.assignedToPlaceholder')}
-                className="text-xs bg-muted/50 border border-border rounded px-2 py-1 text-foreground"
+                className="text-xs [&>input]:bg-muted/50 [&>input]:border [&>input]:border-border [&>input]:rounded [&>input]:px-2 [&>input]:py-1 [&>input]:text-foreground"
             />
         </div>
     );

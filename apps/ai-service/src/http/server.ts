@@ -27,6 +27,7 @@ import type {
 } from '../proposal-store/task-change-processor'
 import type { ProposalRecord, ProposalType } from '../proposal-store/types'
 import type { FieldDiff, ModifyPayload } from '../proposal-store/payloads'
+import type { PersonsProvider } from '../wiki/persons-reader'
 
 const MAX_TEXT_LENGTH = 10_000
 
@@ -52,6 +53,8 @@ export interface HttpServerConfig {
   capture: CaptureFn
   contextStore: ContextStore | null
   proposals: ProposalsHttpDeps | null
+  /** Optional persons registry — when set, exposes GET /v1/persons for UI autocomplete. */
+  persons: PersonsProvider | null
   /** Allowed origins for CORS. Default ['http://localhost:5173']. */
   corsOrigins?: string[]
 }
@@ -141,6 +144,10 @@ export function createHttpServer(config: HttpServerConfig) {
 
   if (config.proposals) {
     mountProposalRoutes(app, config.proposals)
+  }
+
+  if (config.persons) {
+    mountPersonsRoutes(app, config.persons)
   }
 
   return {
@@ -343,4 +350,37 @@ function parseTaskChangeEvent(body: TaskChangeWebhookBody): TaskChangeEvent | nu
     return { kind: 'edit', taskId: body.taskId, fields: body.fields }
   }
   return null
+}
+
+function mountPersonsRoutes(app: Hono, provider: PersonsProvider): void {
+  // GET /v1/persons?q=foo&limit=20 — used by the desktop AssignedToPicker.
+  // Filters case-insensitively against canonical name + aliases. Returns
+  // mention_count so callers can show "most-mentioned first" without sorting.
+  app.get('/v1/persons', async (c) => {
+    const qRaw = c.req.query('q') ?? ''
+    const q = qRaw.trim().toLowerCase()
+    const limitRaw = Number(c.req.query('limit') ?? 30)
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 200) : 30
+
+    // Fetch a comfortable superset; the wiki rollup keeps mention_count
+    // monotone so newer mentions don't promote rare matches above already
+    // canonical ones in the cached list.
+    let persons
+    try {
+      persons = await provider.recentPersons(500)
+    } catch (err) {
+      return c.json({ error: `persons fetch failed: ${(err as Error).message}` }, 500)
+    }
+
+    const filtered = q
+      ? persons.filter((p) => {
+          if (p.name.toLowerCase().includes(q)) return true
+          if (p.slug.toLowerCase().includes(q)) return true
+          for (const a of p.aliases) if (a.toLowerCase().includes(q)) return true
+          return false
+        })
+      : persons
+
+    return c.json({ items: filtered.slice(0, limit) })
+  })
 }

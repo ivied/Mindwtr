@@ -194,6 +194,16 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
         }
         return count;
     }, [tasks, resolvedAreaFilter, projectMap, areaById]);
+    const waitingCount = useMemo(() => {
+        let count = 0;
+        for (const task of tasks) {
+            if (task.deletedAt) continue;
+            if (task.status !== 'waiting') continue;
+            if (!taskMatchesAreaFilter(task, resolvedAreaFilter, projectMap, areaById)) continue;
+            count += 1;
+        }
+        return count;
+    }, [tasks, resolvedAreaFilter, projectMap, areaById]);
     const wideViews = new Set([
         'inbox',
         'next',
@@ -228,6 +238,10 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
             items: [
                 { id: 'inbox', labelKey: 'nav.inbox', icon: Inbox, count: inboxCount },
                 { id: 'agenda', labelKey: 'nav.agenda', icon: Target },
+                // Waiting promoted into Focus: most AI-suggested cards land
+                // here and the user wanted one-click visibility instead of
+                // hunting through Lists.
+                { id: 'waiting', labelKey: 'nav.waiting', icon: PauseCircle, count: waitingCount },
             ],
         },
         {
@@ -236,7 +250,6 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
             items: [
                 { id: 'projects', labelKey: 'nav.projects', icon: Folder },
                 { id: 'someday', labelKey: 'nav.someday', icon: Clock3 },
-                { id: 'waiting', labelKey: 'nav.waiting', icon: PauseCircle },
                 { id: 'reference', labelKey: 'nav.reference', icon: Book },
             ],
         },
@@ -262,7 +275,7 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
                 { id: 'trash', labelKey: 'nav.trash', icon: Trash2 },
             ],
         },
-    ]), [inboxCount, isObsidianEnabled, t]);
+    ]), [inboxCount, waitingCount, isObsidianEnabled, t]);
 
     const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => loadCollapsedSections());
 

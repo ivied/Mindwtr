@@ -9,6 +9,7 @@ function setup(captureImpl: CaptureFn) {
     capture: captureImpl,
     contextStore: null,
     proposals: null,
+    persons: null,
   })
   return server.handler
 }

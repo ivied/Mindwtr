@@ -161,6 +161,26 @@ export async function rejectProposal(id: string, reason?: string): Promise<{ ok:
     });
 }
 
+export interface KnownPerson {
+    slug: string;
+    name: string;
+    aliases: string[];
+    mentionCount: number;
+}
+
+/**
+ * Search the capture-wiki persons registry. Empty q returns the most-mentioned
+ * persons first (ai-service sorts on read). Used by AssignedToPicker for
+ * autocomplete on the Mindwtr task "Assigned to" field.
+ */
+export async function listPersons(q?: string, limit = 30): Promise<KnownPerson[]> {
+    const qs = new URLSearchParams();
+    if (q) qs.set('q', q);
+    qs.set('limit', String(limit));
+    const data = await apiFetch<{ items: KnownPerson[] }>(`/v1/persons?${qs.toString()}`);
+    return data.items;
+}
+
 export async function commentOnProposal(id: string, text: string): Promise<CommentResult> {
     return apiFetch<CommentResult>(`/v1/proposals/${id}/comments`, {
         method: 'POST',
