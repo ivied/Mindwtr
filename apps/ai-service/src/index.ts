@@ -35,6 +35,7 @@ import {
   DailySummaryJob,
   MemoryProposerContext,
 } from './memory'
+import { SlugCanonicalizer } from './memory/slug-canonicalizer'
 
 const MINDWTR_CLOUD_URL = process.env.MINDWTR_CLOUD_URL ?? 'http://localhost:8787'
 const MINDWTR_AUTH_TOKEN = process.env.MINDWTR_AUTH_TOKEN ?? ''
@@ -143,6 +144,18 @@ const memoryStore = new MemoryStore({
   vecAvailable: contextStore.hasVectorSearch,
 })
 const memoryRetriever = new HybridRetriever(memoryStore, embeddings)
+// Slug canonicalizer — folds extractor's free-form slugs (e.g. "sergey",
+// "sergey-kurd") into the wiki's canonical form ("sergey-kurdyuk") via
+// the wiki entity's frontmatter aliases. Best-effort: if WIKI_DIR is
+// unset or the wiki dir is empty, ingest still works (passes slugs through).
+const slugCanonicalizer = WIKI_DIR ? new SlugCanonicalizer({ wikiDir: WIKI_DIR }) : null
+// Kicked off async; the first few captures may miss the map but it's
+// idempotent and self-heals on the next /v1/admin/canonicalize rebuild.
+if (slugCanonicalizer) {
+  void slugCanonicalizer.rebuild().catch((err) =>
+    console.warn('[slug-canonicalizer] initial rebuild failed:', (err as Error).message)
+  )
+}
 // Ingest with NO extractor: live captures embed + insert; per-capture LLM
 // extraction is intentionally NOT wired in the hot path (keeps the
 // inbox-proposal latency budget the Proposer already owns). Facts will be
@@ -151,6 +164,7 @@ let memoryIngest: IngestService | null = new IngestService({
   store: memoryStore,
   embeddings,
   extractor: null,
+  canonicalizer: slugCanonicalizer,
 })
 let memoryFocusContext: FocusContextAssembler | null = null
 let dailySummaryJob: DailySummaryJob | null = null
@@ -223,6 +237,7 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     store: memoryStore,
     embeddings,
     extractor: memoryExtractor,
+    canonicalizer: slugCanonicalizer,
   })
   memoryFocusContext = new FocusContextAssembler({
     store: memoryStore,

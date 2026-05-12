@@ -31,6 +31,8 @@ export { DailySummaryJob } from './daily-summary'
 export type { DailySummaryResult } from './daily-summary'
 export { MemoryProposerContext } from './proposer-context'
 export type { ProposerContextProvider } from './proposer-context'
+export { SlugCanonicalizer } from './slug-canonicalizer'
+export type { SlugCanonicalizerOptions } from './slug-canonicalizer'
 export type {
   Event,
   NewEventInput,

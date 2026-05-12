@@ -16,11 +16,16 @@ import { join } from 'node:path'
 import type { EmbeddingsProvider } from '../context-store/embeddings'
 import { UnifiedExtractor, type ExtractInput, type ExtractOutput } from './extractor'
 import { contentHash, MemoryStore } from './store'
+import type { SlugCanonicalizer } from './slug-canonicalizer'
 
 export interface IngestOptions {
   store: MemoryStore
   embeddings: EmbeddingsProvider | null
   extractor: UnifiedExtractor | null
+  /** Optional. When set, extractor's slug guesses are remapped to wiki
+   *  canonicals before INSERT, so the facts table doesn't accumulate
+   *  variants like "sergey" / "sergey-kurdyuk" / "sergey-kurd". */
+  canonicalizer?: SlugCanonicalizer | null
 }
 
 export interface IngestLiveInput {
@@ -91,17 +96,28 @@ export class IngestService {
       return { inserted: true, duplicate: false, extraction: null, factIdsInserted: [] }
     }
 
-    const validSlugs = new Set(extraction.entities.map((e) => e.slug))
+    // Slug remap: extractor invents a slug per capture; if a canonicalizer
+    // is wired, prefer the wiki's canonical form so the same entity stays
+    // consistent across captures. Build per-extraction translation map.
+    const canon = this.opts.canonicalizer
+    const slugRemap = new Map<string, string>()
+    for (const e of extraction.entities) {
+      const c = canon?.canonicalOf(e.slug) ?? e.slug
+      slugRemap.set(e.slug, c)
+    }
+
+    const validSlugs = new Set(slugRemap.values())
     this.opts.store.linkEntities(input.id, [...validSlugs])
 
     const factIds: number[] = []
     for (const fact of extraction.facts) {
-      if (!validSlugs.has(fact.entity_slug)) continue
+      const canonical = slugRemap.get(fact.entity_slug) ?? fact.entity_slug
+      if (!validSlugs.has(canonical)) continue
       try {
         const inserted = this.opts.store.insertFact(
           {
             statement: fact.statement,
-            entitySlug: fact.entity_slug,
+            entitySlug: canonical,
             factType: fact.fact_type,
             validFrom: input.ts,
             sourceEventId: input.id,
@@ -112,7 +128,7 @@ export class IngestService {
         factIds.push(inserted.id)
       } catch (err) {
         console.warn(
-          `[memory:ingest] insertFact failed for ${input.id}/${fact.entity_slug}: ${(err as Error).message}`
+          `[memory:ingest] insertFact failed for ${input.id}/${canonical}: ${(err as Error).message}`
         )
       }
     }
