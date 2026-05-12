@@ -10,7 +10,7 @@
  */
 
 import type { ContextStore } from '../context-store/store'
-import type { SearchHit } from '../context-store/types'
+import type { CaptureRecord, SearchHit } from '../context-store/types'
 
 export interface RetrieverConfig {
   topK: number
@@ -63,6 +63,9 @@ export function extractKeywords(
   return out
 }
 
+/** Default ±5 min window for cross-channel temporal context. */
+export const DEFAULT_TEMPORAL_WINDOW_MS = 5 * 60 * 1000
+
 export class ContextRetriever {
   constructor(
     private store: ContextStore,
@@ -85,6 +88,43 @@ export class ContextRetriever {
 
     if (hits.length === 0) return ''
     return formatHits(hits)
+  }
+
+  /**
+   * Cross-channel temporal context: everything captured around `centerIso`
+   * ±windowMs, ordered chronologically and tagged so the LLM can see the
+   * surrounding multimodal scene (screen OCR + audio transcripts + TG
+   * captures that landed in the same minute). Complements semantic
+   * `retrieve()` — temporal context catches "the meeting I was just talking
+   * about" cases that vec similarity misses when the wording is short.
+   */
+  temporalContext(
+    centerIso: string,
+    opts: { windowMs?: number; excludeId?: string; limit?: number } = {}
+  ): string {
+    const windowMs = opts.windowMs ?? DEFAULT_TEMPORAL_WINDOW_MS
+    let captures: CaptureRecord[] = []
+    try {
+      captures = this.store.recentAroundTimestamp(centerIso, windowMs, {
+        excludeId: opts.excludeId,
+        limit: opts.limit ?? 20,
+      })
+    } catch (err) {
+      console.warn('[retriever] temporal-context query failed:', (err as Error).message)
+      return ''
+    }
+    if (captures.length === 0) return ''
+    const windowMin = Math.round(windowMs / 60_000)
+    const header = `Cross-channel activity around capture time (±${windowMin} min, chronological):`
+    const lines = captures.map((c) => {
+      const ts = c.capturedAt.slice(11, 19) // HH:MM:SS UTC
+      const meta = c.sourceMeta && Object.keys(c.sourceMeta).length > 0
+        ? ` ${formatMeta(c.sourceMeta)}`
+        : ''
+      const text = c.text.length > 200 ? `${c.text.slice(0, 200)}…` : c.text
+      return `- [${ts}] [${c.sourceChannel}${meta}] ${text.replace(/\n/g, ' ')}`
+    })
+    return `${header}\n${lines.join('\n')}`
   }
 }
 

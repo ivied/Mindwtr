@@ -41,7 +41,10 @@ export interface EnricherPipelineConfig {
 }
 
 export const DEFAULT_ENRICHER_PIPELINE_CONFIG: EnricherPipelineConfig = {
-  minConfidence: 0.5,
+  // Push captures are explicit user inputs, so we want to surface a suggestion
+  // even when the wording is short or ambiguous. Was 0.5; raised the user's
+  // false-negative count too high ("Geo для Лео" got silently dropped).
+  minConfidence: 0.3,
 }
 
 export interface EnricherPipelineDeps {
@@ -80,15 +83,29 @@ export class EnricherPipeline {
   }
 
   async run(input: EnrichInput): Promise<EnrichOutcome> {
-    let priorContext: string | undefined
+    // Build the LLM input context from two complementary signals:
+    //   1) semantic past-similar items (vec/FTS over a 7-day window)
+    //   2) cross-channel temporal window around now (audio + screen + TG
+    //      captures within ±5 min) — catches "the meeting I was just talking
+    //      about" cases where the trigger text alone is too short to vec-match.
+    const contextBlocks: string[] = []
     if (this.deps.retriever) {
       try {
-        const ctx = await this.deps.retriever.retrieve(input.text)
-        if (ctx) priorContext = ctx
+        const semantic = await this.deps.retriever.retrieve(input.text)
+        if (semantic) contextBlocks.push(semantic)
       } catch (err) {
         console.error('[enricher-pipeline] retriever failed:', err)
       }
+      try {
+        const temporal = this.deps.retriever.temporalContext(new Date().toISOString(), {
+          excludeId: input.sourceCaptureId ?? undefined,
+        })
+        if (temporal) contextBlocks.push(temporal)
+      } catch (err) {
+        console.error('[enricher-pipeline] temporal-context failed:', err)
+      }
     }
+    const priorContext = contextBlocks.length > 0 ? contextBlocks.join('\n\n') : undefined
 
     const proposal = await this.deps.enricher.enrich(input.text, {
       sourceMeta: input.sourceMeta ?? undefined,
@@ -96,9 +113,15 @@ export class EnricherPipeline {
     })
 
     if (proposal.is_noise) {
+      console.log(
+        `[enricher] skip noise (task ${input.taskId.slice(0, 8)}): "${input.taskTitle.slice(0, 60)}" reason="${proposal.noise_reason || proposal.reasoning.slice(0, 80)}"`
+      )
       return { kind: 'skipped', reason: 'noise' }
     }
     if (proposal.confidence < this.config.minConfidence) {
+      console.log(
+        `[enricher] skip low-conf ${proposal.confidence.toFixed(2)} (task ${input.taskId.slice(0, 8)}): "${input.taskTitle.slice(0, 60)}"`
+      )
       return { kind: 'skipped', reason: 'low-confidence' }
     }
 
@@ -122,11 +145,17 @@ export class EnricherPipeline {
             console.error('[enricher-pipeline] notifier failed:', (err as Error).message)
           )
       }
+      console.log(
+        `[enricher] proposed split (task ${input.taskId.slice(0, 8)} → proposal ${created.id.slice(0, 8)}): "${proposal.proposed_title.slice(0, 60)}" sub_actions=${proposal.sub_actions.length}`
+      )
       return { kind: 'proposed', proposalId: created.id, type: 'split' }
     }
 
     const diff = buildModifyDiff(input, proposal)
     if (diff.length === 0) {
+      console.log(
+        `[enricher] skip no-changes (task ${input.taskId.slice(0, 8)}): "${input.taskTitle.slice(0, 60)}" already matches enrichment`
+      )
       return { kind: 'skipped', reason: 'no-changes' }
     }
     const payload: ModifyPayload = {
@@ -151,6 +180,9 @@ export class EnricherPipeline {
           console.error('[enricher-pipeline] notifier failed:', (err as Error).message)
         )
     }
+    console.log(
+      `[enricher] proposed modify (task ${input.taskId.slice(0, 8)} → proposal ${created.id.slice(0, 8)}): "${proposal.proposed_title.slice(0, 60)}" diff=[${diff.map((d) => d.field).join(',')}] conf=${proposal.confidence.toFixed(2)}`
+    )
     return { kind: 'proposed', proposalId: created.id, type: 'modify' }
   }
 }

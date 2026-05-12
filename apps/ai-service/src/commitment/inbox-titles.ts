@@ -6,9 +6,17 @@
  *
  * Default implementation wraps a MindwtrClient with a short in-memory cache
  * (TTL 30s by default) so capture bursts don't hammer the cloud API.
+ *
+ * When a ProposalStore is provided, pending `create` proposal titles from
+ * commitment-detector are merged in. This catches the "two duplicate
+ * suggestions" case — the user hasn't approved the first one yet (so the
+ * task isn't in Mindwtr inbox yet), but it's already in the pending queue
+ * and a second look at the same conversation shouldn't re-propose it.
  */
 
 import type { MindwtrClient } from '../api/mindwtr-client'
+import type { ProposalStore } from '../proposal-store/store'
+import type { CreatePayload } from '../proposal-store/payloads'
 
 export interface InboxTitlesProvider {
   recentTitles(limit: number): Promise<string[]>
@@ -16,6 +24,8 @@ export interface InboxTitlesProvider {
 
 export interface MindwtrInboxTitlesOptions {
   client: MindwtrClient
+  /** When set, pending create-proposal titles are merged into the dedup pool. */
+  proposalStore?: ProposalStore | null
   /** Cache TTL in ms — fresh titles within this window are reused. Default 30s. */
   ttlMs?: number
 }
@@ -36,12 +46,14 @@ export class MindwtrInboxTitles implements InboxTitlesProvider {
 
   async recentTitles(limit: number): Promise<string[]> {
     const now = Date.now()
+    const pendingTitles = this.collectPendingTitles(limit)
+
     if (this.cache && now - this.cache.fetchedAt < this.ttlMs) {
-      return this.cache.titles.slice(0, limit)
+      return mergeTitles(this.cache.titles, pendingTitles, limit)
     }
     if (this.inflight) {
       const titles = await this.inflight
-      return titles.slice(0, limit)
+      return mergeTitles(titles, pendingTitles, limit)
     }
     this.inflight = this.options.client
       .listTasks({ status: 'inbox', limit: Math.max(limit, 100) })
@@ -56,11 +68,49 @@ export class MindwtrInboxTitles implements InboxTitlesProvider {
         this.inflight = null
       })
     const titles = await this.inflight
-    return titles.slice(0, limit)
+    return mergeTitles(titles, pendingTitles, limit)
   }
 
   /** For tests / manual cache busting. */
   invalidate(): void {
     this.cache = null
   }
+
+  /**
+   * Pending create-proposal titles — synchronous read from the local SQLite
+   * proposal store (no network, no cache needed). Returned freshest-first
+   * because listPending sorts by created_at DESC.
+   */
+  private collectPendingTitles(limit: number): string[] {
+    if (!this.options.proposalStore) return []
+    const proposals = this.options.proposalStore.listPending({
+      type: 'create',
+      sourceAgent: 'commitment-detector',
+      limit: Math.max(limit, 100),
+    })
+    const titles: string[] = []
+    for (const p of proposals) {
+      const payload = p.currentPayload as CreatePayload | null
+      if (!payload || payload.kind !== 'create') continue
+      const title = payload.task?.title?.trim() ?? ''
+      if (title.length > 0) titles.push(title)
+    }
+    return titles
+  }
+}
+
+/** De-dup, freshest-first, capped at limit. */
+function mergeTitles(inbox: string[], pending: string[], limit: number): string[] {
+  const seen = new Set<string>()
+  const merged: string[] = []
+  // Pending first — they represent the most recent agent output and are the
+  // ones the Proposer will most likely paraphrase on the next pass.
+  for (const t of [...pending, ...inbox]) {
+    const key = t.toLowerCase().replace(/\s+/g, ' ').trim()
+    if (key.length === 0 || seen.has(key)) continue
+    seen.add(key)
+    merged.push(t)
+    if (merged.length >= limit) break
+  }
+  return merged
 }

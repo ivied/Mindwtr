@@ -180,7 +180,9 @@ if (LLM_BASE_URL && LLM_API_KEY) {
   })
   // Feed recent Mindwtr inbox titles to Proposer so it can suppress
   // paraphrase duplicates of cards the user already has.
-  commitmentPipeline.setInboxTitlesProvider(new MindwtrInboxTitles({ client: mindwtr }))
+  commitmentPipeline.setInboxTitlesProvider(
+    new MindwtrInboxTitles({ client: mindwtr, proposalStore })
+  )
   // Identity anchor for role disambiguation. Empty USER_IDENTITY_NAME = no
   // anchor (Proposer reverts to "user = machine owner" heuristic).
   if (USER_IDENTITY_NAME) {

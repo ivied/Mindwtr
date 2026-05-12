@@ -43,8 +43,14 @@ export interface WriteProposalResult {
 
 /** Source-agent identifier used in audit / filters. Keep stable. */
 export const SOURCE_AGENT_COMMITMENT_DETECTOR = 'commitment-detector'
-/** Lookback window for dedup; 10 minutes covers OCR-burst / TG-loop sequences. */
-const DEDUP_WINDOW_MS = 10 * 60 * 1000
+/**
+ * Lookback window for dedup. Bumped 10 → 60 minutes after a real-world case
+ * where two "reschedule meeting with Artyom" proposals from audio_capture
+ * landed ~3 minutes apart but the user only noticed both 30 minutes later —
+ * Proposer + inbox-dedup is the primary gate, this signature compare is a
+ * belt for cases where wording drift defeats the bag-of-words match.
+ */
+const DEDUP_WINDOW_MS = 60 * 60 * 1000
 
 export class ProposalWriter {
   constructor(private store: ProposalStore) {}

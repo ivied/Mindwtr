@@ -231,6 +231,39 @@ export class ContextStore {
   }
 
   /**
+   * Cross-channel temporal window: every capture whose captured_at falls in
+   * [centerIso - windowMs, centerIso + windowMs]. Used by the proposal
+   * pipelines so the LLM sees what the user was doing around the moment of
+   * the trigger (e.g. an audio commitment + the screen content they were
+   * looking at when they said it), not just the trigger text in isolation.
+   *
+   * Excludes the center capture itself when its id is passed via excludeId.
+   * Ordered chronologically.
+   */
+  recentAroundTimestamp(
+    centerIso: string,
+    windowMs: number,
+    opts: { excludeId?: string; limit?: number } = {}
+  ): CaptureRecord[] {
+    const limit = opts.limit ?? 20
+    const center = Date.parse(centerIso)
+    if (!Number.isFinite(center)) return []
+    const fromIso = new Date(center - windowMs).toISOString()
+    const toIso = new Date(center + windowMs).toISOString()
+    const excludeId = opts.excludeId ?? ''
+    const rows = this.db
+      .query<CaptureRow, [string, string, string, number]>(
+        `SELECT id, text, source_channel, source_meta, captured_at, received_at, content_hash, ttl_at, is_pull
+         FROM captures
+         WHERE captured_at >= ? AND captured_at <= ? AND id != ?
+         ORDER BY captured_at ASC
+         LIMIT ?`
+      )
+      .all(fromIso, toIso, excludeId, limit)
+    return rows.map(rowToRecord)
+  }
+
+  /**
    * Drop expired captures (ttl_at < now). Returns deleted count.
    * Uses count-before/after because db.run().changes includes cascaded
    * trigger changes (FTS5), inflating the number.
