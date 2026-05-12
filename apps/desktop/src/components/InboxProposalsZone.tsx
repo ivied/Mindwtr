@@ -590,20 +590,20 @@ function injectCreatedTaskLocally(summary: ProposalSummary, appliedTaskIds: stri
 }
 
 /**
- * ISO timestamp → compact relative-time string ("2m ago", "3h ago").
+ * ISO timestamp → compact absolute date+time chip ("May 12, 14:35").
+ * Year is included only when the suggestion is from a prior year.
  * Mirrors the helper in TaskProposalsInline; small enough that duplicating
  * keeps the component self-contained without an extra shared util file.
  */
 function formatRelativeTime(iso: string): string {
-    const then = new Date(iso).getTime();
-    if (!Number.isFinite(then)) return '';
-    const seconds = Math.max(0, Math.round((Date.now() - then) / 1000));
-    if (seconds < 45) return 'just now';
-    const minutes = Math.round(seconds / 60);
-    if (minutes < 60) return `${minutes}m ago`;
-    const hours = Math.round(minutes / 60);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.round(hours / 24);
-    if (days < 7) return `${days}d ago`;
-    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return '';
+    const sameYear = date.getFullYear() === new Date().getFullYear();
+    return date.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        ...(sameYear ? {} : { year: 'numeric' }),
+        hour: '2-digit',
+        minute: '2-digit',
+    });
 }

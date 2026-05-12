@@ -652,18 +652,23 @@ function notifySplitApplied(result: {
     );
 }
 
+/**
+ * Compact absolute date + time chip: "May 12, 14:35". Year is included
+ * only when the suggestion is from a prior year. Per user preference:
+ * relative "2m ago" was removed — absolute time is easier to anchor on
+ * at a glance ("ах, эта Suggestion из вчерашнего разговора").
+ */
 function formatRelativeTime(iso: string): string {
-    const then = new Date(iso).getTime();
-    if (!Number.isFinite(then)) return '';
-    const seconds = Math.max(0, Math.round((Date.now() - then) / 1000));
-    if (seconds < 45) return 'just now';
-    const minutes = Math.round(seconds / 60);
-    if (minutes < 60) return `${minutes}m ago`;
-    const hours = Math.round(minutes / 60);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.round(hours / 24);
-    if (days < 7) return `${days}d ago`;
-    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) return '';
+    const sameYear = date.getFullYear() === new Date().getFullYear();
+    return date.toLocaleString(undefined, {
+        month: 'short',
+        day: 'numeric',
+        ...(sameYear ? {} : { year: 'numeric' }),
+        hour: '2-digit',
+        minute: '2-digit',
+    });
 }
 
 function formatDiffValue(value: unknown): string {
