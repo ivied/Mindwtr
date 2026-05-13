@@ -157,10 +157,29 @@ export async function approveProposal(
     });
 }
 
-export async function rejectProposal(id: string, reason?: string): Promise<{ ok: boolean }> {
+/**
+ * Resolve a pending proposal with a reject-class transition.
+ *
+ * `kind` distinguishes the user's intent for telemetry — all three end in
+ * status='rejected' but the audit meta carries the nuance:
+ *   - `rejected` (default) — AI was wrong / the proposal is unwanted.
+ *   - `already-done` — AI was right but the user already did the action
+ *     before approving. Counted as a true positive (signal was useful, just
+ *     overlapped with manual work).
+ *   - `not-applicable` — proposal was relevant when emitted but conditions
+ *     changed (meeting cancelled, ticket closed elsewhere). Neither user
+ *     fault nor agent fault.
+ */
+export async function rejectProposal(
+    id: string,
+    reason?: string,
+    kind: 'rejected' | 'already-done' | 'not-applicable' = 'rejected'
+): Promise<{ ok: boolean }> {
+    const body: Record<string, unknown> = { kind };
+    if (reason) body.reason = reason;
     return apiFetch<{ ok: boolean }>(`/v1/proposals/${id}/reject`, {
         method: 'POST',
-        body: JSON.stringify(reason ? { reason } : {}),
+        body: JSON.stringify(body),
     });
 }
 

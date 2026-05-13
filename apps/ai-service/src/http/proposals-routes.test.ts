@@ -391,6 +391,50 @@ describe('POST /v1/proposals/:id/reject', () => {
     expect(res.status).toBe(200)
     expect(store.get(p.id)!.status).toBe('rejected')
   })
+
+  it('kind=already-done records audit meta as already-done, no apply', async () => {
+    const handler = setupServer()
+    const p = store.create({
+      type: 'create',
+      targetTaskIds: [],
+      sourceAgent: 'a',
+      payload: baseCreatePayload,
+    })
+    const res = await handler(
+      new Request(`http://x/v1/proposals/${p.id}/reject`, {
+        method: 'POST',
+        headers: AUTH,
+        body: JSON.stringify({ kind: 'already-done' }),
+      })
+    )
+    expect(res.status).toBe(200)
+    expect(store.get(p.id)!.status).toBe('rejected')
+    const detail = store.getDetail(p.id)!
+    const rejectedEvt = detail.audit.find((a) => a.event === 'rejected')!
+    expect((rejectedEvt.eventMeta as { kind?: string }).kind).toBe('already-done')
+  })
+
+  it('kind=not-applicable records distinct audit meta', async () => {
+    const handler = setupServer()
+    const p = store.create({
+      type: 'create',
+      targetTaskIds: [],
+      sourceAgent: 'a',
+      payload: baseCreatePayload,
+    })
+    const res = await handler(
+      new Request(`http://x/v1/proposals/${p.id}/reject`, {
+        method: 'POST',
+        headers: AUTH,
+        body: JSON.stringify({ kind: 'not-applicable', reason: 'meeting cancelled' }),
+      })
+    )
+    expect(res.status).toBe(200)
+    const detail = store.getDetail(p.id)!
+    const rejectedEvt = detail.audit.find((a) => a.event === 'rejected')!
+    expect((rejectedEvt.eventMeta as { kind?: string; reason?: string }).kind).toBe('not-applicable')
+    expect((rejectedEvt.eventMeta as { reason?: string }).reason).toBe('meeting cancelled')
+  })
 })
 
 describe('POST /v1/proposals/:id/comments', () => {

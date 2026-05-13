@@ -292,11 +292,14 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
     }, []);
 
     const performReject = useCallback(
-        async (reason: string | undefined) => {
+        async (
+            reason: string | undefined,
+            kind: 'rejected' | 'already-done' | 'not-applicable' = 'rejected'
+        ) => {
             setBusy(true);
             setError(null);
             try {
-                await rejectProposal(summary.id, reason);
+                await rejectProposal(summary.id, reason, kind);
                 onResolved();
             } catch (err) {
                 setError((err as Error).message);
@@ -310,10 +313,14 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
     );
 
     const onConfirmReject = useCallback(
-        () => performReject(rejectReason.trim() || undefined),
+        () => performReject(rejectReason.trim() || undefined, 'rejected'),
         [performReject, rejectReason]
     );
-    const onSkipReason = useCallback(() => performReject(undefined), [performReject]);
+    const onSkipReason = useCallback(() => performReject(undefined, 'rejected'), [performReject]);
+    const onAlreadyDone = useCallback(
+        async () => performReject(undefined, 'already-done'),
+        [performReject]
+    );
     const onCancelReject = useCallback(() => {
         setRejectMode(false);
         setRejectReason('');
@@ -367,6 +374,15 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
                     className="inline-flex items-center gap-0.5 rounded bg-emerald-600 px-2 py-0.5 text-xs text-white hover:bg-emerald-700 disabled:opacity-50"
                 >
                     <Check className="h-3 w-3" /> Approve
+                </button>
+                <button
+                    type="button"
+                    onClick={onAlreadyDone}
+                    disabled={busy}
+                    title="AI was right but you already did this. Resolves the proposal without applying it; audit keeps the 'already-done' signal."
+                    className="inline-flex items-center gap-0.5 rounded border border-sky-500/40 bg-sky-500/5 px-2 py-0.5 text-xs text-sky-700 hover:bg-sky-500/10 disabled:opacity-50 dark:text-sky-300"
+                >
+                    <Check className="h-3 w-3" /> Already done
                 </button>
                 <button
                     type="button"

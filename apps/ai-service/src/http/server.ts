@@ -264,17 +264,34 @@ function mountProposalRoutes(app: Hono, deps: ProposalsHttpDeps): void {
       return c.json({ error: `proposal is ${proposal.status}, cannot reject` }, 409)
     }
 
+    // Body shape:
+    //   { reason?: string, kind?: 'rejected' | 'already-done' | 'not-applicable' }
+    // kind distinguishes "AI was wrong" (default `rejected`) from "AI was right
+    // but I already did it" (`already-done`) and "AI was right but the task
+    // doesn't apply anymore" (`not-applicable`). All three flip status to
+    // 'rejected' but the audit meta carries the nuance for telemetry —
+    // already-done counts as a TRUE positive in the false-positive vs
+    // delayed-action breakdown.
     let reason: string | undefined
+    let kind: 'rejected' | 'already-done' | 'not-applicable' = 'rejected'
     try {
-      const body = (await c.req.json()) as { reason?: string }
+      const body = (await c.req.json()) as {
+        reason?: string
+        kind?: string
+      }
       reason = typeof body?.reason === 'string' ? body.reason.trim() : undefined
+      if (body?.kind === 'already-done' || body?.kind === 'not-applicable') {
+        kind = body.kind
+      }
     } catch {
       // No body — that's fine, reject without reason.
     }
     if (reason) {
       deps.store.addMessage({ proposalId: id, role: 'user', text: reason })
     }
-    deps.store.transition(id, 'rejected', 'user', reason ? { reason } : undefined)
+    const meta: Record<string, unknown> = { kind }
+    if (reason) meta.reason = reason
+    deps.store.transition(id, 'rejected', 'user', meta)
     return c.json({ ok: true, proposal: deps.store.get(id) })
   })
 
