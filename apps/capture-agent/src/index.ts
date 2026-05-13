@@ -21,6 +21,7 @@ import { NativeAudioRecorder } from './capture/audio-recorder-native'
 import { WhisperClient } from './capture/whisper'
 import { MdWikiWriter, type ImageAttachment } from './wiki/md-writer'
 import { resizeToJpeg } from './wiki/image-processor'
+import { detectVoiceChat } from './filter/voice-chat-detect'
 
 async function main() {
   const config = loadConfigFromEnv()
@@ -91,10 +92,20 @@ async function main() {
             excludedTitles: config.excludedTitles,
           },
           pauseFlagPath: config.pauseFlagPath,
-          send: (text) =>
-            client.sendAudioTranscript(text, { source: 'mic', device: config.audio.inputDevice }),
+          send: (text, ctx) => {
+            const vc = detectVoiceChat(ctx.window ?? null)
+            return client.sendAudioTranscript(text, {
+              source: 'mic',
+              device: config.audio.inputDevice,
+              likely_mixed_speakers: vc.active,
+              ...(vc.reason ? { voice_chat_reason: vc.reason } : {}),
+              ...(ctx.window?.app ? { active_app: ctx.window.app } : {}),
+              ...(ctx.window?.title ? { active_title: ctx.window.title } : {}),
+            })
+          },
           archive: wikiWriter
             ? async (ctx) => {
+                const vc = detectVoiceChat(ctx.window ?? null)
                 await wikiWriter.write({
                   source: 'audio',
                   ts: ctx.ts,
@@ -106,6 +117,8 @@ async function main() {
                   model: config.audio.whisperModel,
                   rms: ctx.rms,
                   body: ctx.text,
+                  likelyMixedSpeakers: vc.active || undefined,
+                  voiceChatReason: vc.reason,
                 })
               }
             : undefined,

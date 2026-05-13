@@ -31,7 +31,7 @@ export interface AudioRunnerDeps {
   rules: ExclusionRules
   pauseFlagPath: string
   /** Send the transcribed text to AI Service. */
-  send: (text: string) => Promise<void>
+  send: (text: string, ctx: AudioArchiveContext) => Promise<void>
   /** Optional fail-open hook called between transcribe and send. */
   archive?: (ctx: AudioArchiveContext) => Promise<void>
   log?: (msg: string) => void
@@ -108,22 +108,24 @@ export async function runAudioOnce(
     return 'short-transcript'
   }
 
+  const archiveCtx: AudioArchiveContext = {
+    text,
+    ts: new Date(),
+    window: activeWindow,
+    durationMs: chunk.durationMs,
+    rms: energy.rms,
+  }
+
   if (deps.archive) {
     try {
-      await deps.archive({
-        text,
-        ts: new Date(),
-        window: activeWindow,
-        durationMs: chunk.durationMs,
-        rms: energy.rms,
-      })
+      await deps.archive(archiveCtx)
     } catch (err) {
       deps.log?.(`archive-error (non-fatal): ${(err as Error).message}`)
     }
   }
 
   try {
-    await deps.send(text)
+    await deps.send(text, archiveCtx)
     deps.log?.(`audio captured ${text.length}ch · "${text.slice(0, 80)}…"`)
   } catch (err) {
     deps.log?.(`send-error: ${(err as Error).message}`)

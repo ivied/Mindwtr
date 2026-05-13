@@ -31,6 +31,13 @@ export interface CaptureEntry {
   isActiveDisplay?: boolean
   /** Screen-only: whether this entry was sent to AI Service or wiki-only. */
   sentToInbox?: boolean
+  /** Audio-only: voice-chat is likely active (Zoom/Teams/Meet/…). When
+   *  true the transcript probably contains voices from other people in
+   *  the call, so downstream (Proposer) should be conservative about
+   *  treating utterances as the user's commitments. */
+  likelyMixedSpeakers?: boolean
+  /** Audio-only: why we flagged likelyMixedSpeakers (e.g. "app:zoom"). */
+  voiceChatReason?: string
 }
 
 export interface ImageAttachment {
@@ -98,6 +105,9 @@ export function render(entry: CaptureEntry, id: string, imageRef?: string): stri
     fm.push(['active_display', entry.isActiveDisplay ? 'true' : 'false'])
   if (entry.sentToInbox !== undefined)
     fm.push(['sent_to_inbox', entry.sentToInbox ? 'true' : 'false'])
+  if (entry.likelyMixedSpeakers !== undefined)
+    fm.push(['likely_mixed_speakers', entry.likelyMixedSpeakers ? 'true' : 'false'])
+  if (entry.voiceChatReason) fm.push(['voice_chat_reason', yamlString(entry.voiceChatReason)])
 
   const frontmatter = ['---', ...fm.map(([k, v]) => `${k}: ${v}`), '---'].join('\n')
   return `${frontmatter}\n\n${entry.body.trim()}\n`

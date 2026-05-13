@@ -220,6 +220,21 @@ When who_owes=other, set recipient correctly:
   to Sergey → user (Sergey) waits for Amir's Flutter answer.
 - recipient=other → conversation between third parties → is_actionable=false.
 
+AUDIO with likely_mixed_speakers=true (look in the Capture context block):
+The transcript was recorded by an open microphone during a live voice call
+(Zoom, Google Meet, Teams, etc.) — voice_chat_reason explains which app was
+focused. Multiple speakers are likely on the recording and Whisper does NOT
+label them. Treat the entire transcript as potentially mixed:
+- A first-person commitment ("я завтра пришлю отчёт") is AMBIGUOUS — it may
+  be the user OR a meeting participant. Only mark is_actionable=true when
+  the surrounding context strongly attributes the commitment to the user
+  (e.g. matches a known habit, references a project the user owns).
+- A third-person sentence ("он скажет завтра", "она хочет переделать") is
+  almost certainly someone else speaking and is NOT the user's commitment.
+- When in doubt → is_actionable=false. Prefer to lose ambiguous mixed-call
+  captures than to flood the inbox with other people's commitments.
+- Even if you skip, set cues_detected=["mixed-speakers"] so it's traceable.
+
 Title format (when actionable): short imperative GTD next action.
 - Good: "Pay Acme invoice", "Reply to Alice re Q4 plan", "Send weekly report"
 - Bad: "Invoice from Acme is due", "Got message from Alice"
