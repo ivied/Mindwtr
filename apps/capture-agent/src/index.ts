@@ -22,6 +22,8 @@ import { WhisperClient } from './capture/whisper'
 import { MdWikiWriter, type ImageAttachment } from './wiki/md-writer'
 import { resizeToJpeg } from './wiki/image-processor'
 import { detectVoiceChat } from './filter/voice-chat-detect'
+import { Diarizer } from './capture/diarizer'
+import { access } from 'node:fs/promises'
 
 async function main() {
   const config = loadConfigFromEnv()
@@ -82,6 +84,35 @@ async function main() {
         model: config.audio.whisperModel,
         prompt: config.audio.whisperPrompt,
       })
+
+      let diarizer: Diarizer | null = null
+      if (config.audio.diarizeBinaryPath) {
+        const d = new Diarizer({
+          binaryPath: config.audio.diarizeBinaryPath,
+          profilePath: config.audio.voiceProfilePath ?? '',
+        })
+        try {
+          await d.ensureAvailable()
+          let profileOk = false
+          if (config.audio.voiceProfilePath) {
+            try {
+              await access(config.audio.voiceProfilePath)
+              profileOk = true
+            } catch {
+              profileOk = false
+            }
+          }
+          diarizer = d
+          console.log(
+            `🗣  diarizer: ${config.audio.diarizeBinaryPath} (profile: ${
+              profileOk ? config.audio.voiceProfilePath : 'NONE — segments will be anonymous'
+            })`
+          )
+        } catch (err) {
+          console.warn(`⚠️ diarizer disabled: ${(err as Error).message}`)
+          diarizer = null
+        }
+      }
       audioController = startAudioLoop(
         {
           recorder,
@@ -92,6 +123,7 @@ async function main() {
             excludedTitles: config.excludedTitles,
           },
           pauseFlagPath: config.pauseFlagPath,
+          diarizer,
           send: (text, ctx) => {
             const vc = detectVoiceChat(ctx.window ?? null)
             return client.sendAudioTranscript(text, {
@@ -101,6 +133,14 @@ async function main() {
               ...(vc.reason ? { voice_chat_reason: vc.reason } : {}),
               ...(ctx.window?.app ? { active_app: ctx.window.app } : {}),
               ...(ctx.window?.title ? { active_title: ctx.window.title } : {}),
+              ...(ctx.diarize
+                ? {
+                    speaker_count: ctx.diarize.speakerCount,
+                    user_seen: ctx.diarize.userSeen,
+                    user_speech_ms: ctx.diarize.userSpeechMs,
+                    other_speech_ms: ctx.diarize.otherSpeechMs,
+                  }
+                : {}),
             })
           },
           archive: wikiWriter
@@ -119,6 +159,10 @@ async function main() {
                   body: ctx.text,
                   likelyMixedSpeakers: vc.active || undefined,
                   voiceChatReason: vc.reason,
+                  speakerCount: ctx.diarize?.speakerCount,
+                  userSeen: ctx.diarize?.userSeen,
+                  userSpeechMs: ctx.diarize?.userSpeechMs,
+                  otherSpeechMs: ctx.diarize?.otherSpeechMs,
                 })
               }
             : undefined,

@@ -220,20 +220,48 @@ When who_owes=other, set recipient correctly:
   to Sergey → user (Sergey) waits for Amir's Flutter answer.
 - recipient=other → conversation between third parties → is_actionable=false.
 
-AUDIO with likely_mixed_speakers=true (look in the Capture context block):
-The transcript was recorded by an open microphone during a live voice call
-(Zoom, Google Meet, Teams, etc.) — voice_chat_reason explains which app was
-focused. Multiple speakers are likely on the recording and Whisper does NOT
-label them. Treat the entire transcript as potentially mixed:
-- A first-person commitment ("я завтра пришлю отчёт") is AMBIGUOUS — it may
-  be the user OR a meeting participant. Only mark is_actionable=true when
-  the surrounding context strongly attributes the commitment to the user
-  (e.g. matches a known habit, references a project the user owns).
-- A third-person sentence ("он скажет завтра", "она хочет переделать") is
-  almost certainly someone else speaking and is NOT the user's commitment.
-- When in doubt → is_actionable=false. Prefer to lose ambiguous mixed-call
-  captures than to flood the inbox with other people's commitments.
-- Even if you skip, set cues_detected=["mixed-speakers"] so it's traceable.
+AUDIO speaker attribution (look in the Capture context block):
+We run speaker diarization on every audio chunk with an enrolled user
+voice profile. The Capture context may include:
+- speaker_count: integer, distinct speakers detected in this chunk
+- user_seen: bool, whether the enrolled user's voice was matched
+- user_speech_ms: ms of speech attributed to the enrolled user
+- other_speech_ms: ms attributed to anyone else
+- likely_mixed_speakers + voice_chat_reason: heuristic flag based on the
+  focused app at recording time (Zoom/Meet/Teams/…)
+
+Use this to attribute first-person utterances correctly:
+
+1. speaker_count = 1 AND user_seen = true → the entire transcript is the
+   user's speech. Treat first-person commitments as the user's own and
+   apply normal Proposer rules.
+
+2. speaker_count = 1 AND user_seen = false → a single OTHER speaker was
+   detected (could be a podcast, a teammate on call, ambient TV). The
+   transcript is NOT the user's commitments. Mark is_actionable=true
+   only if a third party is explicitly directing the user to do
+   something AND it's clearly meant for them — otherwise skip.
+   cues_detected should include "other-speaker-alone".
+
+3. speaker_count >= 2 → mixed call. Even if user_seen=true, multiple
+   voices are present. First-person sentences are AMBIGUOUS — could be
+   the user or someone else. Apply the strict rules:
+   - Only mark is_actionable=true when context (subject matter, named
+     entities, a project the user owns) clearly attributes the
+     commitment to the user.
+   - Third-person sentences ("он скажет завтра", "она хочет переделать")
+     are someone else and NOT the user's commitment.
+   - When in doubt → is_actionable=false.
+   - Always set cues_detected=["mixed-speakers"].
+
+4. No diarization fields present (older captures or profile missing) →
+   fall back to the likely_mixed_speakers / voice_chat_reason heuristics.
+   If likely_mixed_speakers=true, behave like case 3. Otherwise default
+   to single-speaker treatment.
+
+Prefer losing ambiguous mixed-call captures over flooding the inbox
+with other people's commitments — the wiki still archives every chunk
+for context, only the Proposer is filtering aggressively.
 
 Title format (when actionable): short imperative GTD next action.
 - Good: "Pay Acme invoice", "Reply to Alice re Q4 plan", "Send weekly report"

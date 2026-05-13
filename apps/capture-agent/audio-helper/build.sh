@@ -1,22 +1,29 @@
 #!/usr/bin/env bash
-# Build the native macOS audio capture helper. Uses AVAudioEngine +
-# VoiceProcessingIO so we get the same voice DSP stack as Zoom/FaceTime.
-# Output binary is gitignored; rebuild on each fresh checkout.
+# Build the three native audio helpers via Swift Package Manager:
+#   gtd-audio-capture — AVCaptureSession mic capture (no deps)
+#   gtd-audio-enroll  — voice enrollment via FluidAudio (256-d embedding)
+#   gtd-audio-diarize — diarization via FluidAudio (segments + user/other)
 #
-# Ad-hoc code-signs with the audio-input entitlement so macOS treats the
-# helper as a first-class voice-chat app and coordinates VPIO with other
-# voice apps (Zoom etc.) instead of system-wide ducking them.
+# All three are ad-hoc code-signed with the audio-input entitlement so
+# macOS treats them as legit peer voice-chat consumers.
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
-OUT=gtd-audio-capture
-echo "🔨 swiftc -O main.swift -o $OUT"
-swiftc -O main.swift -o "$OUT"
+echo "🔨 swift build --configuration release"
+swift build --configuration release
 
-echo "🔐 codesign --force --sign - --entitlements entitlements.plist $OUT"
-codesign --force --sign - --entitlements entitlements.plist "$OUT"
-codesign --display --entitlements - "$OUT" 2>&1 | sed 's/^/   /' | head -10
+BIN_DIR=".build/release"
+for OUT in gtd-audio-capture gtd-audio-enroll gtd-audio-diarize; do
+  SRC="$BIN_DIR/$OUT"
+  if [[ ! -f "$SRC" ]]; then
+    echo "⚠️  expected binary not found: $SRC"
+    continue
+  fi
+  cp "$SRC" "./$OUT"
+  echo "🔐 codesign $OUT"
+  codesign --force --sign - --entitlements entitlements.plist "./$OUT" 2>&1 | sed 's/^/   /'
+done
 
-echo "✅ built $(pwd)/$OUT"
-file "$OUT" | sed 's/^/   /'
+echo "✅ binaries:"
+ls -lh ./gtd-audio-* 2>/dev/null | sed 's/^/   /'

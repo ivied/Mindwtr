@@ -38,6 +38,14 @@ export interface CaptureEntry {
   likelyMixedSpeakers?: boolean
   /** Audio-only: why we flagged likelyMixedSpeakers (e.g. "app:zoom"). */
   voiceChatReason?: string
+  /** Audio-only diarization output (FluidAudio). */
+  speakerCount?: number
+  /** True when at least one segment matched the enrolled user voice. */
+  userSeen?: boolean
+  /** Total ms attributed to the enrolled user in this chunk. */
+  userSpeechMs?: number
+  /** Total ms attributed to anyone else in this chunk. */
+  otherSpeechMs?: number
 }
 
 export interface ImageAttachment {
@@ -108,6 +116,11 @@ export function render(entry: CaptureEntry, id: string, imageRef?: string): stri
   if (entry.likelyMixedSpeakers !== undefined)
     fm.push(['likely_mixed_speakers', entry.likelyMixedSpeakers ? 'true' : 'false'])
   if (entry.voiceChatReason) fm.push(['voice_chat_reason', yamlString(entry.voiceChatReason)])
+  if (entry.speakerCount !== undefined) fm.push(['speaker_count', entry.speakerCount])
+  if (entry.userSeen !== undefined)
+    fm.push(['user_seen', entry.userSeen ? 'true' : 'false'])
+  if (entry.userSpeechMs !== undefined) fm.push(['user_speech_ms', entry.userSpeechMs])
+  if (entry.otherSpeechMs !== undefined) fm.push(['other_speech_ms', entry.otherSpeechMs])
 
   const frontmatter = ['---', ...fm.map(([k, v]) => `${k}: ${v}`), '---'].join('\n')
   return `${frontmatter}\n\n${entry.body.trim()}\n`

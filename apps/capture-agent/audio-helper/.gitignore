@@ -1,2 +1,13 @@
-gtd-audio-capture
-gtd-audio-capture.dSYM/
+# Compiled binaries live at audio-helper/ root (rebuild via build.sh).
+# Anchored to / so we don't accidentally ignore Sources/gtd-audio-capture/ etc.
+/gtd-audio-capture
+/gtd-audio-capture.dSYM/
+/gtd-audio-enroll
+/gtd-audio-enroll.dSYM/
+/gtd-audio-diarize
+/gtd-audio-diarize.dSYM/
+
+# Swift Package Manager artefacts.
+.build/
+.swiftpm/
+Package.resolved
