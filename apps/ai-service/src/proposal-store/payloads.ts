@@ -49,6 +49,7 @@ export type FieldDiff =
   | { field: 'status'; from: string; to: string }
   | { field: 'tags'; from: string[]; to: string[] }
   | { field: 'project'; from: string | null; to: string | null }
+  | { field: 'assignedTo'; from: string | null; to: string | null }
   | { field: 'metadata'; from: Record<string, unknown>; to: Record<string, unknown> }
 
 export interface ModifyPayload {

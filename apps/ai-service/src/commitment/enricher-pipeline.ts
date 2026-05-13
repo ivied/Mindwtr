@@ -189,6 +189,14 @@ export class EnricherPipeline {
 
 // --- payload builders ---
 
+/**
+ * Synthetic assignee for tasks the Enricher decided the agent can handle.
+ * Lives in Mindwtr's existing `assignedTo` field — orthogonal to status, so
+ * the agent's stages (queued/doing/review/done) ride on the global status
+ * enum while `assignedTo` answers "who".
+ */
+export const AI_AGENT_ASSIGNEE = '@ai-agent'
+
 function buildModifyDiff(input: EnrichInput, p: EnrichedProposal): FieldDiff[] {
   const diff: FieldDiff[] = []
 
@@ -201,7 +209,19 @@ function buildModifyDiff(input: EnrichInput, p: EnrichedProposal): FieldDiff[] {
     diff.push({ field: 'status', from: 'inbox', to: targetStatus })
   }
 
-  const newTags = mergeTags(input.taskTags, p)
+  // AI routing: when the Enricher decided this task fits a generalist agent
+  // (code / research / draft / etc.), propose handing it off via assignedTo.
+  // Tag with `ai-type:<kind>` and `ai-stage:queued` so the agent lane view
+  // can read both shape and pipeline position. The routing entry stays
+  // partial-approve-friendly: user can uncheck it to keep the task while
+  // accepting the rest of the diff.
+  let routingTagAdditions: string[] | null = null
+  if (p.is_ai_routable) {
+    diff.push({ field: 'assignedTo', from: null, to: AI_AGENT_ASSIGNEE })
+    routingTagAdditions = [`ai-type:${p.ai_task_type}`, 'ai-stage:queued']
+  }
+
+  const newTags = mergeTags(input.taskTags, p, routingTagAdditions ?? [])
   if (!tagsEqual(input.taskTags, newTags)) {
     diff.push({ field: 'tags', from: [...input.taskTags], to: newTags })
   }
@@ -263,6 +283,9 @@ function buildTraceback(input: EnrichInput, p: EnrichedProposal): ProposalTraceb
     `SMART specific: ${p.smart.specific}`,
     `SMART time_bound: ${p.smart.time_bound}`,
     `SMART measurable: ${p.smart.measurable}`,
+    p.is_ai_routable
+      ? `AI routing: ${p.ai_task_type} — ${p.ai_routing_reasoning}`
+      : '',
   ].filter((s) => s.length > 0)
   if (p.reasoning) reasoningSteps.push(p.reasoning)
 

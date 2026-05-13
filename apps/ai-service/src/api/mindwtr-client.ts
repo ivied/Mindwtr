@@ -31,6 +31,7 @@ export interface Task {
   description?: string
   priority?: string
   projectId?: string
+  assignedTo?: string
   dueDate?: string
   createdAt: string
   updatedAt: string

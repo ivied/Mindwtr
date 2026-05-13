@@ -49,6 +49,7 @@ interface TaskSnapshot {
   status?: string
   tags?: string[]
   projectId?: string | null
+  assignedTo?: string | null
 }
 
 /**
@@ -331,6 +332,7 @@ function diffToUpdates(diff: FieldDiff[]): {
   status?: string
   tags?: string[]
   projectId?: string
+  assignedTo?: string
   metadata?: Record<string, unknown>
 } {
   const updates: ReturnType<typeof diffToUpdates> = {}
@@ -351,6 +353,9 @@ function diffToUpdates(diff: FieldDiff[]): {
       case 'project':
         updates.projectId = entry.to ?? undefined
         break
+      case 'assignedTo':
+        updates.assignedTo = entry.to ?? undefined
+        break
       case 'metadata':
         updates.metadata = entry.to
         break
@@ -367,6 +372,7 @@ function snapshotFromTask(task: Task): TaskSnapshot {
     status: task.status,
     tags: task.tags,
     projectId: task.projectId ?? null,
+    assignedTo: (task as { assignedTo?: string | null }).assignedTo ?? null,
   }
 }
 
@@ -398,6 +404,13 @@ function diffMismatch(diff: FieldDiff[], current: TaskSnapshot): string | null {
         const cur = current.projectId ?? null
         if (cur !== entry.from) {
           return `project drift: current=${cur}, snapshot=${entry.from}`
+        }
+        break
+      }
+      case 'assignedTo': {
+        const cur = current.assignedTo ?? null
+        if (cur !== entry.from) {
+          return `assignedTo drift: current=${cur}, snapshot=${entry.from}`
         }
         break
       }

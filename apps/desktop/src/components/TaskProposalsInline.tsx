@@ -92,6 +92,12 @@ function ProposalCard({ summary, onResolved }: CardProps) {
             .filter((f): f is string => typeof f === 'string' && f.length > 0);
     }, [summary.currentPayload]);
 
+    // AI-routing badge — present when the proposal includes a diff that hands
+    // this task off to the agent lane (assignedTo='@ai-agent'). We surface
+    // it as a distinct visual element above the standard diff so the user
+    // can see why the agent is being suggested before they decide.
+    const routing = useMemo(() => extractRoutingInfo(summary), [summary]);
+
     const [selectedFields, setSelectedFields] = useState<Set<string>>(
         () => new Set(modifyFieldNames ?? [])
     );
@@ -284,6 +290,34 @@ function ProposalCard({ summary, onResolved }: CardProps) {
             </div>
 
             {error ? <div className="mt-1 text-xs text-destructive">{error}</div> : null}
+
+            {routing ? (
+                <div className="mt-2 flex items-start gap-2 rounded border border-amber-500/40 bg-amber-500/10 p-2">
+                    <span className="text-base leading-none">🤖</span>
+                    <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-200">
+                            Route to AI agent
+                            <span className="rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide">
+                                {routing.taskType}
+                            </span>
+                        </div>
+                        {routing.reasoning ? (
+                            <div className="mt-0.5 break-words text-xs text-amber-700/80 dark:text-amber-200/80">
+                                {routing.reasoning}
+                            </div>
+                        ) : null}
+                    </div>
+                    <button
+                        type="button"
+                        onClick={onApprove}
+                        disabled={busy || nothingSelected}
+                        title="Accept all suggested changes including assignment to the AI agent"
+                        className="inline-flex shrink-0 items-center gap-0.5 rounded bg-amber-600 px-2 py-0.5 text-xs text-white hover:bg-amber-700 disabled:opacity-50"
+                    >
+                        <Check className="h-3 w-3" /> Accept → Route
+                    </button>
+                </div>
+            ) : null}
 
             {expanded ? (
                 <div className="mt-2 space-y-2 border-t pt-2">
@@ -530,6 +564,10 @@ function applyDiffToLocalStore(
                 if (entry.to === null || typeof entry.to === 'string')
                     patch.projectId = (entry.to as string | null) ?? undefined;
                 break;
+            case 'assignedTo':
+                if (entry.to === null || typeof entry.to === 'string')
+                    patch.assignedTo = (entry.to as string | null) ?? undefined;
+                break;
             // `metadata` field is internal to ai-service; not exposed on Task.
         }
     }
@@ -650,6 +688,59 @@ function notifySplitApplied(result: {
             },
         }
     );
+}
+
+/**
+ * Detect the AI-routing intent in a proposal payload and surface what the
+ * UI needs to render the dedicated routing badge:
+ *   - taskType (e.g. "research", "draft") read from the `ai-type:<type>` tag
+ *     the Enricher adds when is_ai_routable=true.
+ *   - reasoning text read from traceback.reasoningSteps ("AI routing: …").
+ *
+ * Returns null when the proposal doesn't propose handing the task off to the
+ * agent. Lives outside the React render path so its memoization key is just
+ * the proposal summary.
+ */
+function extractRoutingInfo(
+    summary: ProposalSummary
+): { taskType: string; reasoning: string } | null {
+    const p = summary.currentPayload as
+        | {
+              kind?: string;
+              diff?: Array<{ field?: string; to?: unknown }>;
+              traceback?: { reasoningSteps?: unknown };
+          }
+        | null;
+    if (!p || p.kind !== 'modify' || !Array.isArray(p.diff)) return null;
+    const assignedEntry = p.diff.find(
+        (d) => d?.field === 'assignedTo' && (d?.to === '@ai-agent' || d?.to === 'ai-agent')
+    );
+    if (!assignedEntry) return null;
+
+    let taskType = 'task';
+    const tagsEntry = p.diff.find((d) => d?.field === 'tags');
+    if (tagsEntry && Array.isArray((tagsEntry as { to?: unknown }).to)) {
+        const tagsTo = (tagsEntry as { to: unknown[] }).to.filter(
+            (t): t is string => typeof t === 'string'
+        );
+        const aiTypeTag = tagsTo.find((t) => t.startsWith('ai-type:'));
+        if (aiTypeTag) taskType = aiTypeTag.slice('ai-type:'.length) || taskType;
+    }
+
+    let reasoning = '';
+    const steps = Array.isArray(p.traceback?.reasoningSteps)
+        ? (p.traceback!.reasoningSteps as unknown[]).filter((s): s is string => typeof s === 'string')
+        : [];
+    const routingLine = steps.find((s) => s.startsWith('AI routing:'));
+    if (routingLine) {
+        const dashIdx = routingLine.indexOf(' — ');
+        reasoning =
+            dashIdx >= 0
+                ? routingLine.slice(dashIdx + 3).trim()
+                : routingLine.replace(/^AI routing:\s*/, '').trim();
+    }
+
+    return { taskType, reasoning };
 }
 
 /**

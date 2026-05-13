@@ -29,6 +29,15 @@ export interface SmartFields {
   measurable: string
 }
 
+export type AiTaskType =
+  | 'code'
+  | 'research'
+  | 'draft'
+  | 'summarize'
+  | 'data'
+  | 'review'
+  | 'other'
+
 export interface EnrichedProposal {
   is_actionable: boolean
   proposed_title: string
@@ -43,9 +52,28 @@ export interface EnrichedProposal {
   noise_reason: string
   is_delegation: boolean
   delegate_to: string
+  /**
+   * Whether this task could be handed off to an AI agent rather than
+   * executed by the user. When true, the apply step routes it to the
+   * agent lane (assignedTo='@ai-agent'); the user reviews the suggestion
+   * via a dedicated badge in the UI and can accept or reject independently.
+   */
+  is_ai_routable: boolean
+  ai_task_type: AiTaskType
+  ai_routing_reasoning: string
   confidence: number
   reasoning: string
 }
+
+const VALID_AI_TASK_TYPES: AiTaskType[] = [
+  'code',
+  'research',
+  'draft',
+  'summarize',
+  'data',
+  'review',
+  'other',
+]
 
 const VALID_CATEGORIES: GtdCategory[] = [
   'next',
@@ -160,6 +188,22 @@ const ENRICHER_TOOL = {
           type: 'string',
           description: 'Person/team being waited on (when is_delegation=true). Empty string otherwise.',
         },
+        is_ai_routable: {
+          type: 'boolean',
+          description:
+            'True if this task could realistically be delegated to a generalist AI agent (one that has tools for web search, code editing, file I/O, drafting text, calling APIs) WITHOUT requiring secrets the agent does not have, physical action, or the user\'s personal judgment. False when the task needs the user IRL or hinges on their specific opinion/context.',
+        },
+        ai_task_type: {
+          type: 'string',
+          enum: ['code', 'research', 'draft', 'summarize', 'data', 'review', 'other'],
+          description:
+            'When is_ai_routable=true, the kind of work involved. code = code edits/refactor/bugfix; research = look up information / compare options; draft = write text (email, doc, post) that the user will review; summarize = condense source material; data = extract or transform structured data; review = read a doc/PR and produce feedback; other = doesn\'t fit. When is_ai_routable=false, default to "other".',
+        },
+        ai_routing_reasoning: {
+          type: 'string',
+          description:
+            'One short sentence explaining the routing verdict — what about this task lets an agent (or doesn\'t let it) handle it. Shown to the user in the routing badge so they understand the recommendation.',
+        },
         confidence: {
           type: 'number',
           minimum: 0,
@@ -185,6 +229,9 @@ const ENRICHER_TOOL = {
         'noise_reason',
         'is_delegation',
         'delegate_to',
+        'is_ai_routable',
+        'ai_task_type',
+        'ai_routing_reasoning',
         'confidence',
         'reasoning',
       ],
@@ -210,11 +257,27 @@ Job:
    - time_bound: deadline ("Friday", "2026-05-15", or "no deadline" when none).
    - measurable: how to know it is done. For next-actions, restate specific. For projects, list the concrete completion criteria.
 5. Contexts and tags — PREFER existing ones the user already uses. The user message may include a "Past similar items" block — match its contexts/tags rather than inventing labels.
+6. AI-routability — could a generalist AI agent realistically take this off the user's plate? Set is_ai_routable=true when the task is one of:
+   - CODE — code edits, refactors, bug fixes, scripts, configuration changes the agent can make in a repo.
+   - RESEARCH — looking up information online, comparing options, gathering facts.
+   - DRAFT — writing text the user will review: email, doc, post, summary, slide content.
+   - SUMMARIZE — condensing source material the user provides or the agent can fetch.
+   - DATA — extracting / transforming structured data, filling a spreadsheet, parsing a file.
+   - REVIEW — reading a doc/PR/article and producing structured feedback.
+   Set is_ai_routable=FALSE when ANY of these apply:
+   - Requires physical action (call someone live, attend, drive, buy in person).
+   - Requires the user's personal opinion / emotional response / social judgment that cannot be delegated.
+   - Requires secrets/access the agent realistically does not have (a specific person's DMs, paid SaaS without API, internal company tools the user can but agent can't reach).
+   - The goal is ambiguous and only the user can decide what "done" looks like.
+   - It's a private/relationship task addressed to a specific named person who expects YOU.
+   Always fill ai_task_type (use 'other' when not routable). ai_routing_reasoning = one short sentence explaining the verdict.
 
 Quality bar:
 - Title ≤ 120 chars. Imperative. No hashtags. No emojis.
-- "позвать няню на субботу" → proposed_title "Написать няне про субботу", category "two_minute", specific "Няня подтвердила субботу", time_bound "Saturday".
-- "renovate bathroom" → is_project=true, project_name "Bathroom renovation", sub_actions: [{title:"Measure bathroom and list required works", suggested_category:"next"}, {title:"Get 3 contractor quotes", suggested_category:"next"}].
+- "позвать няню на субботу" → proposed_title "Написать няне про субботу", category "two_minute", specific "Няня подтвердила субботу", time_bound "Saturday", is_ai_routable=FALSE (private message to a specific person).
+- "renovate bathroom" → is_project=true, project_name "Bathroom renovation", sub_actions: [{title:"Measure bathroom and list required works", suggested_category:"next"}, {title:"Get 3 contractor quotes", suggested_category:"next"}], is_ai_routable=FALSE (physical work).
+- "summarise the BLE protocol spec PDF from Gady" → is_ai_routable=TRUE, ai_task_type="summarize", routing_reasoning="agent can read the PDF and produce a structured summary".
+- "Write a draft reply to Allison Walker about Custom Tracking App estimate" → is_ai_routable=TRUE, ai_task_type="draft" (user will review and send).
 - Mixed-language input is fine — keep titles in the source language.
 
 Edge cases:
@@ -316,6 +379,12 @@ function normalize(parsed: Partial<EnrichedProposal>): EnrichedProposal {
     .filter((x): x is SubAction => x !== null)
     .slice(0, 5)
 
+  const ai_task_type: AiTaskType = VALID_AI_TASK_TYPES.includes(
+    parsed.ai_task_type as AiTaskType
+  )
+    ? (parsed.ai_task_type as AiTaskType)
+    : 'other'
+
   return {
     is_actionable: parsed.is_actionable !== false,
     proposed_title: asString(parsed.proposed_title).slice(0, 120),
@@ -330,6 +399,9 @@ function normalize(parsed: Partial<EnrichedProposal>): EnrichedProposal {
     noise_reason: asString(parsed.noise_reason),
     is_delegation: parsed.is_delegation === true,
     delegate_to: asString(parsed.delegate_to),
+    is_ai_routable: parsed.is_ai_routable === true,
+    ai_task_type,
+    ai_routing_reasoning: asString(parsed.ai_routing_reasoning).slice(0, 280),
     confidence:
       typeof parsed.confidence === 'number' && parsed.confidence >= 0 && parsed.confidence <= 1
         ? parsed.confidence

@@ -186,6 +186,10 @@ function editMatchesDiff(entry: FieldDiff, fields: TaskFieldsSnapshot): boolean 
       return fields.tags !== undefined && arrayEquals(fields.tags, entry.to)
     case 'project':
       return fields.projectId !== undefined && (fields.projectId ?? null) === entry.to
+    case 'assignedTo':
+      // assignedTo isn't surfaced in the current webhook payload; assume the
+      // diff still applies (drift detection happens inside the applier).
+      return true
     case 'metadata':
       // Metadata isn't reported in TaskFieldsSnapshot; treat as match (we don't track this).
       return true

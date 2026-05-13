@@ -26,6 +26,9 @@ function makeProposal(overrides: Partial<EnrichedProposal> = {}): EnrichedPropos
     noise_reason: '',
     is_delegation: false,
     delegate_to: '',
+    is_ai_routable: false,
+    ai_task_type: 'other',
+    ai_routing_reasoning: '',
     confidence: 0.9,
     reasoning: 'Single-step message, 2-min rule',
     ...overrides,
@@ -115,6 +118,53 @@ describe('EnricherPipeline.run', () => {
     expect(tagsEntry.to).toContain('@phone')
     expect(tagsEntry.to).toContain('family')
     expect(tagsEntry.to).toContain('2min')
+  })
+
+  it('emits routing diff (assignedTo + ai-type/ai-stage tags) when is_ai_routable=true', async () => {
+    const enricher = makeEnricher(
+      makeProposal({
+        proposed_title: 'Summarize BLE protocol spec from Gady',
+        category: 'next',
+        suggested_contexts: ['@computer'],
+        suggested_tags: ['ble'],
+        is_ai_routable: true,
+        ai_task_type: 'summarize',
+        ai_routing_reasoning: 'Agent can read the PDF and produce a structured summary.',
+      })
+    )
+    const store = makeStore()
+    const pipe = new EnricherPipeline({ enricher, proposalStore: store, retriever: null })
+
+    const outcome = await pipe.run(baseInput())
+    expect(outcome.kind).toBe('proposed')
+
+    const calls = (store.create as unknown as { mock: { calls: [{ payload: ModifyPayload }][] } }).mock.calls
+    const payload = calls[0][0].payload
+    const assigned = payload.diff.find((d) => d.field === 'assignedTo') as
+      | { from: string | null; to: string | null }
+      | undefined
+    expect(assigned).toBeDefined()
+    expect(assigned!.to).toBe('@ai-agent')
+
+    const tagsEntry = payload.diff.find((d) => d.field === 'tags')! as { to: string[] }
+    expect(tagsEntry.to).toContain('ai-type:summarize')
+    expect(tagsEntry.to).toContain('ai-stage:queued')
+  })
+
+  it('does NOT add routing diff when is_ai_routable=false', async () => {
+    const enricher = makeEnricher(makeProposal({ is_ai_routable: false }))
+    const store = makeStore()
+    const pipe = new EnricherPipeline({ enricher, proposalStore: store, retriever: null })
+
+    await pipe.run(baseInput())
+    const calls = (store.create as unknown as { mock: { calls: [{ payload: ModifyPayload }][] } }).mock.calls
+    const payload = calls[0][0].payload
+    expect(payload.diff.find((d) => d.field === 'assignedTo')).toBeUndefined()
+    const tagsEntry = payload.diff.find((d) => d.field === 'tags') as { to: string[] } | undefined
+    if (tagsEntry) {
+      expect(tagsEntry.to.some((t) => t.startsWith('ai-type:'))).toBe(false)
+      expect(tagsEntry.to.some((t) => t.startsWith('ai-stage:'))).toBe(false)
+    }
   })
 
   it('emits a split proposal with umbrella + sub-actions for a project', async () => {
