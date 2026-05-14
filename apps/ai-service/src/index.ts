@@ -34,6 +34,7 @@ import {
   FocusContextAssembler,
   DailySummaryJob,
   MemoryProposerContext,
+  ProactiveRunner,
 } from './memory'
 import { SlugCanonicalizer } from './memory/slug-canonicalizer'
 
@@ -168,6 +169,7 @@ let memoryIngest: IngestService | null = new IngestService({
 })
 let memoryFocusContext: FocusContextAssembler | null = null
 let dailySummaryJob: DailySummaryJob | null = null
+let proactiveRunner: ProactiveRunner | null = null
 
 // --- AI Enricher (push) + Commitment Detector (pull) + Reviser ---
 let enricherPipeline: EnricherPipeline | null = null
@@ -248,6 +250,14 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     store: memoryStore,
     llm,
     embeddings,
+  })
+  // Proactive runner — surfaces follow-up proposals from stale facts.
+  // Source-agent='proactive-runner' on every proposal so UI / audit can
+  // tell them apart from commitment-detector and enricher.
+  proactiveRunner = new ProactiveRunner({
+    memoryStore,
+    proposalStore,
+    llm,
   })
   console.log(
     `🧠 Memory module enabled (${memoryStore.vecAvailable ? 'vec+FTS' : 'FTS only'}, ${memoryStore.countEvents()} events, ${memoryStore.countFacts()} facts)`
@@ -482,11 +492,36 @@ async function main() {
       )
     : null
 
+  // Proactive memory runner — scans stale active facts every N hours,
+  // proposes follow-up actions through the same Proposal Store the
+  // commitment-detector uses. Source-agent label distinguishes them.
+  // Default cadence 6h (configurable via PROACTIVE_INTERVAL_MS).
+  const proactiveIntervalMs = Number(process.env.PROACTIVE_INTERVAL_MS ?? 6 * 60 * 60 * 1000)
+  const proactiveTimer = proactiveRunner
+    ? setInterval(
+        () => {
+          if (!proactiveRunner) return
+          proactiveRunner
+            .run()
+            .then((r) => {
+              if (r.proposed > 0 || r.errors > 0) {
+                console.log(
+                  `🔮 Proactive: ${r.proposed} proposed, ${r.skipped} skipped, ${r.errors} errors (${r.elapsedMs}ms)`
+                )
+              }
+            })
+            .catch((err) => console.error('[proactive] failed:', err))
+        },
+        proactiveIntervalMs
+      )
+    : null
+
   const shutdown = async () => {
     console.log('🛑 Shutting down...')
     clearInterval(purgeTimer)
     clearInterval(expiryTimer)
     if (dailySummaryTimer) clearInterval(dailySummaryTimer)
+    if (proactiveTimer) clearInterval(proactiveTimer)
     if (http) http.stop()
     for (const ch of channels) {
       try {

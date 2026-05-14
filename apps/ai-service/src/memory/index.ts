@@ -33,6 +33,19 @@ export { MemoryProposerContext } from './proposer-context'
 export type { ProposerContextProvider } from './proposer-context'
 export { SlugCanonicalizer } from './slug-canonicalizer'
 export type { SlugCanonicalizerOptions } from './slug-canonicalizer'
+export { ProactiveRunner, parseProactiveOutput } from './proactive-runner'
+export type { ProactiveRunnerOptions } from './proactive-runner'
+export {
+  DEFAULT_PROACTIVE_CONFIG,
+  PROACTIVE_SOURCE_AGENT,
+} from './proactive-types'
+export type {
+  ProactiveConfig,
+  ProactiveDecision,
+  ProactiveEvaluation,
+  ProactiveRunResult,
+  StaleFactGroup,
+} from './proactive-types'
 export type {
   Event,
   NewEventInput,
