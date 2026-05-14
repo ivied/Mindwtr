@@ -80,6 +80,30 @@ export interface ProactiveConfig {
   recentEventsPerEntity: number
   /** Cap the lookback window for recent events. Default 14 days. */
   recentEventsWithinDays: number
+
+  // ---------------- Reverse pass (open tasks → completion verdict) ----------------
+
+  /**
+   * Confidence threshold for the reverse pass. Stricter than forward
+   * (default 0.85 vs 0.75) because false-positives here mean "AI archived
+   * my live task" — much worse user impact than spurious follow-ups.
+   */
+  reverseMinConfidence: number
+  /** Max reverse proposals per pass. Default 3 — kept tight on purpose. */
+  reverseMaxProposalsPerPass: number
+  /** Statuses considered "open" and scanned by reverse pass. */
+  openTaskStatuses: string[]
+  /**
+   * Don't propose status changes on tasks younger than this. Default 24h.
+   * Fresh tasks are still being shaped; user often updates them imminently.
+   */
+  taskMinAgeMs: number
+  /** Don't re-propose for same task_id within this window. Default 48h. */
+  reverseDedupWindowMs: number
+  /** Max events retrieved per task for the verdict prompt. Default 8. */
+  reverseEventsLimit: number
+  /** Lookback for recent events when evaluating a task. Default 7 days. */
+  reverseEventsWithinDays: number
 }
 
 export const DEFAULT_PROACTIVE_CONFIG: ProactiveConfig = {
@@ -90,6 +114,14 @@ export const DEFAULT_PROACTIVE_CONFIG: ProactiveConfig = {
   factTypesToScan: ['waiting_on', 'working_on'],
   recentEventsPerEntity: 5,
   recentEventsWithinDays: 14,
+  // Reverse-pass (open tasks → completion verdict) defaults.
+  reverseMinConfidence: 0.85,
+  reverseMaxProposalsPerPass: 3,
+  openTaskStatuses: ['inbox', 'next', 'waiting'],
+  taskMinAgeMs: 24 * 60 * 60 * 1000,
+  reverseDedupWindowMs: 48 * 60 * 60 * 1000,
+  reverseEventsLimit: 8,
+  reverseEventsWithinDays: 7,
 }
 
 /** Per-group decision recorded for telemetry — what the runner did and why. */
@@ -108,6 +140,61 @@ export interface ProactiveRunResult {
   errors: number
   elapsedMs: number
   decisions: ProactiveDecision[]
+}
+
+// ---------------- Reverse pass: open tasks → completion verdict ----------------
+
+/**
+ * LLM verdict for an open task evaluated against memory.
+ *   - 'completed' : recent events show the task is done. requires evidence_quote.
+ *   - 'stale'     : no recent activity, likely should move to someday.
+ *   - 'still_active' : recent events show active work — DO NOT touch.
+ *   - 'unclear'   : default; runner skips. False-positives kill trust.
+ */
+export type TaskVerdict = 'completed' | 'stale' | 'still_active' | 'unclear'
+
+export interface CompletionEvaluation {
+  verdict: TaskVerdict
+  /** Verbatim event quote that justifies the verdict; '' when unclear. */
+  evidence_quote: string
+  /** 1-2 sentence rationale. */
+  reasoning: string
+  /** 0..1; runner discards below reverseMinConfidence threshold. */
+  confidence: number
+}
+
+export interface OpenTaskDecision {
+  taskId: string
+  taskTitle: string
+  action:
+    | 'proposed-done'
+    | 'proposed-someday'
+    | 'skipped-too-fresh'
+    | 'skipped-already-pending'
+    | 'skipped-recent-resolution'
+    | 'skipped-llm-still-active'
+    | 'skipped-llm-unclear'
+    | 'skipped-low-confidence'
+    | 'skipped-budget'
+    | 'skipped-no-entities'
+    | 'error'
+  proposalId?: string
+  reason: string
+  evaluation?: CompletionEvaluation
+}
+
+export interface ReversePassResult {
+  scannedTasks: number
+  proposed: number
+  skipped: number
+  errors: number
+  elapsedMs: number
+  decisions: OpenTaskDecision[]
+}
+
+export interface ProactiveCombinedResult {
+  forward: ProactiveRunResult
+  reverse: ReversePassResult | null
 }
 
 export const PROACTIVE_SOURCE_AGENT = 'proactive-runner'

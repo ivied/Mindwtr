@@ -24,28 +24,41 @@
 
 import { randomUUID } from 'node:crypto'
 import type { LLMClient } from '../ai/client'
+import type { MindwtrClient, Task } from '../api/mindwtr-client'
 import type {
   CreatePayload,
+  FieldDiff,
   MindwtrTaskBlueprint,
+  ModifyPayload,
   ProposalTraceback,
 } from '../proposal-store/payloads'
 import type { ProposalStore } from '../proposal-store/store'
+import type { HybridRetriever } from './retrieve'
 import type { MemoryStore } from './store'
 import type { Fact } from './types'
 import {
   DEFAULT_PROACTIVE_CONFIG,
   PROACTIVE_SOURCE_AGENT,
+  type CompletionEvaluation,
+  type OpenTaskDecision,
+  type ProactiveCombinedResult,
   type ProactiveConfig,
   type ProactiveDecision,
   type ProactiveEvaluation,
   type ProactiveRunResult,
+  type ReversePassResult,
   type StaleFactGroup,
+  type TaskVerdict,
 } from './proactive-types'
 
 export interface ProactiveRunnerOptions {
   memoryStore: MemoryStore
   proposalStore: ProposalStore
   llm: LLMClient
+  /** When set, enables the reverse pass (open tasks → completion verdict). */
+  mindwtrClient?: MindwtrClient | null
+  /** Needed for reverse pass entity-matching via task title. */
+  retriever?: HybridRetriever | null
   /** Defaults DEFAULT_PROACTIVE_CONFIG; overrides merge field-by-field. */
   config?: Partial<ProactiveConfig>
   /** Override wall clock for tests. */
@@ -65,7 +78,28 @@ export class ProactiveRunner {
     this.log = opts.log ?? console.log
   }
 
-  async run(): Promise<ProactiveRunResult> {
+  /**
+   * Entry point — runs both forward (stale facts → follow-up proposals) and
+   * reverse (open tasks → completion verdicts) passes. Reverse pass is
+   * skipped silently when MindwtrClient or HybridRetriever wasn't provided.
+   */
+  async run(): Promise<ProactiveCombinedResult> {
+    const forward = await this.runStaleFactsPass()
+    const reverse =
+      this.opts.mindwtrClient && this.opts.retriever
+        ? await this.runOpenTasksPass()
+        : null
+    return { forward, reverse }
+  }
+
+  // Backwards-compat alias so existing callers (e.g. setInterval wired
+  // before the reverse pass shipped) keep working with the forward-only
+  // result they were expecting.
+  async runForwardOnly(): Promise<ProactiveRunResult> {
+    return this.runStaleFactsPass()
+  }
+
+  async runStaleFactsPass(): Promise<ProactiveRunResult> {
     const startedAt = Date.now()
     const decisions: ProactiveDecision[] = []
     let proposed = 0
@@ -306,6 +340,341 @@ export class ProactiveRunner {
       reasoningSteps: evaluation.reasoning ? [evaluation.reasoning] : [],
     }
   }
+
+  // ============================================================================
+  // Reverse pass: open Mindwtr tasks → completion / stale verdict → modify proposal
+  // ============================================================================
+
+  async runOpenTasksPass(): Promise<ReversePassResult> {
+    const startedAt = Date.now()
+    const decisions: OpenTaskDecision[] = []
+    let proposed = 0
+    let skipped = 0
+    let errors = 0
+
+    if (!this.opts.mindwtrClient || !this.opts.retriever) {
+      this.log('[proactive:reverse] skipped — mindwtrClient or retriever not configured')
+      return {
+        scannedTasks: 0,
+        proposed: 0,
+        skipped: 0,
+        errors: 0,
+        elapsedMs: Date.now() - startedAt,
+        decisions: [],
+      }
+    }
+
+    const tasks = await this.fetchOpenTasks()
+    this.log(`[proactive:reverse] scanning ${tasks.length} open tasks`)
+
+    for (const task of tasks) {
+      if (proposed >= this.config.reverseMaxProposalsPerPass) {
+        decisions.push({
+          taskId: task.id,
+          taskTitle: task.title,
+          action: 'skipped-budget',
+          reason: `exceeded reverseMaxProposalsPerPass=${this.config.reverseMaxProposalsPerPass}`,
+        })
+        skipped += 1
+        continue
+      }
+
+      const ageMs = this.now().getTime() - Date.parse(task.createdAt)
+      if (Number.isFinite(ageMs) && ageMs < this.config.taskMinAgeMs) {
+        decisions.push({
+          taskId: task.id,
+          taskTitle: task.title,
+          action: 'skipped-too-fresh',
+          reason: `task age ${Math.round(ageMs / 3600_000)}h < taskMinAgeMs=${Math.round(this.config.taskMinAgeMs / 3600_000)}h`,
+        })
+        skipped += 1
+        continue
+      }
+
+      // Dedup: pending check first (more informative outcome), then any
+      // recent proposal (resolved or not) within the dedup window. Pending
+      // is also "recent" — by checking it first we surface the actionable
+      // state without losing the recent-window guard for resolved ones.
+      if (this.hasPendingReverseProposalForTask(task.id)) {
+        decisions.push({
+          taskId: task.id,
+          taskTitle: task.title,
+          action: 'skipped-already-pending',
+          reason: 'pending proactive proposal already exists',
+        })
+        skipped += 1
+        continue
+      }
+      if (this.hasRecentReverseProposalForTask(task.id)) {
+        decisions.push({
+          taskId: task.id,
+          taskTitle: task.title,
+          action: 'skipped-recent-resolution',
+          reason: `recent proactive proposal on this task within ${Math.round(this.config.reverseDedupWindowMs / 3600_000)}h`,
+        })
+        skipped += 1
+        continue
+      }
+
+      try {
+        const eventsAndFacts = await this.gatherContextForTask(task)
+        if (eventsAndFacts.events.length === 0 && eventsAndFacts.facts.length === 0) {
+          decisions.push({
+            taskId: task.id,
+            taskTitle: task.title,
+            action: 'skipped-no-entities',
+            reason: 'no related events/facts found in memory',
+          })
+          skipped += 1
+          continue
+        }
+
+        const verdict = await this.evaluateTask(task, eventsAndFacts)
+
+        if (verdict.verdict === 'still_active') {
+          decisions.push({
+            taskId: task.id,
+            taskTitle: task.title,
+            action: 'skipped-llm-still-active',
+            reason: verdict.reasoning,
+            evaluation: verdict,
+          })
+          skipped += 1
+          continue
+        }
+        if (verdict.verdict === 'unclear') {
+          decisions.push({
+            taskId: task.id,
+            taskTitle: task.title,
+            action: 'skipped-llm-unclear',
+            reason: verdict.reasoning,
+            evaluation: verdict,
+          })
+          skipped += 1
+          continue
+        }
+        if (verdict.confidence < this.config.reverseMinConfidence) {
+          decisions.push({
+            taskId: task.id,
+            taskTitle: task.title,
+            action: 'skipped-low-confidence',
+            reason: `confidence ${verdict.confidence.toFixed(2)} < ${this.config.reverseMinConfidence}`,
+            evaluation: verdict,
+          })
+          skipped += 1
+          continue
+        }
+
+        const targetStatus: 'done' | 'someday' = verdict.verdict === 'completed' ? 'done' : 'someday'
+        const proposalId = await this.writeCompletionProposal(task, verdict, targetStatus)
+        proposed += 1
+        decisions.push({
+          taskId: task.id,
+          taskTitle: task.title,
+          action: targetStatus === 'done' ? 'proposed-done' : 'proposed-someday',
+          proposalId,
+          reason: verdict.reasoning,
+          evaluation: verdict,
+        })
+      } catch (err) {
+        errors += 1
+        this.log(`[proactive:reverse] evaluate/write failed for ${task.id}: ${(err as Error).message}`)
+        decisions.push({
+          taskId: task.id,
+          taskTitle: task.title,
+          action: 'error',
+          reason: (err as Error).message,
+        })
+      }
+    }
+
+    const elapsedMs = Date.now() - startedAt
+    this.log(
+      `[proactive:reverse] done: ${proposed} proposed, ${skipped} skipped, ${errors} errors in ${elapsedMs}ms`
+    )
+    return {
+      scannedTasks: tasks.length,
+      proposed,
+      skipped,
+      errors,
+      elapsedMs,
+      decisions,
+    }
+  }
+
+  private async fetchOpenTasks(): Promise<Task[]> {
+    if (!this.opts.mindwtrClient) return []
+    const tasks: Task[] = []
+    for (const status of this.config.openTaskStatuses) {
+      try {
+        const batch = await this.opts.mindwtrClient.listTasks({ status, limit: 50 })
+        tasks.push(...batch)
+      } catch (err) {
+        this.log(`[proactive:reverse] listTasks(${status}) failed: ${(err as Error).message}`)
+      }
+    }
+    return tasks
+  }
+
+  private hasPendingReverseProposalForTask(taskId: string): boolean {
+    const pending = this.opts.proposalStore.listPending({
+      sourceAgent: PROACTIVE_SOURCE_AGENT,
+      targetTaskId: taskId,
+      limit: 1,
+    })
+    return pending.length > 0
+  }
+
+  private hasRecentReverseProposalForTask(taskId: string): boolean {
+    const recent = this.opts.proposalStore.listRecentByAgent(
+      PROACTIVE_SOURCE_AGENT,
+      this.config.reverseDedupWindowMs
+    )
+    return recent.some((p) => p.targetTaskIds.includes(taskId))
+  }
+
+  private async gatherContextForTask(
+    task: Task
+  ): Promise<{
+    events: Array<{ ts: string; app: string | null; title: string | null; body: string }>
+    facts: Fact[]
+    entitySlugs: string[]
+  }> {
+    // Use task title + description as the retrieval query — hybrid search
+    // surfaces events even when the task doesn't carry an explicit entity slug.
+    const query = [task.title, task.description ?? '', task.assignedTo ?? '']
+      .filter(Boolean)
+      .join(' ')
+      .slice(0, 800)
+
+    const retrieved = await this.opts.retriever!.retrieve({
+      query,
+      limit: this.config.reverseEventsLimit,
+      withinDays: this.config.reverseEventsWithinDays,
+    })
+
+    // 1-hop entity expansion through event_entities.
+    const slugSet = new Set<string>()
+    if (retrieved.length > 0) {
+      const placeholders = retrieved.map(() => '?').join(',')
+      const rows = this.opts.memoryStore.db
+        .query<{ entity_slug: string }, string[]>(
+          `SELECT DISTINCT entity_slug FROM event_entities
+            WHERE event_id IN (${placeholders})`
+        )
+        .all(...retrieved.map((e) => e.id))
+      for (const r of rows) slugSet.add(r.entity_slug)
+    }
+    // Also include assignedTo as an explicit slug hint (best-effort).
+    if (task.assignedTo) {
+      const slug = task.assignedTo
+        .toLowerCase()
+        .normalize('NFKD')
+        .replace(/[̀-ͯ]/g, '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+      if (slug) slugSet.add(slug)
+    }
+
+    const facts: Fact[] = []
+    for (const slug of slugSet) {
+      facts.push(...this.opts.memoryStore.activeFactsFor(slug).slice(0, 5))
+    }
+
+    return {
+      events: retrieved.map((e) => ({
+        ts: e.ts,
+        app: e.app,
+        title: e.title,
+        body: e.body,
+      })),
+      facts,
+      entitySlugs: [...slugSet],
+    }
+  }
+
+  async evaluateTask(
+    task: Task,
+    ctx: {
+      events: Array<{ ts: string; app: string | null; title: string | null; body: string }>
+      facts: Fact[]
+      entitySlugs: string[]
+    }
+  ): Promise<CompletionEvaluation> {
+    const prompt = buildCompletionPrompt(task, ctx, this.now())
+    const res = await this.opts.llm.chatCompletion({
+      messages: [
+        { role: 'system', content: COMPLETION_SYSTEM_PROMPT },
+        { role: 'user', content: prompt },
+      ],
+      max_tokens: 500,
+      temperature: 0.1,
+    })
+    const raw = res.choices[0]?.message?.content ?? ''
+    return parseCompletionOutput(raw)
+  }
+
+  private async writeCompletionProposal(
+    task: Task,
+    verdict: CompletionEvaluation,
+    targetStatus: 'done' | 'someday'
+  ): Promise<string> {
+    const diff: FieldDiff[] = [
+      { field: 'status', from: task.status, to: targetStatus },
+    ]
+    const payload: ModifyPayload = {
+      kind: 'modify',
+      taskId: task.id,
+      diff,
+      traceback: {
+        captureExcerpt:
+          `Task "${task.title}" (status=${task.status}). ` +
+          `Memory verdict: ${verdict.verdict}.\n` +
+          `Evidence: ${verdict.evidence_quote || '(no quote)'}\n` +
+          `Reasoning: ${verdict.reasoning}`,
+        sourceChannel: 'memory:proactive-runner',
+        sourceMeta: {
+          taskId: task.id,
+          verdict: verdict.verdict,
+          targetStatus,
+        },
+        capturedAt: this.now().toISOString(),
+        evidenceQuote: verdict.evidence_quote,
+        cuesDetected: [`verdict:${verdict.verdict}`, `target:${targetStatus}`],
+        reasoningSteps: verdict.reasoning ? [verdict.reasoning] : [],
+      },
+    }
+
+    // originSnapshot lets the applier do drift-detection later — if the
+    // user manually changed the task between proposal and approval, applier
+    // marks it stale instead of overwriting blindly.
+    const originSnapshot = {
+      id: task.id,
+      title: task.title,
+      status: task.status,
+      tags: task.tags,
+      contexts: task.contexts,
+      assignedTo: task.assignedTo ?? null,
+      description: task.description ?? '',
+    }
+
+    const proposal = this.opts.proposalStore.create({
+      type: 'modify',
+      targetTaskIds: [task.id],
+      sourceAgent: PROACTIVE_SOURCE_AGENT,
+      sourceCaptureId: null,
+      payload,
+      originSnapshot,
+      summary:
+        targetStatus === 'done'
+          ? `Mark "${task.title}" done — appears completed in memory`
+          : `Move "${task.title}" to someday — stale`,
+    })
+    this.log(
+      `[proactive:reverse] proposed (${task.id} → proposal ${proposal.id}): ${task.status}→${targetStatus} "${task.title.slice(0, 60)}" conf=${verdict.confidence.toFixed(2)}`
+    )
+    return proposal.id
+  }
 }
 
 // ---------------- LLM prompt + parser ----------------
@@ -435,6 +804,110 @@ function extractEntitySlugFromProposal(p: { currentPayload: unknown }): string[]
   const payload = p.currentPayload as { task?: { metadata?: Record<string, unknown> } } | null
   const slug = payload?.task?.metadata?.ai_entity_slug
   return typeof slug === 'string' && slug.length > 0 ? [slug] : []
+}
+
+// ---------------- Reverse-pass LLM (completion verdict) ----------------
+
+const COMPLETION_SYSTEM_PROMPT = `You evaluate whether an OPEN GTD task can be safely marked as completed or stale, based on the user's recent memory (events + active facts about related entities).
+
+DEFAULT verdict is "unclear" — only emit "completed" or "stale" with strong evidence.
+
+Verdicts:
+- "completed": memory clearly shows the task is finished. REQUIRES a specific evidence_quote from events (e.g. "Sergey uploaded TestFlight build" closes "Upload TestFlight build for Valentin").
+- "stale": no recent activity, old (>2 weeks), likely should go to someday. NOT for short-stale things.
+- "still_active": recent events show ongoing work — DO NOT propose changes.
+- "unclear": can't tell from available data → skip.
+
+CRITICAL rules:
+- False-positives here mean "AI archived my live task" — much worse than missed proposals. WHEN IN DOUBT, choose 'unclear'.
+- "completed" requires a specific event quote showing closure. Vague "saw activity" is NOT enough.
+- Tasks <24h old → 'unclear' or 'still_active' unless evidence is overwhelming.
+- Never propose deletion (we only mark done/someday). Status changes are reversible.
+- confidence MUST reflect actual confidence. Threshold downstream is 0.85 — anything below is auto-skipped.
+
+Output strict JSON, no prose, no fences:
+{
+  "verdict": "completed" | "stale" | "still_active" | "unclear",
+  "evidence_quote": "<exact event quote, or empty>",
+  "reasoning": "<1-2 sentence rationale>",
+  "confidence": 0.0-1.0
+}
+
+Output ONLY the JSON object.`
+
+function buildCompletionPrompt(
+  task: Task,
+  ctx: {
+    events: Array<{ ts: string; app: string | null; title: string | null; body: string }>
+    facts: Fact[]
+    entitySlugs: string[]
+  },
+  now: Date
+): string {
+  const ageHours = Math.round((now.getTime() - Date.parse(task.createdAt)) / 3600_000)
+  const factLines = ctx.facts.slice(0, 10).map(
+    (f) => `- [${f.factType ?? 'fact'}] ${f.statement} (about ${f.entitySlug ?? '?'}, since ${f.validFrom.slice(0, 10)})`
+  )
+  const eventLines = ctx.events.slice(0, 10).map((e) => {
+    const ts = e.ts.slice(0, 16).replace('T', ' ')
+    const excerpt = e.body.replace(/\s+/g, ' ').slice(0, 200)
+    return `- [${ts}] ${e.app ?? '-'}/${e.title ?? '-'} — ${excerpt}`
+  })
+  const slugLine =
+    ctx.entitySlugs.length > 0 ? `Linked entities: ${ctx.entitySlugs.slice(0, 8).join(', ')}` : ''
+
+  return `Task: "${task.title}"
+Status: ${task.status}
+Age: ${ageHours}h
+Assigned to: ${task.assignedTo ?? '(none)'}
+Description: ${(task.description ?? '').slice(0, 400) || '(empty)'}
+${slugLine}
+
+Now (UTC): ${now.toISOString()}
+
+Active facts about linked entities:
+${factLines.join('\n') || '(none)'}
+
+Recent events about linked entities (newest first):
+${eventLines.join('\n') || '(none)'}
+
+Decide now. Default to "unclear" if anything ambiguous.`
+}
+
+export function parseCompletionOutput(raw: string): CompletionEvaluation {
+  const cleaned = raw
+    .replace(/^```(?:json)?\s*\n?/i, '')
+    .replace(/\n?```\s*$/i, '')
+    .trim()
+  if (!cleaned) return emptyCompletion()
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(cleaned)
+  } catch {
+    return emptyCompletion()
+  }
+  if (typeof parsed !== 'object' || parsed === null) return emptyCompletion()
+  const o = parsed as Record<string, unknown>
+  return {
+    verdict: normalizeVerdict(o.verdict),
+    evidence_quote: typeof o.evidence_quote === 'string' ? o.evidence_quote.trim().slice(0, 500) : '',
+    reasoning: typeof o.reasoning === 'string' ? o.reasoning.trim() : '',
+    confidence: clamp01(typeof o.confidence === 'number' ? o.confidence : 0),
+  }
+}
+
+function normalizeVerdict(v: unknown): TaskVerdict {
+  if (v === 'completed' || v === 'stale' || v === 'still_active') return v
+  return 'unclear'
+}
+
+function emptyCompletion(): CompletionEvaluation {
+  return {
+    verdict: 'unclear',
+    evidence_quote: '',
+    reasoning: 'LLM output unparseable',
+    confidence: 0,
+  }
 }
 
 // suppress unused import warning when randomUUID isn't directly used

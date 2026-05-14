@@ -5,9 +5,11 @@ import { tmpdir } from 'node:os'
 import { openDb } from '../context-store/db'
 import { MemoryStore } from './store'
 import { ProposalStore } from '../proposal-store/store'
-import { ProactiveRunner, parseProactiveOutput } from './proactive-runner'
+import { ProactiveRunner, parseProactiveOutput, parseCompletionOutput } from './proactive-runner'
 import { PROACTIVE_SOURCE_AGENT } from './proactive-types'
+import { HybridRetriever } from './retrieve'
 import type { LLMClient } from '../ai/client'
+import type { MindwtrClient, Task } from '../api/mindwtr-client'
 
 const NOW = new Date('2026-05-14T12:00:00.000Z')
 const HOUR = 60 * 60 * 1000
@@ -186,7 +188,7 @@ describe('ProactiveRunner.run', () => {
       })
     )
     const runner = new ProactiveRunner({ memoryStore, proposalStore, llm, now: () => NOW })
-    const r = await runner.run()
+    const r = await runner.runStaleFactsPass()
     expect(r.proposed).toBe(1)
     expect(r.scannedGroups).toBe(1)
     expect(r.decisions[0]!.action).toBe('proposed')
@@ -219,7 +221,7 @@ describe('ProactiveRunner.run', () => {
       })
     )
     const runner = new ProactiveRunner({ memoryStore, proposalStore, llm, now: () => NOW })
-    const r = await runner.run()
+    const r = await runner.runStaleFactsPass()
     expect(r.proposed).toBe(0)
     expect(r.skipped).toBe(1)
     expect(r.decisions[0]!.action).toBe('skipped-llm-no')
@@ -244,7 +246,7 @@ describe('ProactiveRunner.run', () => {
       now: () => NOW,
       config: { minConfidence: 0.75 },
     })
-    const r = await runner.run()
+    const r = await runner.runStaleFactsPass()
     expect(r.proposed).toBe(0)
     expect(r.decisions[0]!.action).toBe('skipped-low-confidence')
   })
@@ -270,7 +272,7 @@ describe('ProactiveRunner.run', () => {
       now: () => NOW,
       config: { maxProposalsPerPass: 2 },
     })
-    const r = await runner.run()
+    const r = await runner.runStaleFactsPass()
     expect(r.proposed).toBe(2)
     expect(r.skipped).toBe(1)
     expect(r.decisions.find((d) => d.action === 'skipped-budget')).toBeDefined()
@@ -304,7 +306,7 @@ describe('ProactiveRunner.run', () => {
       now: () => NOW,
       config: { dedupWindowMs: 48 * HOUR },
     })
-    const r = await runner.run()
+    const r = await runner.runStaleFactsPass()
     expect(r.proposed).toBe(0)
     expect(r.decisions[0]!.action).toBe('skipped-recent-proposal')
   })
@@ -313,7 +315,7 @@ describe('ProactiveRunner.run', () => {
     seedFact({ slug: 'fresh', type: 'waiting_on', statement: 'a', hoursAgo: 1 })
     const llm = mkLlm('SHOULD NOT BE CALLED')
     const runner = new ProactiveRunner({ memoryStore, proposalStore, llm, now: () => NOW })
-    const r = await runner.run()
+    const r = await runner.runStaleFactsPass()
     expect(r.scannedGroups).toBe(0)
     expect(r.proposed).toBe(0)
   })
@@ -335,7 +337,7 @@ describe('ProactiveRunner.run', () => {
       })
     })
     const runner = new ProactiveRunner({ memoryStore, proposalStore, llm, now: () => NOW })
-    await runner.run()
+    await runner.runStaleFactsPass()
     expect(capturedPrompt).toContain('Joe message about AI code review')
     expect(capturedPrompt).toContain('joe')
     expect(capturedPrompt).toContain('Stale: 50h')
@@ -349,9 +351,345 @@ describe('ProactiveRunner.run', () => {
       },
     } as unknown as LLMClient
     const runner = new ProactiveRunner({ memoryStore, proposalStore, llm, now: () => NOW })
-    const r = await runner.run()
+    const r = await runner.runStaleFactsPass()
     expect(r.errors).toBe(1)
     expect(r.proposed).toBe(0)
     expect(r.decisions[0]!.action).toBe('error')
+  })
+})
+
+// ============================================================================
+// Reverse pass (open tasks → completion verdict)
+// ============================================================================
+
+function fakeMindwtrClient(tasks: Task[]): MindwtrClient {
+  return {
+    listTasks: async (params: { status?: string } = {}) => {
+      if (!params.status) return tasks
+      return tasks.filter((t) => t.status === params.status)
+    },
+  } as unknown as MindwtrClient
+}
+
+function mkTask(overrides: Partial<Task>): Task {
+  return {
+    id: overrides.id ?? `t-${Math.random().toString(36).slice(2)}`,
+    title: overrides.title ?? 'Some task',
+    status: overrides.status ?? 'inbox',
+    contexts: overrides.contexts ?? [],
+    tags: overrides.tags ?? [],
+    description: overrides.description,
+    assignedTo: overrides.assignedTo,
+    createdAt: overrides.createdAt ?? new Date(NOW.getTime() - 72 * HOUR).toISOString(),
+    updatedAt: overrides.updatedAt ?? new Date(NOW.getTime() - 72 * HOUR).toISOString(),
+  }
+}
+
+describe('parseCompletionOutput', () => {
+  it('parses a well-formed verdict', () => {
+    const r = parseCompletionOutput(
+      JSON.stringify({
+        verdict: 'completed',
+        evidence_quote: 'Sergey uploaded TestFlight build',
+        reasoning: 'Build was uploaded yesterday.',
+        confidence: 0.9,
+      })
+    )
+    expect(r.verdict).toBe('completed')
+    expect(r.evidence_quote).toContain('TestFlight')
+    expect(r.confidence).toBe(0.9)
+  })
+
+  it('defaults to unclear on bad input', () => {
+    expect(parseCompletionOutput('not json').verdict).toBe('unclear')
+    expect(parseCompletionOutput('').confidence).toBe(0)
+  })
+
+  it('normalizes unknown verdict to unclear', () => {
+    const r = parseCompletionOutput(
+      JSON.stringify({
+        verdict: 'totally-done',
+        evidence_quote: '',
+        reasoning: 'r',
+        confidence: 0.9,
+      })
+    )
+    expect(r.verdict).toBe('unclear')
+  })
+})
+
+describe('ProactiveRunner.runOpenTasksPass', () => {
+  it('proposes modify→done when LLM verdict=completed with high confidence', async () => {
+    const task = mkTask({ id: 't1', title: 'Upload TestFlight build', status: 'next' })
+    const mindwtrClient = fakeMindwtrClient([task])
+    const retriever = new HybridRetriever(memoryStore, null)
+    const llm = mkLlm(
+      JSON.stringify({
+        verdict: 'completed',
+        evidence_quote: 'Sergey uploaded build yesterday',
+        reasoning: 'Build was uploaded.',
+        confidence: 0.9,
+      })
+    )
+    // Seed at least one event so the runner has context (and skips the no-entities branch).
+    seedEvent({ slug: 'testflight', hoursAgo: 24, body: 'Sergey uploaded TestFlight build for Valentin' })
+
+    const runner = new ProactiveRunner({
+      memoryStore,
+      proposalStore,
+      llm,
+      mindwtrClient,
+      retriever,
+      now: () => NOW,
+    })
+    const r = await runner.runOpenTasksPass()
+    expect(r.proposed).toBe(1)
+    expect(r.decisions[0]!.action).toBe('proposed-done')
+    const proposal = proposalStore.get(r.decisions[0]!.proposalId!)
+    expect(proposal).toBeDefined()
+    expect(proposal!.type).toBe('modify')
+    expect(proposal!.sourceAgent).toBe(PROACTIVE_SOURCE_AGENT)
+    expect(proposal!.targetTaskIds).toEqual(['t1'])
+    const payload = proposal!.currentPayload as { kind: string; taskId: string; diff: Array<{ field: string; from: string; to: string }> }
+    expect(payload.kind).toBe('modify')
+    expect(payload.diff[0]!.field).toBe('status')
+    expect(payload.diff[0]!.from).toBe('next')
+    expect(payload.diff[0]!.to).toBe('done')
+  })
+
+  it('proposes modify→someday when verdict=stale', async () => {
+    const task = mkTask({ id: 't2', title: 'Stale thing', status: 'inbox' })
+    const retriever = new HybridRetriever(memoryStore, null)
+    const llm = mkLlm(
+      JSON.stringify({
+        verdict: 'stale',
+        evidence_quote: '',
+        reasoning: 'No activity for 3 weeks.',
+        confidence: 0.88,
+      })
+    )
+    seedEvent({ slug: 'stale-thing', hoursAgo: 100, body: 'Old discussion about stale thing' })
+
+    const runner = new ProactiveRunner({
+      memoryStore,
+      proposalStore,
+      llm,
+      mindwtrClient: fakeMindwtrClient([task]),
+      retriever,
+      now: () => NOW,
+    })
+    const r = await runner.runOpenTasksPass()
+    expect(r.proposed).toBe(1)
+    expect(r.decisions[0]!.action).toBe('proposed-someday')
+    const proposal = proposalStore.get(r.decisions[0]!.proposalId!)!
+    const payload = proposal.currentPayload as { diff: Array<{ from: string; to: string }> }
+    expect(payload.diff[0]!.to).toBe('someday')
+  })
+
+  it('skips when verdict=still_active (do NOT propose)', async () => {
+    const task = mkTask({ id: 't3', title: 'Hot ticket', status: 'next' })
+    const retriever = new HybridRetriever(memoryStore, null)
+    seedEvent({ slug: 'hot-ticket', hoursAgo: 1, body: 'active recent work on hot ticket' })
+    const llm = mkLlm(
+      JSON.stringify({
+        verdict: 'still_active',
+        evidence_quote: 'active recent work',
+        reasoning: 'Active right now.',
+        confidence: 0.9,
+      })
+    )
+    const runner = new ProactiveRunner({
+      memoryStore,
+      proposalStore,
+      llm,
+      mindwtrClient: fakeMindwtrClient([task]),
+      retriever,
+      now: () => NOW,
+    })
+    const r = await runner.runOpenTasksPass()
+    expect(r.proposed).toBe(0)
+    expect(r.decisions[0]!.action).toBe('skipped-llm-still-active')
+  })
+
+  it('skips on unclear verdict (default safe path)', async () => {
+    const task = mkTask({ id: 't4', title: 'Ambiguous situation', status: 'inbox' })
+    const retriever = new HybridRetriever(memoryStore, null)
+    seedEvent({ slug: 'ambiguous', hoursAgo: 24, body: 'ambiguous situation came up in chat' })
+    const llm = mkLlm(
+      JSON.stringify({
+        verdict: 'unclear',
+        evidence_quote: '',
+        reasoning: 'Cannot tell.',
+        confidence: 0.5,
+      })
+    )
+    const runner = new ProactiveRunner({
+      memoryStore,
+      proposalStore,
+      llm,
+      mindwtrClient: fakeMindwtrClient([task]),
+      retriever,
+      now: () => NOW,
+    })
+    const r = await runner.runOpenTasksPass()
+    expect(r.proposed).toBe(0)
+    expect(r.decisions[0]!.action).toBe('skipped-llm-unclear')
+  })
+
+  it('skips when confidence below reverseMinConfidence even if verdict=completed', async () => {
+    const task = mkTask({ id: 't5', title: 'Maybe done thing', status: 'inbox' })
+    const retriever = new HybridRetriever(memoryStore, null)
+    seedEvent({ slug: 'maybe-done', hoursAgo: 24, body: 'maybe done thing discussion' })
+    const llm = mkLlm(
+      JSON.stringify({
+        verdict: 'completed',
+        evidence_quote: 'maybe',
+        reasoning: 'Could be done.',
+        confidence: 0.75, // below 0.85 default
+      })
+    )
+    const runner = new ProactiveRunner({
+      memoryStore,
+      proposalStore,
+      llm,
+      mindwtrClient: fakeMindwtrClient([task]),
+      retriever,
+      now: () => NOW,
+    })
+    const r = await runner.runOpenTasksPass()
+    expect(r.proposed).toBe(0)
+    expect(r.decisions[0]!.action).toBe('skipped-low-confidence')
+  })
+
+  it('skips fresh tasks (age < taskMinAgeMs)', async () => {
+    const task = mkTask({
+      id: 't6',
+      title: 'Fresh task',
+      status: 'inbox',
+      createdAt: new Date(NOW.getTime() - 3 * HOUR).toISOString(),
+    })
+    const retriever = new HybridRetriever(memoryStore, null)
+    const llm = mkLlm('SHOULD NOT BE CALLED')
+    const runner = new ProactiveRunner({
+      memoryStore,
+      proposalStore,
+      llm,
+      mindwtrClient: fakeMindwtrClient([task]),
+      retriever,
+      now: () => NOW,
+    })
+    const r = await runner.runOpenTasksPass()
+    expect(r.decisions[0]!.action).toBe('skipped-too-fresh')
+  })
+
+  it('respects reverseMaxProposalsPerPass budget', async () => {
+    const tasks = ['alpha', 'beta', 'gamma', 'delta'].map((id) =>
+      mkTask({ id, title: `Task ${id} project`, status: 'inbox' })
+    )
+    const retriever = new HybridRetriever(memoryStore, null)
+    for (const t of tasks)
+      seedEvent({ slug: t.id, hoursAgo: 24, body: `Closed ${t.id} project finally` })
+
+    const llm = mkLlm(
+      JSON.stringify({
+        verdict: 'completed',
+        evidence_quote: 'closed',
+        reasoning: 'done',
+        confidence: 0.9,
+      })
+    )
+    const runner = new ProactiveRunner({
+      memoryStore,
+      proposalStore,
+      llm,
+      mindwtrClient: fakeMindwtrClient(tasks),
+      retriever,
+      now: () => NOW,
+      config: { reverseMaxProposalsPerPass: 2 },
+    })
+    const r = await runner.runOpenTasksPass()
+    expect(r.proposed).toBe(2)
+    expect(r.decisions.filter((d) => d.action === 'skipped-budget').length).toBe(2)
+  })
+
+  it('dedups against pending proactive proposal on same task', async () => {
+    const task = mkTask({ id: 't7', title: 'Dedup task', status: 'inbox' })
+    const retriever = new HybridRetriever(memoryStore, null)
+    seedEvent({ slug: 'dedup-task', hoursAgo: 24, body: 'done' })
+
+    // Pre-seed pending proactive proposal on this task.
+    proposalStore.create({
+      type: 'modify',
+      targetTaskIds: ['t7'],
+      sourceAgent: PROACTIVE_SOURCE_AGENT,
+      payload: { kind: 'modify', taskId: 't7', diff: [{ field: 'status', from: 'inbox', to: 'done' }] },
+    })
+
+    const llm = mkLlm('SHOULD NOT BE CALLED')
+    const runner = new ProactiveRunner({
+      memoryStore,
+      proposalStore,
+      llm,
+      mindwtrClient: fakeMindwtrClient([task]),
+      retriever,
+      now: () => NOW,
+    })
+    const r = await runner.runOpenTasksPass()
+    expect(r.decisions[0]!.action).toBe('skipped-already-pending')
+  })
+
+  it('skips tasks with no related events/facts', async () => {
+    const task = mkTask({ id: 't8', title: 'Lonely task', status: 'inbox' })
+    const retriever = new HybridRetriever(memoryStore, null)
+    const llm = mkLlm('SHOULD NOT BE CALLED')
+    const runner = new ProactiveRunner({
+      memoryStore,
+      proposalStore,
+      llm,
+      mindwtrClient: fakeMindwtrClient([task]),
+      retriever,
+      now: () => NOW,
+    })
+    const r = await runner.runOpenTasksPass()
+    expect(r.decisions[0]!.action).toBe('skipped-no-entities')
+  })
+
+  it('combined run() returns both forward and reverse results', async () => {
+    seedFact({ slug: 'joe', type: 'waiting_on', statement: 'waiting on Joe', hoursAgo: 50 })
+    const task = mkTask({ id: 't9', title: 'Joe related task', status: 'inbox' })
+    const retriever = new HybridRetriever(memoryStore, null)
+    const llm = mkLlm(
+      JSON.stringify({
+        // Same response for both prompts — neither produces a proposal.
+        should_propose: false,
+        action_title: '',
+        action_description: '',
+        action_kind: 'other',
+        reasoning: 'too soon',
+        confidence: 0.3,
+        verdict: 'unclear',
+        evidence_quote: '',
+      })
+    )
+    const runner = new ProactiveRunner({
+      memoryStore,
+      proposalStore,
+      llm,
+      mindwtrClient: fakeMindwtrClient([task]),
+      retriever,
+      now: () => NOW,
+    })
+    const r = await runner.run()
+    expect(r.forward).toBeDefined()
+    expect(r.reverse).toBeDefined()
+    expect(r.forward.scannedGroups).toBe(1)
+    expect(r.reverse!.scannedTasks).toBe(1)
+  })
+
+  it('reverse pass is null when mindwtrClient/retriever missing', async () => {
+    const llm = mkLlm('never called')
+    const runner = new ProactiveRunner({ memoryStore, proposalStore, llm, now: () => NOW })
+    const r = await runner.run()
+    expect(r.reverse).toBeNull()
   })
 })

@@ -258,6 +258,8 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     memoryStore,
     proposalStore,
     llm,
+    mindwtrClient: mindwtr,
+    retriever: memoryRetriever,
   })
   console.log(
     `🧠 Memory module enabled (${memoryStore.vecAvailable ? 'vec+FTS' : 'FTS only'}, ${memoryStore.countEvents()} events, ${memoryStore.countFacts()} facts)`
@@ -503,10 +505,17 @@ async function main() {
           if (!proactiveRunner) return
           proactiveRunner
             .run()
-            .then((r) => {
-              if (r.proposed > 0 || r.errors > 0) {
+            .then(({ forward, reverse }) => {
+              const fwdNoise = forward.proposed > 0 || forward.errors > 0
+              const revNoise = reverse && (reverse.proposed > 0 || reverse.errors > 0)
+              if (fwdNoise) {
                 console.log(
-                  `🔮 Proactive: ${r.proposed} proposed, ${r.skipped} skipped, ${r.errors} errors (${r.elapsedMs}ms)`
+                  `🔮 Proactive forward: ${forward.proposed} proposed, ${forward.skipped} skipped, ${forward.errors} errors (${forward.elapsedMs}ms)`
+                )
+              }
+              if (revNoise && reverse) {
+                console.log(
+                  `🔁 Proactive reverse: ${reverse.proposed} proposed, ${reverse.skipped} skipped, ${reverse.errors} errors (${reverse.elapsedMs}ms)`
                 )
               }
             })
