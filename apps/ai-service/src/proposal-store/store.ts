@@ -334,6 +334,61 @@ export class ProposalStore {
       .map(proposalRowToRecord)
   }
 
+  /**
+   * Proposals resolved (approved/rejected) within the lookback window, for
+   * the given source agent. Used by the Proposer dedup pool: when a user
+   * marks a proposal as approved / rejected / already-done, the underlying
+   * topic shouldn't bounce right back as a new suggestion the next time the
+   * same screen / audio capture pattern hits. Caller decides window per
+   * status (we surface both via `status` field on the returned records).
+   *
+   * Ordered by resolved_at DESC so freshly-resolved appear first.
+   *
+   * `resolutionMeta` is the `event_meta` JSON of the matching transition
+   * audit row (rejected/approved). Carries the user-intent `kind` for
+   * reject (rejected | already-done | not-applicable) so the Proposer
+   * prompt can label entries per the user's signal nuance, not lump them
+   * all as "rejected".
+   */
+  listRecentlyResolved(
+    sourceAgent: string,
+    withinMs: number,
+    limit = 100
+  ): Array<ProposalRecord & { resolutionMeta: Record<string, unknown> | null }> {
+    const cutoff = new Date(Date.now() - withinMs).toISOString()
+    const rows = this.db
+      .query<
+        ProposalRow & { resolution_meta: string | null },
+        [string, string, number]
+      >(
+        `SELECT p.id, p.type, p.target_task_ids, p.source_capture_id, p.source_agent,
+                p.status, p.current_payload, p.current_version, p.origin_snapshot,
+                p.created_at, p.resolved_at, p.resolved_by,
+                (
+                  SELECT a.event_meta
+                  FROM proposal_audit a
+                  WHERE a.proposal_id = p.id
+                    AND a.event = p.status   -- 'rejected' or 'approved'
+                  ORDER BY a.rowid DESC
+                  LIMIT 1
+                ) AS resolution_meta
+         FROM proposals p
+         WHERE p.source_agent = ?
+           AND p.status IN ('approved', 'rejected')
+           AND p.resolved_at IS NOT NULL
+           AND p.resolved_at > ?
+         ORDER BY p.resolved_at DESC
+         LIMIT ?`
+      )
+      .all(sourceAgent, cutoff, limit)
+    return rows.map((row) => ({
+      ...proposalRowToRecord(row),
+      resolutionMeta: row.resolution_meta
+        ? (parseJson(row.resolution_meta) as Record<string, unknown>)
+        : null,
+    }))
+  }
+
   /** List pending proposals matching filter, newest first. */
   listPending(filter: ListPendingFilter = {}): ProposalRecord[] {
     const where: string[] = [`status = 'pending'`]

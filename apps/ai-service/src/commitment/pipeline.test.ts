@@ -308,6 +308,38 @@ describe('CommitmentPipeline', () => {
     expect(args[2]).toBeUndefined()
   })
 
+  it('passes labelled RecentItem[] into proposer when a RecentItemsProvider is set', async () => {
+    const proposer = { propose: mock(async () => makeProposal()) } as unknown as Proposer
+    const writer = {
+      write: mock(async () => ({ proposalId: 'p', version: 1, title: 'X', proposal: {} as unknown })),
+    } as unknown as ProposalWriter
+    const p = new CommitmentPipeline(proposer, writer, undefined, silent())
+    const items = [
+      { title: 'In inbox', source: 'inbox' as const },
+      { title: 'User just rejected', source: 'resolved' as const, resolution: 'rejected' as const, ageMs: 60_000 },
+    ]
+    p.setRecentItemsProvider({ recentItems: mock(async () => items) })
+    await p.run(record())
+    const args = (proposer.propose as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]
+    expect(args[2]).toEqual(items)
+  })
+
+  it('falls back to recentTitles when only a legacy InboxTitlesProvider is wired', async () => {
+    const proposer = { propose: mock(async () => makeProposal()) } as unknown as Proposer
+    const writer = {
+      write: mock(async () => ({ proposalId: 'p', version: 1, title: 'X', proposal: {} as unknown })),
+    } as unknown as ProposalWriter
+    const p = new CommitmentPipeline(proposer, writer, undefined, silent())
+    const recentItemsSpy = mock(async () => [])
+    const recentTitlesSpy = mock(async () => ['legacy A', 'legacy B'])
+    // Legacy provider exposes only recentTitles → pipeline should NOT call recentItems.
+    p.setInboxTitlesProvider({ recentTitles: recentTitlesSpy })
+    await p.run(record())
+    const args = (proposer.propose as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]
+    expect(args[2]).toEqual(['legacy A', 'legacy B'])
+    expect(recentItemsSpy).not.toHaveBeenCalled()
+  })
+
   it('returns error when writer throws', async () => {
     const proposer = { propose: mock(async () => makeProposal()) } as unknown as Proposer
     const writer = {

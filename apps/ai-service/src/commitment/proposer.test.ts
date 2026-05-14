@@ -133,6 +133,107 @@ describe('Proposer', () => {
     await expect(p.propose('text')).rejects.toThrow('did not return tool call')
   })
 
+  it('renders RECENT_USER_ITEMS block with per-source labels in the user-message', async () => {
+    const llm = {
+      chatCompletion: mock(async () => ({
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [
+                {
+                  id: 'c1',
+                  type: 'function',
+                  function: {
+                    name: 'propose_inbox_item',
+                    arguments: JSON.stringify({
+                      is_actionable: false,
+                      title: '',
+                      who_owes: 'unclear',
+                      who_to: '',
+                      what: '',
+                      by_when: '',
+                      confidence: 0.9,
+                      reasoning: 'noise',
+                    }),
+                  },
+                },
+              ],
+            },
+            finish_reason: 'tool_calls',
+          },
+        ],
+      })),
+    } as unknown as LLMClient
+    const p = new Proposer(llm)
+    await p.propose('text', undefined, [
+      { title: 'Pay Acme invoice', source: 'inbox' },
+      { title: 'Reply to Alice', source: 'pending' },
+      {
+        title: 'Send weekly report',
+        source: 'resolved',
+        resolution: 'rejected',
+        ageMs: 2 * 24 * 60 * 60 * 1000,
+      },
+      {
+        title: 'Submit timesheet',
+        source: 'resolved',
+        resolution: 'already-done',
+        ageMs: 60 * 60 * 1000,
+      },
+    ])
+    const callArgs = (llm.chatCompletion as unknown as { mock: { calls: Array<Array<{ messages: Array<{ role: string; content: string }> }>> } }).mock.calls[0][0]
+    const userMsg = callArgs.messages.find((m) => m.role === 'user')!.content
+    expect(userMsg).toContain('RECENT_USER_ITEMS')
+    expect(userMsg).toContain('"Pay Acme invoice" [in inbox]')
+    expect(userMsg).toContain('"Reply to Alice" [pending AI review]')
+    expect(userMsg).toContain('"Send weekly report" [user rejected 2 days ago]')
+    expect(userMsg).toContain('"Submit timesheet" [user already done 1 hour ago]')
+  })
+
+  it('accepts legacy string[] for recent items and labels them as [in inbox]', async () => {
+    const llm = {
+      chatCompletion: mock(async () => ({
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [
+                {
+                  id: 'c1',
+                  type: 'function',
+                  function: {
+                    name: 'propose_inbox_item',
+                    arguments: JSON.stringify({
+                      is_actionable: false,
+                      title: '',
+                      who_owes: 'unclear',
+                      who_to: '',
+                      what: '',
+                      by_when: '',
+                      confidence: 0.9,
+                      reasoning: 'noise',
+                    }),
+                  },
+                },
+              ],
+            },
+            finish_reason: 'tool_calls',
+          },
+        ],
+      })),
+    } as unknown as LLMClient
+    const p = new Proposer(llm)
+    await p.propose('text', undefined, ['Legacy title A', 'Legacy title B'])
+    const callArgs = (llm.chatCompletion as unknown as { mock: { calls: Array<Array<{ messages: Array<{ role: string; content: string }> }>> } }).mock.calls[0][0]
+    const userMsg = callArgs.messages.find((m) => m.role === 'user')!.content
+    expect(userMsg).toContain('RECENT_USER_ITEMS')
+    expect(userMsg).toContain('"Legacy title A" [in inbox]')
+    expect(userMsg).toContain('"Legacy title B" [in inbox]')
+  })
+
   it('throws on invalid JSON in tool call', async () => {
     const llm = {
       chatCompletion: mock(async () => ({

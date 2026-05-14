@@ -232,3 +232,85 @@ describe('ProposalStore.listPending', () => {
     expect(byType.map((p) => p.id)).toEqual([p2.id])
   })
 })
+
+describe('ProposalStore.listRecentlyResolved', () => {
+  it('returns approved + rejected resolved-records for source agent with kind from audit meta', async () => {
+    const store = new ProposalStore(db)
+    const pRejectedAlreadyDone = store.create({
+      type: 'create',
+      targetTaskIds: [],
+      sourceAgent: 'commitment-detector',
+      payload: { title: 'A' },
+    })
+    const pRejectedPlain = store.create({
+      type: 'create',
+      targetTaskIds: [],
+      sourceAgent: 'commitment-detector',
+      payload: { title: 'B' },
+    })
+    const pApproved = store.create({
+      type: 'create',
+      targetTaskIds: [],
+      sourceAgent: 'commitment-detector',
+      payload: { title: 'C' },
+    })
+    const pOtherAgent = store.create({
+      type: 'create',
+      targetTaskIds: [],
+      sourceAgent: 'dedup-agent',
+      payload: { title: 'D' },
+    })
+
+    store.transition(pRejectedAlreadyDone.id, 'rejected', 'user', {
+      kind: 'already-done',
+    })
+    store.transition(pRejectedPlain.id, 'rejected', 'user', { kind: 'rejected' })
+    store.transition(pApproved.id, 'approved', 'user')
+    store.transition(pOtherAgent.id, 'rejected', 'user', { kind: 'rejected' })
+
+    const out = store.listRecentlyResolved(
+      'commitment-detector',
+      24 * 60 * 60 * 1000
+    )
+    const byTitle = Object.fromEntries(
+      out.map((r) => [
+        (r.currentPayload as { title: string }).title,
+        r,
+      ])
+    )
+    expect(byTitle['A']).toBeDefined()
+    expect(byTitle['B']).toBeDefined()
+    expect(byTitle['C']).toBeDefined()
+    // Different source agent is excluded.
+    expect(byTitle['D']).toBeUndefined()
+
+    expect(byTitle['A']!.status).toBe('rejected')
+    expect(byTitle['A']!.resolutionMeta).toEqual({ kind: 'already-done' })
+    expect(byTitle['B']!.resolutionMeta).toEqual({ kind: 'rejected' })
+    // approved has no kind meta — should be null.
+    expect(byTitle['C']!.status).toBe('approved')
+    expect(byTitle['C']!.resolutionMeta).toBeNull()
+  })
+
+  it('drops resolutions older than the requested window', async () => {
+    const store = new ProposalStore(db)
+    const p = store.create({
+      type: 'create',
+      targetTaskIds: [],
+      sourceAgent: 'commitment-detector',
+      payload: { title: 'Old' },
+    })
+    store.transition(p.id, 'rejected', 'user', { kind: 'rejected' })
+    // Force resolved_at into the past via direct DB update — windowing is by
+    // resolved_at, not created_at.
+    db.run(
+      `UPDATE proposals SET resolved_at = ? WHERE id = ?`,
+      [new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(), p.id]
+    )
+    const recent = store.listRecentlyResolved(
+      'commitment-detector',
+      24 * 60 * 60 * 1000
+    )
+    expect(recent.map((r) => r.id)).not.toContain(p.id)
+  })
+})

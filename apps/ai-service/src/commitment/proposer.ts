@@ -15,6 +15,7 @@
 
 import type { LLMClient } from '../ai/client'
 import type { KnownPerson } from '../wiki/persons-reader'
+import type { RecentItem } from './inbox-titles'
 
 export type WhoOwes = 'user' | 'other' | 'unclear'
 export type Recipient = 'user' | 'other' | 'unclear'
@@ -151,7 +152,7 @@ const PROPOSER_TOOL = {
         duplicate_of_title: {
           type: 'string',
           description:
-            'When the proposed task is semantically the same as an existing inbox item from the RECENT_INBOX list in the user message (different wording but same intent / target / deadline), set this to the exact title of that existing item AND set is_actionable=false. Use this to suppress paraphrase duplicates. Empty string when no match.',
+            'When the proposed task is semantically the same as an entry in RECENT_USER_ITEMS (same intent / target / deadline as one of those, possibly worded differently), set this to the EXACT title of that entry AND set is_actionable=false. Read the [label] on each item to choose the right reasoning: [in inbox] / [pending AI review] / [user accepted N ago] / [user rejected N ago] / [user already done N ago] / [no longer applicable N ago]. Empty string when no match (genuinely new commitment, or item is old enough that a fresh recurrence is plausible).',
         },
         suggested_category: {
           type: 'string',
@@ -246,16 +247,46 @@ Use this to keep the same person consistent across captures — "Эллисон"
 "A. Walker" should all collapse to one canonical entity.
 
 DUPLICATE SUPPRESSION:
-The user message MAY include a RECENT_INBOX block — current inbox titles, one per line.
-If the action you'd propose is essentially the same as one of those (different wording but
-same target person/object, same intent, same deadline window), set is_actionable=false,
-duplicate_of_title to the EXACT existing title, and reasoning to a one-liner like
-"Duplicate of: <existing>". Be liberal here — the user already has the card. Examples
-of semantic match:
+The user message MAY include a RECENT_USER_ITEMS block — items the user has recently
+seen or acted on, each tagged with a label:
+  - [in inbox]                  → open task already sitting in the user's inbox
+  - [pending AI review]         → AI already proposed this; the user hasn't decided yet
+  - [user accepted N ago]       → AI proposal approved; the task should already be in inbox
+  - [user rejected N ago]       → AI was wrong; the user dismissed this idea
+  - [user already done N ago]   → AI was right but the user did the action manually
+  - [no longer applicable N ago]→ situation changed (meeting cancelled, ticket closed)
+
+If the action you'd propose is essentially the same as one of these (different wording
+but same target person/object, same intent, same deadline window), set is_actionable=false,
+duplicate_of_title to the EXACT title from that entry, and write a one-line reasoning
+that mirrors the label, e.g.:
+- "Already in inbox: Reply to Alice re Q4 plan"
+- "Pending AI review: Pay Acme invoice"
+- "User just rejected this 2 days ago — suppressing replay"
+- "User already did this yesterday"
+- "No longer applicable (cancelled 3 days ago)"
+
+How strict to be by label (calibrate suppression strength):
+- [in inbox] / [pending AI review]    → strongest match; suppress on near-paraphrase.
+- [user rejected N ago]               → strong; the user said no recently. Suppress unless
+                                        wording shows a clearly different occurrence.
+- [no longer applicable N ago]        → moderate; situation changed, but a NEW instance of
+                                        the same kind of action can legitimately recur.
+- [user already done N ago]           → moderate; the user did it, but a recurring task
+                                        (daily report, weekly sync) can fire again.
+- [user accepted N ago]               → expect this is already in inbox; treat as such
+                                        unless the recurrence interval clearly elapsed.
+
+Recurrence escape hatch: when the recent item is OLD relative to its natural cadence
+("send weekly report" rejected 8 days ago → a new week has started → propose as fresh)
+or wording suggests a distinct instance (different invoice, different meeting), DO NOT
+suppress. Set duplicate_of_title = "".
+
+Semantic match examples (DO suppress):
 - "Send Polina's hours to Dylan" ≡ "Forward Polina's timesheet to Dylan Feeney"
 - "Reply to Alice about Q4 plan" ≡ "Get back to Alice re Q4 strategy email"
 - "Pay Acme invoice" ≡ "Settle Acme invoice $500"
-NOT a match (don't dedup):
+NOT a match (DON'T suppress):
 - Different recipient ("Reply to Alice" vs "Reply to Bob")
 - Different timeframe (this Friday vs next Friday)
 - Different scope (one-off task vs an open recurring project)
@@ -271,7 +302,13 @@ export class Proposer {
   async propose(
     text: string,
     sourceMeta?: Record<string, unknown>,
-    recentInboxTitles?: string[],
+    /**
+     * Recent user items for semantic dedup. Accepts the new `RecentItem[]`
+     * (labelled with source/resolution/age) or the legacy `string[]` of bare
+     * inbox titles. Strings are auto-promoted to RecentItem with source='inbox'
+     * so older callers keep working.
+     */
+    recentItems?: RecentItem[] | string[],
     userIdentity?: UserIdentity | null,
     knownPersons?: KnownPerson[],
     /** Optional pre-assembled summary of relevant past context. Goes into
@@ -297,12 +334,15 @@ export class Proposer {
         `KNOWN_PERSONS (registry from past captures — normalize who_to to one of these when matched):\n${lines}`
       )
     }
-    if (recentInboxTitles && recentInboxTitles.length > 0) {
-      const lines = recentInboxTitles
+    const normalizedItems = normalizeRecentItems(recentItems)
+    if (normalizedItems.length > 0) {
+      const lines = normalizedItems
         .slice(0, 50)
-        .map((t) => `- ${t}`)
+        .map((it) => `- "${it.title}" ${formatRecentItemLabel(it)}`)
         .join('\n')
-      parts.push(`RECENT_INBOX (existing items — dedup against these):\n${lines}`)
+      parts.push(
+        `RECENT_USER_ITEMS (dedup against these — labels show provenance and age; calibrate suppression strength per the rules in the system prompt):\n${lines}`
+      )
     }
     if (recentContext && recentContext.trim().length > 0) {
       parts.push(
@@ -386,6 +426,56 @@ export class Proposer {
       suggested_category: suggestedCategory,
     }
   }
+}
+
+/**
+ * Accept either the rich RecentItem[] (preferred) or a legacy string[] of
+ * bare inbox titles. Strings are promoted to source='inbox' so the rest of
+ * the rendering pipeline doesn't branch.
+ */
+function normalizeRecentItems(
+  input: RecentItem[] | string[] | undefined
+): RecentItem[] {
+  if (!input || input.length === 0) return []
+  const out: RecentItem[] = []
+  for (const it of input) {
+    if (typeof it === 'string') {
+      const trimmed = it.trim()
+      if (trimmed.length > 0) out.push({ title: trimmed, source: 'inbox' })
+    } else if (it && typeof it.title === 'string' && it.title.trim().length > 0) {
+      out.push(it)
+    }
+  }
+  return out
+}
+
+/** Human-readable bracket label for the Proposer prompt. */
+function formatRecentItemLabel(item: RecentItem): string {
+  if (item.source === 'inbox') return '[in inbox]'
+  if (item.source === 'pending') return '[pending AI review]'
+  // resolved
+  const age = formatAge(item.ageMs)
+  switch (item.resolution) {
+    case 'approved':
+      return `[user accepted${age ? ` ${age}` : ''}]`
+    case 'already-done':
+      return `[user already done${age ? ` ${age}` : ''}]`
+    case 'not-applicable':
+      return `[no longer applicable${age ? ` ${age}` : ''}]`
+    case 'rejected':
+    default:
+      return `[user rejected${age ? ` ${age}` : ''}]`
+  }
+}
+
+function formatAge(ms: number | undefined): string {
+  if (!Number.isFinite(ms) || (ms as number) < 0) return ''
+  const minutes = Math.floor((ms as number) / 60_000)
+  if (minutes < 60) return minutes <= 1 ? 'just now' : `${minutes} min ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return hours === 1 ? '1 hour ago' : `${hours} hours ago`
+  const days = Math.floor(hours / 24)
+  return days === 1 ? '1 day ago' : `${days} days ago`
 }
 
 function buildSystemPrompt(identity: UserIdentity | null | undefined): string {

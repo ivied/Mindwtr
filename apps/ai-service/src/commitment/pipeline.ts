@@ -15,7 +15,11 @@ import type { CaptureRecord } from '../context-store/types'
 import type { Proposer, UserIdentity } from './proposer'
 import type { ProposalWriter } from './writer'
 import type { ProposalNotifier } from '../bot/proposal-notifier'
-import type { InboxTitlesProvider } from './inbox-titles'
+import type {
+  InboxTitlesProvider,
+  RecentItem,
+  RecentItemsProvider,
+} from './inbox-titles'
 import type { PersonsProvider } from '../wiki/persons-reader'
 import type { ProposerContextProvider } from '../memory/proposer-context'
 import { l0Filter } from './l0-filter'
@@ -59,7 +63,10 @@ export type PipelineOutcome =
 
 export class CommitmentPipeline {
   private notifier: ProposalNotifier | null = null
-  private inboxTitlesProvider: InboxTitlesProvider | null = null
+  private recentItemsProvider:
+    | RecentItemsProvider
+    | InboxTitlesProvider
+    | null = null
   private userIdentity: UserIdentity | null = null
   private personsProvider: PersonsProvider | null = null
   private memoryContextProvider: ProposerContextProvider | null = null
@@ -77,9 +84,21 @@ export class CommitmentPipeline {
   }
 
   /** Optional: when set, recent inbox titles are passed to the Proposer for
-   *  semantic dedup against existing user-known cards. */
+   *  semantic dedup against existing user-known cards. New code should prefer
+   *  `setRecentItemsProvider` to surface pending + resolved proposals with
+   *  per-source/per-resolution labels; this setter is the legacy entry point
+   *  that only supplies bare titles. */
   setInboxTitlesProvider(provider: InboxTitlesProvider | null): void {
-    this.inboxTitlesProvider = provider
+    this.recentItemsProvider = provider
+  }
+
+  /** Preferred entry point: surfaces inbox tasks + pending proposals +
+   *  recently-resolved proposals (with labels) to the Proposer for richer
+   *  per-signal dedup. A provider that implements both interfaces (e.g.
+   *  MindwtrInboxTitles) can be passed here OR to setInboxTitlesProvider —
+   *  the pipeline uses the richer API when available. */
+  setRecentItemsProvider(provider: RecentItemsProvider | null): void {
+    this.recentItemsProvider = provider
   }
 
   /** Identity anchor — Proposer uses it to map first-person pronouns to the
@@ -127,15 +146,22 @@ export class CommitmentPipeline {
       }
     }
 
-    // Best-effort inbox titles for semantic dedup. Failures are logged and
-    // ignored — we'd rather risk a duplicate proposal than miss a real one.
-    let inboxTitles: string[] | undefined
-    if (this.inboxTitlesProvider) {
+    // Best-effort recent user items for semantic dedup. Prefer the labelled
+    // RecentItem[] (inbox + pending + recently-resolved with kind/age tags)
+    // when the provider supports it; fall back to bare titles otherwise.
+    // Failures are logged and ignored — we'd rather risk a duplicate proposal
+    // than miss a real one.
+    let recentItems: RecentItem[] | string[] | undefined
+    if (this.recentItemsProvider) {
       try {
-        inboxTitles = await this.inboxTitlesProvider.recentTitles(50)
+        if (hasRecentItems(this.recentItemsProvider)) {
+          recentItems = await this.recentItemsProvider.recentItems(50)
+        } else {
+          recentItems = await this.recentItemsProvider.recentTitles(50)
+        }
       } catch (err) {
         this.log(
-          `[commitment] inbox titles fetch failed (${capture.id}): ${(err as Error).message}`
+          `[commitment] recent items fetch failed (${capture.id}): ${(err as Error).message}`
         )
       }
     }
@@ -173,7 +199,7 @@ export class CommitmentPipeline {
       proposal = await this.proposer.propose(
         capture.text,
         capture.sourceMeta ?? undefined,
-        inboxTitles,
+        recentItems,
         this.userIdentity,
         knownPersons,
         recentContext
@@ -252,4 +278,10 @@ export class CommitmentPipeline {
       return { kind: 'error', error: err as Error }
     }
   }
+}
+
+function hasRecentItems(
+  p: RecentItemsProvider | InboxTitlesProvider
+): p is RecentItemsProvider {
+  return typeof (p as RecentItemsProvider).recentItems === 'function'
 }
