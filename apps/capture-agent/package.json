@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
+    "enroll": "bun run src/cli/enroll.ts",
     "test": "bun test",
     "lint": "eslint src/ --max-warnings 0",
     "typecheck": "tsc --noEmit"

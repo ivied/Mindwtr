@@ -8,10 +8,16 @@ import { fileURLToPath } from 'node:url'
 import type { AgentConfig } from './types'
 import { DEFAULT_EXCLUDED_APPS, DEFAULT_EXCLUDED_TITLES } from './filter/exclusion'
 
-function defaultNativeBinaryPath(): string {
-  // Resolve relative to this file: src/config.ts → ../audio-helper/gtd-audio-capture
+function audioHelperPath(name: string): string {
+  // Resolve relative to this file: src/config.ts → ../audio-helper/<name>
   const here = dirname(fileURLToPath(import.meta.url))
-  return resolve(here, '..', 'audio-helper', 'gtd-audio-capture')
+  return resolve(here, '..', 'audio-helper', name)
+}
+function defaultNativeBinaryPath(): string {
+  return audioHelperPath('gtd-audio-capture')
+}
+function defaultDiarizeBinaryPath(): string {
+  return audioHelperPath('gtd-audio-diarize')
 }
 
 function parseList(value: string | undefined): string[] {
@@ -61,6 +67,11 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): AgentCo
       backend: (env.AGENT_AUDIO_BACKEND ?? 'native') === 'ffmpeg' ? 'ffmpeg' : 'native',
       nativeBinaryPath: env.AGENT_AUDIO_HELPER_PATH ?? defaultNativeBinaryPath(),
       nativeNoVoiceProcessing: env.AGENT_AUDIO_NO_VP === 'true',
+      diarizeBinaryPath:
+        env.AGENT_AUDIO_DIARIZE_DISABLED === 'true'
+          ? ''
+          : env.AGENT_AUDIO_DIARIZE_BINARY ?? defaultDiarizeBinaryPath(),
+      voiceProfilePath: env.AGENT_VOICE_PROFILE_PATH ?? '',
     },
     wiki: {
       dir: env.AGENT_WIKI_DIR ?? '',

@@ -23,7 +23,7 @@ import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { writeFile, unlink, access } from 'node:fs/promises'
+import { writeFile, access } from 'node:fs/promises'
 import { wrapPcmAsWav } from './wav-wrap'
 import type { AudioRecorder, RecordedChunk } from './audio-recorder'
 
@@ -82,16 +82,16 @@ export class NativeAudioRecorder implements AudioRecorder {
       bitsPerSample: 16,
     })
 
-    // Keep API parity with ffmpeg backend: temp WAV file path returned,
-    // already cleaned up. Whisper consumes chunk.data directly so this is
-    // belt-and-suspenders.
+    // Persist the WAV to a temp file for downstream tooling (diarizer
+    // reads files, not buffers). Caller is responsible for unlinking
+    // once they're done with it — audio-runner does this after Whisper +
+    // diarize have both run.
     const tempPath = join(this.config.tmpDir, `gtd-audio-${randomUUID()}.wav`)
     try {
       await writeFile(tempPath, wav)
     } catch {
       // Non-fatal: in-memory data is what callers actually use.
     }
-    void unlink(tempPath).catch(() => {})
 
     return {
       data: wav,

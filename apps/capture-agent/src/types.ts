@@ -115,4 +115,8 @@ export interface AudioConfig {
   nativeBinaryPath: string
   /** Disable VoiceProcessingIO setup in the native helper (debug fallback). */
   nativeNoVoiceProcessing: boolean
+  /** Path to gtd-audio-diarize binary. Empty = diarization disabled. */
+  diarizeBinaryPath: string
+  /** Path to enrolled voice profile JSON. Empty = anonymous diarization. */
+  voiceProfilePath: string
 }

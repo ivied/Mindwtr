@@ -7,13 +7,15 @@
  * the loop sleeps; we never record.
  */
 
-import type { AudioRecorder } from './capture/audio-recorder'
+import type { AudioRecorder, RecordedChunk } from './capture/audio-recorder'
 import type { WhisperClient } from './capture/whisper'
 import type { ActiveWindowProvider } from './capture/active-window'
 import { computeEnergy } from './capture/audio-energy'
 import { isPaused } from './filter/pause'
 import { shouldSkip, type ExclusionRules } from './filter/exclusion'
 import type { ActiveWindowInfo } from './types'
+import type { DiarizeResult, Diarizer } from './capture/diarizer'
+import { unlink } from 'node:fs/promises'
 
 export interface AudioArchiveContext {
   text: string
@@ -21,6 +23,7 @@ export interface AudioArchiveContext {
   window: ActiveWindowInfo | null
   durationMs: number
   rms: number
+  diarize: DiarizeResult | null
 }
 
 export interface AudioRunnerDeps {
@@ -30,8 +33,10 @@ export interface AudioRunnerDeps {
   window: ActiveWindowProvider | null
   rules: ExclusionRules
   pauseFlagPath: string
+  /** Optional speaker diarizer — called between transcribe and send. */
+  diarizer?: Diarizer | null
   /** Send the transcribed text to AI Service. */
-  send: (text: string) => Promise<void>
+  send: (text: string, ctx: AudioArchiveContext) => Promise<void>
   /** Optional fail-open hook called between transcribe and send. */
   archive?: (ctx: AudioArchiveContext) => Promise<void>
   log?: (msg: string) => void
@@ -92,6 +97,7 @@ export async function runAudioOnce(
   const energy = computeEnergy(chunk.data, config.energyThreshold)
   if (!energy.hasSignal) {
     deps.log?.(`silent (rms=${energy.rms.toFixed(4)})`)
+    await cleanupTemp(chunk, deps.log)
     return 'silent'
   }
 
@@ -100,36 +106,67 @@ export async function runAudioOnce(
     text = await deps.whisper.transcribe(chunk.data)
   } catch (err) {
     deps.log?.(`transcribe-error: ${(err as Error).message}`)
+    await cleanupTemp(chunk, deps.log)
     return 'transcribe-error'
   }
 
   if (text.length < config.minTranscriptLength) {
     deps.log?.(`short-transcript (${text.length} chars): "${text}"`)
+    await cleanupTemp(chunk, deps.log)
     return 'short-transcript'
+  }
+
+  let diarize: DiarizeResult | null = null
+  if (deps.diarizer && chunk.tempPath) {
+    try {
+      diarize = await deps.diarizer.diarize(chunk.tempPath)
+      if (diarize) {
+        deps.log?.(
+          `diarize: ${diarize.speakerCount} speaker(s), user=${diarize.userSeen ? `${diarize.userSpeechMs}ms` : 'no'} other=${diarize.otherSpeechMs}ms`
+        )
+      }
+    } catch (err) {
+      deps.log?.(`diarize-error (non-fatal): ${(err as Error).message}`)
+    }
+  }
+
+  const archiveCtx: AudioArchiveContext = {
+    text,
+    ts: new Date(),
+    window: activeWindow,
+    durationMs: chunk.durationMs,
+    rms: energy.rms,
+    diarize,
   }
 
   if (deps.archive) {
     try {
-      await deps.archive({
-        text,
-        ts: new Date(),
-        window: activeWindow,
-        durationMs: chunk.durationMs,
-        rms: energy.rms,
-      })
+      await deps.archive(archiveCtx)
     } catch (err) {
       deps.log?.(`archive-error (non-fatal): ${(err as Error).message}`)
     }
   }
 
   try {
-    await deps.send(text)
+    await deps.send(text, archiveCtx)
     deps.log?.(`audio captured ${text.length}ch · "${text.slice(0, 80)}…"`)
   } catch (err) {
     deps.log?.(`send-error: ${(err as Error).message}`)
     return 'send-error'
+  } finally {
+    await cleanupTemp(chunk, deps.log)
   }
   return null
+}
+
+async function cleanupTemp(chunk: RecordedChunk, log?: (msg: string) => void): Promise<void> {
+  if (!chunk.tempPath) return
+  try {
+    await unlink(chunk.tempPath)
+  } catch {
+    // best-effort
+    log?.(`cleanup: failed to unlink ${chunk.tempPath}`)
+  }
 }
 
 /**
