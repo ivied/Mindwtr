@@ -209,16 +209,6 @@ function ProposalCard({ summary, onResolved }: CardProps) {
         [performReject, rejectReason]
     );
     const onSkipReason = useCallback(() => performReject(undefined, 'rejected'), [performReject]);
-    const onAlreadyDone = useCallback(
-        async (event: React.MouseEvent) => {
-            event.stopPropagation();
-            // "I already did this" — AI was right, just overlapped with my
-            // manual work. Goes to status='rejected' but audit meta marks it
-            // as already-done so we can tell true positives from false ones.
-            await performReject(undefined, 'already-done');
-        },
-        [performReject]
-    );
     const onCancelReject = useCallback(() => {
         setRejectMode(false);
         setRejectReason('');
@@ -280,15 +270,6 @@ function ProposalCard({ summary, onResolved }: CardProps) {
                 >
                     <Check className="h-3 w-3" />
                     {isPartial ? `Approve ${selectedCount}/${totalFieldCount}` : 'Approve'}
-                </button>
-                <button
-                    type="button"
-                    onClick={onAlreadyDone}
-                    disabled={busy}
-                    title="AI was right but you already did this. Marks the proposal resolved without applying the diff; audit trail keeps the 'already-done' signal so we know it was a true positive."
-                    className="inline-flex items-center gap-0.5 rounded border border-sky-500/40 bg-sky-500/5 px-2 py-0.5 text-xs text-sky-700 hover:bg-sky-500/10 disabled:opacity-50 dark:text-sky-300"
-                >
-                    <Check className="h-3 w-3" /> Already done
                 </button>
                 <button
                     type="button"
