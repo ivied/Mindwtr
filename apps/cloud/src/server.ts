@@ -747,6 +747,7 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                         if (typeof body !== 'object') return errorResponse('Invalid JSON body');
                         const validated = validateAppData(body);
                         if (!validated.ok) return errorResponse(validated.error, 400);
+                        const requestSource = req.headers.get('x-mindwtr-source') || '';
                         return await withWriteLock(key, async () => {
                             throwIfRequestAborted(requestAbortController.signal);
                             const existingData = loadAppData(filePath);
@@ -759,6 +760,32 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                             }
                             throwIfRequestAborted(requestAbortController.signal);
                             writeData(filePath, validatedMerged.data);
+
+                            // Fire task-changes 'create' webhook for tasks that appear in the
+                            // merged snapshot but were absent (or tombstoned) in the prior
+                            // server state — that's how desktop UI's manual-add reaches the
+                            // Enricher (FR80). POST /v1/tasks handles the same for per-task
+                            // creators (mobile, API). Source guard prevents ai-service from
+                            // re-triggering itself.
+                            if (requestSource !== 'ai-service' && taskWebhookUrl) {
+                                const priorTaskIds = new Set<string>();
+                                for (const t of existingData.tasks ?? []) {
+                                    if (t && typeof t.id === 'string') priorTaskIds.add(t.id);
+                                }
+                                for (const task of validatedMerged.data.tasks ?? []) {
+                                    if (!task || typeof task.id !== 'string') continue;
+                                    if (task.deletedAt) continue;
+                                    if (priorTaskIds.has(task.id)) continue;
+                                    fireTaskWebhook('create', task.id, {
+                                        title: task.title,
+                                        description: task.description,
+                                        status: task.status,
+                                        tags: task.tags,
+                                        projectId: task.projectId ?? null,
+                                    });
+                                }
+                            }
+
                             return jsonResponse({ ok: true });
                         });
                     }

@@ -1367,4 +1367,132 @@ describe('cloud server task-change webhook', () => {
         await new Promise((r) => setTimeout(r, 50));
         expect(webhookServer!.calls.length).toBe(0);
     });
+
+    test('PUT /v1/data fires create webhook for newly-arrived tasks (desktop manual-add path)', async () => {
+        // Seed with one existing task so we can verify the diff against prior state.
+        const existingId = 'task-existing';
+        await fetch(`${baseUrl}/v1/data`, {
+            method: 'PUT',
+            headers: { ...authHeaders, 'content-type': 'application/json' },
+            body: JSON.stringify({
+                tasks: [{
+                    id: existingId,
+                    title: 'Already known',
+                    status: 'inbox',
+                    createdAt: '2026-01-01T00:00:00.000Z',
+                    updatedAt: '2026-01-01T00:00:00.000Z',
+                }],
+                projects: [], sections: [], areas: [], settings: {},
+            }),
+        });
+        // First seed PUT is itself a 'new task arrival' — drain those calls.
+        await new Promise((r) => setTimeout(r, 50));
+        webhookServer!.calls.length = 0;
+
+        // Desktop UI does a full snapshot PUT after the user adds a card manually.
+        // The snapshot includes both the prior task and the new one.
+        const newId = 'task-manual-add';
+        const res = await fetch(`${baseUrl}/v1/data`, {
+            method: 'PUT',
+            headers: { ...authHeaders, 'content-type': 'application/json' },
+            body: JSON.stringify({
+                tasks: [
+                    {
+                        id: existingId,
+                        title: 'Already known',
+                        status: 'inbox',
+                        createdAt: '2026-01-01T00:00:00.000Z',
+                        updatedAt: '2026-01-01T00:00:00.000Z',
+                    },
+                    {
+                        id: newId,
+                        title: 'Manually added card',
+                        description: 'typed in QuickAddModal',
+                        status: 'inbox',
+                        tags: ['ux'],
+                        projectId: null,
+                        createdAt: '2026-05-14T20:00:00.000Z',
+                        updatedAt: '2026-05-14T20:00:00.000Z',
+                    },
+                ],
+                projects: [], sections: [], areas: [], settings: {},
+            }),
+        });
+        expect(res.status).toBe(200);
+        await new Promise((r) => setTimeout(r, 50));
+        const calls = webhookServer!.calls;
+        expect(calls.length).toBe(1);
+        const body = calls[0]!.body as {
+            kind: string;
+            taskId: string;
+            fields: { title: string; status: string; tags?: string[] };
+        };
+        expect(body.kind).toBe('create');
+        expect(body.taskId).toBe(newId);
+        expect(body.fields.title).toBe('Manually added card');
+        expect(body.fields.status).toBe('inbox');
+    });
+
+    test('PUT /v1/data with X-Mindwtr-Source=ai-service does NOT fire webhook', async () => {
+        const res = await fetch(`${baseUrl}/v1/data`, {
+            method: 'PUT',
+            headers: {
+                ...authHeaders,
+                'content-type': 'application/json',
+                'x-mindwtr-source': 'ai-service',
+            },
+            body: JSON.stringify({
+                tasks: [{
+                    id: 'task-from-ai',
+                    title: 'Should not loop back',
+                    status: 'inbox',
+                    createdAt: '2026-05-14T20:00:00.000Z',
+                    updatedAt: '2026-05-14T20:00:00.000Z',
+                }],
+                projects: [], sections: [], areas: [], settings: {},
+            }),
+        });
+        expect(res.status).toBe(200);
+        await new Promise((r) => setTimeout(r, 50));
+        expect(webhookServer!.calls.length).toBe(0);
+    });
+
+    test('PUT /v1/data does NOT re-fire create webhook for tasks already on server', async () => {
+        const taskId = 'task-already-there';
+        // Seed.
+        await fetch(`${baseUrl}/v1/data`, {
+            method: 'PUT',
+            headers: { ...authHeaders, 'content-type': 'application/json' },
+            body: JSON.stringify({
+                tasks: [{
+                    id: taskId,
+                    title: 'Seeded',
+                    status: 'inbox',
+                    createdAt: '2026-01-01T00:00:00.000Z',
+                    updatedAt: '2026-01-01T00:00:00.000Z',
+                }],
+                projects: [], sections: [], areas: [], settings: {},
+            }),
+        });
+        await new Promise((r) => setTimeout(r, 50));
+        webhookServer!.calls.length = 0;
+
+        // Subsequent PUT — same task, no new ids. Should not fire.
+        await fetch(`${baseUrl}/v1/data`, {
+            method: 'PUT',
+            headers: { ...authHeaders, 'content-type': 'application/json' },
+            body: JSON.stringify({
+                tasks: [{
+                    id: taskId,
+                    title: 'Seeded edited',
+                    status: 'next',
+                    createdAt: '2026-01-01T00:00:00.000Z',
+                    updatedAt: '2026-05-14T20:00:00.000Z',
+                }],
+                projects: [], sections: [], areas: [], settings: {},
+            }),
+        });
+        await new Promise((r) => setTimeout(r, 50));
+        expect(webhookServer!.calls.length).toBe(0);
+    });
 });
