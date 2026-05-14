@@ -1,8 +1,8 @@
 import { Profiler } from 'react';
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { act, render, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, fireEvent, waitFor, within } from '@testing-library/react';
 import { TaskItem } from '../components/TaskItem';
-import { Project, Task, configureDateFormatting, safeFormatDate, useTaskStore } from '@mindwtr/core';
+import { Area, Project, Task, configureDateFormatting, safeFormatDate, useTaskStore } from '@mindwtr/core';
 import { LanguageProvider } from '../contexts/language-context';
 import { useUiStore } from '../store/ui-store';
 
@@ -49,6 +49,70 @@ describe('TaskItem', () => {
         const editButtons = getAllByRole('button', { name: /edit/i });
         fireEvent.click(editButtons[0]);
         expect(getByDisplayValue('Test Task')).toBeInTheDocument();
+    });
+
+    it('opens the editor in a modal when the setting uses pop-up presentation', async () => {
+        act(() => {
+            useTaskStore.setState({
+                settings: {
+                    gtd: {
+                        taskEditor: {
+                            presentation: 'modal',
+                        },
+                    },
+                },
+            });
+        });
+
+        const { getAllByRole, getByRole, getByDisplayValue } = render(
+            <LanguageProvider>
+                <TaskItem task={mockTask} />
+            </LanguageProvider>
+        );
+
+        await act(async () => {
+            fireEvent.click(getAllByRole('button', { name: /edit/i })[0]);
+        });
+
+        expect(getByRole('dialog', { name: /edit task/i })).toBeInTheDocument();
+        expect(getByDisplayValue('Test Task')).toBeInTheDocument();
+    });
+
+    it('shows a delete action while editing inbox tasks', async () => {
+        const { getAllByRole, getByRole, findByRole } = render(
+            <LanguageProvider>
+                <TaskItem task={mockTask} />
+            </LanguageProvider>
+        );
+        await act(async () => {
+            fireEvent.click(getAllByRole('button', { name: /edit/i })[0]);
+        });
+        const deleteButton = await findByRole('button', { name: /^delete$/i });
+
+        await act(async () => {
+            fireEvent.click(deleteButton);
+        });
+
+        expect(getByRole('dialog', { name: /^delete$/i })).toBeInTheDocument();
+    });
+
+    it('does not show the edit-mode delete action for non-inbox tasks', async () => {
+        const nextTask: Task = {
+            ...mockTask,
+            id: 'next-edit-task',
+            status: 'next',
+        };
+        const { getAllByRole, getByDisplayValue, queryByRole } = render(
+            <LanguageProvider>
+                <TaskItem task={nextTask} />
+            </LanguageProvider>
+        );
+        await act(async () => {
+            fireEvent.click(getAllByRole('button', { name: /edit/i })[0]);
+        });
+        await waitFor(() => expect(getByDisplayValue('Test Task')).toBeInTheDocument());
+
+        expect(queryByRole('button', { name: /^delete$/i })).not.toBeInTheDocument();
     });
 
     it('enters edit mode when task title is double-clicked', () => {
@@ -119,17 +183,37 @@ describe('TaskItem', () => {
             fireEvent.contextMenu(row!);
         });
 
-        expect(getByRole('button', { name: /due date/i })).toBeInTheDocument();
-        expect(getByRole('button', { name: /contexts/i })).toBeInTheDocument();
-        expect(getByRole('button', { name: /duplicate/i })).toBeInTheDocument();
+        expect(getByRole('menu', { name: /more options/i })).toBeInTheDocument();
+        expect(getByRole('menuitem', { name: /due date/i })).toBeInTheDocument();
+        expect(getByRole('menuitem', { name: /review date/i })).toBeInTheDocument();
+        expect(getByRole('menuitem', { name: /area/i })).toBeInTheDocument();
+        expect(getByRole('menuitem', { name: /contexts/i })).toBeInTheDocument();
+        expect(getByRole('menuitem', { name: /duplicate/i })).toBeInTheDocument();
         expect(getByText('Delete')).toBeInTheDocument();
 
         act(() => {
             fireEvent.mouseDown(document.body);
         });
         await waitFor(() => {
-            expect(queryByRole('button', { name: /duplicate/i })).toBeNull();
+            expect(queryByRole('menuitem', { name: /duplicate/i })).toBeNull();
         });
+    });
+
+    it('opens the task quick actions menu from the visible affordance button', () => {
+        const menuTask: Task = {
+            ...mockTask,
+            id: 'quick-actions-button-task',
+        };
+        const { getByRole } = render(
+            <LanguageProvider>
+                <TaskItem task={menuTask} />
+            </LanguageProvider>
+        );
+
+        fireEvent.click(getByRole('button', { name: /more options/i }));
+
+        expect(getByRole('menu', { name: /more options/i })).toBeInTheDocument();
+        expect(getByRole('menuitem', { name: /duplicate/i })).toBeInTheDocument();
     });
 
     it('updates due date from the task quick actions menu', async () => {
@@ -156,13 +240,93 @@ describe('TaskItem', () => {
         const row = container.querySelector('[data-task-id="quick-due-task"]');
         expect(row).toBeTruthy();
         fireEvent.contextMenu(row!);
-        fireEvent.click(getByRole('button', { name: /due date/i }));
-        fireEvent.change(getByLabelText('Due Date'), { target: { value: '2026-05-01' } });
+        fireEvent.click(getByRole('menuitem', { name: /due date/i }));
+        fireEvent.change(getByLabelText('Due Date', { selector: 'input' }), { target: { value: '2026-05-01' } });
         fireEvent.click(getByRole('button', { name: 'Save' }));
 
         await waitFor(() => {
             const updatedTask = useTaskStore.getState()._allTasks.find((task) => task.id === 'quick-due-task');
             expect(updatedTask?.dueDate).toBe('2026-05-01');
+        });
+    });
+
+    it('updates review date from the task quick actions menu', async () => {
+        const quickReviewTask: Task = {
+            ...mockTask,
+            id: 'quick-review-task',
+        };
+        act(() => {
+            useTaskStore.setState((state) => ({
+                ...state,
+                tasks: [quickReviewTask],
+                _allTasks: [quickReviewTask],
+                projects: [],
+                _allProjects: [],
+            }));
+        });
+
+        const { container, getByLabelText, getByRole } = render(
+            <LanguageProvider>
+                <TaskItem task={quickReviewTask} />
+            </LanguageProvider>
+        );
+
+        const row = container.querySelector('[data-task-id="quick-review-task"]');
+        expect(row).toBeTruthy();
+        fireEvent.contextMenu(row!);
+        fireEvent.click(getByRole('menuitem', { name: /review date/i }));
+        fireEvent.change(getByLabelText('Review Date', { selector: 'input' }), { target: { value: '2026-05-03' } });
+        fireEvent.click(getByRole('button', { name: 'Save' }));
+
+        await waitFor(() => {
+            const updatedTask = useTaskStore.getState()._allTasks.find((task) => task.id === 'quick-review-task');
+            expect(updatedTask?.reviewAt).toBe('2026-05-03');
+        });
+    });
+
+    it('updates area from the task quick actions menu', async () => {
+        const quickAreaTask: Task = {
+            ...mockTask,
+            id: 'quick-area-task',
+        };
+        const workArea: Area = {
+            id: 'area-work',
+            name: 'Work',
+            color: '#3b82f6',
+            order: 0,
+            createdAt: '2026-05-01T00:00:00.000Z',
+            updatedAt: '2026-05-01T00:00:00.000Z',
+        };
+        act(() => {
+            useTaskStore.setState((state) => ({
+                ...state,
+                tasks: [quickAreaTask],
+                _allTasks: [quickAreaTask],
+                projects: [],
+                _allProjects: [],
+                areas: [workArea],
+                _allAreas: [workArea],
+            }));
+        });
+
+        const { container, getByRole } = render(
+            <LanguageProvider>
+                <TaskItem task={quickAreaTask} />
+            </LanguageProvider>
+        );
+
+        const row = container.querySelector('[data-task-id="quick-area-task"]');
+        expect(row).toBeTruthy();
+        fireEvent.contextMenu(row!);
+        fireEvent.click(getByRole('menuitem', { name: /area/i }));
+        const areaDialog = getByRole('dialog', { name: 'Area' });
+        fireEvent.click(within(areaDialog).getByRole('button', { name: 'No Area' }));
+        fireEvent.click(within(areaDialog).getByRole('option', { name: 'Work' }));
+        fireEvent.click(within(areaDialog).getByRole('button', { name: 'Save' }));
+
+        await waitFor(() => {
+            const updatedTask = useTaskStore.getState()._allTasks.find((task) => task.id === 'quick-area-task');
+            expect(updatedTask?.areaId).toBe('area-work');
         });
     });
 
@@ -190,8 +354,8 @@ describe('TaskItem', () => {
         const row = container.querySelector('[data-task-id="quick-context-task"]');
         expect(row).toBeTruthy();
         fireEvent.contextMenu(row!);
-        fireEvent.click(getByRole('button', { name: /contexts/i }));
-        fireEvent.change(getByLabelText('Contexts'), { target: { value: '@office, @errands' } });
+        fireEvent.click(getByRole('menuitem', { name: /contexts/i }));
+        fireEvent.change(getByLabelText('Contexts', { selector: 'input' }), { target: { value: '@office, @errands' } });
         fireEvent.click(getByRole('button', { name: 'Save' }));
 
         await waitFor(() => {
@@ -209,6 +373,18 @@ describe('TaskItem', () => {
         const root = container.querySelector('[data-task-id="1"]');
         expect(root).toBeTruthy();
         expect(root?.className).toContain('ring-inset');
+    });
+
+    it('shows the selected row treatment while keyboard focus is inside the task card', () => {
+        const { container } = render(
+            <LanguageProvider>
+                <TaskItem task={mockTask} />
+            </LanguageProvider>
+        );
+        const root = container.querySelector('[data-task-id="1"]');
+        expect(root).toBeTruthy();
+        expect(root?.className).toContain('focus-within:ring-2');
+        expect(root?.className).toContain('focus-within:bg-primary/5');
     });
 
     it('includes archived in the task status selector', () => {
@@ -288,6 +464,120 @@ describe('TaskItem', () => {
         await waitFor(() => {
             expect(container.querySelector('input[type="date"]')).toBeTruthy();
             expect(getByRole('button', { name: /skip/i })).toBeInTheDocument();
+        });
+    });
+
+    it('prompts for a new next action after completing the last next project task', async () => {
+        const projectTask: Task = {
+            ...mockTask,
+            id: 'project-last-next',
+            title: 'Finish current step',
+            status: 'next',
+            projectId: 'project-1',
+        };
+        const project: Project = {
+            id: 'project-1',
+            title: 'Launch plan',
+            status: 'active',
+            color: '#3b82f6',
+            order: 0,
+            tagIds: [],
+            createdAt: projectTask.createdAt,
+            updatedAt: projectTask.updatedAt,
+        };
+        act(() => {
+            useTaskStore.setState((state) => ({
+                ...state,
+                tasks: [projectTask],
+                _allTasks: [projectTask],
+                projects: [project],
+                _allProjects: [project],
+                sections: [],
+                _allSections: [],
+                areas: [],
+                _allAreas: [],
+            }));
+        });
+
+        const { getByPlaceholderText, getByRole } = render(
+            <LanguageProvider>
+                <TaskItem task={projectTask} />
+            </LanguageProvider>
+        );
+
+        fireEvent.click(getByRole('button', { name: 'Done' }));
+
+        await waitFor(() => {
+            expect(getByRole('dialog', { name: /what's the next action/i })).toBeInTheDocument();
+        });
+        fireEvent.change(getByPlaceholderText('New next action...'), { target: { value: 'Call Alex' } });
+        fireEvent.click(getByRole('button', { name: 'Add next action' }));
+
+        await waitFor(() => {
+            const createdTask = useTaskStore.getState()._allTasks.find((task) => task.title === 'Call Alex');
+            expect(createdTask).toMatchObject({
+                status: 'next',
+                projectId: 'project-1',
+            });
+        });
+    });
+
+    it('can promote an existing project task from the next-action prompt', async () => {
+        const projectTask: Task = {
+            ...mockTask,
+            id: 'project-complete-next',
+            title: 'Finish current step',
+            status: 'next',
+            projectId: 'project-1',
+        };
+        const candidateTask: Task = {
+            ...mockTask,
+            id: 'project-candidate',
+            title: 'Draft follow-up',
+            status: 'someday',
+            projectId: 'project-1',
+            order: 2,
+        };
+        const project: Project = {
+            id: 'project-1',
+            title: 'Launch plan',
+            status: 'active',
+            color: '#3b82f6',
+            order: 0,
+            tagIds: [],
+            createdAt: projectTask.createdAt,
+            updatedAt: projectTask.updatedAt,
+        };
+        act(() => {
+            useTaskStore.setState((state) => ({
+                ...state,
+                tasks: [projectTask, candidateTask],
+                _allTasks: [projectTask, candidateTask],
+                projects: [project],
+                _allProjects: [project],
+                sections: [],
+                _allSections: [],
+                areas: [],
+                _allAreas: [],
+            }));
+        });
+
+        const { getByRole } = render(
+            <LanguageProvider>
+                <TaskItem task={projectTask} />
+            </LanguageProvider>
+        );
+
+        fireEvent.click(getByRole('button', { name: 'Done' }));
+
+        await waitFor(() => {
+            expect(getByRole('button', { name: /draft follow-up/i })).toBeInTheDocument();
+        });
+        fireEvent.click(getByRole('button', { name: /draft follow-up/i }));
+
+        await waitFor(() => {
+            const promotedTask = useTaskStore.getState()._allTasks.find((task) => task.id === 'project-candidate');
+            expect(promotedTask?.status).toBe('next');
         });
     });
 

@@ -1,7 +1,12 @@
 import {
     buildSaveSnapshot,
+    archiveSectionForProjectArchive,
+    completeTaskForProjectArchive,
     ensureDeviceId,
-    normalizeRevision,
+    getNextDataChangeAt,
+    nextRevision,
+    restoreSectionFromProjectArchive,
+    restoreTaskFromProjectArchive,
     selectVisibleTasks,
     toVisibleTask,
 } from '../store-helpers';
@@ -13,6 +18,7 @@ import { actionFail, actionOk } from './shared';
 
 export const createProjectCoreActions = ({
     set,
+    get,
     debouncedSave,
 }: ProjectActionContext): ProjectCoreActions => ({
     addProject: async (title: string, color: string, initialProps?: Partial<Project>) => {
@@ -67,7 +73,7 @@ export const createProjectCoreActions = ({
             return {
                 projects: newVisibleProjects,
                 _allProjects: newAllProjects,
-                lastDataChangeAt: changeAt,
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
@@ -101,36 +107,31 @@ export const createProjectCoreActions = ({
             let newAllSections = state._allSections;
 
             if (statusChanged && incomingStatus === 'archived') {
-                const taskStatus: TaskStatus = 'archived';
                 newAllTasks = newAllTasks.map(task => {
                     if (
                         task.projectId === id &&
                         !task.deletedAt &&
-                        task.status !== taskStatus
+                        task.status !== 'done' &&
+                        task.status !== 'archived'
                     ) {
-                        return {
-                            ...task,
-                            status: taskStatus,
-                            completedAt: task.completedAt || now,
-                            isFocusedToday: false,
-                            updatedAt: now,
-                            rev: normalizeRevision(task.rev) + 1,
-                            revBy: deviceState.deviceId,
-                        };
+                        return completeTaskForProjectArchive(task, now, deviceState.deviceId);
                     }
                     return task;
                 });
                 newAllSections = newAllSections.map((section) => {
                     if (section.projectId === id && !section.deletedAt) {
-                        return {
-                            ...section,
-                            deletedAt: now,
-                            updatedAt: now,
-                            rev: normalizeRevision(section.rev) + 1,
-                            revBy: deviceState.deviceId,
-                        };
+                        return archiveSectionForProjectArchive(section, now, deviceState.deviceId);
                     }
                     return section;
+                });
+            } else if (statusChanged && oldProject.status === 'archived' && incomingStatus !== 'archived') {
+                newAllTasks = newAllTasks.map((task) => {
+                    if (task.projectId !== id || !task.projectArchivedAt) return task;
+                    return restoreTaskFromProjectArchive(task, now, deviceState.deviceId);
+                });
+                newAllSections = newAllSections.map((section) => {
+                    if (section.projectId !== id || !section.projectArchivedAt) return section;
+                    return restoreSectionFromProjectArchive(section, now, deviceState.deviceId);
                 });
             }
 
@@ -158,7 +159,7 @@ export const createProjectCoreActions = ({
                         ...project,
                         ...finalProjectUpdates,
                         updatedAt: now,
-                        rev: normalizeRevision(project.rev) + 1,
+                        rev: nextRevision(project.rev),
                         revBy: deviceState.deviceId,
                     }
                     : project
@@ -181,7 +182,7 @@ export const createProjectCoreActions = ({
                 _allTasks: newAllTasks,
                 sections: newVisibleSections,
                 _allSections: newAllSections,
-                lastDataChangeAt: changeAt,
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
@@ -221,7 +222,7 @@ export const createProjectCoreActions = ({
                         ...project,
                         deletedAt: now,
                         updatedAt: now,
-                        rev: normalizeRevision(project.rev) + 1,
+                        rev: nextRevision(project.rev),
                         revBy: deviceState.deviceId,
                     }
                     : project
@@ -232,7 +233,7 @@ export const createProjectCoreActions = ({
                         ...section,
                         deletedAt: now,
                         updatedAt: now,
-                        rev: normalizeRevision(section.rev) + 1,
+                        rev: nextRevision(section.rev),
                         revBy: deviceState.deviceId,
                     }
                     : section
@@ -243,7 +244,7 @@ export const createProjectCoreActions = ({
                         ...task,
                         deletedAt: now,
                         updatedAt: now,
-                        rev: normalizeRevision(task.rev) + 1,
+                        rev: nextRevision(task.rev),
                         revBy: deviceState.deviceId,
                     }
                     : task
@@ -265,7 +266,7 @@ export const createProjectCoreActions = ({
                 _allProjects: newAllProjects,
                 _allTasks: newAllTasks,
                 _allSections: newAllSections,
-                lastDataChangeAt: changeAt,
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
@@ -314,7 +315,7 @@ export const createProjectCoreActions = ({
                         : restoredArea.name)
                     : undefined,
                 updatedAt: now,
-                rev: normalizeRevision(target.rev) + 1,
+                rev: nextRevision(target.rev),
                 revBy: deviceState.deviceId,
             };
             const newAllProjects = state._allProjects.map((project) =>
@@ -326,7 +327,7 @@ export const createProjectCoreActions = ({
                         ...section,
                         deletedAt: undefined,
                         updatedAt: now,
-                        rev: normalizeRevision(section.rev) + 1,
+                        rev: nextRevision(section.rev),
                         revBy: deviceState.deviceId,
                     }
                     : section
@@ -346,7 +347,7 @@ export const createProjectCoreActions = ({
                             ? task.sectionId
                             : undefined,
                         updatedAt: now,
-                        rev: normalizeRevision(task.rev) + 1,
+                        rev: nextRevision(task.rev),
                         revBy: deviceState.deviceId,
                     }
                     : task
@@ -368,7 +369,7 @@ export const createProjectCoreActions = ({
                 _allProjects: newAllProjects,
                 _allSections: newAllSections,
                 _allTasks: newAllTasks,
-                lastDataChangeAt: changeAt,
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
@@ -496,7 +497,7 @@ export const createProjectCoreActions = ({
                 _allProjects: newAllProjects,
                 _allSections: newAllSections,
                 _allTasks: newAllTasks,
-                lastDataChangeAt: changeAt,
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
@@ -517,7 +518,7 @@ export const createProjectCoreActions = ({
             if (project.status !== 'active' && !project.isFocused) return state;
             const deviceState = ensureDeviceId(state.settings);
 
-            const focusedCount = allProjects.filter(p => p.isFocused && !p.deletedAt).length;
+            const focusedCount = get().getDerivedState().focusedProjectCount;
             const isCurrentlyFocused = project.isFocused;
 
             if (!isCurrentlyFocused && focusedCount >= 5) {
@@ -530,7 +531,7 @@ export const createProjectCoreActions = ({
                         ...p,
                         isFocused: !p.isFocused,
                         updatedAt: now,
-                        rev: normalizeRevision(p.rev) + 1,
+                        rev: nextRevision(p.rev),
                         revBy: deviceState.deviceId,
                     }
                     : p
@@ -543,7 +544,7 @@ export const createProjectCoreActions = ({
             return {
                 projects: newVisibleProjects,
                 _allProjects: newAllProjects,
-                lastDataChangeAt: changeAt,
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });

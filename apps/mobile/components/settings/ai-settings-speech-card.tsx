@@ -6,14 +6,14 @@ import type { ThemeColors } from '@/hooks/use-theme-colors';
 import { DEFAULT_WHISPER_MODEL } from './settings.constants';
 import { styles } from './settings.styles';
 
-type Localize = (english: string, chinese: string) => string;
+type SettingsTranslator = (key: string, values?: Record<string, string | number | boolean | null | undefined>) => string;
 type SpeechProvider = 'openai' | 'gemini' | 'whisper';
 type Translate = (key: string) => string;
 
 type AiSettingsSpeechCardProps = {
     isExpoGo: boolean;
     isFossBuild: boolean;
-    localize: Localize;
+    tr: SettingsTranslator;
     onDeleteWhisperModel: () => void;
     onDownloadWhisperModel: () => void;
     onOpenModelPicker: () => void;
@@ -43,7 +43,7 @@ type AiSettingsSpeechCardProps = {
 export function AiSettingsSpeechCard({
     isExpoGo,
     isFossBuild,
-    localize,
+    tr,
     onDeleteWhisperModel,
     onDownloadWhisperModel,
     onOpenModelPicker,
@@ -139,7 +139,7 @@ export function AiSettingsSpeechCard({
                                 onPress={() => onSpeechProviderChange('whisper')}
                             >
                                 <Text style={[styles.backendOptionText, { color: speechProvider === 'whisper' ? tc.tint : tc.secondaryText }]}>
-                                    {isFossBuild ? localize('Local Whisper', '本地 Whisper') : t('settings.speechProviderOffline')}
+                                    {isFossBuild ? tr('settings.aiMobile.localWhisper') : t('settings.speechProviderOffline')}
                                 </Text>
                             </TouchableOpacity>
                         </View>
@@ -168,10 +168,7 @@ export function AiSettingsSpeechCard({
                                     <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>{t('settings.speechOfflineModelDesc')}</Text>
                                     {isExpoGo ? (
                                         <Text style={[styles.settingDescription, { color: tc.danger, marginTop: 6 }]}>
-                                            {localize(
-                                                'Whisper transcription requires a dev build or production build (not Expo Go).',
-                                                'Whisper 转录需要开发版或正式版构建（Expo Go 不支持）。'
-                                            )}
+                                            {tr('settings.aiMobile.whisperTranscriptionRequiresADevBuildOrProductionBuildNot')}
                                         </Text>
                                     ) : null}
                                 </View>

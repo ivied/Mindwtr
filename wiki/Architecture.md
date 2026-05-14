@@ -134,20 +134,34 @@ The core package contains all shared business logic:
 
 ```
 apps/desktop/
-├── src/                   # React frontend
-│   ├── App.tsx           # Root component
-│   ├── components/       # UI components
-│   │   ├── Layout.tsx    # Sidebar + content
-│   │   ├── TaskItem.tsx  # Task component
-│   │   └── views/        # View components
-│   ├── contexts/         # React contexts
-│   ├── store/            # UI-specific state (filters, focus mode)
-│   └── lib/              # Utilities
+├── src/                         # React frontend
+│   ├── App.tsx                  # Root component and app shell wiring
+│   ├── main.tsx                 # Vite/Tauri webview entry
+│   ├── components/
+│   │   ├── Task/                # Task form, field, and editor components
+│   │   ├── ui/                  # Shared primitive UI components
+│   │   └── views/               # Feature views
+│   │       ├── agenda/
+│   │       ├── calendar/
+│   │       ├── inbox/
+│   │       ├── list/
+│   │       ├── projects/
+│   │       ├── review/
+│   │       └── settings/
+│   ├── config/                  # Desktop app constants/config
+│   ├── contexts/                # React contexts
+│   ├── hooks/                   # Shared React hooks
+│   ├── lib/                     # Desktop services and Tauri bridges
+│   ├── store/                   # UI-specific state
+│   ├── test/                    # Desktop test utilities
+│   └── utils/                   # Small shared utilities
 │
-├── src-tauri/            # Rust backend
-│   ├── src/main.rs       # Entry point
-│   ├── Cargo.toml        # Rust dependencies
-│   └── tauri.conf.json   # Tauri config
+├── src-tauri/                  # Rust backend
+│   ├── src/main.rs             # Entry point
+│   ├── src/platform.rs         # Native commands and path validation
+│   ├── capabilities/           # Tauri command/plugin permissions
+│   ├── Cargo.toml              # Rust dependencies
+│   └── tauri.conf.json         # Tauri config
 │
 └── package.json
 ```
@@ -161,7 +175,7 @@ User Action → React Component → Zustand Store (@mindwtr/core) → Storage Ad
 ### Tauri Commands
 
 The Rust backend exposes commands for:
-- File system operations
+- Allowlisted file opening and attachment/storage operations
 - Native dialogs
 - System notifications
 
@@ -184,8 +198,11 @@ apps/mobile/
 │   ├── (drawer)/         # Drawer navigation
 │   │   ├── (tabs)/       # Tab navigation
 │   │   │   ├── inbox.tsx
-│   │   │   ├── next.tsx
-│   │   │   └── ...
+│   │   │   ├── focus.tsx
+│   │   │   ├── capture.tsx
+│   │   │   ├── projects.tsx
+│   │   │   ├── review-tab.tsx
+│   │   │   └── menu.tsx
 │   │   ├── projects-screen.tsx
 │   │   └── settings.tsx
 │   └── _layout.tsx       # Root layout
@@ -291,7 +308,7 @@ Data synchronization relies on revision-aware last-write-wins with deterministic
     - If delete-vs-live operations land within the 30-second ambiguity window, Mindwtr preserves the live item instead of eagerly deleting it.
 3. **Conflicts**:
     - Metadata-level conflicts are resolved automatically.
-    - Settings merge by sync groups (`appearance`, `language`, `externalCalendars`, `ai`) rather than one giant object timestamp.
+    - Settings merge by sync groups (`appearance`, `language`, `gtd`, `externalCalendars`, `ai`, `savedFilters`) rather than one giant object timestamp.
     - Large clock skew warnings fire when merge drift exceeds the current 5-minute threshold.
 
 ### Sync Cycle
@@ -317,6 +334,8 @@ Mindwtr sync currently transports full snapshots on purpose. This is not a place
 - If this changes later, the delta design should extend the existing `rev` and `revBy` model rather than replacing it with a new sequence system.
 
 The delta-log decision should be revisited only if snapshot files regularly exceed 5 MB, sync round-trips exceed 5 seconds on typical networks, or the product needs real-time multi-device streaming.
+
+Testing coverage and release gates are tracked separately in [[Testing Strategy]] so this page can stay focused on runtime architecture.
 
 ---
 

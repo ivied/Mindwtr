@@ -30,14 +30,20 @@ const ArchiveTaskRowInner = memo(function ArchiveTaskRowInner({
 }: ArchiveTaskRowInnerProps) {
     const handleRestore = useCallback(() => onRestore(task.id), [onRestore, task.id]);
     const handleDelete = useCallback(() => onDelete(task.id), [onDelete, task.id]);
+    const completionTimestamp = task.completedAt || task.updatedAt;
+    const completedLabel = t('list.done') || 'Completed';
+    const metadataParts = [
+        `${completedLabel}: ${completionTimestamp ? safeFormatDate(completionTimestamp, 'Pp', completionTimestamp) : 'Unknown'}`,
+        task.dueDate ? `${t('taskEdit.dueDateLabel')}: ${safeFormatDate(task.dueDate, 'P')}` : '',
+        ...(task.contexts ?? []),
+    ].filter(Boolean);
 
     return (
         <div className="rounded-lg px-3 py-3 flex items-center justify-between group hover:bg-muted/50 transition-colors">
             <div>
                 <h3 className="font-medium text-foreground line-through opacity-70">{task.title}</h3>
                 <p className="text-xs text-muted-foreground mt-1">
-                    {task.dueDate && `${t('taskEdit.dueDateLabel')}: ${safeFormatDate(task.dueDate, 'P')} • `}
-                    {task.contexts?.join(', ')}
+                    {metadataParts.join(' • ')}
                 </p>
             </div>
             <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">

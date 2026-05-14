@@ -17,6 +17,7 @@ type ShortcutOption = {
 };
 
 type GlobalQuickAddShortcutPlatform = {
+    isFlatpak?: boolean;
     isMac?: boolean;
     isWindows?: boolean;
 };
@@ -32,7 +33,7 @@ const ALLOWED_SHORTCUTS = new Set<GlobalQuickAddShortcutSetting>([
 export function getDefaultGlobalQuickAddShortcut(
     platform: GlobalQuickAddShortcutPlatform = {}
 ): GlobalQuickAddShortcutSetting {
-    if (platform.isWindows) {
+    if (platform.isWindows || platform.isFlatpak) {
         return GLOBAL_QUICK_ADD_SHORTCUT_DISABLED;
     }
     return GLOBAL_QUICK_ADD_SHORTCUT_DEFAULT;
@@ -51,6 +52,7 @@ export function normalizeGlobalQuickAddShortcut(
 }
 
 export function getGlobalQuickAddShortcutOptions(platform: GlobalQuickAddShortcutPlatform = {}): ShortcutOption[] {
+    const isFlatpak = platform.isFlatpak === true;
     const isMac = platform.isMac === true;
     const isWindows = platform.isWindows === true;
     const defaultShortcut = getDefaultGlobalQuickAddShortcut(platform);
@@ -62,6 +64,8 @@ export function getGlobalQuickAddShortcutOptions(platform: GlobalQuickAddShortcu
             : ' (legacy)';
     const disabledLabel = isWindows
         ? 'Disabled (default)'
+        : isFlatpak
+            ? 'Disabled (Flatpak default)'
         : defaultShortcut === GLOBAL_QUICK_ADD_SHORTCUT_DISABLED
             ? 'Disabled (recommended)'
             : 'Disabled';

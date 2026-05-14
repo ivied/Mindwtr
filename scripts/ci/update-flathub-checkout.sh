@@ -96,6 +96,32 @@ def find_block_end(start_index: int, base_indent: int) -> int:
             break
     return block_end_index
 
+finish_args_line_index = next((index for index, line in enumerate(lines) if line.strip() == 'finish-args:'), None)
+if finish_args_line_index is None:
+    raise SystemExit(f"Expected finish-args block in {manifest_path}")
+
+finish_args_indent = len(lines[finish_args_line_index]) - len(lines[finish_args_line_index].lstrip())
+finish_args_entry_indent = finish_args_indent + 2
+finish_args_block_end_index = find_block_end(finish_args_line_index, finish_args_indent)
+
+def ensure_finish_arg(value: str, after=None) -> None:
+    formatted = f"{' ' * finish_args_entry_indent}- {value}"
+    existing = {
+        line.strip()
+        for line in lines[finish_args_line_index + 1:finish_args_block_end_index]
+    }
+    if f'- {value}' in existing:
+        return
+    insert_index = finish_args_block_end_index
+    if after:
+        for index in range(finish_args_line_index + 1, finish_args_block_end_index):
+            if lines[index].strip() == f'- {after}':
+                insert_index = index + 1
+                break
+    lines.insert(insert_index, formatted)
+
+ensure_finish_arg('--socket=pulseaudio', after='--socket=wayland')
+
 env_line_index = next((index for index, line in enumerate(lines) if line.strip() == 'env:'), None)
 if env_line_index is None:
     raise SystemExit(f"Expected build-options env block in {manifest_path}")

@@ -1,0 +1,3 @@
+Sync es mas estable con mejor manejo de conflictos, ejecuciones serializadas e historial mas claro.
+Quick capture evita guardados rapidos duplicados, Projects permite reordenar tareas e Inbox muestra mejor las rutas de captura.
+Los destinos HTTP locales o privados funcionan mejor, los gestos de calendario son mas fluidos y se eliminaron avisos ruidosos.

@@ -1,0 +1,230 @@
+import React, { useMemo, useState, useCallback } from 'react';
+import { View, Text, FlatList, StyleSheet, RefreshControl, TouchableOpacity, Alert } from 'react-native';
+import { useLocalSearchParams, router } from 'expo-router';
+import { useTaskStore, filterTasksBySearch, sortTasksBy, type Task, type TaskStatus, type TaskSortBy } from '@mindwtr/core';
+import { SwipeableTaskItem } from '@/components/swipeable-task-item';
+import { TaskEditModal } from '@/components/task-edit-modal';
+import { useLanguage } from '@/contexts/language-context';
+import { useMobileAreaFilter } from '@/hooks/use-mobile-area-filter';
+import { useTheme } from '@/contexts/theme-context';
+import { useThemeColors } from '@/hooks/use-theme-colors';
+import { taskMatchesAreaFilter } from '@/lib/area-filter';
+import { openContextsScreen, openProjectScreen } from '@/lib/task-meta-navigation';
+import { Trash2 } from 'lucide-react-native';
+
+export default function SavedSearchScreen() {
+  const { id } = useLocalSearchParams<{ id: string }>();
+  const { tasks, projects, settings, updateTask, deleteTask, fetchData, updateSettings } = useTaskStore();
+  const { t } = useLanguage();
+  const { isDark } = useTheme();
+  const tc = useThemeColors();
+  const { areaById, resolvedAreaFilter } = useMobileAreaFilter();
+
+  const goBackOrInbox = useCallback(() => {
+    if (router.canGoBack()) router.back();
+    else router.replace('/inbox');
+  }, []);
+
+  const savedSearch = settings?.savedSearches?.find(s => s.id === id);
+  const query = savedSearch?.query || '';
+  const sortBy = (settings?.taskSortBy ?? 'default') as TaskSortBy;
+
+  const filteredTasks = useMemo(() => {
+    if (!query) return [];
+    const projectMap = new Map(projects.map((project) => [project.id, project]));
+    return sortTasksBy(
+      filterTasksBySearch(tasks, projects, query).filter((task) => (
+        taskMatchesAreaFilter(task, resolvedAreaFilter, projectMap, areaById)
+      )),
+      sortBy,
+    );
+  }, [tasks, projects, query, sortBy, resolvedAreaFilter, areaById]);
+
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [isModalVisible, setIsModalVisible] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await fetchData();
+    setRefreshing(false);
+  }, [fetchData]);
+
+  const handleDeleteSearch = useCallback(() => {
+    if (!savedSearch) return;
+    Alert.alert(
+      t('common.delete'),
+      t('search.deleteConfirm') || `Delete "${savedSearch.name}"?`,
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: t('common.delete'),
+          style: 'destructive',
+          onPress: async () => {
+            const updated = (settings?.savedSearches || []).filter(s => s.id !== id);
+            await updateSettings({ savedSearches: updated });
+            goBackOrInbox();
+          },
+        },
+      ]
+    );
+  }, [savedSearch, id, settings?.savedSearches, updateSettings, t, goBackOrInbox]);
+
+  const emptyMessage = (() => {
+    if (savedSearch) return t('search.noResults');
+    const hasAnySavedSearches = (settings?.savedSearches?.length ?? 0) > 0;
+    return hasAnySavedSearches ? t('search.noResults') : t('search.noSavedSearches');
+  })();
+
+  const renderTask = ({ item }: { item: Task }) => (
+    <SwipeableTaskItem
+      task={item}
+      isDark={isDark}
+      tc={tc}
+      onPress={() => {
+        setEditingTask(item);
+        setIsModalVisible(true);
+      }}
+      onStatusChange={(status) => { void updateTask(item.id, { status: status as TaskStatus }); }}
+      onDelete={() => { void deleteTask(item.id); }}
+      onProjectPress={openProjectScreen}
+      onContextPress={openContextsScreen}
+      onTagPress={openContextsScreen}
+    />
+  );
+
+  return (
+    <View style={[styles.container, { backgroundColor: tc.bg }]}>
+      <View style={[styles.header, { borderBottomColor: tc.border }]}>
+        <View style={styles.headerContent}>
+          <View style={styles.headerText}>
+            <Text style={[styles.title, { color: tc.text }]} accessibilityRole="header">
+              {savedSearch?.name || t('search.savedSearches')}
+            </Text>
+            {query ? (
+              <Text style={[styles.queryText, { color: tc.secondaryText }]} numberOfLines={1}>
+                {query}
+              </Text>
+            ) : null}
+          </View>
+          {savedSearch && (
+            <TouchableOpacity
+              onPress={handleDeleteSearch}
+              style={styles.deleteButton}
+              accessibilityLabel={t('common.delete')}
+            >
+              <Trash2 size={20} color="#EF4444" />
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+
+      <FlatList
+        data={filteredTasks}
+        renderItem={renderTask}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={styles.listContent}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
+        ListEmptyComponent={
+          <View style={styles.emptyContainer}>
+            <Text style={[styles.emptyText, { color: tc.secondaryText }]}>
+              {emptyMessage}
+            </Text>
+            {!savedSearch && (
+              <View style={styles.emptyActions}>
+                <TouchableOpacity
+                  onPress={() => router.replace('/inbox')}
+                  style={[styles.actionButton, { borderColor: tc.border, backgroundColor: tc.cardBg }]}
+                >
+                  <Text style={[styles.actionText, { color: tc.text }]}>{t('nav.inbox')}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={goBackOrInbox}
+                  style={[styles.actionButton, { borderColor: tc.border, backgroundColor: tc.cardBg }]}
+                >
+                  <Text style={[styles.actionText, { color: tc.text }]}>{t('common.back')}</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        }
+      />
+
+      <TaskEditModal
+        visible={isModalVisible}
+        task={editingTask}
+        onClose={() => setIsModalVisible(false)}
+        onSave={(taskId, updates) => {
+          updateTask(taskId, updates);
+          setIsModalVisible(false);
+          setEditingTask(null);
+        }}
+        defaultTab="view"
+        onProjectNavigate={openProjectScreen}
+        onContextNavigate={openContextsScreen}
+        onTagNavigate={openContextsScreen}
+        onFocusMode={(taskId) => {
+          setIsModalVisible(false);
+          router.push(`/check-focus?id=${taskId}`);
+        }}
+      />
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  header: {
+    padding: 16,
+    borderBottomWidth: 1,
+  },
+  headerContent: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+  },
+  headerText: {
+    flex: 1,
+    gap: 4,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  queryText: {
+    fontSize: 12,
+  },
+  deleteButton: {
+    padding: 8,
+    marginLeft: 8,
+  },
+  listContent: {
+    padding: 16,
+  },
+  emptyContainer: {
+    padding: 32,
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: 16,
+  },
+  emptyActions: {
+    marginTop: 16,
+    flexDirection: 'row',
+    gap: 12,
+  },
+  actionButton: {
+    borderWidth: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+  },
+  actionText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+});

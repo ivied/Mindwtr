@@ -9,6 +9,7 @@ type Labels = {
     calendarName: string;
     calendarUrl: string;
     calendarAdd: string;
+    calendarChooseLocalFile: string;
     calendarRemove: string;
     externalCalendars: string;
     calendarSystemTitle: string;
@@ -33,6 +34,7 @@ type SettingsCalendarPageProps = {
     onCalendarNameChange: (value: string) => void;
     onCalendarUrlChange: (value: string) => void;
     onAddCalendar: () => void;
+    onChooseLocalCalendarFile?: () => Promise<void> | void;
     onToggleCalendar: (id: string, enabled: boolean) => void;
     onRemoveCalendar: (id: string) => void;
     onRequestSystemCalendarPermission: () => void;
@@ -50,6 +52,7 @@ export function SettingsCalendarPage({
     onCalendarNameChange,
     onCalendarUrlChange,
     onAddCalendar,
+    onChooseLocalCalendarFile,
     onToggleCalendar,
     onRemoveCalendar,
     onRequestSystemCalendarPermission,
@@ -112,25 +115,36 @@ export function SettingsCalendarPage({
                         <input
                             value={newCalendarUrl}
                             onChange={(e) => onCalendarUrlChange(e.target.value)}
-                            placeholder="https://..."
+                            placeholder="https://... or file:///..."
                             className="w-full text-sm px-3 py-2 rounded border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
                         />
                     </div>
                 </div>
 
                 <div className="flex items-center justify-between gap-4">
-                    <button
-                        disabled={!newCalendarUrl.trim()}
-                        onClick={onAddCalendar}
-                        className={cn(
-                            "text-sm px-3 py-2 rounded-md transition-colors",
-                            newCalendarUrl.trim()
-                                ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                                : "bg-muted text-muted-foreground cursor-not-allowed"
+                    <div className="flex flex-wrap items-center gap-2">
+                        <button
+                            disabled={!newCalendarUrl.trim()}
+                            onClick={onAddCalendar}
+                            className={cn(
+                                "text-sm px-3 py-2 rounded-md transition-colors",
+                                newCalendarUrl.trim()
+                                    ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                                    : "bg-muted text-muted-foreground cursor-not-allowed"
+                            )}
+                        >
+                            {t.calendarAdd}
+                        </button>
+                        {onChooseLocalCalendarFile && (
+                            <button
+                                type="button"
+                                onClick={onChooseLocalCalendarFile}
+                                className="text-sm px-3 py-2 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+                            >
+                                {t.calendarChooseLocalFile}
+                            </button>
                         )}
-                    >
-                        {t.calendarAdd}
-                    </button>
+                    </div>
                     {calendarError && (
                         <div className="text-xs text-red-400">{calendarError}</div>
                     )}

@@ -82,7 +82,7 @@ export function useReviewModalController({
     const { tasks, projects, areas, updateTask, deleteTask, settings, batchUpdateTasks, addTask } = useTaskStore();
     const areaById = useMemo(() => new Map(areas.map((area) => [area.id, area])), [areas]);
     const { isDark } = useTheme();
-    const { language } = useLanguage();
+    const { t } = useLanguage();
     const { openQuickCapture } = useQuickCapture();
     const [currentStep, setCurrentStep] = useState<ReviewStep>('inbox');
     const [editingTask, setEditingTask] = useState<Task | null>(null);
@@ -101,7 +101,7 @@ export function useReviewModalController({
     const [projectTaskPrompt, setProjectTaskPrompt] = useState<{ projectId: string; projectTitle: string } | null>(null);
     const [projectTaskTitle, setProjectTaskTitle] = useState('');
 
-    const labels = getReviewLabels(language);
+    const labels = useMemo(() => getReviewLabels(t), [t]);
     const tc = useThemeColors();
     const aiEnabled = settings?.ai?.enabled === true;
     const includeContextStep = settings?.gtd?.weeklyReview?.includeContextStep !== false;

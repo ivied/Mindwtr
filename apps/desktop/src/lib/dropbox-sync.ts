@@ -38,6 +38,35 @@ export type DropboxDownloadResult = {
     rev: string | null;
 };
 
+export async function getDropboxAppDataMetadata(
+    accessToken: string,
+    fetcher: typeof fetch = fetch
+): Promise<{ rev: string | null }> {
+    const response = await fetcher(FILE_METADATA_ENDPOINT, {
+        method: 'POST',
+        headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            path: DROPBOX_SYNC_PATH,
+            include_media_info: false,
+            include_deleted: false,
+        }),
+    });
+    if (response.status === 409) {
+        return { rev: null };
+    }
+    if (response.status === 401) {
+        throw new DropboxUnauthorizedError('Dropbox metadata failed: HTTP 401');
+    }
+    if (!response.ok) {
+        throw new Error(`Dropbox metadata failed: HTTP ${response.status}`);
+    }
+    const payload = await response.json().catch(() => null) as { rev?: unknown } | null;
+    return { rev: typeof payload?.rev === 'string' ? payload.rev : null };
+}
+
 export async function downloadDropboxAppData(
     accessToken: string,
     fetcher: typeof fetch = fetch

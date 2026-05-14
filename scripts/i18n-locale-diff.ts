@@ -58,10 +58,14 @@ const localeKeySet = new Set(localeKeys);
 
 const missingKeys = sourceKeys.filter((key) => !localeKeySet.has(key));
 const extraKeys = localeKeys.filter((key) => !sourceKeySet.has(key));
+const coveragePercent = sourceKeys.length > 0
+    ? ((sourceKeys.length - missingKeys.length) / sourceKeys.length) * 100
+    : 100;
 
 console.log(`Locale: ${locale}`);
 console.log(`English keys: ${sourceKeys.length}`);
 console.log(`Locale keys: ${localeKeys.length}`);
+console.log(`Coverage: ${coveragePercent.toFixed(2)}%`);
 console.log(`Missing keys: ${missingKeys.length}`);
 console.log(`Extra keys: ${extraKeys.length}`);
 

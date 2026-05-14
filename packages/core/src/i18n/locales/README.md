@@ -6,10 +6,9 @@ Mindwtr keeps translations under this folder so community contributions are easy
 - `zh-Hans.ts`: Full Simplified Chinese dictionary.
 - `zh-Hant.ts`: Full Traditional Chinese dictionary.
 - `zh.ts`: Legacy alias that points to `zh-Hans.ts` for backward compatibility.
-- `*.ts` for other languages: manual override dictionaries.
+- `*.ts` for other languages: manual override dictionaries. These locales are partial by design; missing keys fall back to English.
 
-For languages using overrides, prefer adding explicit translations for all keys.
-Any missing key falls back to the English source string at runtime.
+English and Chinese are the only full dictionaries today. For languages using overrides, prefer adding explicit translations for all keys, but do not copy English strings into override files as placeholders. CI enforces each partial locale's current coverage floor so newly added English keys cannot silently lower existing coverage.
 
 ## How to contribute a language fix
 
@@ -36,5 +35,6 @@ Replace `de` with another locale code such as `fr`, `it`, or `nl`.
 
 The script reports:
 
+- locale coverage percentage
 - keys that exist in `en.ts` but are missing from the locale file and currently fall back to English
 - keys that exist in the locale file but no longer exist in `en.ts`

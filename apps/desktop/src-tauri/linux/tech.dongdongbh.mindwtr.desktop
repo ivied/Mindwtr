@@ -9,3 +9,8 @@ Categories=Office;
 Keywords=Tasks;Todo;GTD;Productivity;
 StartupNotify=true
 StartupWMClass=Mindwtr
+Actions=QuickAdd;
+
+[Desktop Action QuickAdd]
+Name=Quick Add
+Exec=mindwtr --quick-add

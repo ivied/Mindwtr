@@ -44,8 +44,15 @@ import {
     uploadDropboxFile,
 } from './dropbox-sync';
 
-export type WebDavConfig = { url: string; username: string; password?: string; hasPassword?: boolean };
-export type CloudConfig = { url: string; token: string };
+export type WebDavConfig = {
+    url: string;
+    username: string;
+    password?: string;
+    hasPassword?: boolean;
+    allowInsecureHttp?: boolean;
+    allowWeakFingerprint?: boolean;
+};
+export type CloudConfig = { url: string; token: string; allowInsecureHttp?: boolean };
 
 export type AttachmentBackendDeps = {
     getTauriFetch: () => Promise<typeof fetch | undefined>;
@@ -108,6 +115,7 @@ export async function syncWebdavAttachments(
     const attachmentsDirUrl = `${baseSyncUrl}/${ATTACHMENTS_DIR_NAME}`;
     try {
         await webdavMakeDirectory(attachmentsDirUrl, {
+            allowInsecureHttp: webDavConfig.allowInsecureHttp,
             username: webDavConfig.username,
             password,
             fetcher,
@@ -210,6 +218,7 @@ export async function syncWebdavAttachments(
                     async () => {
                         await waitForSlot();
                         return await webdavFileExists(`${baseSyncUrl}/${attachment.cloudKey}`, {
+                            allowInsecureHttp: webDavConfig.allowInsecureHttp,
                             username: webDavConfig.username,
                             password,
                             fetcher,
@@ -275,6 +284,7 @@ export async function syncWebdavAttachments(
                             fileData,
                             attachment.mimeType || 'application/octet-stream',
                             {
+                                allowInsecureHttp: webDavConfig.allowInsecureHttp,
                                 headers: { 'Content-Length': String(fileData.length) },
                                 username: webDavConfig.username,
                                 password,
@@ -345,6 +355,7 @@ export async function syncWebdavAttachments(
                 async () => {
                     await waitForSlot();
                     return await webdavGetFile(`${baseSyncUrl}/${cloudKey}`, {
+                        allowInsecureHttp: webDavConfig.allowInsecureHttp,
                         username: webDavConfig.username,
                         password,
                         fetcher,
@@ -477,6 +488,7 @@ export async function syncCloudAttachments(
                     fileData,
                     attachment.mimeType || 'application/octet-stream',
                     {
+                        allowInsecureHttp: cloudConfig.allowInsecureHttp,
                         token: cloudConfig.token,
                         fetcher,
                         timeoutMs: UPLOAD_TIMEOUT_MS,
@@ -508,6 +520,7 @@ export async function syncCloudAttachments(
             if (!attachment.cloudKey) return false;
             const fileData = await withRetry(() =>
                 cloudGetFile(`${baseSyncUrl}/${attachment.cloudKey}`, {
+                    allowInsecureHttp: cloudConfig.allowInsecureHttp,
                     token: cloudConfig.token,
                     fetcher,
                     onProgress: (loaded, total) => reportProgress(attachment.id, 'download', loaded, total, 'active'),

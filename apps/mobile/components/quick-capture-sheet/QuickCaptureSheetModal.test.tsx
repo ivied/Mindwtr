@@ -1,5 +1,5 @@
 import React from 'react';
-import { Modal, Platform, TextInput } from 'react-native';
+import { FlatList, Modal, Platform, Text, TextInput } from 'react-native';
 import { act, create } from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -46,6 +46,7 @@ describe('Quick capture modal composition', () => {
           onCloseProjectPicker={vi.fn()}
           onContextQueryChange={vi.fn()}
           onDueDateChange={vi.fn()}
+          onDueTimeChange={vi.fn()}
           onProjectQueryChange={vi.fn()}
           onRemoveContext={vi.fn()}
           onSelectArea={vi.fn()}
@@ -64,6 +65,7 @@ describe('Quick capture modal composition', () => {
           showAreaPicker={false}
           showContextPicker={false}
           showDatePicker={false}
+          showDueTimePicker={false}
           showPriorityPicker={false}
           showProjectPicker={false}
           startPickerMode={null}
@@ -100,6 +102,7 @@ describe('Quick capture modal composition', () => {
           onCloseProjectPicker={vi.fn()}
           onContextQueryChange={vi.fn()}
           onDueDateChange={vi.fn()}
+          onDueTimeChange={vi.fn()}
           onProjectQueryChange={vi.fn()}
           onRemoveContext={vi.fn()}
           onSelectArea={vi.fn()}
@@ -118,6 +121,7 @@ describe('Quick capture modal composition', () => {
           showAreaPicker={false}
           showContextPicker
           showDatePicker={false}
+          showDueTimePicker={false}
           showPriorityPicker={false}
           showProjectPicker={false}
           startPickerMode={null}
@@ -131,9 +135,81 @@ describe('Quick capture modal composition', () => {
     const modals = tree.root.findAllByType(Modal);
     expect(modals).toHaveLength(1);
     expect(modals[0]?.props.visible).toBe(true);
+    expect(modals[0]?.props.accessibilityViewIsModal).toBe(true);
+    expect(tree.root.findByType(FlatList).props.accessibilityRole).toBe('list');
+    expect(tree.root.findByProps({ accessibilityRole: 'header' }).props.children).toBe('taskEdit.contextsLabel');
   });
 
-  it('uses a non-sliding Android modal to avoid ghosted sheet trails', () => {
+  it('disables Android modal animation to avoid ghosted sheet trails', () => {
+    let tree!: ReturnType<typeof create>;
+    const originalPlatformOs = Platform.OS;
+
+    Object.defineProperty(Platform, 'OS', {
+      configurable: true,
+      value: 'android',
+    });
+
+    try {
+      act(() => {
+        tree = create(
+          <QuickCaptureSheetBody
+            addAnother={false}
+            areaLabel="No Area"
+            contextLabel="Contexts"
+            dueDate={null}
+            dueLabel="Due Date"
+            dueTimeLabel="Change time"
+            handleClose={vi.fn()}
+            handleSave={vi.fn()}
+            insetsBottom={0}
+            inputRef={{ current: null }}
+            onOpenAreaPicker={vi.fn()}
+            onOpenContextPicker={vi.fn()}
+            onOpenDueDatePicker={vi.fn()}
+            onOpenDueTimePicker={vi.fn()}
+            onOpenPriorityPicker={vi.fn()}
+            onOpenProjectPicker={vi.fn()}
+            onQuickDueDateSelect={vi.fn()}
+            onResetArea={vi.fn()}
+            onResetContexts={vi.fn()}
+            onResetDueDate={vi.fn()}
+            onResetDueTime={vi.fn()}
+            onResetPriority={vi.fn()}
+            onResetProject={vi.fn()}
+            onToggleAddAnother={vi.fn()}
+            onToggleRecording={vi.fn()}
+            onValueChange={vi.fn()}
+            prioritiesEnabled
+            priorityLabel="Priority"
+            projectLabel="Project"
+            recording={false}
+            recordingBusy={false}
+            recordingReady={false}
+            sheetMaxHeight={500}
+            showDueTime={false}
+            t={(key) => key}
+            tc={tc}
+            value=""
+            visible
+          />
+        );
+      });
+    } finally {
+      Object.defineProperty(Platform, 'OS', {
+        configurable: true,
+        value: originalPlatformOs,
+      });
+    }
+
+    const modal = tree.root.findByType(Modal);
+    expect(modal.props.transparent).toBe(true);
+    expect(modal.props.animationType).toBe('none');
+    expect(modal.props.hardwareAccelerated).toBe(true);
+    expect(modal.props.statusBarTranslucent).toBe(true);
+    expect(modal.props.accessibilityViewIsModal).toBe(true);
+  });
+
+  it('bounds compact sheet text scaling so tablet controls cannot overlap', () => {
     let tree!: ReturnType<typeof create>;
 
     act(() => {
@@ -141,8 +217,10 @@ describe('Quick capture modal composition', () => {
         <QuickCaptureSheetBody
           addAnother={false}
           areaLabel="No Area"
-          contextLabel="Contexts"
+          contextLabel="Very Long Context Label"
+          dueDate={null}
           dueLabel="Due Date"
+          dueTimeLabel="Change time"
           handleClose={vi.fn()}
           handleSave={vi.fn()}
           insetsBottom={0}
@@ -150,11 +228,14 @@ describe('Quick capture modal composition', () => {
           onOpenAreaPicker={vi.fn()}
           onOpenContextPicker={vi.fn()}
           onOpenDueDatePicker={vi.fn()}
+          onOpenDueTimePicker={vi.fn()}
           onOpenPriorityPicker={vi.fn()}
           onOpenProjectPicker={vi.fn()}
+          onQuickDueDateSelect={vi.fn()}
           onResetArea={vi.fn()}
           onResetContexts={vi.fn()}
           onResetDueDate={vi.fn()}
+          onResetDueTime={vi.fn()}
           onResetPriority={vi.fn()}
           onResetProject={vi.fn()}
           onToggleAddAnother={vi.fn()}
@@ -162,11 +243,12 @@ describe('Quick capture modal composition', () => {
           onValueChange={vi.fn()}
           prioritiesEnabled
           priorityLabel="Priority"
-          projectLabel="Project"
+          projectLabel="Very Long Project Label"
           recording={false}
           recordingBusy={false}
           recordingReady={false}
           sheetMaxHeight={500}
+          showDueTime={false}
           t={(key) => key}
           tc={tc}
           value=""
@@ -175,11 +257,13 @@ describe('Quick capture modal composition', () => {
       );
     });
 
-    const modal = tree.root.findByType(Modal);
-    expect(modal.props.transparent).toBe(true);
-    expect(modal.props.animationType).toBe(Platform.OS === 'android' ? 'fade' : 'slide');
-    expect(modal.props.hardwareAccelerated).toBe(Platform.OS === 'android');
-    expect(modal.props.statusBarTranslucent).toBe(Platform.OS === 'android');
+    expect(tree.root.findByType(TextInput).props.maxFontSizeMultiplier).toBe(1.2);
+    expect(tree.root.findByType(TextInput).props.textAlignVertical).toBe('center');
+    const compactTexts = tree.root
+      .findAllByType(Text)
+      .filter((node) => typeof node.props.children === 'string');
+    expect(compactTexts.length).toBeGreaterThan(0);
+    expect(compactTexts.every((node) => node.props.maxFontSizeMultiplier === 1.2)).toBe(true);
   });
 
   it('submits the quick capture input from the keyboard Done action on iOS', () => {
@@ -199,7 +283,9 @@ describe('Quick capture modal composition', () => {
             addAnother={false}
             areaLabel="No Area"
             contextLabel="Contexts"
+            dueDate={null}
             dueLabel="Due Date"
+            dueTimeLabel="Change time"
             handleClose={vi.fn()}
             handleSave={handleSave}
             insetsBottom={0}
@@ -207,11 +293,14 @@ describe('Quick capture modal composition', () => {
             onOpenAreaPicker={vi.fn()}
             onOpenContextPicker={vi.fn()}
             onOpenDueDatePicker={vi.fn()}
+            onOpenDueTimePicker={vi.fn()}
             onOpenPriorityPicker={vi.fn()}
             onOpenProjectPicker={vi.fn()}
+            onQuickDueDateSelect={vi.fn()}
             onResetArea={vi.fn()}
             onResetContexts={vi.fn()}
             onResetDueDate={vi.fn()}
+            onResetDueTime={vi.fn()}
             onResetPriority={vi.fn()}
             onResetProject={vi.fn()}
             onToggleAddAnother={vi.fn()}
@@ -224,6 +313,7 @@ describe('Quick capture modal composition', () => {
             recordingBusy={false}
             recordingReady={false}
             sheetMaxHeight={500}
+            showDueTime={false}
             t={(key) => key}
             tc={tc}
             value="Capture me"

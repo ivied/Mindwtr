@@ -1,8 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { shallow, useTaskStore } from '@mindwtr/core';
+import { shallow, translateWithFallback, useTaskStore } from '@mindwtr/core';
 import { useLanguage } from './language-context';
 import { KeybindingHelpModal } from '../components/KeybindingHelpModal';
-import { isTauriRuntime } from '../lib/runtime';
+import { isFlatpakRuntime, isTauriRuntime } from '../lib/runtime';
 import { reportError } from '../lib/report-error';
 import { logWarn } from '../lib/app-log';
 import { useUiStore } from '../store/ui-store';
@@ -23,6 +23,7 @@ export interface TaskListScope {
     selectFirst: () => void;
     selectLast: () => void;
     editSelected: () => void;
+    openQuickActions?: () => void;
     toggleDoneSelected: () => void;
     deleteSelected: () => void;
     focusAddInput?: () => void;
@@ -142,11 +143,20 @@ export function KeybindingProvider({
     const [isHelpOpen, setIsHelpOpen] = useState(false);
     const quickAddShortcut = useMemo(
         () => normalizeGlobalQuickAddShortcut(settings.globalQuickAddShortcut, {
+            isFlatpak: isFlatpakRuntime(),
             isMac,
             isWindows,
         }),
         [isMac, isWindows, settings.globalQuickAddShortcut]
     );
+    const undoLabel = useMemo(() => {
+        const value = t('common.undo');
+        return value && value !== 'common.undo' ? value : 'Undo';
+    }, [t]);
+    const formatTaskMarkedDoneMessage = useCallback((title: string) => {
+        return translateWithFallback(t, 'task.markedDone', '{title} marked Done')
+            .replace('{title}', title);
+    }, [t]);
     const sortedAreas = useMemo(
         () => [...areas].sort((a, b) => a.order - b.order),
         [areas],
@@ -347,6 +357,15 @@ export function KeybindingProvider({
         editTrigger.click();
     }, [pickFallbackTaskElement]);
 
+    const fallbackOpenQuickActionsSelected = useCallback(() => {
+        const selectedElement = pickFallbackTaskElement();
+        if (!selectedElement) return;
+        const trigger = selectedElement.querySelector<HTMLElement>('[data-task-quick-actions-trigger]');
+        if (!trigger) return;
+        trigger.focus();
+        trigger.click();
+    }, [pickFallbackTaskElement]);
+
     const fallbackToggleDoneSelected = useCallback(() => {
         const selectedElement = pickFallbackTaskElement();
         const selectedTaskId = selectedElement?.dataset.taskId;
@@ -355,19 +374,60 @@ export function KeybindingProvider({
         const task = state.tasks.find((item) => item.id === selectedTaskId);
         if (!task) return;
         const nextStatus = task.status === 'done' ? 'inbox' : 'done';
-        void state.moveTask(task.id, nextStatus);
-    }, [pickFallbackTaskElement]);
+        const previousStatus = task.status;
+        void state.moveTask(task.id, nextStatus)
+            .then((result) => {
+                if (!result.success) {
+                    throw new Error(result.error || 'Failed to change task status');
+                }
+                if (settings.undoNotificationsEnabled === false || nextStatus !== 'done' || previousStatus === 'done') return;
+                showToast(
+                    formatTaskMarkedDoneMessage(task.title),
+                    'info',
+                    5000,
+                    {
+                        label: undoLabel,
+                        onClick: () => {
+                            void state.moveTask(task.id, previousStatus);
+                        },
+                    }
+                );
+            })
+            .catch((error) => reportError('Failed to change task status', error));
+    }, [formatTaskMarkedDoneMessage, pickFallbackTaskElement, settings.undoNotificationsEnabled, showToast, undoLabel]);
 
     const fallbackDeleteSelected = useCallback(() => {
         const selectedElement = pickFallbackTaskElement();
         const selectedTaskId = selectedElement?.dataset.taskId;
         if (!selectedTaskId) return;
         const state = useTaskStore.getState();
-        void state.deleteTask(selectedTaskId);
+        void state.deleteTask(selectedTaskId)
+            .then((result) => {
+                if (!result.success) {
+                    throw new Error(result.error || 'Failed to delete task');
+                }
+                if (settings.undoNotificationsEnabled === false) return;
+                const deletedMessageRaw = t('list.taskDeleted');
+                const deletedMessage = deletedMessageRaw && deletedMessageRaw !== 'list.taskDeleted'
+                    ? deletedMessageRaw
+                    : 'Task deleted';
+                showToast(
+                    deletedMessage,
+                    'info',
+                    5000,
+                    {
+                        label: undoLabel,
+                        onClick: () => {
+                            void state.restoreTask(selectedTaskId);
+                        },
+                    }
+                );
+            })
+            .catch((error) => reportError('Failed to delete task', error));
         if (fallbackSelectedTaskIdRef.current === selectedTaskId) {
             fallbackSelectedTaskIdRef.current = null;
         }
-    }, [pickFallbackTaskElement]);
+    }, [pickFallbackTaskElement, settings.undoNotificationsEnabled, showToast, t, undoLabel]);
 
     const fallbackTaskListScope = useMemo<TaskListScope>(() => ({
         kind: 'taskList',
@@ -376,12 +436,14 @@ export function KeybindingProvider({
         selectFirst: fallbackSelectFirst,
         selectLast: fallbackSelectLast,
         editSelected: fallbackEditSelected,
+        openQuickActions: fallbackOpenQuickActionsSelected,
         toggleDoneSelected: fallbackToggleDoneSelected,
         deleteSelected: fallbackDeleteSelected,
         focusAddInput: focusFallbackFilterInput,
     }), [
         fallbackDeleteSelected,
         fallbackEditSelected,
+        fallbackOpenQuickActionsSelected,
         fallbackSelectFirst,
         fallbackSelectLast,
         fallbackSelectNext,
@@ -522,6 +584,10 @@ export function KeybindingProvider({
                     e.preventDefault();
                     scope?.editSelected();
                     break;
+                case '.':
+                    e.preventDefault();
+                    scope?.openQuickActions?.();
+                    break;
                 case 'x':
                     e.preventDefault();
                     scope?.toggleDoneSelected();
@@ -583,6 +649,10 @@ export function KeybindingProvider({
                     case 'e':
                         e.preventDefault();
                         scope?.editSelected();
+                        break;
+                    case '.':
+                        e.preventDefault();
+                        scope?.openQuickActions?.();
                         break;
                     case 't':
                         e.preventDefault();
@@ -739,7 +809,11 @@ export function KeybindingProvider({
             )
             .then((result) => {
                 if (cancelled) return;
-                const appliedShortcut = normalizeGlobalQuickAddShortcut(result?.shortcut, { isMac, isWindows });
+                const appliedShortcut = normalizeGlobalQuickAddShortcut(result?.shortcut, {
+                    isFlatpak: isFlatpakRuntime(),
+                    isMac,
+                    isWindows,
+                });
                 if (result?.warning) {
                     showToast(result.warning, 'info', 6000);
                 }

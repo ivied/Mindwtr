@@ -18,6 +18,8 @@ This page documents practical performance patterns for Mindwtr (desktop, mobile,
 4. Use virtualization for large lists and avoid dynamic height recalculation in hot paths.
 5. Avoid creating new inline callbacks/objects in large mapped lists.
 
+Current desktop list rows rely on memoized `TaskItem` rendering, so keep task row props stable when changing list, project, agenda, calendar, or review views. If a view needs extra per-row metadata, derive it once at the list level instead of building new objects inside every row render.
+
 ### Rendering Optimization Playbook
 
 When a screen feels slow, use this order:
@@ -36,6 +38,8 @@ When a screen feels slow, use this order:
 - Keep `keyExtractor` stable and avoid index keys.
 - Avoid inline anonymous renderers in deeply nested item trees.
 
+Calendar-specific rule: virtualize unbounded result sets, not fixed calendar scaffolding. The mobile Schedule view can grow with every visible task/event and should stay on `FlatList`; day and week timelines are bounded by the visible hour grid, and month cells are bounded by calendar weeks, so `ScrollView` is acceptable there as long as task/event rows are pre-filtered outside the render loop.
+
 ## Sync Performance Guidance
 
 1. Validate payload shape before merge to fail fast.
@@ -44,6 +48,8 @@ When a screen feels slow, use this order:
 4. Bound retries with backoff and classify retryable vs terminal errors.
 5. Cache backend config reads during a sync cycle to reduce repeated storage access.
 
+The sync engine maintains indexed conflict/revision lookups during merge. When adding new synced entity types or conflict reporting, preserve that indexed shape rather than reintroducing per-entity scans across full collections.
+
 ### Sync Tuning Tips
 
 1. Keep attachment upload/download concurrency conservative on mobile networks.
@@ -51,6 +57,7 @@ When a screen feels slow, use this order:
 3. Abort quickly on offline transitions; avoid long retry chains after connectivity loss.
 4. Use progress instrumentation for long-running attachment phases.
 5. Track conflict count, max clock skew, and timestamp adjustments per sync run.
+6. Treat sync-conflict samples as bounded diagnostics. Keep sample count and diff-key limits small so conflict reporting does not dominate large merges.
 
 ### Sync Debug Checklist
 

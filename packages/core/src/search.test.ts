@@ -1,8 +1,26 @@
 import { describe, it, expect } from 'vitest';
-import { filterTasksBySearch } from './search';
+import { filterTasksBySearch, searchAll } from './search';
 import type { Project, Task } from './types';
 
 describe('search', () => {
+    it('caps global search results to the shared search limit', () => {
+        const tasks: Task[] = Array.from({ length: 205 }, (_, index) => ({
+            id: `task-${index}`,
+            title: `Needle task ${index}`,
+            status: 'next',
+            tags: [],
+            contexts: [],
+            createdAt: '2025-01-01T00:00:00Z',
+            updatedAt: '2025-01-01T00:00:00Z',
+        }));
+
+        const results = searchAll(tasks, [], 'needle');
+
+        expect(results.tasks).toHaveLength(200);
+        expect(results.limited).toBe(true);
+        expect(results.limit).toBe(200);
+    });
+
     it('supports status, OR groups, and negation', () => {
         const now = new Date('2025-01-01T10:00:00Z');
 
@@ -152,6 +170,74 @@ describe('search', () => {
 
         const results = filterTasksBySearch(tasks, projects, 'project:work');
         expect(results).toHaveLength(1);
+    });
+
+    it('matches assigned task filters and combines them with tags', () => {
+        const nowIso = new Date('2025-01-01T00:00:00Z').toISOString();
+        const tasks: Task[] = [
+            {
+                id: 't1',
+                title: 'Follow up',
+                status: 'waiting',
+                assignedTo: 'Tom',
+                tags: ['#urgent'],
+                contexts: [],
+                createdAt: nowIso,
+                updatedAt: nowIso,
+            },
+            {
+                id: 't2',
+                title: 'Review invoice',
+                status: 'waiting',
+                assignedTo: 'Tom',
+                tags: ['#finance'],
+                contexts: [],
+                createdAt: nowIso,
+                updatedAt: nowIso,
+            },
+            {
+                id: 't3',
+                title: 'Ask for estimate',
+                status: 'waiting',
+                assignedTo: 'Alex',
+                tags: ['#urgent'],
+                contexts: [],
+                createdAt: nowIso,
+                updatedAt: nowIso,
+            },
+        ];
+
+        const results = filterTasksBySearch(tasks, [], 'tags:#urgent assigned:Tom');
+        expect(results.map((task) => task.id)).toEqual(['t1']);
+    });
+
+    it('supports quoted assignee filters', () => {
+        const nowIso = new Date('2025-01-01T00:00:00Z').toISOString();
+        const tasks: Task[] = [
+            {
+                id: 't1',
+                title: 'Follow up',
+                status: 'waiting',
+                assignedTo: 'Tom Smith',
+                tags: [],
+                contexts: [],
+                createdAt: nowIso,
+                updatedAt: nowIso,
+            },
+            {
+                id: 't2',
+                title: 'Check brief',
+                status: 'waiting',
+                assignedTo: 'Tom',
+                tags: [],
+                contexts: [],
+                createdAt: nowIso,
+                updatedAt: nowIso,
+            },
+        ];
+
+        const results = filterTasksBySearch(tasks, [], 'assignee:"Tom Smith"');
+        expect(results.map((task) => task.id)).toEqual(['t1']);
     });
 
     it('does not build project lookup when query has no project terms', () => {

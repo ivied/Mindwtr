@@ -62,6 +62,8 @@ type ReviewLabelKey =
 
 export type ReviewLabels = Record<ReviewLabelKey, string>;
 
+type ReviewLabelTranslator = (key: string) => string;
+
 const defaultReviewLabels: ReviewLabels = {
     weeklyReview: 'Weekly Review',
     inbox: 'Inbox',
@@ -125,69 +127,84 @@ const defaultReviewLabels: ReviewLabels = {
     moreItems: 'more items',
 };
 
-const zhReviewLabels: ReviewLabels = {
-    weeklyReview: '周回顾',
-    inbox: '收集箱',
-    ai: 'AI 洞察',
-    calendar: '日历',
-    waiting: '等待中',
-    contexts: '情境',
-    projects: '项目',
-    someday: '将来/也许',
-    done: '完成!',
-    timeFor: '开始周回顾!',
-    timeForDesc: '花几分钟整理你的系统，确保一切都在掌控之中。',
-    startReview: '开始回顾',
-    inboxDesc: '清空收集箱',
-    inboxGuide: '处理每一项：删除、委托、设置下一步行动，或移到将来/也许。目标是清空收集箱！',
-    itemsInInbox: '条在收集箱',
-    inboxEmpty: '太棒了！收集箱已清空！',
-    aiDesc: 'AI 标记久未推进的任务并给出清理建议。',
-    aiRun: '开始分析',
-    aiRunning: '分析中…',
-    aiEmpty: '没有发现过期项目。',
-    aiApply: '应用所选',
-    aiActionSomeday: '移至将来/也许',
-    aiActionArchive: '归档',
-    aiActionBreakdown: '需要拆解',
-    aiActionKeep: '保留',
-    loading: '加载中…',
-    calendarDesc: '先查看未来 7 天的日程摘要。',
-    calendarEmpty: '该时间范围没有日历事件。',
-    calendarUpcoming: '未来 7 天',
-    calendarTasks: '未来 7 天任务',
-    calendarTasksEmpty: '未来 7 天没有已安排任务。',
-    dueLabel: '截止',
-    startLabel: '开始',
-    allDay: '全天',
-    more: '更多',
-    less: '收起',
-    addTask: '添加任务',
-    addTaskPlaceholder: '输入任务标题',
-    cancel: '取消',
-    add: '添加',
-    waitingDesc: '跟进等待项目',
-    waitingGuide: '检查每个等待项：是否需要跟进？已完成可以标记完成，需要再次跟进可以加注释。',
-    contextsDesc: '回顾你的情境，确保每个情境下有清晰的下一步行动。',
-    contextsEmpty: '没有带有活动任务的情境。',
-    nothingWaiting: '没有等待项目',
-    projectsDesc: '检查项目状态',
-    projectsGuide: '确保每个活跃项目都有明确的下一步行动。没有下一步的项目会卡住！',
-    noActiveProjects: '没有活跃项目',
-    somedayDesc: '重新审视将来/也许',
-    somedayGuide: '有没有现在想开始的？有没有不再感兴趣的？激活它或删除它。',
-    listEmpty: '列表为空',
-    reviewComplete: '回顾完成!',
-    completeDesc: '你的系统已经整理完毕，准备好迎接新的一周了！',
-    finish: '完成',
-    next: '下一步',
-    back: '返回',
-    hasNext: '✓ 有下一步',
-    needsAction: '! 需要行动',
-    activeTasks: '个活跃任务',
-    moreItems: '更多项目',
+const reviewLabelTranslationKeys: Record<ReviewLabelKey, string> = {
+    weeklyReview: 'settings.weeklyReview',
+    inbox: 'nav.inbox',
+    ai: 'review.aiStep',
+    calendar: 'nav.calendar',
+    waiting: 'review.waitingStep',
+    contexts: 'review.contexts',
+    projects: 'nav.projects',
+    someday: 'review.somedayStep',
+    done: 'review.allDone',
+    timeFor: 'review.timeFor',
+    timeForDesc: 'review.timeForDesc',
+    startReview: 'review.startReview',
+    inboxDesc: 'review.inboxStep',
+    inboxGuide: 'review.inboxGuide',
+    itemsInInbox: 'review.inboxZeroDesc',
+    inboxEmpty: 'review.inboxEmpty',
+    aiDesc: 'review.aiStepDesc',
+    aiRun: 'review.aiRun',
+    aiRunning: 'review.aiRunning',
+    aiEmpty: 'review.aiEmpty',
+    aiApply: 'review.aiApply',
+    aiActionSomeday: 'review.aiAction.someday',
+    aiActionArchive: 'review.aiAction.archive',
+    aiActionBreakdown: 'review.aiAction.breakdown',
+    aiActionKeep: 'review.aiAction.keep',
+    loading: 'common.loading',
+    calendarDesc: 'review.calendarStepDesc',
+    calendarEmpty: 'review.calendarEmpty',
+    calendarUpcoming: 'review.upcoming14',
+    calendarTasks: 'review.calendarTasks',
+    calendarTasksEmpty: 'review.calendarTasksEmpty',
+    dueLabel: 'taskEdit.dueDateLabel',
+    startLabel: 'taskEdit.startDateLabel',
+    allDay: 'calendar.allDay',
+    more: 'common.more',
+    less: 'common.less',
+    addTask: 'nav.addTask',
+    addTaskPlaceholder: 'review.addTaskPlaceholder',
+    cancel: 'common.cancel',
+    add: 'common.add',
+    waitingDesc: 'review.waitingStepDesc',
+    waitingGuide: 'review.waitingHint',
+    contextsDesc: 'review.contextsStepDesc',
+    contextsEmpty: 'review.contextsEmpty',
+    nothingWaiting: 'review.waitingEmpty',
+    projectsDesc: 'review.projectsStep',
+    projectsGuide: 'review.projectsHint',
+    noActiveProjects: 'review.noActiveTasks',
+    somedayDesc: 'review.somedayStepDesc',
+    somedayGuide: 'review.somedayHint',
+    listEmpty: 'review.listEmpty',
+    reviewComplete: 'review.complete',
+    completeDesc: 'review.completeDesc',
+    finish: 'review.finish',
+    next: 'review.next',
+    back: 'review.back',
+    hasNext: 'review.hasNextAction',
+    needsAction: 'review.needsAction',
+    activeTasks: 'review.activeTasks',
+    moreItems: 'review.moreItems',
 };
 
-export const getReviewLabels = (lang: string): ReviewLabels => (
-    lang === 'zh' || lang === 'zh-Hant' ? zhReviewLabels : defaultReviewLabels
+const translateReviewLabel = (
+    key: ReviewLabelKey,
+    t: ReviewLabelTranslator | undefined
+): string => {
+    const translationKey = reviewLabelTranslationKeys[key];
+    if (!translationKey || !t) return defaultReviewLabels[key];
+    const translated = t(translationKey);
+    return translated && translated !== translationKey ? translated : defaultReviewLabels[key];
+};
+
+export const getReviewLabels = (t?: ReviewLabelTranslator): ReviewLabels => (
+    Object.fromEntries(
+        (Object.keys(defaultReviewLabels) as ReviewLabelKey[]).map((key) => [
+            key,
+            translateReviewLabel(key, t),
+        ])
+    ) as ReviewLabels
 );

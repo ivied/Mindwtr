@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { buildAIConfig, buildCopilotConfig } from './ai-config';
-import type { AppData } from './types';
+import type { AiSettings, AppSettings } from './types';
 
-const createSettings = (ai: AppData['settings']['ai']): AppData['settings'] => ({
+const createSettings = (ai: AiSettings): AppSettings => ({
     ai,
 });
 
@@ -17,6 +17,18 @@ describe('ai-config endpoint mapping', () => {
             'test-key',
         );
         expect(config.endpoint).toBe('http://localhost:11434/v1/chat/completions');
+    });
+
+    it('maps llama.cpp OpenAI-compatible base URL to chat completions endpoint', () => {
+        const config = buildAIConfig(
+            createSettings({
+                provider: 'openai',
+                model: 'llama-3.2',
+                baseUrl: 'http://localhost:8080/v1',
+            }),
+            '',
+        );
+        expect(config.endpoint).toBe('http://localhost:8080/v1/chat/completions');
     });
 
     it('keeps chat completions endpoint unchanged', () => {

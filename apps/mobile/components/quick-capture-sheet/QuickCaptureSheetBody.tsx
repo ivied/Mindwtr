@@ -1,15 +1,20 @@
 import React from 'react';
 import type { RefObject } from 'react';
 import { KeyboardAvoidingView, Modal, Platform, Pressable, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
-import { AtSign, CalendarDays, Flag, Folder, Mic, Square, X } from 'lucide-react-native';
+import { AtSign, CalendarDays, Clock, Flag, Folder, Mic, Square, X } from 'lucide-react-native';
 import type { ThemeColors } from '@/hooks/use-theme-colors';
+import { QuickDateChips } from '../QuickDateChips';
 import { styles } from './quick-capture-sheet.styles';
+
+const COMPACT_TEXT_MAX_SCALE = 1.2;
 
 interface QuickCaptureSheetBodyProps {
   addAnother: boolean;
   areaLabel: string;
   contextLabel: string;
   dueLabel: string;
+  dueDate: Date | null;
+  dueTimeLabel: string;
   handleClose: () => void;
   handleSave: () => void;
   insetsBottom: number;
@@ -17,11 +22,14 @@ interface QuickCaptureSheetBodyProps {
   onOpenAreaPicker: () => void;
   onOpenContextPicker: () => void;
   onOpenDueDatePicker: () => void;
+  onOpenDueTimePicker: () => void;
   onOpenPriorityPicker: () => void;
   onOpenProjectPicker: () => void;
+  onQuickDueDateSelect: (date: Date | null) => void;
   onResetArea: () => void;
   onResetContexts: () => void;
   onResetDueDate: () => void;
+  onResetDueTime: () => void;
   onResetPriority: () => void;
   onResetProject: () => void;
   onToggleAddAnother: (value: boolean) => void;
@@ -34,6 +42,7 @@ interface QuickCaptureSheetBodyProps {
   recordingBusy: boolean;
   recordingReady: boolean;
   sheetMaxHeight: number;
+  showDueTime: boolean;
   t: (key: string) => string;
   tc: ThemeColors;
   value: string;
@@ -44,7 +53,9 @@ export function QuickCaptureSheetBody({
   addAnother,
   areaLabel,
   contextLabel,
+  dueDate,
   dueLabel,
+  dueTimeLabel,
   handleClose,
   handleSave,
   insetsBottom,
@@ -52,11 +63,14 @@ export function QuickCaptureSheetBody({
   onOpenAreaPicker,
   onOpenContextPicker,
   onOpenDueDatePicker,
+  onOpenDueTimePicker,
   onOpenPriorityPicker,
   onOpenProjectPicker,
+  onQuickDueDateSelect,
   onResetArea,
   onResetContexts,
   onResetDueDate,
+  onResetDueTime,
   onResetPriority,
   onResetProject,
   onToggleAddAnother,
@@ -69,6 +83,7 @@ export function QuickCaptureSheetBody({
   recordingBusy,
   recordingReady,
   sheetMaxHeight,
+  showDueTime,
   t,
   tc,
   value,
@@ -78,11 +93,12 @@ export function QuickCaptureSheetBody({
     <Modal
       visible={visible}
       transparent
-      // Transparent slide modals leave ghost trails on some Android tablet GPUs.
-      animationType={Platform.OS === 'android' ? 'fade' : 'slide'}
+      // Transparent Android modal animations can blend stale frames on some tablet GPUs.
+      animationType={Platform.OS === 'android' ? 'none' : 'slide'}
       hardwareAccelerated={Platform.OS === 'android'}
       navigationBarTranslucent={Platform.OS === 'android'}
       statusBarTranslucent={Platform.OS === 'android'}
+      accessibilityViewIsModal
       onRequestClose={handleClose}
     >
       <View style={styles.modalRoot} accessibilityViewIsModal>
@@ -108,7 +124,13 @@ export function QuickCaptureSheetBody({
             ]}
           >
             <View style={styles.headerRow}>
-              <Text style={[styles.title, { color: tc.text }]}>{t('nav.addTask')}</Text>
+              <Text
+                style={[styles.title, { color: tc.text }]}
+                numberOfLines={1}
+                maxFontSizeMultiplier={COMPACT_TEXT_MAX_SCALE}
+              >
+                {t('nav.addTask')}
+              </Text>
               <TouchableOpacity onPress={handleClose} accessibilityLabel={t('common.close')}>
                 <X size={18} color={tc.secondaryText} />
               </TouchableOpacity>
@@ -128,6 +150,9 @@ export function QuickCaptureSheetBody({
                 }}
                 returnKeyType="done"
                 blurOnSubmit
+                numberOfLines={1}
+                textAlignVertical="center"
+                maxFontSizeMultiplier={COMPACT_TEXT_MAX_SCALE}
               />
               <TouchableOpacity
                 onPress={onToggleRecording}
@@ -154,7 +179,13 @@ export function QuickCaptureSheetBody({
             {recordingReady && (
               <View style={styles.recordingRow}>
                 <View style={[styles.recordingDot, { backgroundColor: tc.danger }]} />
-                <Text style={[styles.recordingText, { color: tc.danger }]}>{t('quickAdd.audioRecording')}</Text>
+                <Text
+                  style={[styles.recordingText, { color: tc.danger }]}
+                  numberOfLines={1}
+                  maxFontSizeMultiplier={COMPACT_TEXT_MAX_SCALE}
+                >
+                  {t('quickAdd.audioRecording')}
+                </Text>
               </View>
             )}
 
@@ -167,8 +198,35 @@ export function QuickCaptureSheetBody({
                 accessibilityLabel={`${t('taskEdit.dueDate')}: ${dueLabel}`}
               >
                 <CalendarDays size={16} color={tc.text} />
-                <Text style={[styles.optionText, { color: tc.text }]} numberOfLines={1}>{dueLabel}</Text>
+                <Text
+                  style={[styles.optionText, { color: tc.text }]}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                  maxFontSizeMultiplier={COMPACT_TEXT_MAX_SCALE}
+                >
+                  {dueLabel}
+                </Text>
               </TouchableOpacity>
+
+              {showDueTime && (
+                <TouchableOpacity
+                  style={[styles.optionChip, { backgroundColor: tc.filterBg, borderColor: tc.border }]}
+                  onPress={onOpenDueTimePicker}
+                  onLongPress={onResetDueTime}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${t('task.aria.dueTime')}: ${dueTimeLabel}`}
+                >
+                  <Clock size={16} color={tc.text} />
+                  <Text
+                    style={[styles.optionText, { color: tc.text }]}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                    maxFontSizeMultiplier={COMPACT_TEXT_MAX_SCALE}
+                  >
+                    {dueTimeLabel}
+                  </Text>
+                </TouchableOpacity>
+              )}
 
               <TouchableOpacity
                 style={[styles.optionChip, { backgroundColor: tc.filterBg, borderColor: tc.border }]}
@@ -178,7 +236,14 @@ export function QuickCaptureSheetBody({
                 accessibilityLabel={`${t('taskEdit.contextsLabel')}: ${contextLabel}`}
               >
                 <AtSign size={16} color={tc.text} />
-                <Text style={[styles.optionText, { color: tc.text }]} numberOfLines={1}>{contextLabel}</Text>
+                <Text
+                  style={[styles.optionText, { color: tc.text }]}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                  maxFontSizeMultiplier={COMPACT_TEXT_MAX_SCALE}
+                >
+                  {contextLabel}
+                </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -188,7 +253,14 @@ export function QuickCaptureSheetBody({
                 accessibilityRole="button"
                 accessibilityLabel={`${t('taskEdit.areaLabel')}: ${areaLabel}`}
               >
-                <Text style={[styles.optionText, { color: tc.text }]} numberOfLines={1}>{areaLabel}</Text>
+                <Text
+                  style={[styles.optionText, { color: tc.text }]}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                  maxFontSizeMultiplier={COMPACT_TEXT_MAX_SCALE}
+                >
+                  {areaLabel}
+                </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -199,7 +271,14 @@ export function QuickCaptureSheetBody({
                 accessibilityLabel={`${t('taskEdit.project')}: ${projectLabel}`}
               >
                 <Folder size={16} color={tc.text} />
-                <Text style={[styles.optionText, { color: tc.text }]} numberOfLines={1}>{projectLabel}</Text>
+                <Text
+                  style={[styles.optionText, { color: tc.text }]}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                  maxFontSizeMultiplier={COMPACT_TEXT_MAX_SCALE}
+                >
+                  {projectLabel}
+                </Text>
               </TouchableOpacity>
 
               {prioritiesEnabled && (
@@ -211,10 +290,24 @@ export function QuickCaptureSheetBody({
                   accessibilityLabel={`${t('taskEdit.priorityLabel')}: ${priorityLabel}`}
                 >
                   <Flag size={16} color={tc.text} />
-                  <Text style={[styles.optionText, { color: tc.text }]} numberOfLines={1}>{priorityLabel}</Text>
+                  <Text
+                    style={[styles.optionText, { color: tc.text }]}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                    maxFontSizeMultiplier={COMPACT_TEXT_MAX_SCALE}
+                  >
+                    {priorityLabel}
+                  </Text>
                 </TouchableOpacity>
               )}
             </View>
+
+            <QuickDateChips
+              t={t}
+              tc={tc}
+              selectedDate={dueDate}
+              onSelect={(date) => onQuickDueDateSelect(date)}
+            />
 
             <View style={styles.footerRow}>
               <View style={styles.toggleRow}>
@@ -225,7 +318,13 @@ export function QuickCaptureSheetBody({
                   trackColor={{ false: tc.border, true: `${tc.tint}55` }}
                   accessibilityLabel={t('quickAdd.addAnother')}
                 />
-                <Text style={[styles.toggleText, { color: tc.text }]}>{t('quickAdd.addAnother')}</Text>
+                <Text
+                  style={[styles.toggleText, { color: tc.text }]}
+                  numberOfLines={1}
+                  maxFontSizeMultiplier={COMPACT_TEXT_MAX_SCALE}
+                >
+                  {t('quickAdd.addAnother')}
+                </Text>
               </View>
               <TouchableOpacity
                 onPress={handleSave}
@@ -234,7 +333,13 @@ export function QuickCaptureSheetBody({
                 accessibilityRole="button"
                 accessibilityLabel={t('common.save')}
               >
-                <Text style={styles.saveText}>{t('common.save')}</Text>
+                <Text
+                  style={styles.saveText}
+                  numberOfLines={1}
+                  maxFontSizeMultiplier={COMPACT_TEXT_MAX_SCALE}
+                >
+                  {t('common.save')}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>

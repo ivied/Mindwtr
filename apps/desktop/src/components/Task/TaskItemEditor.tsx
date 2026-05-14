@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, type FormEvent, type ReactNode } from 'react';
-import { Loader2, Sparkles, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2, Sparkles, Trash2, X } from 'lucide-react';
 import {
     filterProjectsBySelectedArea,
     resolveAutoTextDirection,
@@ -72,6 +72,7 @@ interface TaskItemEditorProps {
     language: string;
     inputContexts: string[];
     onDuplicateTask: () => void;
+    onDeleteTask?: () => void;
     onCancel: () => void;
     onSubmit: (e: FormEvent) => void;
 }
@@ -128,6 +129,7 @@ export function TaskItemEditor({
     language,
     inputContexts,
     onDuplicateTask,
+    onDeleteTask,
     onCancel,
     onSubmit,
 }: TaskItemEditorProps) {
@@ -439,7 +441,7 @@ export function TaskItemEditor({
                                 </span>
                             )}
                         </span>
-                        <span className="text-[10px]">{schedulingOpen ? '▾' : '▸'}</span>
+                        {schedulingOpen ? <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" /> : <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
                     </button>
                     {schedulingOpen && (
                         <div className="mt-3 space-y-3">
@@ -470,7 +472,7 @@ export function TaskItemEditor({
                                 </span>
                             )}
                         </span>
-                        <span className="text-[10px]">{organizationOpen ? '▾' : '▸'}</span>
+                        {organizationOpen ? <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" /> : <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
                     </button>
                     {organizationOpen && (
                         <div className="mt-3 space-y-3">
@@ -501,7 +503,7 @@ export function TaskItemEditor({
                                 </span>
                             )}
                         </span>
-                        <span className="text-[10px]">{detailsOpen ? '▾' : '▸'}</span>
+                        {detailsOpen ? <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" /> : <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
                     </button>
                     {detailsOpen && (
                         <div className="mt-3 space-y-3">
@@ -530,27 +532,39 @@ export function TaskItemEditor({
                 </div>
             </div>
             </div>
-            <div className="flex gap-2 pt-1">
-                <button
-                    type="button"
-                    onClick={onDuplicateTask}
-                    className="text-xs px-3 py-1.5 rounded bg-muted/50 hover:bg-muted transition-colors text-muted-foreground"
-                >
-                    {t('taskEdit.duplicateTask')}
-                </button>
-                <button
-                    type="submit"
-                    className="text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded hover:bg-primary/90"
-                >
-                    {t('common.save')}
-                </button>
-                <button
-                    type="button"
-                    onClick={onCancel}
-                    className="text-xs bg-muted text-muted-foreground px-3 py-1.5 rounded hover:bg-muted/80"
-                >
-                    {t('common.cancel')}
-                </button>
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+                {onDeleteTask && (
+                    <button
+                        type="button"
+                        onClick={onDeleteTask}
+                        className="inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border border-destructive/30 text-destructive hover:bg-destructive/10 transition-colors"
+                    >
+                        <Trash2 className="w-3 h-3" aria-hidden="true" />
+                        {t('common.delete')}
+                    </button>
+                )}
+                <div className="flex flex-wrap gap-2 ml-auto">
+                    <button
+                        type="button"
+                        onClick={onDuplicateTask}
+                        className="text-xs px-3 py-1.5 rounded bg-muted/50 hover:bg-muted transition-colors text-muted-foreground"
+                    >
+                        {t('taskEdit.duplicateTask')}
+                    </button>
+                    <button
+                        type="submit"
+                        className="text-xs bg-primary text-primary-foreground px-3 py-1.5 rounded hover:bg-primary/90"
+                    >
+                        {t('common.save')}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={onCancel}
+                        className="text-xs bg-muted text-muted-foreground px-3 py-1.5 rounded hover:bg-muted/80"
+                    >
+                        {t('common.cancel')}
+                    </button>
+                </div>
             </div>
         </form>
     );

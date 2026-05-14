@@ -1,6 +1,13 @@
 import { BaseDirectory, mkdir, remove, writeTextFile } from '@tauri-apps/plugin-fs';
 import { dataDir, join } from '@tauri-apps/api/path';
-import { getBreadcrumbs, sanitizeForLog, sanitizeLogContext, sanitizeUrl, useTaskStore } from '@mindwtr/core';
+import {
+    getBreadcrumbs,
+    sanitizeForLog,
+    sanitizeLogContext,
+    sanitizeUrl,
+    type DiagnosticsSettings,
+    useTaskStore,
+} from '@mindwtr/core';
 import { isTauriRuntime } from './runtime';
 
 const LOG_DIR = 'mindwtr/logs';
@@ -32,7 +39,8 @@ async function ensureLogDir(): Promise<void> {
 
 function isLoggingEnabled(): boolean {
     if (isDiagnosticsEnabled()) return true;
-    return useTaskStore.getState().settings.diagnostics?.loggingEnabled === true;
+    const diagnostics: DiagnosticsSettings | undefined = useTaskStore.getState().settings.diagnostics;
+    return diagnostics?.loggingEnabled === true;
 }
 
 export function isDiagnosticsEnabled(): boolean {

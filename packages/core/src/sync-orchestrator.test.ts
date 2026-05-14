@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createSyncOrchestrator } from './sync-orchestrator';
+import { createSyncOrchestrator, runPreSyncAttachmentPhase } from './sync-orchestrator';
 
 describe('sync orchestrator', () => {
     afterEach(() => {
@@ -92,5 +92,65 @@ describe('sync orchestrator', () => {
 
         await new Promise((resolve) => setTimeout(resolve, 30));
         expect(args).toEqual(['first', 'second']);
+    });
+});
+
+describe('pre-sync attachment phase', () => {
+    it('runs the webdav operation behind a network availability check', async () => {
+        const ensureNetworkStillAvailable = vi.fn();
+        const webdav = vi.fn(async () => ({ id: 'mutated' }));
+
+        const result = await runPreSyncAttachmentPhase({
+            backend: 'webdav',
+            data: { id: 'original' },
+            ensureNetworkStillAvailable,
+            webdav,
+        });
+
+        expect(ensureNetworkStillAvailable).toHaveBeenCalledOnce();
+        expect(webdav).toHaveBeenCalledWith({ id: 'original' });
+        expect(result).toEqual({ data: { id: 'mutated' }, mutated: true, ran: true });
+    });
+
+    it('uses boolean mutation results with the original data snapshot', async () => {
+        const data = { id: 'original' };
+        const file = vi.fn(async () => true);
+
+        const result = await runPreSyncAttachmentPhase({
+            backend: 'file',
+            data,
+            file,
+        });
+
+        expect(result).toEqual({ data, mutated: true, ran: true });
+    });
+
+    it('selects the cloud operation from the configured provider', async () => {
+        const dropbox = vi.fn(async () => false);
+        const selfHostedCloud = vi.fn(async () => true);
+
+        const result = await runPreSyncAttachmentPhase({
+            backend: 'cloud',
+            cloudProvider: 'dropbox',
+            data: { id: 'original' },
+            dropbox,
+            selfHostedCloud,
+        });
+
+        expect(dropbox).toHaveBeenCalledOnce();
+        expect(selfHostedCloud).not.toHaveBeenCalled();
+        expect(result).toEqual({ data: null, mutated: false, ran: true });
+    });
+
+    it('skips unsupported or unconfigured backends', async () => {
+        await expect(runPreSyncAttachmentPhase({
+            backend: 'cloudkit',
+            data: { id: 'original' },
+        })).resolves.toEqual({ data: null, mutated: false, ran: false });
+
+        await expect(runPreSyncAttachmentPhase({
+            backend: 'webdav',
+            data: { id: 'original' },
+        })).resolves.toEqual({ data: null, mutated: false, ran: false });
     });
 });

@@ -4,15 +4,19 @@ import { purgeExpiredTombstones } from './sync';
 import { markCoreStartupPhase, measureCoreStartupPhase } from './startup-profiler';
 import { normalizeTaskForLoad } from './task-status';
 import type { StorageAdapter } from './storage';
-import type { AppData, Area, Project, TaskEditorFieldId } from './types';
+import type { AppData, Area, MigrationSettings, Project, TaskEditorFieldId } from './types';
 import type { DerivedCache, TaskStore } from './store-types';
 import {
     buildSaveSnapshot,
+    archiveSectionForProjectArchive,
+    clearDeletedTaskProjectArchiveMetadata,
+    completeTaskForProjectArchive,
     computeProjectDerivedState,
     computeTaskDerivedState,
     ensureDeviceId,
+    getNextDataChangeAt,
     normalizeAiSettingsForSync,
-    normalizeRevision,
+    nextRevision,
     reconcileEntityCollection,
     reuseArrayIfShallowEqual,
     selectVisibleAreas,
@@ -181,13 +185,13 @@ export const createSettingsActions = ({
                 rawSections.length === 0 &&
                 rawAreas.length === 0 &&
                 Object.keys(settings).length === 0;
-            const migrations = settings.migrations ?? {};
+            const migrations: MigrationSettings = settings.migrations ?? {};
             const shouldRunMigrations = (migrations.version ?? 0) < MIGRATION_VERSION;
             const lastAutoArchiveAt = safeParseDate(migrations.lastAutoArchiveAt)?.getTime() ?? 0;
             const shouldRunAutoArchive = Date.now() - lastAutoArchiveAt > AUTO_ARCHIVE_INTERVAL_MS;
             const lastTombstoneCleanupAt = safeParseDate(migrations.lastTombstoneCleanupAt)?.getTime() ?? 0;
             const shouldRunTombstoneCleanup = Date.now() - lastTombstoneCleanupAt > TOMBSTONE_CLEANUP_INTERVAL_MS;
-            const nextMigrationState = { ...migrations };
+            const nextMigrationState: MigrationSettings = { ...migrations };
             let didSettingsUpdate = false;
 
             if (shouldRunMigrations) {
@@ -240,7 +244,16 @@ export const createSettingsActions = ({
                 didSettingsUpdate = true;
             }
 
-            let allTasks = rawTasks.map((task) => normalizeTaskForLoad(task, nowIso));
+            let didClearDeletedProjectArchiveMetadata = false;
+            let allTasks = rawTasks
+                .map((task) => normalizeTaskForLoad(task, nowIso))
+                .map((task) => {
+                    const nextTask = clearDeletedTaskProjectArchiveMetadata(task);
+                    if (nextTask !== task) {
+                        didClearDeletedProjectArchiveMetadata = true;
+                    }
+                    return nextTask;
+                });
             const nowMs = Date.now();
             let didPromoteScheduled = false;
             allTasks = allTasks.map((task) => {
@@ -250,7 +263,7 @@ export const createSettingsActions = ({
                     ...task,
                     status: 'next',
                     updatedAt: nowIso,
-                    rev: normalizeRevision(task.rev) + 1,
+                    rev: nextRevision(task.rev),
                     revBy: nextSettings.deviceId,
                 };
             });
@@ -279,7 +292,7 @@ export const createSettingsActions = ({
                         completedAt: Number.isFinite(completedAt) ? task.completedAt : task.updatedAt || nowIso,
                         isFocusedToday: false,
                         updatedAt: nowIso,
-                        rev: normalizeRevision(task.rev) + 1,
+                        rev: nextRevision(task.rev),
                         revBy: nextSettings.deviceId,
                     };
                 });
@@ -468,7 +481,7 @@ export const createSettingsActions = ({
                     });
                 }
             }
-            let didArchiveTasksForArchivedProjects = false;
+            let didCompleteTasksForArchivedProjects = false;
             let didArchiveSectionsForArchivedProjects = false;
             const archivedProjectIds = new Set(
                 allProjects
@@ -477,30 +490,16 @@ export const createSettingsActions = ({
             );
             if (archivedProjectIds.size > 0) {
                 allTasks = allTasks.map((task) => {
-                    if (task.deletedAt || task.status === 'archived') return task;
+                    if (task.deletedAt || task.status === 'done' || task.status === 'archived') return task;
                     if (!task.projectId || !archivedProjectIds.has(task.projectId)) return task;
-                    didArchiveTasksForArchivedProjects = true;
-                    return {
-                        ...task,
-                        status: 'archived',
-                        completedAt: task.completedAt || nowIso,
-                        isFocusedToday: false,
-                        updatedAt: nowIso,
-                        rev: normalizeRevision(task.rev) + 1,
-                        revBy: nextSettings.deviceId,
-                    };
+                    didCompleteTasksForArchivedProjects = true;
+                    return completeTaskForProjectArchive(task, nowIso, nextSettings.deviceId);
                 });
                 allSections = allSections.map((section) => {
                     if (section.deletedAt) return section;
                     if (!archivedProjectIds.has(section.projectId)) return section;
                     didArchiveSectionsForArchivedProjects = true;
-                    return {
-                        ...section,
-                        deletedAt: nowIso,
-                        updatedAt: nowIso,
-                        rev: normalizeRevision(section.rev) + 1,
-                        revBy: nextSettings.deviceId,
-                    };
+                    return archiveSectionForProjectArchive(section, nowIso, nextSettings.deviceId);
                 });
             }
             let didRepairEntityReferences = false;
@@ -516,7 +515,7 @@ export const createSettingsActions = ({
                     ...project,
                     areaId: undefined,
                     updatedAt: nowIso,
-                    rev: normalizeRevision(project.rev) + 1,
+                    rev: nextRevision(project.rev),
                     revBy: nextSettings.deviceId,
                 };
             });
@@ -532,7 +531,7 @@ export const createSettingsActions = ({
                     ...section,
                     deletedAt: nowIso,
                     updatedAt: nowIso,
-                    rev: normalizeRevision(section.rev) + 1,
+                    rev: nextRevision(section.rev),
                     revBy: nextSettings.deviceId,
                 };
             });
@@ -573,7 +572,7 @@ export const createSettingsActions = ({
                 return {
                     ...nextTask,
                     updatedAt: nowIso,
-                    rev: normalizeRevision(task.rev) + 1,
+                    rev: nextRevision(task.rev),
                     revBy: nextSettings.deviceId,
                 };
             });
@@ -591,12 +590,16 @@ export const createSettingsActions = ({
                 );
                 allTasks = cleanup.data.tasks;
                 allProjects = cleanup.data.projects;
+                allSections = cleanup.data.sections;
+                allAreas = cleanup.data.areas;
+                nextSettings = cleanup.data.settings;
                 if (
                     cleanup.removedTaskTombstones > 0
                     || cleanup.removedProjectTombstones > 0
                     || cleanup.removedSectionTombstones > 0
                     || cleanup.removedAreaTombstones > 0
                     || cleanup.removedAttachmentTombstones > 0
+                    || cleanup.removedSavedFilterTombstones > 0
                 ) {
                     didTombstoneCleanup = true;
                     logWarn('Purged expired tombstones during data fetch', {
@@ -608,6 +611,7 @@ export const createSettingsActions = ({
                             removedSectionTombstones: cleanup.removedSectionTombstones,
                             removedAreaTombstones: cleanup.removedAreaTombstones,
                             removedAttachmentTombstones: cleanup.removedAttachmentTombstones,
+                            removedSavedFilterTombstones: cleanup.removedSavedFilterTombstones,
                         },
                     });
                 }
@@ -646,11 +650,12 @@ export const createSettingsActions = ({
                         lastDataChangeAt:
                             didAutoArchive
                                 || didPromoteScheduled
-                                || didArchiveTasksForArchivedProjects
+                                || didCompleteTasksForArchivedProjects
                                 || didArchiveSectionsForArchivedProjects
+                                || didClearDeletedProjectArchiveMetadata
                                 || didRepairEntityReferences
                                 || didTombstoneCleanup
-                                ? Date.now()
+                                ? getNextDataChangeAt(state.lastDataChangeAt)
                                 : state.lastDataChangeAt,
                     };
                 });
@@ -671,8 +676,9 @@ export const createSettingsActions = ({
             if (
                 didAutoArchive
                 || didPromoteScheduled
-                || didArchiveTasksForArchivedProjects
+                || didCompleteTasksForArchivedProjects
                 || didArchiveSectionsForArchivedProjects
+                || didClearDeletedProjectArchiveMetadata
                 || didRepairEntityReferences
                 || didTombstoneCleanup
                 || didAreaMigration
@@ -719,12 +725,27 @@ export const createSettingsActions = ({
                 markSyncUpdated('appearance');
             }
 
+            const defaultScheduleTimeUpdate = updates.gtd
+                ? Object.prototype.hasOwnProperty.call(updates.gtd, 'defaultScheduleTime')
+                : false;
+            const focusTaskLimitUpdate = updates.gtd
+                ? Object.prototype.hasOwnProperty.call(updates.gtd, 'focusTaskLimit')
+                : false;
+
             if ('language' in updates || 'weekStart' in updates || 'dateFormat' in updates || 'timeFormat' in updates) {
                 markSyncUpdated('language');
             }
 
+            if (defaultScheduleTimeUpdate || focusTaskLimitUpdate) {
+                markSyncUpdated('gtd');
+            }
+
             if ('externalCalendars' in updates) {
                 markSyncUpdated('externalCalendars');
+            }
+
+            if ('savedFilters' in updates) {
+                markSyncUpdated('savedFilters');
             }
 
             if ('ai' in updates) {
@@ -763,7 +784,7 @@ export const createSettingsActions = ({
                             isFocusedToday: false,
                             updatedAt: nowIso,
                             completedAt: Number.isFinite(completedAt) ? task.completedAt : task.updatedAt || nowIso,
-                            rev: normalizeRevision(task.rev) + 1,
+                            rev: nextRevision(task.rev),
                             revBy: deviceState.deviceId,
                         };
                     });
@@ -776,7 +797,7 @@ export const createSettingsActions = ({
                         tasks: newVisibleTasks,
                         _allTasks: newAllTasks,
                         settings: newSettings,
-                        lastDataChangeAt: Date.now(),
+                        lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt),
                     };
                 }
             }
@@ -784,7 +805,7 @@ export const createSettingsActions = ({
             snapshot = buildSaveSnapshot(state, { settings: newSettings });
             return {
                 settings: newSettings,
-                lastDataChangeAt: shouldTrackChange ? Date.now() : state.lastDataChangeAt,
+                lastDataChangeAt: shouldTrackChange ? getNextDataChangeAt(state.lastDataChangeAt) : state.lastDataChangeAt,
             };
         });
 
@@ -833,6 +854,7 @@ export const createSettingsActions = ({
                 ? {
                     projectMap: previous.projectMap,
                     sequentialProjectIds: previous.sequentialProjectIds,
+                    focusedProjectCount: previous.focusedProjectCount,
                 }
                 : computeProjectDerivedState(state._allProjects, state._projectsById);
         const derived = {

@@ -1,0 +1,9 @@
+<en-US>
+Mindwtr 0.9.2 refreshes mobile navigation, Focus, Settings, Review, and capture. Android capture now works from Quick Settings and assistant voice create-note intents before showing the confirm-first capture screen. Sync is steadier with background task handling, saved filter sync, safer attachment cancellation, and better WebDAV/cloud checks.
+</en-US>
+<zh-CN>
+Mindwtr 0.9.2 刷新了移动端导航、专注、设置、回顾和收集体验。Android 现在支持从快捷设置和语音助理创建笔记入口打开收集，并仍会先显示确认页面。同步也更稳定：支持后台任务、已保存筛选同步、更安全的附件取消，以及更可靠的 WebDAV/云端检查。
+</zh-CN>
+<es-ES>
+Mindwtr 0.9.2 renueva navegacion movil, Focus, Settings, Review y captura. En Android, la captura funciona desde Quick Settings y entradas de voz de asistente antes de mostrar la pantalla de confirmacion. Sync es mas estable con tareas en segundo plano, filtros guardados, cancelacion segura de adjuntos y mejores revisiones WebDAV/cloud.
+</es-ES>

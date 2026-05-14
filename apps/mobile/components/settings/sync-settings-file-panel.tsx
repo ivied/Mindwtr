@@ -7,12 +7,12 @@ import type { ThemeColors } from '@/hooks/use-theme-colors';
 import { styles } from './settings.styles';
 
 type Translate = (key: string) => string;
-type Localize = (english: string, chinese: string) => string;
+type SettingsTranslator = (key: string, values?: Record<string, string | number | boolean | null | undefined>) => string;
 
 type SyncFileBackendPanelProps = {
     isSyncing: boolean;
     lastSyncCard: ReactNode;
-    localize: Localize;
+    tr: SettingsTranslator;
     onSelectFolder: () => void;
     onSync: () => void;
     syncPath: string | null;
@@ -23,7 +23,7 @@ type SyncFileBackendPanelProps = {
 export function SyncFileBackendPanel({
     isSyncing,
     lastSyncCard,
-    localize,
+    tr,
     onSelectFolder,
     onSync,
     syncPath,
@@ -33,7 +33,7 @@ export function SyncFileBackendPanel({
     return (
         <>
             <View style={[styles.helpBox, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>
-                <Text style={[styles.helpTitle, { color: tc.text }]}>{localize('How to Sync', '如何同步')}</Text>
+                <Text style={[styles.helpTitle, { color: tc.text }]}>{tr('settings.syncMobile.howToSync')}</Text>
                 <Text style={[styles.helpText, { color: tc.secondaryText }]}>
                     {Platform.OS === 'ios' ? t('settings.fileSyncHowToIos') : t('settings.fileSyncHowToAndroid')}
                 </Text>

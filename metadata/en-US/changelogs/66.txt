@@ -1,0 +1,3 @@
+Mobile navigation, Focus, Settings, Review, and capture were refreshed.
+Capture now works from Quick Settings and assistant-compatible voice entry points, while still opening the confirmation screen first.
+Sync is steadier with background task handling, saved filter sync, safer attachment cancellation, and better WebDAV/cloud checks.

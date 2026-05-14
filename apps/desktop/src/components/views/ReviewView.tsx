@@ -15,8 +15,29 @@ import { usePerformanceMonitor } from '../../hooks/usePerformanceMonitor';
 import { checkBudget } from '../../config/performanceBudgets';
 import { resolveAreaFilter, taskMatchesAreaFilter } from '../../lib/area-filter';
 import { useUiStore } from '../../store/ui-store';
+import { usePersistedViewState } from '../../hooks/usePersistedViewState';
 
 const STATUS_OPTIONS: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'done'];
+const REVIEW_VIEW_STATE_STORAGE_KEY = 'mindwtr:view:review:v1';
+
+type ReviewPersistedViewState = {
+    filterStatus: TaskStatus | 'all';
+};
+
+const DEFAULT_REVIEW_VIEW_STATE: ReviewPersistedViewState = {
+    filterStatus: 'all',
+};
+
+function sanitizeReviewViewState(value: unknown, fallback: ReviewPersistedViewState): ReviewPersistedViewState {
+    const parsed = value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Partial<ReviewPersistedViewState>
+        : {};
+    return {
+        filterStatus: parsed.filterStatus === 'all' || STATUS_OPTIONS.includes(parsed.filterStatus as TaskStatus)
+            ? parsed.filterStatus as TaskStatus | 'all'
+            : fallback.filterStatus,
+    };
+}
 
 export function ReviewView() {
     const perf = usePerformanceMonitor('ReviewView');
@@ -35,7 +56,18 @@ export function ReviewView() {
         shallow
     );
     const { t } = useLanguage();
-    const [filterStatus, setFilterStatus] = useState<TaskStatus | 'all'>('all');
+    const [persistedViewState, setPersistedViewState] = usePersistedViewState(
+        REVIEW_VIEW_STATE_STORAGE_KEY,
+        DEFAULT_REVIEW_VIEW_STATE,
+        sanitizeReviewViewState
+    );
+    const filterStatus = persistedViewState.filterStatus;
+    const setFilterStatus = useCallback((value: TaskStatus | 'all') => {
+        setPersistedViewState((current) => ({
+            ...current,
+            filterStatus: value,
+        }));
+    }, [setPersistedViewState]);
     const [searchQuery, setSearchQuery] = useState('');
     const [selectionMode, setSelectionMode] = useState(false);
     const [multiSelectedIds, setMultiSelectedIds] = useState<Set<string>>(new Set());

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+    PROJECTS_SIDEBAR_COMPACT_MAX_WIDTH,
     PROJECTS_SIDEBAR_DEFAULT_WIDTH,
     PROJECTS_SIDEBAR_MAX_WIDTH,
     PROJECTS_SIDEBAR_MIN_WIDTH,
@@ -24,6 +25,16 @@ describe('projects-sidebar-width', () => {
     it('reduces the allowed max width when the workspace gets narrow', () => {
         expect(getProjectsSidebarMaxWidth(700)).toBe(320);
         expect(clampProjectsSidebarWidth(520, 700)).toBe(320);
+    });
+
+    it('keeps the compact max on ordinary desktop widths', () => {
+        expect(getProjectsSidebarMaxWidth(1408)).toBe(PROJECTS_SIDEBAR_COMPACT_MAX_WIDTH);
+    });
+
+    it('expands the allowed max width on ultra-wide desktops', () => {
+        expect(getProjectsSidebarMaxWidth(2400)).toBe(1200);
+        expect(getProjectsSidebarMaxWidth(4480)).toBe(PROJECTS_SIDEBAR_MAX_WIDTH);
+        expect(clampProjectsSidebarWidth(9999, 4480)).toBe(PROJECTS_SIDEBAR_MAX_WIDTH);
     });
 
     it('persists the clamped width', () => {

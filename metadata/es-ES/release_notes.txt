@@ -1,0 +1,3 @@
+- Se agrego la importacion de Apple Reminders para recordatorios incompletos.
+- La edicion de tareas es mas rapida con controles mas claros y atajos de fecha.
+- Los detalles archivados, listas de Focus, recurrencias de calendario y desarchivado de proyectos son mas fiables.

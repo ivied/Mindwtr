@@ -9,7 +9,7 @@ import {
     type PointerEvent as ReactPointerEvent,
 } from 'react';
 import { ErrorBoundary } from '../ErrorBoundary';
-import { useTaskStore, Task, type Project } from '@mindwtr/core';
+import { tFallback, useTaskStore, Task, type Project } from '@mindwtr/core';
 import { useLanguage } from '../../contexts/language-context';
 import { PromptModal } from '../PromptModal';
 import { ProjectsSidebar } from './projects/ProjectsSidebar';
@@ -31,19 +31,54 @@ import { useProjectsViewStore } from './projects/useProjectsViewStore';
 import { splitProjectsForSidebar } from './projects/project-sidebar-grouping';
 import {
     PROJECTS_SIDEBAR_DEFAULT_WIDTH,
-    PROJECTS_SIDEBAR_MAX_WIDTH,
     PROJECTS_SIDEBAR_MIN_WIDTH,
     clampProjectsSidebarWidth,
     getProjectsSidebarMaxWidth,
     loadProjectsSidebarWidth,
     saveProjectsSidebarWidth,
 } from './projects/projects-sidebar-width';
+import {
+    PROJECTS_SIDEBAR_KEYBOARD_STEP,
+    PROJECTS_VIEW_DEFAULT_MAX_WIDTH,
+    PROJECTS_VIEW_WIDE_BREAKPOINT,
+    PROJECTS_VIEW_WIDE_MAX_WIDTH,
+} from '../../constants/layout';
 import { useConfirmDialog } from '../../hooks/useConfirmDialog';
+import { usePersistedViewState } from '../../hooks/usePersistedViewState';
 
 const COLLAPSED_AREAS_STORAGE_KEY = 'mindwtr:projects:collapsedAreas';
-const PROJECTS_VIEW_DEFAULT_MAX_WIDTH = 1344;
-const PROJECTS_VIEW_2XL_MAX_WIDTH = 1408;
-const PROJECTS_VIEW_2XL_BREAKPOINT = 1536;
+const PROJECTS_VIEW_STATE_STORAGE_KEY = 'mindwtr:view:projects:v1';
+const ALL_TAGS = '__all__';
+const NO_TAGS = '__none__';
+
+type ProjectsPersistedViewState = {
+    showDeferredProjects: boolean;
+    showArchivedProjects: boolean;
+    selectedTag: string;
+};
+
+const DEFAULT_PROJECTS_VIEW_STATE: ProjectsPersistedViewState = {
+    showDeferredProjects: false,
+    showArchivedProjects: false,
+    selectedTag: ALL_TAGS,
+};
+
+function sanitizeProjectsViewState(value: unknown, fallback: ProjectsPersistedViewState): ProjectsPersistedViewState {
+    const parsed = value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Partial<ProjectsPersistedViewState>
+        : {};
+    return {
+        showDeferredProjects: typeof parsed.showDeferredProjects === 'boolean'
+            ? parsed.showDeferredProjects
+            : fallback.showDeferredProjects,
+        showArchivedProjects: typeof parsed.showArchivedProjects === 'boolean'
+            ? parsed.showArchivedProjects
+            : fallback.showArchivedProjects,
+        selectedTag: typeof parsed.selectedTag === 'string' && parsed.selectedTag.trim()
+            ? parsed.selectedTag
+            : fallback.selectedTag,
+    };
+}
 
 function loadCollapsedAreas(): Record<string, boolean> {
     if (typeof window === 'undefined') return {};
@@ -82,6 +117,7 @@ export function ProjectsView() {
         addProject,
         updateProject,
         deleteProject,
+        restoreProject,
         duplicateProject,
         updateTask,
         addSection,
@@ -94,6 +130,7 @@ export function ProjectsView() {
         setHighlightTask,
         settings,
         getDerivedState,
+        focusedProjectCount,
     } = useProjectsViewStore();
     const { allContexts, allTags } = getDerivedState();
     const allTokens = useMemo(
@@ -111,8 +148,14 @@ export function ProjectsView() {
     );
     const [isCreating, setIsCreating] = useState(false);
     const [newProjectTitle, setNewProjectTitle] = useState('');
-    const [showDeferredProjects, setShowDeferredProjects] = useState(false);
-    const [showArchivedProjects, setShowArchivedProjects] = useState(false);
+    const [persistedViewState, setPersistedViewState] = usePersistedViewState(
+        PROJECTS_VIEW_STATE_STORAGE_KEY,
+        DEFAULT_PROJECTS_VIEW_STATE,
+        sanitizeProjectsViewState
+    );
+    const showDeferredProjects = persistedViewState.showDeferredProjects;
+    const showArchivedProjects = persistedViewState.showArchivedProjects;
+    const selectedTag = persistedViewState.selectedTag;
     const [collapsedAreas, setCollapsedAreas] = useState<Record<string, boolean>>(loadCollapsedAreas);
     useEffect(() => { saveCollapsedAreas(collapsedAreas); }, [collapsedAreas]);
     const projectsLayoutRef = useRef<HTMLDivElement | null>(null);
@@ -130,14 +173,29 @@ export function ProjectsView() {
     const [isAreaCreating, setIsAreaCreating] = useState(false);
     const ALL_AREAS = AREA_FILTER_ALL;
     const NO_AREA = AREA_FILTER_NONE;
-    const ALL_TAGS = '__all__';
-    const NO_TAGS = '__none__';
-    const [selectedTag, setSelectedTag] = useState(ALL_TAGS);
+    const setShowDeferredProjects = useCallback((value: boolean | ((current: boolean) => boolean)) => {
+        setPersistedViewState((current) => ({
+            ...current,
+            showDeferredProjects: typeof value === 'function' ? value(current.showDeferredProjects) : value,
+        }));
+    }, [setPersistedViewState]);
+    const setShowArchivedProjects = useCallback((value: boolean | ((current: boolean) => boolean)) => {
+        setPersistedViewState((current) => ({
+            ...current,
+            showArchivedProjects: typeof value === 'function' ? value(current.showArchivedProjects) : value,
+        }));
+    }, [setPersistedViewState]);
+    const setSelectedTag = useCallback((value: string) => {
+        setPersistedViewState((current) => ({
+            ...current,
+            selectedTag: value,
+        }));
+    }, [setPersistedViewState]);
 
     const getProjectsBaseMaxWidth = useCallback(() => {
         if (typeof window === 'undefined') return PROJECTS_VIEW_DEFAULT_MAX_WIDTH;
-        return window.innerWidth >= PROJECTS_VIEW_2XL_BREAKPOINT
-            ? PROJECTS_VIEW_2XL_MAX_WIDTH
+        return window.innerWidth >= PROJECTS_VIEW_WIDE_BREAKPOINT
+            ? PROJECTS_VIEW_WIDE_MAX_WIDTH
             : PROJECTS_VIEW_DEFAULT_MAX_WIDTH;
     }, []);
 
@@ -152,9 +210,14 @@ export function ProjectsView() {
         return Math.min(desiredMaxWidth, availableProjectsWidth);
     }, [availableProjectsWidth, getProjectsBaseMaxWidth, sidebarWidth]);
 
+    const sidebarMaxWidth = useMemo(
+        () => getProjectsSidebarMaxWidth(availableProjectsWidth ?? projectsLayoutMaxWidth),
+        [availableProjectsWidth, projectsLayoutMaxWidth],
+    );
+
     const clampSidebarWidth = useCallback(
-        (width: number) => clampProjectsSidebarWidth(width, projectsLayoutMaxWidth),
-        [projectsLayoutMaxWidth],
+        (width: number) => clampProjectsSidebarWidth(width, availableProjectsWidth ?? projectsLayoutMaxWidth),
+        [availableProjectsWidth, projectsLayoutMaxWidth],
     );
 
     useEffect(() => {
@@ -213,10 +276,7 @@ export function ProjectsView() {
         sidebarResizeCleanupRef.current?.();
     }, []);
 
-    const resizeSidebarLabel = (() => {
-        const label = t('projects.resizeSidebar');
-        return label === 'projects.resizeSidebar' ? 'Resize projects panel' : label;
-    })();
+    const resizeSidebarLabel = tFallback(t, 'projects.resizeSidebar', 'Resize projects panel');
 
     const handleSidebarResizePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
         if (event.button !== 0) return;
@@ -262,11 +322,11 @@ export function ProjectsView() {
         switch (event.key) {
             case 'ArrowLeft':
                 event.preventDefault();
-                setSidebarWidth((current) => clampSidebarWidth(current - 24));
+                setSidebarWidth((current) => clampSidebarWidth(current - PROJECTS_SIDEBAR_KEYBOARD_STEP));
                 break;
             case 'ArrowRight':
                 event.preventDefault();
-                setSidebarWidth((current) => clampSidebarWidth(current + 24));
+                setSidebarWidth((current) => clampSidebarWidth(current + PROJECTS_SIDEBAR_KEYBOARD_STEP));
                 break;
             case 'Home':
                 event.preventDefault();
@@ -274,12 +334,12 @@ export function ProjectsView() {
                 break;
             case 'End':
                 event.preventDefault();
-                setSidebarWidth(clampSidebarWidth(getProjectsSidebarMaxWidth(projectsLayoutMaxWidth)));
+                setSidebarWidth(clampSidebarWidth(sidebarMaxWidth));
                 break;
             default:
                 break;
         }
-    }, [clampSidebarWidth, projectsLayoutMaxWidth]);
+    }, [clampSidebarWidth, sidebarMaxWidth]);
 
     const handleDuplicateProject = useCallback(async (projectId: string) => {
         try {
@@ -370,6 +430,13 @@ export function ProjectsView() {
         };
     }, [projects]);
 
+    useEffect(() => {
+        // Keep persisted tag selections through the empty startup frame; reset only after we have a real tag inventory.
+        if (tagOptions.list.length === 0 && !tagOptions.hasNoTags) return;
+        if (selectedTag === ALL_TAGS || selectedTag === NO_TAGS || tagOptions.list.includes(selectedTag)) return;
+        setSelectedTag(ALL_TAGS);
+    }, [selectedTag, tagOptions.hasNoTags, tagOptions.list, setSelectedTag]);
+
     const { groupedActiveProjects, groupedDeferredProjects, groupedArchivedProjects } = useMemo(() => {
         const visibleProjects = projects.filter(p => !p.deletedAt);
         const sorted = [...visibleProjects].sort((a, b) => {
@@ -459,7 +526,7 @@ export function ProjectsView() {
             <div className="h-full px-4 py-3">
                 <div
                     ref={projectsLayoutRef}
-                    className="mx-auto flex h-full w-full min-w-0 gap-5 xl:gap-6"
+                    className="flex h-full w-full min-w-0 gap-5 xl:gap-6"
                     style={{ maxWidth: `${projectsLayoutMaxWidth}px` }}
                 >
                     <div className="relative min-h-0 flex-none" style={{ width: `${sidebarWidth}px` }}>
@@ -495,6 +562,7 @@ export function ProjectsView() {
                                 getProjectColor={getProjectColorForTask}
                                 tasksByProject={tasksByProject}
                                 projects={projects}
+                                focusedProjectCount={focusedProjectCount}
                                 toggleProjectFocus={toggleProjectFocus}
                                 updateProject={updateProject}
                                 reorderProjects={reorderProjects}
@@ -508,19 +576,27 @@ export function ProjectsView() {
                             aria-label={resizeSidebarLabel}
                             aria-orientation="vertical"
                             aria-valuemin={PROJECTS_SIDEBAR_MIN_WIDTH}
-                            aria-valuemax={PROJECTS_SIDEBAR_MAX_WIDTH}
+                            aria-valuemax={sidebarMaxWidth}
                             aria-valuenow={sidebarWidth}
                             title={resizeSidebarLabel}
                             tabIndex={0}
                             onPointerDown={handleSidebarResizePointerDown}
                             onKeyDown={handleSidebarResizeKeyDown}
-                            className="absolute -right-3 top-0 z-10 flex h-full w-6 items-center justify-center cursor-col-resize touch-none rounded-full outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                            className="group absolute -right-3 bottom-0 top-0 z-10 flex w-6 items-start justify-center cursor-col-resize touch-none rounded-full pt-20 outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                         >
                             <span
-                                className={`h-16 w-1 rounded-full transition-colors ${
+                                aria-hidden="true"
+                                className={`absolute inset-y-0 left-1/2 w-px -translate-x-1/2 transition-colors ${
+                                    isSidebarResizing
+                                        ? 'bg-primary/40'
+                                        : 'bg-border/45 group-hover:bg-primary/25'
+                                }`}
+                            />
+                            <span
+                                className={`relative h-16 w-1 rounded-full transition-colors ${
                                     isSidebarResizing
                                         ? 'bg-primary/70'
-                                        : 'bg-border/70 hover:bg-primary/45'
+                                        : 'bg-border/80 group-hover:bg-primary/45'
                                 }`}
                             />
                         </div>
@@ -550,6 +626,7 @@ export function ProjectsView() {
                         projects={projects}
                         reorderProjectTasks={reorderProjectTasks}
                         requestConfirmation={requestConfirmation}
+                        restoreProject={restoreProject}
                         sections={sections}
                         selectedProject={selectedProject}
                         selectedProjectId={selectedProjectId}
@@ -558,6 +635,7 @@ export function ProjectsView() {
                         showToast={showToast}
                         sortedAreas={sortedAreas}
                         t={t}
+                        undoNotificationsEnabled={settings?.undoNotificationsEnabled !== false}
                         updateProject={updateProject}
                         updateSection={updateSection}
                         updateTask={updateTask}

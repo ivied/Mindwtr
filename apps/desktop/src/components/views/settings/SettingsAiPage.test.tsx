@@ -12,7 +12,7 @@ const t = {
     aiProviderAnthropic: 'Anthropic (Claude)',
     aiModel: 'Model',
     aiBaseUrl: 'Custom OpenAI-compatible base URL',
-    aiBaseUrlHint: 'Leave blank for official OpenAI. Set this for local or third-party OpenAI-compatible APIs such as Ollama, LM Studio, GLM, or vLLM.',
+    aiBaseUrlHint: 'Leave blank for official OpenAI. Set this for local or third-party OpenAI-compatible APIs such as llama.cpp, Ollama, LM Studio, GLM, or vLLM.',
     aiBaseUrlModelHint: 'This model looks non-OpenAI. If you are using GLM or another OpenAI-compatible provider, set a custom base URL.',
     aiCopilotModel: 'Copilot model',
     aiCopilotHint: 'Used for fast autocomplete suggestions.',

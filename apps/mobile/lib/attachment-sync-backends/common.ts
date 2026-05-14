@@ -41,6 +41,93 @@ const resolveUploadType = (): any => {
   return types?.BINARY_CONTENT ?? types?.BINARY ?? undefined;
 };
 
+export const createAttachmentAbortError = (
+  message = 'Attachment sync aborted',
+  signal?: AbortSignal
+): Error => {
+  const reason = signal?.reason;
+  if (reason instanceof Error) return reason;
+  const error = new Error(typeof reason === 'string' && reason.trim() ? reason : message);
+  error.name = 'AbortError';
+  return error;
+};
+
+const createUploadAbortError = (signal?: AbortSignal): Error =>
+  createAttachmentAbortError('Attachment upload aborted', signal);
+
+export const assertAttachmentSyncNotAborted = (signal?: AbortSignal): void => {
+  if (!signal?.aborted) return;
+  throw createAttachmentAbortError('Attachment sync aborted', signal);
+};
+
+export const isAttachmentSyncAbortError = (error: unknown, signal?: AbortSignal): boolean => (
+  Boolean(signal?.aborted) || (error instanceof Error && error.name === 'AbortError')
+);
+
+export const waitForAttachmentSyncDelay = async (ms: number, signal?: AbortSignal): Promise<void> => {
+  assertAttachmentSyncNotAborted(signal);
+  if (ms <= 0) return;
+  if (!signal) {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const cleanup = () => {
+      if (timeoutId) clearTimeout(timeoutId);
+      signal.removeEventListener('abort', onAbort);
+    };
+    const onAbort = () => {
+      cleanup();
+      reject(createAttachmentAbortError('Attachment sync aborted', signal));
+    };
+    timeoutId = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, ms);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+};
+
+const assertUploadNotAborted = (signal?: AbortSignal): void => {
+  if (!signal?.aborted) return;
+  throw createUploadAbortError(signal);
+};
+
+const cancelUploadTask = async (task: unknown): Promise<void> => {
+  const cancelAsync = (task as { cancelAsync?: unknown } | null)?.cancelAsync;
+  if (typeof cancelAsync !== 'function') return;
+  await cancelAsync.call(task);
+};
+
+const runUploadTask = async <T,>(task: { uploadAsync: () => Promise<T> }, signal?: AbortSignal): Promise<T> => {
+  assertUploadNotAborted(signal);
+  if (!signal) {
+    return task.uploadAsync();
+  }
+
+  return await new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let onAbort: () => void;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      fn();
+    };
+    onAbort = () => {
+      void cancelUploadTask(task).catch(() => undefined);
+      finish(() => reject(createUploadAbortError(signal)));
+    };
+
+    signal.addEventListener('abort', onAbort, { once: true });
+    task.uploadAsync().then(
+      (result) => finish(() => resolve(result)),
+      (error) => finish(() => reject(error))
+    );
+  });
+};
+
 export const uploadWebdavFileWithFileSystem = async (
   url: string,
   fileUri: string,
@@ -48,8 +135,10 @@ export const uploadWebdavFileWithFileSystem = async (
   username: string,
   password: string,
   onProgress?: (sent: number, total: number) => void,
-  totalBytes?: number
+  totalBytes?: number,
+  signal?: AbortSignal
 ): Promise<boolean> => {
+  assertUploadNotAborted(signal);
   const uploadAsync = (FileSystem as any).uploadAsync;
   if (typeof uploadAsync !== 'function') return false;
   if (!fileUri.startsWith('file://')) return false;
@@ -62,7 +151,7 @@ export const uploadWebdavFileWithFileSystem = async (
 
   const uploadType = resolveUploadType();
   const createUploadTask = (FileSystem as any).createUploadTask;
-  if (typeof createUploadTask === 'function' && onProgress) {
+  if (typeof createUploadTask === 'function' && (onProgress || signal)) {
     const task = createUploadTask(
       url,
       fileUri,
@@ -72,6 +161,7 @@ export const uploadWebdavFileWithFileSystem = async (
         uploadType,
       },
       (event: { totalBytesSent?: number; totalBytesExpectedToSend?: number }) => {
+        if (!onProgress) return;
         const sent = Number(event.totalBytesSent ?? 0);
         const expected = Number(event.totalBytesExpectedToSend ?? totalBytes ?? 0);
         if (expected > 0) {
@@ -79,7 +169,7 @@ export const uploadWebdavFileWithFileSystem = async (
         }
       }
     );
-    const result = await task.uploadAsync();
+    const result = await runUploadTask(task, signal);
     const status = Number((result as { status?: number } | null)?.status ?? 0);
     if (status && (status < 200 || status >= 300)) {
       const error = new Error(`WebDAV File PUT failed (${status})`);
@@ -88,6 +178,8 @@ export const uploadWebdavFileWithFileSystem = async (
     }
     return true;
   }
+
+  if (signal) return false;
 
   const result = await uploadAsync(url, fileUri, { httpMethod: 'PUT', headers, uploadType });
   const status = Number((result as { status?: number } | null)?.status ?? 0);
@@ -108,8 +200,10 @@ export const uploadCloudFileWithFileSystem = async (
   contentType: string,
   token: string,
   onProgress?: (sent: number, total: number) => void,
-  totalBytes?: number
+  totalBytes?: number,
+  signal?: AbortSignal
 ): Promise<boolean> => {
+  assertUploadNotAborted(signal);
   const uploadAsync = (FileSystem as any).uploadAsync;
   if (typeof uploadAsync !== 'function') return false;
   if (!fileUri.startsWith('file://')) return false;
@@ -122,7 +216,7 @@ export const uploadCloudFileWithFileSystem = async (
 
   const uploadType = resolveUploadType();
   const createUploadTask = (FileSystem as any).createUploadTask;
-  if (typeof createUploadTask === 'function' && onProgress) {
+  if (typeof createUploadTask === 'function' && (onProgress || signal)) {
     const task = createUploadTask(
       url,
       fileUri,
@@ -132,6 +226,7 @@ export const uploadCloudFileWithFileSystem = async (
         uploadType,
       },
       (event: { totalBytesSent?: number; totalBytesExpectedToSend?: number }) => {
+        if (!onProgress) return;
         const sent = Number(event.totalBytesSent ?? 0);
         const expected = Number(event.totalBytesExpectedToSend ?? totalBytes ?? 0);
         if (expected > 0) {
@@ -139,7 +234,7 @@ export const uploadCloudFileWithFileSystem = async (
         }
       }
     );
-    const result = await task.uploadAsync();
+    const result = await runUploadTask(task, signal);
     const status = Number((result as { status?: number } | null)?.status ?? 0);
     if (status && (status < 200 || status >= 300)) {
       const error = new Error(`Cloud File PUT failed (${status})`);
@@ -148,6 +243,8 @@ export const uploadCloudFileWithFileSystem = async (
     }
     return true;
   }
+
+  if (signal) return false;
 
   const result = await uploadAsync(url, fileUri, { httpMethod: 'PUT', headers, uploadType });
   const status = Number((result as { status?: number } | null)?.status ?? 0);

@@ -3,6 +3,7 @@ import {
     addBreadcrumb,
     DEFAULT_PROJECT_COLOR,
     parseQuickAddDateCommands,
+    tFallback,
     type AppData,
     type Area,
     type Project,
@@ -271,6 +272,46 @@ export function useInboxProcessingController({
             processNext();
         }
     }, [applyProcessingEdits, deleteTask, processNext, processingTask]);
+
+    const handleLater = useCallback(() => {
+        if (!processingTask) return;
+        handleScheduleTimeCommit();
+        const startTime = buildDateTimeUpdate(scheduleDate, scheduleTimeDraft, scheduleTime);
+        if (!startTime) {
+            showToast(tFallback(t, 'process.laterStartRequired', 'Choose a start date for Later.'), 'error');
+            return;
+        }
+        const projectUpdates = projectFirst && showProjectStep
+            ? {
+                ...(showProjectField ? { projectId: selectedProjectId || undefined } : {}),
+                ...(showAreaField ? { areaId: selectedProjectId ? undefined : (selectedAreaId || undefined) } : {}),
+            }
+            : {};
+        const applied = applyProcessingEdits({
+            status: 'next',
+            ...projectUpdates,
+            startTime,
+        });
+        if (applied) {
+            processNext();
+        }
+    }, [
+        applyProcessingEdits,
+        handleScheduleTimeCommit,
+        processNext,
+        processingTask,
+        projectFirst,
+        scheduleDate,
+        scheduleTime,
+        scheduleTimeDraft,
+        selectedAreaId,
+        selectedProjectId,
+        showAreaField,
+        showProjectField,
+        showProjectStep,
+        showToast,
+        t,
+    ]);
 
     const goToStep = useCallback((nextStep: ProcessingStep) => {
         setStepHistory((prev) => [...prev, processingStep]);
@@ -572,6 +613,10 @@ export function useInboxProcessingController({
         handleScheduleTimeCommit();
         handleDueTimeCommit();
         handleReviewTimeCommit();
+        if (quickActionability === 'later') {
+            handleLater();
+            return;
+        }
         if (quickActionability !== 'actionable') {
             handleNotActionable(quickActionability);
             return;
@@ -594,6 +639,7 @@ export function useInboxProcessingController({
         handleConfirmWaiting,
         handleConvertToProject,
         handleDueTimeCommit,
+        handleLater,
         handleNotActionable,
         handleReviewTimeCommit,
         handleScheduleTimeCommit,
@@ -694,6 +740,7 @@ export function useInboxProcessingController({
         handleRefineNext,
         handleSkip,
         handleNotActionable,
+        handleLater,
         handleActionable,
         showDoneNowShortcut: twoMinuteEnabled && !twoMinuteFirst,
         showReferenceOption: referenceEnabled,

@@ -1,4 +1,4 @@
-import { buildSaveSnapshot, ensureDeviceId, normalizeRevision, selectVisibleTasks } from '../store-helpers';
+import { buildSaveSnapshot, ensureDeviceId, getNextDataChangeAt, nextRevision, selectVisibleTasks } from '../store-helpers';
 import { logWarn } from '../logger';
 import { generateUUID as uuidv4 } from '../uuid';
 import type { ProjectActionContext, Section, SectionActions } from './shared';
@@ -46,7 +46,7 @@ export const createSectionActions = ({
             return {
                 sections: newVisibleSections,
                 _allSections: newAllSections,
-                lastDataChangeAt: changeAt,
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
@@ -83,7 +83,7 @@ export const createSectionActions = ({
                         ...restUpdates,
                         title: nextTitle,
                         updatedAt: now,
-                        rev: normalizeRevision(item.rev) + 1,
+                        rev: nextRevision(item.rev),
                         revBy: deviceState.deviceId,
                     }
                     : item
@@ -96,7 +96,7 @@ export const createSectionActions = ({
             return {
                 sections: newVisibleSections,
                 _allSections: newAllSections,
-                lastDataChangeAt: changeAt,
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
@@ -140,7 +140,7 @@ export const createSectionActions = ({
                         ...item,
                         deletedAt: now,
                         updatedAt: now,
-                        rev: normalizeRevision(item.rev) + 1,
+                        rev: nextRevision(item.rev),
                         revBy: deviceState.deviceId,
                     }
                     : item
@@ -151,7 +151,7 @@ export const createSectionActions = ({
                     ...task,
                     sectionId: undefined,
                     updatedAt: now,
-                    rev: normalizeRevision(task.rev) + 1,
+                    rev: nextRevision(task.rev),
                     revBy: deviceState.deviceId,
                 };
             });
@@ -167,7 +167,7 @@ export const createSectionActions = ({
                 _allSections: newAllSections,
                 tasks: newVisibleTasks,
                 _allTasks: newAllTasks,
-                lastDataChangeAt: changeAt,
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });

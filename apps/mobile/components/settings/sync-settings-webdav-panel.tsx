@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Platform, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Platform, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 import type { ThemeColors } from '@/hooks/use-theme-colors';
 
@@ -10,12 +10,14 @@ import { styles } from './settings.styles';
 type Translate = (key: string) => string;
 
 export type WebDavSyncSettings = {
+    allowInsecureHttp: boolean;
     password: string;
     url: string;
     username: string;
 };
 
 type SyncWebDavBackendPanelProps = {
+    initialAllowInsecureHttp: boolean;
     initialPassword: string;
     initialUrl: string;
     initialUsername: string;
@@ -30,6 +32,7 @@ type SyncWebDavBackendPanelProps = {
 };
 
 export function SyncWebDavBackendPanel({
+    initialAllowInsecureHttp,
     initialPassword,
     initialUrl,
     initialUsername,
@@ -42,6 +45,7 @@ export function SyncWebDavBackendPanel({
     t,
     tc,
 }: SyncWebDavBackendPanelProps) {
+    const [allowInsecureHttp, setAllowInsecureHttp] = useState(initialAllowInsecureHttp);
     const [password, setPassword] = useState(initialPassword);
     const [url, setUrl] = useState(initialUrl);
     const [username, setUsername] = useState(initialUsername);
@@ -49,6 +53,10 @@ export function SyncWebDavBackendPanel({
     useEffect(() => {
         setUrl(initialUrl);
     }, [initialUrl]);
+
+    useEffect(() => {
+        setAllowInsecureHttp(initialAllowInsecureHttp);
+    }, [initialAllowInsecureHttp]);
 
     useEffect(() => {
         setUsername(initialUsername);
@@ -59,7 +67,7 @@ export function SyncWebDavBackendPanel({
     }, [initialPassword]);
 
     const urlError = url.trim() ? !isValidHttpUrl(url.trim()) : false;
-    const settings = { password, url, username };
+    const settings = { allowInsecureHttp, password, url, username };
     const canUseActions = url.trim().length > 0 && !urlError;
 
     return (
@@ -81,6 +89,19 @@ export function SyncWebDavBackendPanel({
                     {urlError && (
                         <Text style={[styles.settingDescription, { color: '#EF4444' }]}>{t('settings.invalidUrlHttp')}</Text>
                     )}
+                </View>
+                <View style={[styles.inputGroup, { borderTopWidth: 1, borderTopColor: tc.border }]}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <View style={styles.settingInfo}>
+                            <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.allowInsecureHttp')}</Text>
+                            <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>{t('settings.allowInsecureHttpHint')}</Text>
+                        </View>
+                        <Switch
+                            value={allowInsecureHttp}
+                            onValueChange={setAllowInsecureHttp}
+                            trackColor={{ false: '#767577', true: '#3B82F6' }}
+                        />
+                    </View>
                 </View>
                 <View style={[styles.inputGroup, { borderTopWidth: 1, borderTopColor: tc.border }]}>
                     <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.webdavUsername')}</Text>

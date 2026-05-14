@@ -1,0 +1,3 @@
+Navegacion movil, Focus, Settings, Review y captura fueron renovados.
+La captura ahora funciona desde Quick Settings y entradas de voz compatibles con asistentes, siempre mostrando primero la pantalla de confirmacion.
+Sync es mas estable con tareas en segundo plano, filtros guardados, cancelacion segura de adjuntos y mejores revisiones WebDAV/cloud.

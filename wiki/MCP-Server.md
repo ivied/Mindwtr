@@ -130,30 +130,7 @@ node apps/mcp-server/dist/index.js --db "/path/to/mindwtr.db"
 
 ## Migration: tool rename (`mindwtr.*` → `mindwtr_*`)
 
-> **Breaking change** (introduced in this release): all tool names have changed from dot-notation (`mindwtr.list_tasks`) to underscore-notation (`mindwtr_list_tasks`) to comply with MCP client validation rules (e.g. Claude Desktop).
-
-**Old → new mapping:**
-
-| Old name                  | New name                   |
-| ------------------------- | -------------------------- |
-| `mindwtr.list_tasks`      | `mindwtr_list_tasks`       |
-| `mindwtr.list_projects`   | `mindwtr_list_projects`    |
-| `mindwtr.get_project`     | `mindwtr_get_project`      |
-| `mindwtr.get_task`        | `mindwtr_get_task`         |
-| `mindwtr.list_areas`      | `mindwtr_list_areas`       |
-| `mindwtr.add_task`        | `mindwtr_add_task`         |
-| `mindwtr.update_task`     | `mindwtr_update_task`      |
-| `mindwtr.complete_task`   | `mindwtr_complete_task`    |
-| `mindwtr.delete_task`     | `mindwtr_delete_task`      |
-| `mindwtr.restore_task`    | `mindwtr_restore_task`     |
-| `mindwtr.add_project`     | `mindwtr_add_project`      |
-| `mindwtr.update_project`  | `mindwtr_update_project`   |
-| `mindwtr.delete_project`  | `mindwtr_delete_project`   |
-| `mindwtr.add_area`        | `mindwtr_add_area`         |
-| `mindwtr.update_area`     | `mindwtr_update_area`      |
-| `mindwtr.delete_area`     | `mindwtr_delete_area`      |
-
-**Upgrade action:** find and replace `mindwtr.` with `mindwtr_` in any MCP client configs, system prompts, scripts, or automations that reference these tool names. No other changes are required.
+Tool names now use underscore notation, such as `mindwtr_list_tasks`; older dot-notation names are no longer documented.
 
 ---
 
@@ -299,8 +276,8 @@ If you need more than 500 tasks, page with `limit` + `offset` instead of expecti
 - `limit`: number
 - `offset`: number
 - `search`: string
-- `dueDateFrom`: ISO string
-- `dueDateTo`: ISO string
+- `dueDateFrom`: ISO date or datetime string (compared by calendar date)
+- `dueDateTo`: ISO date or datetime string (compared by calendar date)
 - `sortBy`: `updatedAt | createdAt | dueDate | title | priority`
 - `sortOrder`: `asc | desc`
 
@@ -402,7 +379,7 @@ If you need more than 500 tasks, page with `limit` + `offset` instead of expecti
 
 - `title`: string (required if `quickAdd` omitted)
 - `quickAdd`: string (required if `title` omitted)
-- `status`: `inbox | next | waiting | someday | done | archived`
+- `status`: `inbox | next | waiting | someday | reference | done | archived`
 - `projectId`: string
 - `dueDate`: ISO string
 - `startTime`: ISO string

@@ -212,6 +212,52 @@ describe('ProjectsView', () => {
         });
     });
 
+    it('allows ultra-wide desktops to expand the projects sidebar beyond the compact cap', async () => {
+        const originalInnerWidth = window.innerWidth;
+        const originalClientWidthDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
+        Object.defineProperty(window, 'innerWidth', {
+            configurable: true,
+            value: 4480,
+        });
+        Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+            configurable: true,
+            get: () => 4480,
+        });
+
+        render(<ProjectsView />);
+        act(() => {
+            flushAnimationFrames();
+        });
+
+        const separator = screen.getByRole('separator', { name: 'Resize projects panel' });
+        const sidebar = screen.getByTestId('projects-sidebar').parentElement?.parentElement;
+        const layout = sidebar?.parentElement;
+
+        expect(sidebar).not.toBeNull();
+        expect(layout).not.toBeNull();
+        expect(separator).toHaveAttribute('aria-valuemax', '1920');
+        expect(layout).not.toHaveClass('mx-auto');
+
+        fireEvent.keyDown(separator, { key: 'End' });
+
+        await waitFor(() => {
+            expect(sidebar).toHaveStyle({ width: '1920px' });
+        });
+        await waitFor(() => {
+            expect(layout).toHaveStyle({ maxWidth: '3024px' });
+        });
+
+        if (originalClientWidthDescriptor) {
+            Object.defineProperty(HTMLElement.prototype, 'clientWidth', originalClientWidthDescriptor);
+        } else {
+            delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+        }
+        Object.defineProperty(window, 'innerWidth', {
+            configurable: true,
+            value: originalInnerWidth,
+        });
+    });
+
     it('coalesces ResizeObserver sidebar sync work into a single animation frame', () => {
         const requestAnimationFrameMock = window.requestAnimationFrame as unknown as ReturnType<typeof vi.fn>;
 

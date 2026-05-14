@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
     canAutoSync,
+    coerceSupportedSyncBackend,
     formatSyncErrorMessage,
     getFileSyncDir,
     isLikelyOfflineSyncError,
+    isRemoteSyncBackend,
     isSyncFilePath,
     normalizeSyncBackend,
+    resolveSyncBackend,
     sanitizeSyncErrorMessage,
 } from './sync-service-utils';
 
@@ -18,6 +21,18 @@ describe('sync-service-utils', () => {
         expect(normalizeSyncBackend('off')).toBe('off');
         expect(normalizeSyncBackend('invalid')).toBe('off');
         expect(normalizeSyncBackend(null)).toBe('off');
+    });
+
+    it('resolves supported backend capabilities', () => {
+        expect(resolveSyncBackend('cloudkit')).toBe('cloudkit');
+        expect(resolveSyncBackend('invalid')).toBe('off');
+        expect(coerceSupportedSyncBackend('cloudkit', { allowCloudKit: false })).toBe('off');
+        expect(coerceSupportedSyncBackend('cloudkit', { allowCloudKit: true })).toBe('cloudkit');
+        expect(isRemoteSyncBackend('webdav')).toBe(true);
+        expect(isRemoteSyncBackend('cloud')).toBe(true);
+        expect(isRemoteSyncBackend('cloudkit')).toBe(true);
+        expect(isRemoteSyncBackend('file')).toBe(false);
+        expect(isRemoteSyncBackend('off')).toBe(false);
     });
 
     it('detects sync file paths using default names', () => {

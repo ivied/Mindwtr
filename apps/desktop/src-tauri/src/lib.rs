@@ -41,6 +41,7 @@ use time::OffsetDateTime;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 mod audio;
+mod autostart;
 mod config;
 mod install;
 mod logging;
@@ -53,11 +54,12 @@ mod sync;
 mod ui;
 
 use audio::{start_audio_recording, stop_audio_recording, transcribe_whisper};
+use autostart::{get_launch_at_startup_enabled, set_launch_at_startup_enabled};
 use config::{
-    check_obsidian_vault_marker, get_ai_key, get_cloud_config, get_external_calendars,
-    get_obsidian_config, get_sync_backend, get_webdav_config, get_webdav_password, set_ai_key,
-    set_cloud_config, set_external_calendars, set_obsidian_config, set_sync_backend,
-    set_webdav_config,
+    check_obsidian_vault_marker, expand_external_calendar_file_scopes, get_ai_key,
+    get_cloud_config, get_external_calendars, get_obsidian_config, get_sync_backend,
+    get_webdav_config, get_webdav_password, set_ai_key, set_cloud_config, set_external_calendars,
+    set_obsidian_config, set_sync_backend, set_webdav_config,
 };
 use install::{
     diagnostics_enabled, get_install_source, get_linux_distro, is_flatpak, is_niri_session,
@@ -88,7 +90,8 @@ use sync::{
 };
 use ui::{
     acknowledge_close_request, apply_global_quick_add_shortcut, consume_quick_add_pending,
-    quit_app, set_global_quick_add_shortcut, set_tray_visible, show_main, show_main_and_emit,
+    create_quick_add_window, quit_app, set_global_quick_add_shortcut, set_tray_visible, show_main,
+    show_quick_add_window,
 };
 
 #[cfg(test)]
@@ -136,6 +139,10 @@ const DROPBOX_OAUTH_TIMEOUT_SECS: u64 = 180;
 const DROPBOX_TOKEN_REFRESH_SKEW_MS: i64 = 60_000;
 const DROPBOX_DEFAULT_TOKEN_LIFETIME_SECS: i64 = 4 * 60 * 60;
 const QUICK_ADD_CLI_FLAG: &str = "--quick-add";
+const QUICK_ADD_WINDOW_LABEL: &str = "quick-add";
+const QUICK_ADD_WINDOW_URL: &str = "index.html?quickAddWindow=1";
+const QUICK_ADD_TARGET_MAIN: &str = "main";
+const QUICK_ADD_TARGET_WINDOW: &str = "quick-add-window";
 const GLOBAL_QUICK_ADD_SHORTCUT_DEFAULT: &str = "Control+Alt+M";
 const GLOBAL_QUICK_ADD_SHORTCUT_ALTERNATE_N: &str = "Control+Alt+N";
 const GLOBAL_QUICK_ADD_SHORTCUT_ALTERNATE_Q: &str = "Control+Alt+Q";
@@ -337,8 +344,11 @@ struct AppConfigToml {
     webdav_url: Option<String>,
     webdav_username: Option<String>,
     webdav_password: Option<String>,
+    webdav_allow_insecure_http: Option<String>,
+    webdav_allow_weak_fingerprint: Option<String>,
     cloud_url: Option<String>,
     cloud_token: Option<String>,
+    cloud_allow_insecure_http: Option<String>,
     dropbox_tokens: Option<String>,
     obsidian_config: Option<String>,
     external_calendars: Option<String>,
@@ -480,7 +490,7 @@ struct TaskQueryOptions {
     include_archived: Option<bool>,
 }
 
-struct QuickAddPending(AtomicBool);
+struct QuickAddPending(Mutex<Option<String>>);
 struct CloseRequestHandled(AtomicBool);
 struct GlobalQuickAddShortcutState(Mutex<Option<String>>);
 
@@ -516,6 +526,12 @@ struct GlobalQuickAddShortcutApplyResult {
     warning: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QuickAddEventPayload {
+    target: String,
+}
+
 fn default_global_quick_add_shortcut() -> &'static str {
     #[cfg(target_os = "windows")]
     {
@@ -543,12 +559,12 @@ pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if launch_requests_quick_add(args.iter()) {
-                show_main_and_emit(app);
+                show_quick_add_window(app);
             } else {
                 show_main(app);
             }
         }))
-        .manage(QuickAddPending(AtomicBool::new(false)))
+        .manage(QuickAddPending(Mutex::new(None)))
         .manage(CloseRequestHandled(AtomicBool::new(false)))
         .manage(GlobalQuickAddShortcutState(Mutex::new(None)))
         .plugin(tauri_plugin_dialog::init())
@@ -556,6 +572,11 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .app_name("Mindwtr")
+                .build(),
+        )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build());
     #[cfg(target_os = "macos")]
     let builder = builder
@@ -597,6 +618,10 @@ pub fn run() {
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
+                if window.label() == QUICK_ADD_WINDOW_LABEL {
+                    let _ = window.hide();
+                    return;
+                }
                 window
                     .app_handle()
                     .state::<CloseRequestHandled>()
@@ -663,6 +688,11 @@ pub fn run() {
                         }
                     }
                 }
+
+                expand_external_calendar_file_scopes(
+                    &app.handle(),
+                    config.external_calendars.as_deref(),
+                );
             }
 
             let diagnostics_enabled = diagnostics_enabled();
@@ -688,6 +718,9 @@ pub fn run() {
             }
 
             let handle = app.handle();
+            if let Err(error) = create_quick_add_window(&handle) {
+                log::warn!("{error}");
+            }
             if !(cfg!(target_os = "linux") && is_flatpak()) && !is_windows_store {
                 let tray_init_result: tauri::Result<()> = (|| {
                     let quick_add_item =
@@ -709,7 +742,7 @@ pub fn run() {
                             .show_menu_on_left_click(false)
                             .on_menu_event(move |app, event| match event.id().as_ref() {
                                 "quick_add" => {
-                                    show_main_and_emit(app);
+                                    show_quick_add_window(app);
                                 }
                                 "show" => {
                                     show_main(app);
@@ -751,18 +784,23 @@ pub fn run() {
             }
 
             let shortcut_state = app.state::<GlobalQuickAddShortcutState>();
-            if let Err(error) = apply_global_quick_add_shortcut(
-                &handle,
-                &shortcut_state,
-                Some(default_global_quick_add_shortcut()),
-            ) {
+            let default_shortcut = if cfg!(target_os = "linux") && is_flatpak() {
+                GLOBAL_QUICK_ADD_SHORTCUT_DISABLED
+            } else {
+                default_global_quick_add_shortcut()
+            };
+            if let Err(error) =
+                apply_global_quick_add_shortcut(&handle, &shortcut_state, Some(default_shortcut))
+            {
                 log::warn!("Failed to register global quick add shortcut: {error}");
             }
 
             if initial_launch_requests_quick_add {
-                app.state::<QuickAddPending>()
-                    .0
-                    .store(true, Ordering::SeqCst);
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_skip_taskbar(true);
+                    let _ = window.hide();
+                }
+                show_quick_add_window(&handle);
             }
 
             if cfg!(debug_assertions) || diagnostics_enabled {
@@ -846,6 +884,8 @@ pub fn run() {
             set_global_quick_add_shortcut,
             is_windows_store_install,
             get_install_source,
+            get_launch_at_startup_enabled,
+            set_launch_at_startup_enabled,
             quit_app
         ])
         .run(tauri::generate_context!())

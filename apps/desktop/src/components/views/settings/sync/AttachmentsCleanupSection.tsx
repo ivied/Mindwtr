@@ -6,6 +6,8 @@ type AttachmentsCleanupSectionProps = Pick<
     | 't'
     | 'isTauri'
     | 'attachmentsLastCleanupDisplay'
+    | 'pendingRemoteDeleteCount'
+    | 'onClearPendingRemoteDeletes'
     | 'onRunAttachmentsCleanup'
     | 'isCleaningAttachments'
 >;
@@ -14,7 +16,9 @@ export function AttachmentsCleanupSection({
     attachmentsLastCleanupDisplay,
     isCleaningAttachments,
     isTauri,
+    onClearPendingRemoteDeletes,
     onRunAttachmentsCleanup,
+    pendingRemoteDeleteCount,
     t,
 }: AttachmentsCleanupSectionProps) {
     return (
@@ -39,6 +43,20 @@ export function AttachmentsCleanupSection({
                         disabled={!isTauri || isCleaningAttachments}
                     >
                         {isCleaningAttachments ? t.attachmentsCleanupRunning : t.attachmentsCleanupRun}
+                    </button>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3 text-sm">
+                    <div className="text-muted-foreground">
+                        {t.attachmentsCleanupPendingDeletes}:{' '}
+                        <span className="font-medium text-foreground">{pendingRemoteDeleteCount}</span>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={onClearPendingRemoteDeletes}
+                        className="px-3 py-1.5 rounded-md text-xs font-medium bg-muted text-foreground hover:bg-muted/80 transition-colors disabled:opacity-50"
+                        disabled={pendingRemoteDeleteCount === 0}
+                    >
+                        {t.attachmentsCleanupPendingDeletesClear}
                     </button>
                 </div>
             </div>

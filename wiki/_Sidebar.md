@@ -11,6 +11,7 @@
 **User Guides**
 * [[User Guide Desktop]]
   * [[Desktop Installation]]
+  * [[Desktop Keyboard Shortcuts]]
 * [[User Guide Mobile]]
   * [[Mobile Installation]]
 * [[Pomodoro Focus]]
@@ -20,9 +21,9 @@
 
 **GTD Methodology**
 * [[GTD Overview]]
-* [[GTD Best Practices]]
 * [[GTD Workflow in Mindwtr]]
 * [[Contexts and Tags]]
+* [[Daily Review]]
 * [[Weekly Review]]
 
 ---
@@ -30,15 +31,18 @@
 **Data & Sync**
 * [[Data and Sync]]
 * [[Backup-and-Restore]]
+* [[Cloud Deployment]]
 * [[iCloud Sync]]
 * [[Sync Algorithm]]
 * [[Dropbox Sync]]
+* [[Cloud API]]
 * [[Cloud Deployment]]
 * [[Local API]]
 * [[MCP Server]]
 * [[Web App PWA]]
 * [[Calendar Integration]]
 * [[Obsidian Integration]]
+* [[Markdown Links]]
 * [[AI Assistant]]
 * [[Reusable Lists]]
 * [[Attachments]]
@@ -59,7 +63,6 @@
 * [[Architecture]]
 * [[Core API]]
 * [[Database Schema]]
-* [[Deployment Guide]]
 * [[Release Process]]
 * [[Testing Strategy]]
 * [[Performance Guide]]

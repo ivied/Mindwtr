@@ -1,0 +1,3 @@
+Task editing is faster with pill controls and quick date shortcuts.
+Archived task details, Focus lists, yearly calendar recurrences, and project unarchive behavior are more reliable.
+F-Droid builds keep required Expo application metadata without bundled store referrer code.

@@ -19,6 +19,11 @@ interface ProjectSelectorProps {
     className?: string;
 }
 
+const isSelectableProject = (project: Project): boolean => {
+    const status = String(project.status);
+    return !project.deletedAt && status !== 'archived' && status !== 'completed';
+};
+
 export function ProjectSelector({
     projects,
     allProjects,
@@ -46,10 +51,14 @@ export function ProjectSelector({
     });
 
     const normalizedQuery = query.trim().toLowerCase();
+    const selectableProjects = useMemo(
+        () => projects.filter(isSelectableProject),
+        [projects]
+    );
     const filtered = useMemo(() => {
-        if (!normalizedQuery) return projects;
-        return projects.filter((project) => project.title.toLowerCase().includes(normalizedQuery));
-    }, [projects, normalizedQuery]);
+        if (!normalizedQuery) return selectableProjects;
+        return selectableProjects.filter((project) => project.title.toLowerCase().includes(normalizedQuery));
+    }, [selectableProjects, normalizedQuery]);
 
     const hasExactMatch = useMemo(() => {
         if (!normalizedQuery) return false;

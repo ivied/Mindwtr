@@ -1,10 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { HEARTBEAT_LAST_SENT_DAY_KEY, sendDailyHeartbeat } from './analytics-heartbeat';
+import {
+    HEARTBEAT_LAST_SENT_DAY_KEY,
+    HEARTBEAT_OPT_OUT_SENT_KEY,
+    resetHeartbeatOptOutMarker,
+    sendDailyHeartbeat,
+    sendHeartbeatOptOut,
+} from './analytics-heartbeat';
 
 type MemoryStore = {
     getItem: (key: string) => string | null;
     setItem: (key: string, value: string) => void;
+    removeItem: (key: string) => void;
     dump: () => Record<string, string>;
 };
 
@@ -14,6 +21,9 @@ const createMemoryStore = (initial: Record<string, string> = {}): MemoryStore =>
         getItem: (key: string) => map.get(key) ?? null,
         setItem: (key: string, value: string) => {
             map.set(key, value);
+        },
+        removeItem: (key: string) => {
+            map.delete(key);
         },
         dump: () => Object.fromEntries(map.entries()),
     };
@@ -196,6 +206,82 @@ describe('sendDailyHeartbeat', () => {
             now: () => fixedDate,
             fetcher,
         })).resolves.toBe(false);
+        expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
+    it('sends a one-shot opt-out heartbeat even when daily heartbeat was already sent', async () => {
+        const store = createMemoryStore({
+            [HEARTBEAT_LAST_SENT_DAY_KEY]: '2026-02-19',
+        });
+        const fetcher = vi.fn().mockResolvedValue({ ok: true });
+
+        const sent = await sendHeartbeatOptOut({
+            enabled: true,
+            endpointUrl: 'https://analytics.example.com/heartbeat',
+            distinctId: 'device-123',
+            platform: 'linux',
+            channel: 'flathub',
+            appVersion: '0.9.4',
+            deviceClass: 'desktop',
+            osMajor: 'linux',
+            locale: 'en-US',
+            storage: store,
+            now: () => fixedDate,
+            fetcher,
+        });
+
+        expect(sent).toBe(true);
+        expect(fetcher).toHaveBeenCalledTimes(1);
+        const call = fetcher.mock.calls[0]?.[1] as RequestInit;
+        const body = JSON.parse(String(call.body));
+        expect(body).toMatchObject({
+            distinct_id: 'device-123',
+            platform: 'linux',
+            channel: 'flathub',
+            app_version: '0.9.4',
+            version: '0.9.4',
+            event: 'opt_out',
+            analytics_enabled: 'false',
+            device_class: 'desktop',
+            os_major: 'linux',
+            locale: 'en-US',
+        });
+        expect(store.dump()[HEARTBEAT_LAST_SENT_DAY_KEY]).toBe('2026-02-19');
+        expect(store.dump()[HEARTBEAT_OPT_OUT_SENT_KEY]).toBe(fixedDate.toISOString());
+    });
+
+    it('skips repeated opt-out heartbeat until the marker is reset', async () => {
+        const store = createMemoryStore({
+            [HEARTBEAT_OPT_OUT_SENT_KEY]: fixedDate.toISOString(),
+        });
+        const fetcher = vi.fn().mockResolvedValue({ ok: true });
+
+        const skipped = await sendHeartbeatOptOut({
+            enabled: true,
+            endpointUrl: 'https://analytics.example.com/heartbeat',
+            distinctId: 'device-123',
+            platform: 'android',
+            channel: 'play-store',
+            appVersion: '0.9.4',
+            storage: store,
+            now: () => fixedDate,
+            fetcher,
+        });
+        await resetHeartbeatOptOutMarker(store);
+        const sent = await sendHeartbeatOptOut({
+            enabled: true,
+            endpointUrl: 'https://analytics.example.com/heartbeat',
+            distinctId: 'device-123',
+            platform: 'android',
+            channel: 'play-store',
+            appVersion: '0.9.4',
+            storage: store,
+            now: () => fixedDate,
+            fetcher,
+        });
+
+        expect(skipped).toBe(false);
+        expect(sent).toBe(true);
         expect(fetcher).toHaveBeenCalledTimes(1);
     });
 });

@@ -23,6 +23,11 @@ type FsEvent = {
     paths?: string[];
 };
 
+type PendingExternalData = {
+    data: AppData;
+    hash: string;
+};
+
 type LocalDataWatcherDependencies = {
     readDataJson: () => Promise<AppData>;
     watchFile: (path: string, callback: (event: FsEvent) => void) => Promise<unknown>;
@@ -87,7 +92,7 @@ let pendingSelfWrites: Array<{ payload: string; expiresAt: number }> = [];
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let ignoreDrainTimer: ReturnType<typeof setTimeout> | null = null;
 let hasPendingChangeDuringIgnore = false;
-let pendingExternalData: AppData | null = null;
+let pendingExternalData: PendingExternalData | null = null;
 let mergeInFlight: Promise<void> | null = null;
 
 const normalizePathsFromEvent = (event: FsEvent): string[] => {
@@ -157,18 +162,23 @@ const runPendingMerge = () => {
     });
 };
 
-async function mergeExternalData(externalData: AppData): Promise<void> {
+async function mergeExternalData(externalData: PendingExternalData): Promise<void> {
     try {
         await flushPendingSave();
 
         const localSnapshot = localDataWatcherDependencies.getSnapshot();
         const normalizedLocal = localDataWatcherDependencies.normalize(localSnapshot);
-        const merged = localDataWatcherDependencies.merge(normalizedLocal, externalData);
-        const normalizedMerged = localDataWatcherDependencies.normalize(merged);
-
         const localPayload = toStableJson(normalizedLocal);
-        const mergedPayload = toStableJson(normalizedMerged);
         const localHash = await localDataWatcherDependencies.hashPayload(localPayload);
+
+        if (localHash === externalData.hash) {
+            lastKnownHash = externalData.hash;
+            return;
+        }
+
+        const merged = localDataWatcherDependencies.merge(normalizedLocal, externalData.data);
+        const normalizedMerged = localDataWatcherDependencies.normalize(merged);
+        const mergedPayload = toStableJson(normalizedMerged);
         const mergedHash = await localDataWatcherDependencies.hashPayload(mergedPayload);
 
         if (mergedHash === localHash) {
@@ -216,7 +226,7 @@ async function handleExternalChange(): Promise<void> {
             debounceTimer = null;
         }
 
-        pendingExternalData = normalized;
+        pendingExternalData = { data: normalized, hash };
         debounceTimer = localDataWatcherDependencies.schedule(() => {
             debounceTimer = null;
             runPendingMerge();

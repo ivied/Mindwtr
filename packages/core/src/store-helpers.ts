@@ -1,9 +1,13 @@
 import { createNextRecurringTask } from './recurrence';
 import { getUsedTaskTokens } from './task-token-usage';
 import { rescheduleTask } from './task-utils';
-import type { AppData, Area, Project, Section, Task, TaskStatus } from './types';
+import { filterNotDeleted } from './sync-helpers';
+import { nextRevision, normalizeRevision } from './sync-revision';
+import type { AiSettings, AppData, Area, Project, Section, Task, TaskStatus } from './types';
 import { generateUUID as uuidv4 } from './uuid';
 import type { DerivedState, SaveBaseState } from './store-types';
+
+export { MAX_SYNC_REVISION, normalizeRevision, nextRevision } from './sync-revision';
 
 type EntityWithId = { id: string };
 type EntityWithRevision = EntityWithId & {
@@ -19,7 +23,9 @@ let projectOrderCacheValue: Map<string, number> | null = null;
 let reservedProjectOrdersRef: Task[] | null = null;
 let reservedProjectOrdersValue: Map<string, number> | null = null;
 
-export const normalizeRevision = (value?: number): number => (typeof value === 'number' && Number.isFinite(value) ? value : 0);
+export const getNextDataChangeAt = (previous: number, now = Date.now()): number => (
+    Math.max(now, previous + 1)
+);
 
 export const ensureDeviceId = (settings: AppData['settings']): { settings: AppData['settings']; deviceId: string; updated: boolean } => {
     if (settings.deviceId) {
@@ -119,7 +125,7 @@ export const isTaskVisible = (task?: Task | null, options?: TaskVisibilityOption
 export const toVisibleTask = (task: Task): Task => {
     const attachments = task.attachments;
     if (!attachments || attachments.length === 0) return task;
-    const visibleAttachments = attachments.filter((attachment) => !attachment.deletedAt);
+    const visibleAttachments = filterNotDeleted(attachments);
     return visibleAttachments.length === attachments.length
         ? task
         : { ...task, attachments: visibleAttachments };
@@ -129,16 +135,161 @@ export const selectVisibleTasks = (tasks: Task[]): Task[] =>
     tasks.filter((task) => isTaskVisible(task)).map(toVisibleTask);
 
 export const selectVisibleProjects = (projects: Project[]): Project[] =>
-    projects.filter((project) => !project.deletedAt);
+    filterNotDeleted(projects);
 
 export const selectVisibleSections = (sections: Section[]): Section[] =>
-    sections.filter((section) => !section.deletedAt);
+    filterNotDeleted(sections);
 
 export const selectVisibleAreas = (areas: Area[]): Area[] =>
-    areas.filter((area) => !area.deletedAt);
+    filterNotDeleted(areas);
+
+export const completeTaskForProjectArchive = (task: Task, archivedAt: string, deviceId?: string): Task => ({
+    ...task,
+    status: 'done',
+    completedAt: archivedAt,
+    isFocusedToday: false,
+    statusBeforeProjectArchive: task.status,
+    completedAtBeforeProjectArchive: task.completedAt ?? null,
+    isFocusedTodayBeforeProjectArchive: task.isFocusedToday ?? null,
+    projectArchivedAt: archivedAt,
+    updatedAt: archivedAt,
+    rev: nextRevision(task.rev),
+    revBy: deviceId,
+});
+
+export const restoreTaskFromProjectArchive = (task: Task, restoredAt: string, deviceId?: string): Task => {
+    const previousStatus = task.statusBeforeProjectArchive;
+    const archivedAt = task.projectArchivedAt;
+    const shouldRestore =
+        !task.deletedAt &&
+        Boolean(previousStatus) &&
+        previousStatus !== 'done' &&
+        previousStatus !== 'archived' &&
+        task.status === 'done' &&
+        Boolean(archivedAt) &&
+        task.completedAt === archivedAt;
+
+    if (!shouldRestore) {
+        return task;
+    }
+
+    return {
+        ...task,
+        status: previousStatus!,
+        completedAt: task.completedAtBeforeProjectArchive ?? undefined,
+        isFocusedToday: task.isFocusedTodayBeforeProjectArchive ?? false,
+        statusBeforeProjectArchive: undefined,
+        completedAtBeforeProjectArchive: undefined,
+        isFocusedTodayBeforeProjectArchive: undefined,
+        projectArchivedAt: undefined,
+        updatedAt: restoredAt,
+        rev: nextRevision(task.rev),
+        revBy: deviceId,
+    };
+};
+
+const hasTaskProjectArchiveMetadata = (task: Task): boolean => (
+    task.projectArchivedAt !== undefined
+    || task.statusBeforeProjectArchive !== undefined
+    || task.completedAtBeforeProjectArchive !== undefined
+    || task.isFocusedTodayBeforeProjectArchive !== undefined
+);
+
+export const clearDeletedTaskProjectArchiveMetadata = (task: Task): Task => {
+    if (!task.deletedAt || !hasTaskProjectArchiveMetadata(task)) return task;
+    return {
+        ...task,
+        statusBeforeProjectArchive: undefined,
+        completedAtBeforeProjectArchive: undefined,
+        isFocusedTodayBeforeProjectArchive: undefined,
+        projectArchivedAt: undefined,
+    };
+};
+
+export const archiveSectionForProjectArchive = (section: Section, archivedAt: string, deviceId?: string): Section => ({
+    ...section,
+    deletedAt: archivedAt,
+    deletedAtBeforeProjectArchive: section.deletedAt ?? null,
+    projectArchivedAt: archivedAt,
+    updatedAt: archivedAt,
+    rev: nextRevision(section.rev),
+    revBy: deviceId,
+});
+
+export const restoreSectionFromProjectArchive = (section: Section, restoredAt: string, deviceId?: string): Section => {
+    const archivedAt = section.projectArchivedAt;
+    const shouldRestore =
+        Boolean(archivedAt) &&
+        section.deletedAt === archivedAt &&
+        section.deletedAtBeforeProjectArchive === null;
+
+    if (!shouldRestore) {
+        return section;
+    }
+
+    return {
+        ...section,
+        deletedAt: undefined,
+        deletedAtBeforeProjectArchive: undefined,
+        projectArchivedAt: undefined,
+        updatedAt: restoredAt,
+        rev: nextRevision(section.rev),
+        revBy: deviceId,
+    };
+};
 
 export const buildEntityMap = <T extends EntityWithId>(items: readonly T[]): Map<string, T> =>
     new Map(items.map((item) => [item.id, item] as const));
+
+export const replaceEntityInArray = <T extends EntityWithId>(items: readonly T[], id: string, nextItem: T): T[] => {
+    const index = items.findIndex((item) => item.id === id);
+    if (index < 0) return items as T[];
+    if (items[index] === nextItem) return items as T[];
+    const nextItems = items.slice();
+    nextItems[index] = nextItem;
+    return nextItems;
+};
+
+export const replaceEntitiesInArray = <T extends EntityWithId>(
+    items: readonly T[],
+    nextItems: readonly T[]
+): T[] => {
+    if (nextItems.length === 0) return items as T[];
+    const replacementsById = new Map(nextItems.map((item) => [item.id, item] as const));
+    let patchedItems: T[] | null = null;
+    for (let index = 0; index < items.length; index += 1) {
+        const currentItem = items[index];
+        const nextItem = replacementsById.get(currentItem.id);
+        if (!nextItem || nextItem === currentItem) continue;
+        if (!patchedItems) patchedItems = items.slice();
+        patchedItems[index] = nextItem;
+    }
+    return patchedItems ?? items as T[];
+};
+
+export const replaceEntityInMap = <T extends EntityWithId>(
+    itemsById: Map<string, T>,
+    nextItem: T
+): Map<string, T> => {
+    if (itemsById.get(nextItem.id) === nextItem) return itemsById;
+    const nextItemsById = new Map(itemsById);
+    nextItemsById.set(nextItem.id, nextItem);
+    return nextItemsById;
+};
+
+export const replaceEntitiesInMap = <T extends EntityWithId>(
+    itemsById: Map<string, T>,
+    nextItems: readonly T[]
+): Map<string, T> => {
+    if (nextItems.length === 0) return itemsById;
+    let nextItemsById: Map<string, T> | null = null;
+    for (const nextItem of nextItems) {
+        if (itemsById.get(nextItem.id) === nextItem) continue;
+        if (!nextItemsById) nextItemsById = new Map(itemsById);
+        nextItemsById.set(nextItem.id, nextItem);
+    }
+    return nextItemsById ?? itemsById;
+};
 
 export const reuseArrayIfShallowEqual = <T>(previous: T[], next: T[]): T[] => (
     previous.length === next.length && previous.every((item, index) => item === next[index])
@@ -187,10 +338,14 @@ export const updateVisibleTasks = (visible: Task[], previous?: Task | null, next
     const isVisible = isTaskVisible(next);
     const visibleNext = next && isVisible ? toVisibleTask(next) : next;
     if (wasVisible && isVisible && next) {
-        return visible.map((task) => (task.id === visibleNext!.id ? visibleNext! : task));
+        return replaceEntityInArray(visible, visibleNext!.id, visibleNext!);
     }
     if (wasVisible && !isVisible && previous) {
-        return visible.filter((task) => task.id !== previous.id);
+        const index = visible.findIndex((task) => task.id === previous.id);
+        if (index < 0) return visible;
+        const nextVisible = visible.slice();
+        nextVisible.splice(index, 1);
+        return nextVisible;
     }
     if (!wasVisible && isVisible && next) {
         return [...visible, visibleNext!];
@@ -254,22 +409,28 @@ export const computeDerivedState = (tasks: Task[], projects: Project[]): Derived
 export const computeProjectDerivedState = (
     projects: Iterable<Project>,
     projectMap?: Map<string, Project>
-): Pick<DerivedState, 'projectMap' | 'sequentialProjectIds'> => {
+): Pick<DerivedState, 'projectMap' | 'sequentialProjectIds' | 'focusedProjectCount'> => {
     const resolvedProjectMap = projectMap ?? new Map<string, Project>();
     const sequentialProjectIds = new Set<string>();
+    let focusedProjectCount = 0;
 
     for (const project of projects) {
         if (!projectMap) {
             resolvedProjectMap.set(project.id, project);
         }
-        if (project.isSequential && !project.deletedAt) {
+        if (project.deletedAt) continue;
+        if (project.isSequential) {
             sequentialProjectIds.add(project.id);
+        }
+        if (project.isFocused) {
+            focusedProjectCount += 1;
         }
     }
 
     return {
         projectMap: resolvedProjectMap,
         sequentialProjectIds,
+        focusedProjectCount,
     };
 };
 
@@ -289,6 +450,7 @@ export const computeTaskDerivedState = (
         const list = activeTasksByStatus.get(task.status) ?? [];
         list.push(task);
         activeTasksByStatus.set(task.status, list);
+        // Done/reference tasks keep their historical focus flag but should not consume today's focus limit.
         if (task.isFocusedToday && task.status !== 'done' && task.status !== 'reference') {
             focusedCount += 1;
         }
@@ -333,7 +495,7 @@ export const stripSensitiveSettings = (settings: AppData['settings']): AppData['
     };
 };
 
-export const normalizeAiSettingsForSync = (ai?: AppData['settings']['ai']): AppData['settings']['ai'] | undefined => {
+export const normalizeAiSettingsForSync = (ai?: AiSettings): AiSettings | undefined => {
     if (!ai) return ai;
     const { apiKey, ...rest } = ai;
     if (!rest.speechToText) return rest;

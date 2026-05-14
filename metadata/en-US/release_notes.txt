@@ -1,0 +1,3 @@
+- Added Apple Reminders import for incomplete reminders.
+- Task editing is faster with clearer controls and quick date shortcuts.
+- Archived task details, Focus lists, calendar recurrences, and project unarchive behavior are more reliable.

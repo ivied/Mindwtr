@@ -10,7 +10,7 @@ import { AiSettingsAssistantGeminiPanel } from './ai-settings-assistant-gemini-p
 import { AiSettingsAssistantOpenAiPanel } from './ai-settings-assistant-openai-panel';
 import { styles } from './settings.styles';
 
-type Localize = (english: string, chinese: string) => string;
+type SettingsTranslator = (key: string, values?: Record<string, string | number | boolean | null | undefined>) => string;
 type ModelPickerKind = null | 'model' | 'copilot' | 'speech';
 type Translate = (key: string) => string;
 
@@ -29,7 +29,7 @@ type AiSettingsAssistantCardProps = {
     anthropicThinkingEnabled: boolean;
     getAIProviderLabel: (provider: AIProviderId) => string;
     isFossBuild: boolean;
-    localize: Localize;
+    tr: SettingsTranslator;
     onAiApiKeyChange: (value: string) => void;
     onAiBaseUrlChange: (value: string) => void;
     onAiCopilotModelChange: (value: string) => void;
@@ -60,7 +60,7 @@ export function AiSettingsAssistantCard({
     anthropicThinkingEnabled,
     getAIProviderLabel,
     isFossBuild,
-    localize,
+    tr,
     onAiApiKeyChange,
     onAiBaseUrlChange,
     onAiCopilotModelChange,
@@ -91,10 +91,7 @@ export function AiSettingsAssistantCard({
                         <View style={styles.settingInfo}>
                             <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.aiEnable')}</Text>
                             <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                                {localize(
-                                    `When enabled, task text is sent directly to ${getAIProviderLabel(aiProvider)} using your API key.`,
-                                    `启用后，任务文本将通过你的 API Key 直接发送到 ${getAIProviderLabel(aiProvider)}。`
-                                )}
+                                {tr('settings.aiMobile.taskTextSentToProvider', { provider: getAIProviderLabel(aiProvider) })}
                             </Text>
                         </View>
                         <Switch
@@ -173,7 +170,7 @@ export function AiSettingsAssistantCard({
                                 onPress={() => onModelPickerChange('model')}
                             >
                                 <Text style={[styles.modelSuggestButtonText, { color: tc.secondaryText }]}>
-                                    {localize('Suggestions', '建议')}
+                                    {tr('settings.aiMobile.suggestions')}
                                 </Text>
                             </TouchableOpacity>
                         </View>
@@ -201,7 +198,7 @@ export function AiSettingsAssistantCard({
                                 onPress={() => onModelPickerChange('copilot')}
                             >
                                 <Text style={[styles.modelSuggestButtonText, { color: tc.secondaryText }]}>
-                                    {localize('Suggestions', '建议')}
+                                    {tr('settings.aiMobile.suggestions')}
                                 </Text>
                             </TouchableOpacity>
                         </View>
@@ -213,7 +210,7 @@ export function AiSettingsAssistantCard({
                             aiBaseUrl={aiBaseUrl}
                             aiReasoningEffort={aiReasoningEffort}
                             isFossBuild={isFossBuild}
-                            localize={localize}
+                            tr={tr}
                             onAiApiKeyChange={onAiApiKeyChange}
                             onAiBaseUrlChange={onAiBaseUrlChange}
                             onAiReasoningEffortChange={onAiReasoningEffortChange}

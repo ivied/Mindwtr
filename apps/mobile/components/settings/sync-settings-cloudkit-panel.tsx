@@ -6,7 +6,7 @@ import type { ThemeColors } from '@/hooks/use-theme-colors';
 
 import { styles } from './settings.styles';
 
-type Localize = (english: string, chinese: string) => string;
+type SettingsTranslator = (key: string, values?: Record<string, string | number | boolean | null | undefined>) => string;
 type Translate = (key: string) => string;
 
 type SyncCloudKitBackendPanelProps = {
@@ -14,7 +14,7 @@ type SyncCloudKitBackendPanelProps = {
     isSyncEnabled: boolean;
     isSyncing: boolean;
     lastSyncCard: ReactNode;
-    localize: Localize;
+    tr: SettingsTranslator;
     onSync: () => void;
     statusLabel: string;
     t: Translate;
@@ -26,7 +26,7 @@ export function SyncCloudKitBackendPanel({
     isSyncEnabled,
     isSyncing,
     lastSyncCard,
-    localize,
+    tr,
     onSync,
     statusLabel,
     t,
@@ -40,7 +40,7 @@ export function SyncCloudKitBackendPanel({
                     {helpText}
                 </Text>
                 <Text style={[styles.helpText, { color: tc.secondaryText, marginTop: 8 }]}>
-                    {localize('Account status', '账户状态')}: {statusLabel}
+                    {tr('settings.syncMobile.accountStatus')}: {statusLabel}
                 </Text>
             </View>
 
@@ -55,10 +55,7 @@ export function SyncCloudKitBackendPanel({
                             {t('settings.syncNow')}
                         </Text>
                         <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                            {localize(
-                                'Read and merge the latest CloudKit data now.',
-                                '立即读取并合并最新的 CloudKit 数据。'
-                            )}
+                            {tr('settings.syncMobile.readAndMergeTheLatestCloudkitDataNow')}
                         </Text>
                     </View>
                     {isSyncing && <ActivityIndicator size="small" color={tc.tint} />}

@@ -5,15 +5,22 @@ import {
     applyTaskUpdates,
     buildSaveSnapshot,
     ensureDeviceId,
+    getNextDataChangeAt,
     getTaskOrder,
     getReferenceTaskFieldClears,
     isTaskVisible,
-    normalizeRevision,
+    nextRevision,
+    replaceEntitiesInArray,
+    replaceEntitiesInMap,
+    replaceEntityInArray,
+    replaceEntityInMap,
     reserveNextProjectOrder,
     updateVisibleTasks,
 } from './store-helpers';
 import { logWarn } from './logger';
 import { generateUUID as uuidv4 } from './uuid';
+import { normalizeRecurrenceForLoad } from './recurrence';
+import { normalizeFocusTaskLimit } from './focus-utils';
 
 const stripAttachmentRemoteMetadata = (attachments: Task['attachments']): Task['attachments'] =>
     attachments?.map((attachment) => (
@@ -52,7 +59,6 @@ type TaskActionContext = {
 
 const actionOk = (extra?: Omit<StoreActionResult, 'success'>): StoreActionResult => ({ success: true, ...extra });
 const actionFail = (error: string): StoreActionResult => ({ success: false, error });
-const MAX_FOCUS_TASKS = 3;
 const hasOwnField = (value: object, field: PropertyKey): boolean => Object.prototype.hasOwnProperty.call(value, field);
 const normalizeOptionalReferenceId = (value: unknown): string | undefined => (
     typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
@@ -214,6 +220,12 @@ const normalizeTaskUpdateForStore = ({
     allTasks: Task[];
 }): Partial<Task> => {
     let adjustedUpdates = updates;
+    if (hasOwnField(updates, 'recurrence')) {
+        adjustedUpdates = {
+            ...adjustedUpdates,
+            recurrence: normalizeRecurrenceForLoad(updates.recurrence),
+        };
+    }
     const hasOrder = Object.prototype.hasOwnProperty.call(updates, 'order');
     const hasOrderNum = Object.prototype.hasOwnProperty.call(updates, 'orderNum');
     if (hasOrder || hasOrderNum) {
@@ -335,6 +347,7 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
                 tags: initialProps?.tags ?? [],
                 contexts: initialProps?.contexts ?? [],
                 pushCount: initialProps?.pushCount ?? 0,
+                recurrence: normalizeRecurrenceForLoad(initialProps?.recurrence),
                 rev: 1,
                 revBy: deviceId,
                 createdAt: now,
@@ -356,7 +369,7 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
             return {
                 tasks: newVisibleTasks,
                 _allTasks: newAllTasks,
-                lastDataChangeAt: changeAt,
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
@@ -376,7 +389,7 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
         const changeAt = Date.now();
         const now = new Date().toISOString();
         const currentState = get();
-        const existingTask = currentState._allTasks.find((task) => task.id === id);
+        const existingTask = currentState._tasksById.get(id);
         if (!existingTask) {
             const message = 'Task not found';
             logWarn('updateTask skipped: task not found', {
@@ -401,39 +414,37 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
         }
         const isPromotingTaskFocus = preparedUpdates.updates.isFocusedToday === true && existingTask.isFocusedToday !== true;
         if (isPromotingTaskFocus) {
-            const focusedCount = currentState._allTasks.filter(
-                (task) => task.isFocusedToday === true && !task.deletedAt
-            ).length;
-            if (focusedCount >= MAX_FOCUS_TASKS) {
-                const message = `Maximum of ${MAX_FOCUS_TASKS} focused tasks allowed`;
+            const focusTaskLimit = normalizeFocusTaskLimit(currentState.settings.gtd?.focusTaskLimit);
+            const focusedCount = currentState.getDerivedState().focusedCount;
+            if (focusedCount >= focusTaskLimit) {
+                const message = `Maximum of ${focusTaskLimit} focused tasks allowed`;
                 set({ error: message });
                 return actionFail(message);
             }
         }
         let snapshot: AppData | null = null;
         set((state) => {
-            const oldTask = state._allTasks.find((t) => t.id === id);
+            const oldTask = state._tasksById.get(id);
             if (!oldTask) {
                 return state;
             }
             const deviceState = ensureDeviceId(state.settings);
-            const nextRevision = {
-                rev: normalizeRevision(oldTask.rev) + 1,
+            const revisionPatch = {
+                rev: nextRevision(oldTask.rev),
                 revBy: deviceState.deviceId,
             };
 
             const { updatedTask, nextRecurringTask } = applyTaskUpdates(
                 oldTask,
-                { ...preparedUpdates.updates, ...nextRevision },
+                { ...preparedUpdates.updates, ...revisionPatch },
                 now
             );
 
-            const updatedAllTasksBase = state._allTasks.map((task) =>
-                task.id === id ? updatedTask : task
-            );
+            const updatedAllTasksBase = replaceEntityInArray(state._allTasks, id, updatedTask);
             const updatedAllTasks = nextRecurringTask
                 ? [...updatedAllTasksBase, nextRecurringTask]
                 : updatedAllTasksBase;
+            const updatedTasksById = replaceEntityInMap(state._tasksById, updatedTask);
 
             let updatedVisibleTasks = updateVisibleTasks(state.tasks, oldTask, updatedTask);
             if (nextRecurringTask) {
@@ -446,7 +457,10 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
             return {
                 tasks: updatedVisibleTasks,
                 _allTasks: updatedAllTasks,
-                lastDataChangeAt: changeAt,
+                _tasksById: nextRecurringTask
+                    ? replaceEntityInMap(updatedTasksById, nextRecurringTask)
+                    : updatedTasksById,
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
@@ -467,7 +481,7 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
         let snapshot: AppData | null = null;
         let missingTask = false;
         set((state) => {
-            const oldTask = state._allTasks.find((task) => task.id === id);
+            const oldTask = state._tasksById.get(id);
             if (!oldTask) {
                 missingTask = true;
                 return state;
@@ -477,13 +491,11 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
                 ...oldTask,
                 deletedAt: now,
                 updatedAt: now,
-                rev: normalizeRevision(oldTask.rev) + 1,
+                rev: nextRevision(oldTask.rev),
                 revBy: deviceState.deviceId,
             };
             // Update in full data (set tombstone)
-            const newAllTasks = state._allTasks.map((task) =>
-                task.id === id ? updatedTask : task
-            );
+            const newAllTasks = replaceEntityInArray(state._allTasks, id, updatedTask);
             // Filter for UI state (hide deleted)
             const newVisibleTasks = updateVisibleTasks(state.tasks, oldTask, updatedTask);
             snapshot = buildSaveSnapshot(state, {
@@ -493,7 +505,8 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
             return {
                 tasks: newVisibleTasks,
                 _allTasks: newAllTasks,
-                lastDataChangeAt: changeAt,
+                _tasksById: replaceEntityInMap(state._tasksById, updatedTask),
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
@@ -512,7 +525,7 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
         let snapshot: AppData | null = null;
         let missingTask = false;
         set((state) => {
-            const oldTask = state._allTasks.find((task) => task.id === id);
+            const oldTask = state._tasksById.get(id);
             if (!oldTask) {
                 missingTask = true;
                 return state;
@@ -523,12 +536,10 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
                 deletedAt: undefined,
                 purgedAt: undefined,
                 updatedAt: now,
-                rev: normalizeRevision(oldTask.rev) + 1,
+                rev: nextRevision(oldTask.rev),
                 revBy: deviceState.deviceId,
             };
-            const newAllTasks = state._allTasks.map((task) =>
-                task.id === id ? updatedTask : task
-            );
+            const newAllTasks = replaceEntityInArray(state._allTasks, id, updatedTask);
             const newVisibleTasks = updateVisibleTasks(state.tasks, oldTask, updatedTask);
             snapshot = buildSaveSnapshot(state, {
                 tasks: newAllTasks,
@@ -537,7 +548,8 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
             return {
                 tasks: newVisibleTasks,
                 _allTasks: newAllTasks,
-                lastDataChangeAt: changeAt,
+                _tasksById: replaceEntityInMap(state._tasksById, updatedTask),
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
@@ -556,7 +568,7 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
         let snapshot: AppData | null = null;
         let missingTask = false;
         set((state) => {
-            const oldTask = state._allTasks.find((task) => task.id === id);
+            const oldTask = state._tasksById.get(id);
             if (!oldTask) {
                 missingTask = true;
                 return state;
@@ -568,12 +580,10 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
                 purgedAt: now,
                 attachments: stripAttachmentRemoteMetadata(oldTask.attachments),
                 updatedAt: now,
-                rev: normalizeRevision(oldTask.rev) + 1,
+                rev: nextRevision(oldTask.rev),
                 revBy: deviceState.deviceId,
             };
-            const newAllTasks = state._allTasks.map((task) =>
-                task.id === id ? updatedTask : task
-            );
+            const newAllTasks = replaceEntityInArray(state._allTasks, id, updatedTask);
             const newVisibleTasks = updateVisibleTasks(state.tasks, oldTask, updatedTask);
             snapshot = buildSaveSnapshot(state, {
                 tasks: newAllTasks,
@@ -582,7 +592,8 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
             return {
                 tasks: newVisibleTasks,
                 _allTasks: newAllTasks,
-                lastDataChangeAt: changeAt,
+                _tasksById: replaceEntityInMap(state._tasksById, updatedTask),
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
@@ -601,22 +612,22 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
         let snapshot: AppData | null = null;
         set((state) => {
             const deviceState = ensureDeviceId(state.settings);
-            let changed = false;
-            const newAllTasks = state._allTasks.map((task) => {
-                if (!task.deletedAt || task.purgedAt) return task;
-                changed = true;
-                return {
+            const changedTasks: Task[] = [];
+            for (const task of state._allTasks) {
+                if (!task.deletedAt || task.purgedAt) continue;
+                changedTasks.push({
                     ...task,
                     purgedAt: now,
                     attachments: stripAttachmentRemoteMetadata(task.attachments),
                     updatedAt: now,
-                    rev: normalizeRevision(task.rev) + 1,
+                    rev: nextRevision(task.rev),
                     revBy: deviceState.deviceId,
-                };
-            });
-            if (!changed && !deviceState.updated) {
+                });
+            }
+            if (changedTasks.length === 0 && !deviceState.updated) {
                 return state;
             }
+            const newAllTasks = replaceEntitiesInArray(state._allTasks, changedTasks);
             snapshot = buildSaveSnapshot(state, {
                 tasks: newAllTasks,
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
@@ -624,7 +635,8 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
             return {
                 tasks: state.tasks,
                 _allTasks: newAllTasks,
-                lastDataChangeAt: changeAt,
+                _tasksById: replaceEntitiesInMap(state._tasksById, changedTasks),
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
@@ -643,7 +655,11 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
         let snapshot: AppData | null = null;
         let missingTask = false;
         set((state) => {
-            const sourceTask = state._allTasks.find((task) => task.id === id && !task.deletedAt);
+            const sourceTask = state._tasksById.get(id);
+            if (sourceTask?.deletedAt) {
+                missingTask = true;
+                return state;
+            }
             if (!sourceTask) {
                 missingTask = true;
                 return state;
@@ -698,7 +714,7 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
             return {
                 tasks: newVisibleTasks,
                 _allTasks: newAllTasks,
-                lastDataChangeAt: changeAt,
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
@@ -717,8 +733,8 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
         let snapshot: AppData | null = null;
         let missingTask = false;
         set((state) => {
-            const sourceTask = state._allTasks.find((task) => task.id === id && !task.deletedAt);
-            if (!sourceTask || !sourceTask.checklist || sourceTask.checklist.length === 0) {
+            const sourceTask = state._tasksById.get(id);
+            if (!sourceTask || sourceTask.deletedAt || !sourceTask.checklist || sourceTask.checklist.length === 0) {
                 missingTask = true;
                 return state;
             }
@@ -738,11 +754,11 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
                 completedAt: wasDone ? undefined : sourceTask.completedAt,
                 isFocusedToday: wasDone ? false : sourceTask.isFocusedToday,
                 updatedAt: now,
-                rev: normalizeRevision(sourceTask.rev) + 1,
+                rev: nextRevision(sourceTask.rev),
                 revBy: deviceState.deviceId,
             };
 
-            const newAllTasks = state._allTasks.map((task) => (task.id === id ? updatedTask : task));
+            const newAllTasks = replaceEntityInArray(state._allTasks, id, updatedTask);
             const newVisibleTasks = updateVisibleTasks(state.tasks, sourceTask, updatedTask);
             snapshot = buildSaveSnapshot(state, {
                 tasks: newAllTasks,
@@ -751,7 +767,8 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
             return {
                 tasks: newVisibleTasks,
                 _allTasks: newAllTasks,
-                lastDataChangeAt: changeAt,
+                _tasksById: replaceEntityInMap(state._tasksById, updatedTask),
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
@@ -827,6 +844,7 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
             const deviceState = ensureDeviceId(state.settings);
             let newVisibleTasks = state.tasks;
             let nextRecurringTasks: Task[] = [];
+            const changedTasks: Task[] = [];
             const newAllTasksBase = [...state._allTasks];
             for (let index = 0; index < state._allTasks.length; index += 1) {
                 const task = newAllTasksBase[index];
@@ -841,7 +859,7 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
                     task,
                     {
                         ...adjustedUpdates,
-                        rev: normalizeRevision(task.rev) + 1,
+                        rev: nextRevision(task.rev),
                         revBy: deviceState.deviceId,
                     },
                     now
@@ -849,6 +867,7 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
                 if (nextRecurringTask) nextRecurringTasks = [...nextRecurringTasks, nextRecurringTask];
                 newVisibleTasks = updateVisibleTasks(newVisibleTasks, task, updatedTask);
                 newAllTasksBase[index] = updatedTask;
+                changedTasks.push(updatedTask);
             }
 
             const newAllTasks = nextRecurringTasks.length > 0
@@ -868,7 +887,8 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
             return {
                 tasks: newVisibleTasks,
                 _allTasks: newAllTasks,
-                lastDataChangeAt: changeAt,
+                _tasksById: replaceEntitiesInMap(state._tasksById, [...changedTasks, ...nextRecurringTasks]),
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
@@ -904,18 +924,20 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
         set((state) => {
             const deviceState = ensureDeviceId(state.settings);
             let newVisibleTasks = state.tasks;
-            const newAllTasks = state._allTasks.map((task) => {
-                if (!idSet.has(task.id)) return task;
+            const changedTasks: Task[] = [];
+            for (const task of state._allTasks) {
+                if (!idSet.has(task.id)) continue;
                 const updatedTask = {
                     ...task,
                     deletedAt: now,
                     updatedAt: now,
-                    rev: normalizeRevision(task.rev) + 1,
+                    rev: nextRevision(task.rev),
                     revBy: deviceState.deviceId,
                 };
                 newVisibleTasks = updateVisibleTasks(newVisibleTasks, task, updatedTask);
-                return updatedTask;
-            });
+                changedTasks.push(updatedTask);
+            }
+            const newAllTasks = replaceEntitiesInArray(state._allTasks, changedTasks);
             snapshot = buildSaveSnapshot(state, {
                 tasks: newAllTasks,
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
@@ -923,7 +945,8 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
             return {
                 tasks: newVisibleTasks,
                 _allTasks: newAllTasks,
-                lastDataChangeAt: changeAt,
+                _tasksById: replaceEntitiesInMap(state._tasksById, changedTasks),
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });

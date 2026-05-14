@@ -3,6 +3,7 @@ import renderer from 'react-test-renderer';
 import { describe, expect, it, vi } from 'vitest';
 
 import { TaskEditViewTab } from './TaskEditViewTab';
+import { styles as taskEditStyles } from './task-edit-modal.styles';
 
 function MockTaskStatusBadge(props: any) {
   return React.createElement('TaskStatusBadge', props);
@@ -20,7 +21,24 @@ vi.mock('../AttachmentProgressIndicator', () => ({
   AttachmentProgressIndicator: (props: any) => React.createElement('AttachmentProgressIndicator', props),
 }));
 
+const flattenStyle = (value: any): Record<string, unknown> => (
+  Array.isArray(value)
+    ? Object.assign({}, ...value.map(flattenStyle))
+    : value
+);
+
 describe('TaskEditViewTab', () => {
+  it('lets preview metadata values wrap across the full row width', () => {
+    expect(flattenStyle(taskEditStyles.viewRow)).toMatchObject({
+      alignItems: 'flex-start',
+    });
+    expect(flattenStyle(taskEditStyles.viewLabel)).not.toHaveProperty('flex');
+    expect(flattenStyle(taskEditStyles.viewValue)).toMatchObject({
+      textAlign: 'left',
+      width: '100%',
+    });
+  });
+
   it('renders an interactive status badge and forwards updates', () => {
     const onStatusUpdate = vi.fn();
 

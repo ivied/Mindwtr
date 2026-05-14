@@ -1,0 +1,3 @@
+Sync is steadier with safer conflict handling, serialized sync runs, and clearer history details.
+Quick capture blocks duplicate rapid saves, Projects supports task reordering, and Inbox tips make capture paths easier to discover.
+Local/private HTTP sync targets work more reliably, calendar gestures are smoother, and noisy bundle warnings are gone.

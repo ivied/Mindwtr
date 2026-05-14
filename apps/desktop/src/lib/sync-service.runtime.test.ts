@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AppData } from '@mindwtr/core';
+import { computeStableValueFingerprint, computeSyncPayloadFingerprint, type AppData } from '@mindwtr/core';
 
 type MockStoreState = {
     _allTasks: AppData['tasks'];
@@ -516,6 +516,76 @@ describe('desktop sync-service runtime', () => {
 
         expect(result).toEqual({ success: true, stats: emptyStats });
         expect(writeRemoteCloudKitMock).not.toHaveBeenCalled();
+    });
+
+    it('skips the full WebDAV merge when local and remote fingerprints are unchanged', async () => {
+        const syncServiceModule = await syncServiceModulePromise;
+        const syncedData: AppData = {
+            tasks: [],
+            projects: [],
+            sections: [],
+            areas: [],
+            settings: {},
+        };
+        const remoteFingerprint = 'webdav:v1:etag="fast":mtime=:len=2';
+        const scope = computeStableValueFingerprint({
+            backend: 'webdav',
+            url: 'https://sync.example.com/data.json',
+            username: 'user',
+        });
+        const headFetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            expect(String(input)).toBe('https://sync.example.com/data.json');
+            expect(init?.method).toBe('HEAD');
+            return buildResponse(200, '', { etag: '"fast"', 'content-length': '2' });
+        });
+
+        storeStateRef.current = {
+            ...storeStateRef.current,
+            _allTasks: [],
+            _allProjects: [],
+            _allSections: [],
+            _allAreas: [],
+            settings: {},
+        };
+        getInMemoryAppDataSnapshotMock.mockReturnValue(syncedData);
+        localStorage.setItem('mindwtr-fast-sync-state-v1', JSON.stringify({
+            scope,
+            localFingerprint: computeSyncPayloadFingerprint(syncedData),
+            remoteFingerprint,
+            checkedAt: '2026-05-07T00:00:00.000Z',
+        }));
+        invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+            if (command === 'get_sync_backend') return 'webdav';
+            if (command === 'create_data_snapshot') return undefined;
+            if (command === 'get_webdav_config') {
+                return {
+                    url: 'https://sync.example.com/data.json',
+                    username: 'user',
+                    password: 'pass',
+                    hasPassword: true,
+                    allowInsecureHttp: false,
+                };
+            }
+            if (command === 'get_data') return structuredClone(syncedData);
+            if (command === 'save_data') return undefined;
+            throw new Error(`Unexpected command: ${command} ${JSON.stringify(args)}`);
+        });
+        syncServiceModule.__syncServiceTestUtils.setDependenciesForTests({
+            getTauriFetch: async () => headFetchMock as unknown as typeof fetch,
+        });
+
+        const result = await syncServiceModule.SyncService.performSync();
+
+        expect(result).toEqual({ success: true, skipped: 'unchanged' });
+        expect(performSyncCycleMock).not.toHaveBeenCalled();
+        expect(headFetchMock).toHaveBeenCalled();
+        expect(headFetchMock.mock.calls.some(([input, init]) =>
+            init?.method === 'HEAD' || (typeof Request !== 'undefined' && input instanceof Request && input.method === 'HEAD')
+        )).toBe(true);
+        expect(storeStateRef.current.updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+            lastSyncStatus: 'success',
+            lastSyncError: undefined,
+        }));
     });
 
     it('falls back to browser fetch when native Dropbox download returns an empty body', async () => {

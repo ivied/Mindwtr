@@ -67,6 +67,28 @@ Single-row JSON store for app settings.
 - `id = 1`
 - `data`: serialized settings object
 
+### `saved_filters`
+
+Saved Focus filter definitions used by the Focus view.
+
+Notable columns:
+
+- `name`, `icon`, `view`: display metadata
+- `criteria`: serialized filter criteria
+- `sortBy`, `sortOrder`: optional saved ordering
+- `createdAt`, `updatedAt`: local metadata
+
+### `calendar_sync`
+
+Device-calendar push-sync mapping table.
+
+Notable columns:
+
+- `task_id`: Mindwtr task ID
+- `calendar_event_id`, `calendar_id`: native calendar identifiers
+- `platform`: platform namespace for the mapping
+- `last_synced_at`: last successful push timestamp
+
 ### `schema_migrations`
 
 Tracks applied schema versions for additive migrations.

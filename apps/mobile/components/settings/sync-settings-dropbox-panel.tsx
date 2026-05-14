@@ -7,7 +7,7 @@ import type { ThemeColors } from '@/hooks/use-theme-colors';
 import { styles } from './settings.styles';
 
 type Translate = (key: string) => string;
-type Localize = (english: string, chinese: string) => string;
+type SettingsTranslator = (key: string, values?: Record<string, string | number | boolean | null | undefined>) => string;
 
 type SyncDropboxBackendPanelProps = {
     dropboxBusy: boolean;
@@ -17,7 +17,7 @@ type SyncDropboxBackendPanelProps = {
     isSyncing: boolean;
     isTestingConnection: boolean;
     lastSyncCard: ReactNode;
-    localize: Localize;
+    tr: SettingsTranslator;
     onConnectToggle: () => void;
     onSync: () => void;
     onTestConnection: () => void;
@@ -34,7 +34,7 @@ export function SyncDropboxBackendPanel({
     isSyncing,
     isTestingConnection,
     lastSyncCard,
-    localize,
+    tr,
     onConnectToggle,
     onSync,
     onTestConnection,
@@ -46,28 +46,25 @@ export function SyncDropboxBackendPanel({
         <>
             <View style={[styles.settingCard, { backgroundColor: tc.cardBg, marginTop: 12 }]}>
                 <View style={styles.settingRowColumn}>
-                    <Text style={[styles.settingLabel, { color: tc.text }]}>{localize('Dropbox account', 'Dropbox 账号')}</Text>
+                    <Text style={[styles.settingLabel, { color: tc.text }]}>{tr('settings.dropboxAppKey')}</Text>
                     <Text style={[styles.settingDescription, { color: tc.secondaryText, marginTop: 6 }]}>
-                        {localize(
-                            'OAuth with Dropbox App Folder access. Mindwtr syncs /Apps/Mindwtr/data.json and /Apps/Mindwtr/attachments/* in your Dropbox.',
-                            '使用 Dropbox OAuth（应用文件夹权限）。Mindwtr 会同步 Dropbox 中 /Apps/Mindwtr/data.json 与 /Apps/Mindwtr/attachments/*。'
-                        )}
+                        {tr('settings.syncMobile.oauthWithDropboxAppFolderAccessMindwtrSyncsAppsMindwtr')}
                     </Text>
                     <Text style={[styles.settingDescription, { color: tc.secondaryText, marginTop: 6 }]}>
-                        {localize('Redirect URI', '回调地址')}: {redirectUri}
+                        {tr('settings.dropboxRedirectUri')}: {redirectUri}
                     </Text>
                     {!dropboxConfigured && (
                         <Text style={[styles.settingDescription, { color: '#EF4444', marginTop: 8 }]}>
-                            {localize('Dropbox app key is not configured for this build.', '当前构建未配置 Dropbox App Key。')}
+                            {tr('settings.syncMobile.dropboxAppKeyIsNotConfiguredForThisBuild')}
                         </Text>
                     )}
                     {isExpoGo && (
                         <Text style={[styles.settingDescription, { color: '#EF4444', marginTop: 8 }]}>
-                            {localize('Expo Go is not supported for Dropbox OAuth. Use a development/release build.', 'Expo Go 不支持 Dropbox OAuth。请使用开发版或正式版应用。')}
+                            {tr('settings.syncMobile.expoGoIsNotSupportedForDropboxOauthUseA')}
                         </Text>
                     )}
                     <Text style={[styles.settingDescription, { color: tc.secondaryText, marginTop: 8 }]}>
-                        {dropboxConnected ? localize('Status: Connected', '状态：已连接') : localize('Status: Not connected', '状态：未连接')}
+                        {dropboxConnected ? tr('settings.syncMobile.statusConnected') : tr('settings.syncMobile.statusNotConnected')}
                     </Text>
                 </View>
                 <TouchableOpacity
@@ -77,14 +74,14 @@ export function SyncDropboxBackendPanel({
                 >
                     <View style={styles.settingInfo}>
                         <Text style={[styles.settingLabel, { color: dropboxConfigured && !isExpoGo ? tc.tint : tc.secondaryText }]}>
-                            {dropboxConnected ? localize('Disconnect Dropbox', '断开 Dropbox') : localize('Connect Dropbox', '连接 Dropbox')}
+                            {dropboxConnected ? tr('settings.dropboxDisconnect') : tr('settings.dropboxConnect')}
                         </Text>
                         <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
                             {isExpoGo
-                                ? localize('Requires development/release build (Expo Go unsupported).', '需要开发版/正式版应用（Expo Go 不支持）。')
+                                ? tr('settings.syncMobile.requiresDevelopmentReleaseBuildExpoGoUnsupported')
                                 : dropboxConnected
-                                    ? localize('Revoke app token and remove local auth.', '撤销应用令牌并移除本地授权。')
-                                    : localize('Open Dropbox OAuth sign-in in browser.', '在浏览器中打开 Dropbox OAuth 登录。')}
+                                    ? tr('settings.syncMobile.revokeAppTokenAndRemoveLocalAuth')
+                                    : tr('settings.syncMobile.openDropboxOauthSignInInBrowser')}
                         </Text>
                     </View>
                     {dropboxBusy && <ActivityIndicator size="small" color={tc.tint} />}
@@ -112,7 +109,7 @@ export function SyncDropboxBackendPanel({
                             {t('settings.syncNow')}
                         </Text>
                         <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-                            {localize('Read and merge Dropbox data.', '读取并合并 Dropbox 数据。')}
+                            {tr('settings.syncMobile.readAndMergeDropboxData')}
                         </Text>
                     </View>
                     {isSyncing && <ActivityIndicator size="small" color={tc.tint} />}

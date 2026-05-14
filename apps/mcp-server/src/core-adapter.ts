@@ -28,8 +28,13 @@ type CoreActionResult = {
 type CoreModule = {
   setStorageAdapter: (adapter: unknown) => void;
   flushPendingSave: () => Promise<void>;
+  createSerializedAsyncQueue: () => SerializedAsyncQueue;
   useTaskStore: CoreStore;
   SqliteAdapter: new (client: unknown) => { ensureSchema: () => Promise<void> };
+};
+
+type SerializedAsyncQueue = {
+  run: <T>(fn: () => Promise<T> | T) => Promise<T>;
 };
 
 type CoreService = {
@@ -50,7 +55,7 @@ let coreService: CoreService | null = null;
 let coreDbPath: string | undefined;
 let coreReadonly = false;
 let coreReady: Promise<void> | null = null;
-let coreQueue: Promise<void> = Promise.resolve();
+let coreQueue: SerializedAsyncQueue | null = null;
 
 const isBun = () => typeof (globalThis as any).Bun !== 'undefined';
 
@@ -98,27 +103,6 @@ const loadCoreModules = async (): Promise<CoreModule> => {
   return core as CoreModule;
 };
 
-const runSerialized = async <T>(fn: () => Promise<T>): Promise<T> => {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const result = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  coreQueue = coreQueue
-    .then(async () => {
-      try {
-        resolve(await fn());
-      } catch (error) {
-        reject(error);
-      }
-    })
-    .catch(() => {
-      // swallow to keep queue alive
-    });
-  return result;
-};
-
 const getErrorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 const ensureActionSucceeded = (action: string, result: CoreActionResult) => {
   if (!result.success) {
@@ -141,6 +125,7 @@ const ensureCoreReady = async (options: DbOptions) => {
   coreReadonly = Boolean(options.readonly);
   coreReady = (async () => {
     const core = await loadCoreModules();
+    coreQueue ??= core.createSerializedAsyncQueue();
     const { client } = await createSqliteClient(coreDbPath!, coreReadonly);
     const ensureOrderNumColumn = async (tableName: 'tasks' | 'projects') => {
       let columns: Array<{ name?: string }> = [];
@@ -286,5 +271,8 @@ export const getCoreService = async (options: DbOptions): Promise<CoreService> =
 
 export const runCoreService = async <T>(options: DbOptions, fn: (service: CoreService) => Promise<T>): Promise<T> => {
   const service = await getCoreService(options);
-  return runSerialized(() => fn(service));
+  if (!coreQueue) {
+    throw new Error('Core service queue failed to initialize.');
+  }
+  return coreQueue.run(() => fn(service));
 };

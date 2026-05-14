@@ -1,11 +1,12 @@
 import { format } from 'date-fns';
-import { safeParseDate, type Project } from '@mindwtr/core';
+import { safeParseDate, tFallback, type Project } from '@mindwtr/core';
 import { Archive as ArchiveIcon, Calendar, CalendarClock, ChevronDown, ChevronRight, Copy, FolderOpenDot, ListOrdered, Loader2, RotateCcw, Signal, Trash2 } from 'lucide-react';
 
 type ProjectProgress = {
     total: number;
     doneCount: number;
     remainingCount: number;
+    isArchived?: boolean;
 };
 
 type ProjectDetailsHeaderProps = {
@@ -52,13 +53,20 @@ export function ProjectDetailsHeader({
     t,
 }: ProjectDetailsHeaderProps) {
     const completedRatio = projectProgress && projectProgress.total > 0
-        ? Math.round((projectProgress.doneCount / projectProgress.total) * 100)
+        ? projectProgress.isArchived
+            ? 100
+            : Math.round((projectProgress.doneCount / projectProgress.total) * 100)
         : 0;
-    const detailsLabel = t('taskEdit.details') === 'taskEdit.details' ? 'Details' : t('taskEdit.details');
+    const progressText = projectProgress?.isArchived && projectProgress.total > 0
+        ? `${projectProgress.total} ${tFallback(t, 'list.done', 'Completed')}`
+        : projectProgress && projectProgress.total > 0
+            ? `${projectProgress.doneCount}/${projectProgress.total} ${t('status.done')} • ${projectProgress.remainingCount} ${t('process.remaining')}`
+            : t('projects.noActiveTasks');
+    const detailsLabel = tFallback(t, 'taskEdit.details', 'Details');
     const dueDateValue = dueDate ? safeParseDate(dueDate) : null;
     const reviewDate = reviewAt ? safeParseDate(reviewAt) : null;
-    const dueLabelPrefix = t('taskEdit.dueDateLabel') === 'taskEdit.dueDateLabel' ? 'Due' : t('taskEdit.dueDateLabel');
-    const reviewLabelPrefix = t('projects.reviewAt') === 'projects.reviewAt' ? 'Review' : t('projects.reviewAt');
+    const dueLabelPrefix = tFallback(t, 'taskEdit.dueDateLabel', 'Due');
+    const reviewLabelPrefix = tFallback(t, 'projects.reviewAt', 'Review');
     const summaryItems = [
         {
             key: 'status',
@@ -74,8 +82,8 @@ export function ProjectDetailsHeader({
             key: 'sequence',
             icon: ListOrdered,
             label: isSequential
-                ? (t('projects.sequential') === 'projects.sequential' ? 'Sequential' : t('projects.sequential'))
-                : (t('projects.parallel') === 'projects.parallel' ? 'Parallel' : t('projects.parallel')),
+                ? tFallback(t, 'projects.sequential', 'Sequential')
+                : tFallback(t, 'projects.parallel', 'Parallel'),
         },
         ...(dueDateValue ? [{
             key: 'due',
@@ -117,9 +125,7 @@ export function ProjectDetailsHeader({
                         {projectProgress ? (
                             <div className="space-y-1.5">
                                 <div className="text-xs text-muted-foreground">
-                                    {projectProgress.total > 0
-                                        ? `${projectProgress.doneCount}/${projectProgress.total} ${t('status.done')} • ${projectProgress.remainingCount} ${t('process.remaining')}`
-                                        : t('projects.noActiveTasks')}
+                                    {progressText}
                                 </div>
                                 {projectProgress.total > 0 && (
                                     <div className="h-1.5 rounded-full bg-muted overflow-hidden">

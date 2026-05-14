@@ -3,15 +3,14 @@ import {
     Attachment,
     computeSha256Hex,
     globalProgressTracker,
+    type AttachmentSettings,
 } from '@mindwtr/core';
 import { createCooperativeYield, stripFileScheme } from './sync-service-utils';
 
-type PendingRemoteAttachmentDeleteEntry = NonNullable<
-    NonNullable<AppData['settings']['attachments']>['pendingRemoteDeletes']
->[number];
+type PendingRemoteAttachmentDeleteEntry = NonNullable<AttachmentSettings['pendingRemoteDeletes']>[number];
 
 export const normalizePendingRemoteDeletes = (
-    value: AppData['settings']['attachments'] extends { pendingRemoteDeletes?: infer T } ? T : unknown
+    value: unknown
 ): PendingRemoteAttachmentDeleteEntry[] => {
     if (!Array.isArray(value)) return [];
     const deduped = new Map<string, PendingRemoteAttachmentDeleteEntry>();

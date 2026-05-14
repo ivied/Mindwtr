@@ -7,8 +7,11 @@ export const SYNC_BACKEND_KEY = 'mindwtr-sync-backend';
 export const WEBDAV_URL_KEY = 'mindwtr-webdav-url';
 export const WEBDAV_USERNAME_KEY = 'mindwtr-webdav-username';
 export const WEBDAV_PASSWORD_KEY = 'mindwtr-webdav-password';
+export const WEBDAV_ALLOW_INSECURE_HTTP_KEY = 'mindwtr-webdav-allow-insecure-http';
+export const WEBDAV_ALLOW_WEAK_FINGERPRINT_KEY = 'mindwtr-webdav-allow-weak-fingerprint';
 export const CLOUD_URL_KEY = 'mindwtr-cloud-url';
 export const CLOUD_TOKEN_KEY = 'mindwtr-cloud-token';
+export const CLOUD_ALLOW_INSECURE_HTTP_KEY = 'mindwtr-cloud-allow-insecure-http';
 const CLOUD_PROVIDER_KEY = 'mindwtr-cloud-provider';
 const DEFAULT_DROPBOX_APP_KEY = String(import.meta.env.VITE_DROPBOX_APP_KEY || '').trim();
 
@@ -37,12 +40,16 @@ export const getWebDavConfigLocal = (): WebDavConfig => {
         username: localStorage.getItem(WEBDAV_USERNAME_KEY) || '',
         password: '',
         hasPassword: false,
+        allowInsecureHttp: localStorage.getItem(WEBDAV_ALLOW_INSECURE_HTTP_KEY) === 'true',
+        allowWeakFingerprint: localStorage.getItem(WEBDAV_ALLOW_WEAK_FINGERPRINT_KEY) !== 'false',
     };
 };
 
-const setWebDavConfigLocal = (config: { url: string; username?: string; password?: string }) => {
+const setWebDavConfigLocal = (config: { url: string; username?: string; password?: string; allowInsecureHttp?: boolean; allowWeakFingerprint?: boolean }) => {
     localStorage.setItem(WEBDAV_URL_KEY, config.url);
     localStorage.setItem(WEBDAV_USERNAME_KEY, config.username || '');
+    localStorage.setItem(WEBDAV_ALLOW_INSECURE_HTTP_KEY, config.allowInsecureHttp === true ? 'true' : 'false');
+    localStorage.setItem(WEBDAV_ALLOW_WEAK_FINGERPRINT_KEY, config.allowWeakFingerprint === false ? 'false' : 'true');
 };
 
 export const getCloudConfigLocal = (): CloudConfig => {
@@ -56,11 +63,13 @@ export const getCloudConfigLocal = (): CloudConfig => {
     return {
         url: localStorage.getItem(CLOUD_URL_KEY) || '',
         token,
+        allowInsecureHttp: localStorage.getItem(CLOUD_ALLOW_INSECURE_HTTP_KEY) === 'true',
     };
 };
 
-const setCloudConfigLocal = (config: { url: string; token?: string }) => {
+const setCloudConfigLocal = (config: { url: string; token?: string; allowInsecureHttp?: boolean }) => {
     localStorage.setItem(CLOUD_URL_KEY, config.url);
+    localStorage.setItem(CLOUD_ALLOW_INSECURE_HTTP_KEY, config.allowInsecureHttp === true ? 'true' : 'false');
     if (config.token) {
         sessionStorage.setItem(CLOUD_TOKEN_KEY, config.token);
     } else {
@@ -122,12 +131,12 @@ export async function readWebDavConfig(
         if (!options?.silent) {
             deps.reportError('Failed to get WebDAV config', error);
         }
-        return { url: '', username: '', hasPassword: false };
+        return { url: '', username: '', hasPassword: false, allowInsecureHttp: false, allowWeakFingerprint: true };
     }
 }
 
 export async function writeWebDavConfig(
-    config: { url: string; username?: string; password?: string },
+    config: { url: string; username?: string; password?: string; allowInsecureHttp?: boolean; allowWeakFingerprint?: boolean },
     deps: ConfigDeps,
 ): Promise<void> {
     if (!deps.isTauriRuntimeEnv()) {
@@ -139,6 +148,8 @@ export async function writeWebDavConfig(
             url: config.url,
             username: config.username || '',
             password: config.password || '',
+            allowInsecureHttp: config.allowInsecureHttp === true,
+            allowWeakFingerprint: config.allowWeakFingerprint,
         });
     } catch (error) {
         deps.reportError('Failed to set WebDAV config', error);
@@ -157,12 +168,12 @@ export async function readCloudConfig(
         if (!options?.silent) {
             deps.reportError('Failed to get Self-Hosted config', error);
         }
-        return { url: '', token: '' };
+        return { url: '', token: '', allowInsecureHttp: false };
     }
 }
 
 export async function writeCloudConfig(
-    config: { url: string; token?: string },
+    config: { url: string; token?: string; allowInsecureHttp?: boolean },
     deps: ConfigDeps,
 ): Promise<void> {
     if (!deps.isTauriRuntimeEnv()) {
@@ -173,6 +184,7 @@ export async function writeCloudConfig(
         await deps.tauriInvoke('set_cloud_config', {
             url: config.url,
             token: config.token || '',
+            allowInsecureHttp: config.allowInsecureHttp === true,
         });
     } catch (error) {
         deps.reportError('Failed to set Self-Hosted config', error);

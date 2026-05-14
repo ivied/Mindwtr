@@ -109,12 +109,18 @@ describeSqlite('SqliteAdapter', () => {
 
     it('round-trips tasks, projects, areas, and settings', async () => {
         const now = new Date().toISOString();
+        const archivedAt = '2026-05-12T09:00:00.000Z';
         const data: AppData = {
             tasks: [
                 {
                     id: 'task-1',
                     title: 'Write docs',
-                    status: 'next',
+                    status: 'done',
+                    completedAt: archivedAt,
+                    statusBeforeProjectArchive: 'next',
+                    completedAtBeforeProjectArchive: null,
+                    isFocusedTodayBeforeProjectArchive: true,
+                    projectArchivedAt: archivedAt,
                     rev: 5,
                     revBy: 'device-desktop',
                     tags: ['#docs', '#writing'],
@@ -134,6 +140,7 @@ describeSqlite('SqliteAdapter', () => {
                             uri: '/tmp/spec.pdf',
                             createdAt: now,
                             updatedAt: now,
+                            localStatus: 'available',
                         },
                     ],
                     createdAt: now,
@@ -167,6 +174,9 @@ describeSqlite('SqliteAdapter', () => {
                     revBy: 'device-desktop',
                     createdAt: now,
                     updatedAt: now,
+                    deletedAt: archivedAt,
+                    deletedAtBeforeProjectArchive: null,
+                    projectArchivedAt: archivedAt,
                 },
             ],
             areas: [
@@ -180,6 +190,17 @@ describeSqlite('SqliteAdapter', () => {
             ],
             settings: {
                 gtd: { autoArchiveDays: 7 },
+                savedFilters: [
+                    {
+                        id: 'filter-1',
+                        name: 'Desk focus',
+                        view: 'focus',
+                        criteria: { contexts: ['@desk'], priority: ['high'] },
+                        createdAt: now,
+                        updatedAt: now,
+                        deletedAt: '2026-05-03T00:00:00.000Z',
+                    },
+                ],
             },
         };
 
@@ -191,6 +212,18 @@ describeSqlite('SqliteAdapter', () => {
         expect(loaded.sections).toHaveLength(1);
         expect(loaded.areas).toHaveLength(1);
         expect(loaded.settings.gtd?.autoArchiveDays).toBe(7);
+        expect(loaded.settings.savedFilters?.[0]).toMatchObject({
+            id: 'filter-1',
+            name: 'Desk focus',
+            view: 'focus',
+            criteria: { contexts: ['@desk'], priority: ['high'] },
+            deletedAt: '2026-05-03T00:00:00.000Z',
+        });
+        expect(allSql(db, 'SELECT id, view, deletedAt FROM saved_filters')).toEqual([{
+            id: 'filter-1',
+            view: 'focus',
+            deletedAt: '2026-05-03T00:00:00.000Z',
+        }]);
 
         const task = loaded.tasks[0];
         expect(task.title).toBe('Write docs');
@@ -204,6 +237,12 @@ describeSqlite('SqliteAdapter', () => {
         });
         expect(task.checklist?.[0]?.title).toBe('Outline');
         expect(task.attachments?.[0]?.title).toBe('spec.pdf');
+        expect(task.attachments?.[0]?.localStatus).toBe('available');
+        expect(task.completedAt).toBe(archivedAt);
+        expect(task.statusBeforeProjectArchive).toBe('next');
+        expect(task.completedAtBeforeProjectArchive).toBeNull();
+        expect(task.isFocusedTodayBeforeProjectArchive).toBe(true);
+        expect(task.projectArchivedAt).toBe(archivedAt);
         expect(task.rev).toBe(5);
         expect(task.revBy).toBe('device-desktop');
 
@@ -218,6 +257,9 @@ describeSqlite('SqliteAdapter', () => {
 
         const section = loaded.sections[0];
         expect(section.title).toBe('Milestones');
+        expect(section.deletedAt).toBe(archivedAt);
+        expect(section.deletedAtBeforeProjectArchive).toBeNull();
+        expect(section.projectArchivedAt).toBe(archivedAt);
         expect(section.rev).toBe(2);
         expect(section.revBy).toBe('device-desktop');
 
@@ -226,6 +268,31 @@ describeSqlite('SqliteAdapter', () => {
         expect(area.order).toBe(0);
         expect(area.rev).toBe(3);
         expect(area.revBy).toBe('device-desktop');
+    });
+
+    it('normalizes legacy string recurrence values when loading tasks', async () => {
+        const now = new Date().toISOString();
+        await adapter.saveData({
+            tasks: [
+                {
+                    id: 'task-legacy-recurrence',
+                    title: 'Legacy recurring task',
+                    status: 'next',
+                    tags: [],
+                    contexts: [],
+                    recurrence: 'daily',
+                    createdAt: now,
+                    updatedAt: now,
+                },
+            ],
+            projects: [],
+            sections: [],
+            areas: [],
+            settings: {},
+        });
+
+        const loaded = await adapter.getData();
+        expect(loaded.tasks[0]?.recurrence).toEqual({ rule: 'daily' });
     });
 
     it('saves and deletes linked area, project, section, and task records without foreign key failures', async () => {
@@ -391,10 +458,16 @@ describeSqlite('SqliteAdapter', () => {
 
         expect(allMock).toHaveBeenCalledTimes(2);
         expect(allMock.mock.calls[0]?.[0]).toContain('SELECT t.id AS id');
+        expect(allMock.mock.calls[0]?.[0]).toContain('ORDER BY bm25(tasks_fts)');
+        expect(allMock.mock.calls[0]?.[0]).toContain('LIMIT ?');
+        expect(allMock.mock.calls[0]?.[1]).toEqual(['Searchable*', 201]);
         expect(allMock.mock.calls[0]?.[0]).not.toContain('t.attachments');
         expect(allMock.mock.calls[0]?.[0]).not.toContain('t.description');
         expect(allMock.mock.calls[0]?.[0]).not.toContain("t.status != 'archived'");
         expect(allMock.mock.calls[1]?.[0]).toContain('SELECT p.id AS id');
+        expect(allMock.mock.calls[1]?.[0]).toContain('ORDER BY bm25(projects_fts)');
+        expect(allMock.mock.calls[1]?.[0]).toContain('LIMIT ?');
+        expect(allMock.mock.calls[1]?.[1]).toEqual(['Searchable*', 201]);
         expect(allMock.mock.calls[1]?.[0]).not.toContain('p.supportNotes');
 
         expect(results.tasks).toHaveLength(1);
@@ -576,6 +649,23 @@ describeSqlite('SqliteAdapter', () => {
         expect(areaColumnNames).toContain('revBy');
         expect(areaColumns.find((col) => col.name === 'createdAt')?.notnull).toBe(1);
         expect(areaColumns.find((col) => col.name === 'updatedAt')?.notnull).toBe(1);
+
+        const savedFilterColumns = allSql<{ name: string }>(db, 'PRAGMA table_info(saved_filters)');
+        const savedFilterColumnNames = savedFilterColumns.map((col) => col.name);
+        expect(savedFilterColumnNames).toEqual([
+            'id',
+            'name',
+            'icon',
+            'view',
+            'criteria',
+            'sortBy',
+            'sortOrder',
+            'createdAt',
+            'updatedAt',
+            'deletedAt',
+        ]);
+        const savedFilterIndexes = allSql<{ name: string }>(db, 'PRAGMA index_list(saved_filters)');
+        expect(savedFilterIndexes.map((row) => row.name)).toContain('idx_saved_filters_view');
     });
 
     it('rejects invalid task status values at the database layer', async () => {
@@ -603,10 +693,66 @@ describeSqlite('SqliteAdapter', () => {
     it('creates composite indexes used by sync queries', async () => {
         await adapter.ensureSchema();
 
-        const indexes = allSql<{ name: string }>(db, 'PRAGMA index_list(tasks)');
-        const names = new Set(indexes.map((index) => index.name));
+        const taskIndexes = allSql<{ name: string }>(db, 'PRAGMA index_list(tasks)');
+        const projectIndexes = allSql<{ name: string }>(db, 'PRAGMA index_list(projects)');
+        const sectionIndexes = allSql<{ name: string }>(db, 'PRAGMA index_list(sections)');
+        const areaIndexes = allSql<{ name: string }>(db, 'PRAGMA index_list(areas)');
+        const names = new Set([
+            ...taskIndexes,
+            ...projectIndexes,
+            ...sectionIndexes,
+            ...areaIndexes,
+        ].map((index) => index.name));
 
         expect(names.has('idx_tasks_project_status_updatedAt')).toBe(true);
+        expect(names.has('idx_tasks_updatedAt_rev')).toBe(true);
+        expect(names.has('idx_projects_area_deletedAt')).toBe(true);
+        expect(names.has('idx_projects_updatedAt_rev')).toBe(true);
+        expect(names.has('idx_sections_updatedAt_rev')).toBe(true);
+        expect(names.has('idx_areas_updatedAt_rev')).toBe(true);
         expect(names.has('idx_tasks_area_deletedAt')).toBe(true);
+    });
+});
+
+describe('SqliteAdapter saveData pruning', () => {
+    it('batches temp id table inserts and uses unique temp names', async () => {
+        const run = vi.fn().mockResolvedValue(undefined);
+        const client: SqliteClient = {
+            run,
+            get: vi.fn().mockResolvedValue(undefined),
+            all: vi.fn().mockResolvedValue([]),
+            exec: vi.fn().mockResolvedValue(undefined),
+        };
+        const lightweightAdapter = new SqliteAdapter(client);
+        (lightweightAdapter as unknown as { ensureSchema: () => Promise<void> }).ensureSchema = async () => {};
+
+        const now = '2026-03-04T12:00:00.000Z';
+        const data: AppData = {
+            tasks: [],
+            projects: [],
+            sections: [],
+            areas: Array.from({ length: 1201 }, (_, index) => ({
+                id: `area-${index}`,
+                name: `Area ${index}`,
+                order: index,
+                createdAt: now,
+                updatedAt: now,
+            })),
+            settings: {},
+        };
+
+        await lightweightAdapter.saveData(data);
+
+        const tempCreateCalls = run.mock.calls
+            .map(([sql]) => String(sql))
+            .filter((sql) => sql.startsWith('CREATE TEMP TABLE temp_'));
+        const tempNames = tempCreateCalls.map((sql) => sql.match(/CREATE TEMP TABLE (temp_[a-z0-9_]+)/)?.[1]);
+        expect(new Set(tempNames).size).toBe(5);
+
+        const tempAreaInsertCalls = run.mock.calls.filter(([sql]) =>
+            String(sql).startsWith('INSERT OR IGNORE INTO temp_areas_ids_')
+        );
+        expect(tempAreaInsertCalls).toHaveLength(3);
+        expect(tempAreaInsertCalls.map(([, params]) => (params as unknown[]).length)).toEqual([500, 500, 201]);
     });
 });

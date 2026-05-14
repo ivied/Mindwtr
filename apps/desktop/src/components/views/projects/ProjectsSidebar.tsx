@@ -4,7 +4,7 @@ import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { AlertTriangle, ChevronDown, ChevronRight, CornerDownRight, Folder, Plus, Star } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import { SortableProjectRow } from './SortableRows';
-import type { Area, Project, StoreActionResult, Task } from '@mindwtr/core';
+import { tFallback, type Area, type Project, type StoreActionResult, type Task } from '@mindwtr/core';
 import { reportError } from '../../../lib/report-error';
 import {
     computeProjectAreaDragResult,
@@ -63,6 +63,7 @@ interface ProjectsSidebarProps {
     getProjectColor: (project: Project) => string;
     tasksByProject: TasksByProject;
     projects: Project[];
+    focusedProjectCount: number;
     toggleProjectFocus: (projectId: string) => void;
     updateProject: (projectId: string, updates: Partial<Project>) => Promise<StoreActionResult> | void;
     reorderProjects: (projectIds: string[], areaId?: string) => Promise<void> | void;
@@ -100,7 +101,7 @@ export function ProjectsSidebar({
     onSelectProject,
     getProjectColor,
     tasksByProject,
-    projects,
+    focusedProjectCount,
     toggleProjectFocus,
     updateProject,
     reorderProjects,
@@ -113,7 +114,7 @@ export function ProjectsSidebar({
         }),
     );
 
-    const focusedCount = useMemo(() => projects.filter((project) => project.isFocused).length, [projects]);
+    const focusedCount = focusedProjectCount;
     const [contextMenu, setContextMenu] = useState<{ projectId: string; x: number; y: number } | null>(null);
     const contextMenuRef = useRef<HTMLDivElement | null>(null);
     const pendingProjectSelectionRef = useRef<{ projectId: string; timeoutId: number } | null>(null);
@@ -661,22 +662,13 @@ export function ProjectsSidebar({
                     <div className="text-sm text-muted-foreground text-center py-8 space-y-3">
                         <p className="text-base font-medium text-foreground">
                             {areaFilterLabel
-                                ? (t('projects.noProjectsInArea') === 'projects.noProjectsInArea'
-                                    ? 'No projects in this area.'
-                                    : t('projects.noProjectsInArea'))
+                                ? tFallback(t, 'projects.noProjectsInArea', 'No projects in this area.')
                                 : t('projects.noProjects')}
                         </p>
                         <p>
                             {areaFilterLabel
-                                ? (t('projects.emptyHintFiltered') === 'projects.emptyHintFiltered'
-                                    ? 'Try switching the Area filter or create a project in this area.'
-                                    : t('projects.emptyHintFiltered'))
-                                : (() => {
-                                    const hint = t('projects.emptyHint');
-                                    return hint === 'projects.emptyHint'
-                                        ? 'Create your first project to start organizing work.'
-                                        : hint;
-                                })()}
+                                ? tFallback(t, 'projects.emptyHintFiltered', 'Try switching the Area filter or create a project in this area.')
+                                : tFallback(t, 'projects.emptyHint', 'Create your first project to start organizing work.')}
                         </p>
                         <button
                             type="button"

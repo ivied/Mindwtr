@@ -260,4 +260,31 @@ describe('local-data-watcher', () => {
         expect(saveCalls).toHaveLength(1);
         expect(saveCalls[0]?.tasks.some((task) => task.id === 'ext-2')).toBe(true);
     });
+
+    it('skips merge work when the external payload already matches the local snapshot', async () => {
+        externalData = {
+            ...emptyData(),
+            tasks: [
+                {
+                    id: 'same-1',
+                    title: 'Already current',
+                    status: 'next',
+                    createdAt: '2026-01-03T00:00:00.000Z',
+                    updatedAt: '2026-01-03T00:00:00.000Z',
+                },
+            ],
+        } as AppData;
+        const mergeSpy = vi.fn((local: AppData) => local);
+
+        __localDataWatcherTestUtils.setDependenciesForTests({
+            getSnapshot: () => externalData,
+            merge: mergeSpy,
+        });
+
+        await __localDataWatcherTestUtils.triggerChangeForTests();
+        await flushScheduledTimers();
+
+        expect(mergeSpy).not.toHaveBeenCalled();
+        expect(saveCalls).toHaveLength(0);
+    });
 });

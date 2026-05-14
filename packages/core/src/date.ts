@@ -1,9 +1,11 @@
-import { format, isValid, parseISO, setDefaultOptions, type Locale } from 'date-fns';
+import { addDays, addMonths, format, isSameDay, isValid, parseISO, setDefaultOptions, startOfDay, startOfMonth, type Locale } from 'date-fns';
 import { ar, de, enGB, enUS, es, fr, hi, it, ja, ko, nl, pl, ptBR, ru, tr, zhCN, zhTW } from 'date-fns/locale';
 import type { Language } from './i18n/i18n-types';
 
 export type DateFormatSetting = 'system' | 'dmy' | 'mdy' | 'ymd';
 export type TimeFormatSetting = 'system' | '12h' | '24h';
+export const QUICK_DATE_PRESETS = ['today', 'tomorrow', 'in_3_days', 'next_week', 'next_month', 'no_date'] as const;
+export type QuickDatePreset = typeof QUICK_DATE_PRESETS[number];
 
 const DEFAULT_LOCALE = enUS;
 const DMY_EN_REGIONS = new Set(['GB', 'IE', 'AU', 'NZ', 'ZA']);
@@ -125,6 +127,65 @@ export function normalizeTimeFormatSetting(value?: string | null): TimeFormatSet
     if (normalized === '12h' || normalized === '12' || normalized === '12-hour') return '12h';
     if (normalized === '24h' || normalized === '24' || normalized === '24-hour') return '24h';
     return 'system';
+}
+
+export function normalizeClockTimeInput(value?: string | null): string | null {
+    const trimmed = String(value ?? '').trim();
+    if (!trimmed) return '';
+    const compact = trimmed.replace(/\s+/g, '');
+    let hours: number;
+    let minutes: number;
+
+    if (/^\d{1,2}:\d{2}$/.test(compact)) {
+        const [h, m] = compact.split(':');
+        hours = Number(h);
+        minutes = Number(m);
+    } else if (/^\d{3,4}$/.test(compact)) {
+        if (compact.length === 3) {
+            hours = Number(compact.slice(0, 1));
+            minutes = Number(compact.slice(1));
+        } else {
+            hours = Number(compact.slice(0, 2));
+            minutes = Number(compact.slice(2));
+        }
+    } else {
+        return null;
+    }
+
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+    if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
+export function getQuickDate(preset: QuickDatePreset, now: Date = new Date()): Date | null {
+    const today = startOfDay(now);
+    switch (preset) {
+        case 'today':
+            return today;
+        case 'tomorrow':
+            return addDays(today, 1);
+        case 'in_3_days':
+            return addDays(today, 3);
+        case 'next_week': {
+            const dayOfWeek = today.getDay();
+            const daysUntilNextMonday = ((8 - dayOfWeek) % 7) || 7;
+            return addDays(today, daysUntilNextMonday);
+        }
+        case 'next_month':
+            return startOfMonth(addMonths(today, 1));
+        case 'no_date':
+            return null;
+    }
+}
+
+export function isQuickDatePresetSelected(
+    preset: QuickDatePreset,
+    selectedDate: Date | null | undefined,
+    now: Date = new Date()
+): boolean {
+    if (!selectedDate || preset === 'no_date') return false;
+    const presetDate = getQuickDate(preset, now);
+    return presetDate ? isSameDay(selectedDate, presetDate) : false;
 }
 
 export function resolveDateLocaleTag(params: {

@@ -1,0 +1,237 @@
+{
+  "Id": "1152921505700480090",
+  "ApplicationCategory": "UtilitiesAndTools",
+  "Pricing": {
+    "TrialPeriod": "NoFreeTrial",
+    "MarketSpecificPricings": {
+      "LB": "NotAvailable",
+      "EH": "NotAvailable"
+    },
+    "PriceId": "Free",
+    "IsAdvancedPricingModel": true
+  },
+  "Visibility": "Public",
+  "TargetPublishMode": "Immediate",
+  "TargetPublishDate": "1601-01-01T00:00:00Z",
+  "Listings": {
+    "zh": {
+      "BaseListing": {
+        "Keywords": [
+          "GTD 待办事项管理",
+          "本地优先任务管理",
+          "轻量级任务管理器",
+          "隐私保护任务应用"
+        ],
+        "Description": "Mindwtr \n是一款注重隐私、本地优先（Lo\ncal-First）的 GTD (Getting Things Done) \n待办事项管理应用，旨在帮助您井井有条地安排生活，且无需牺牲数据安全。\n\n与其他将您的生活数据存储在云端服务器的任务管理器不同，Mindwtr \n将所有内容都保存在您的设备上。您的任务、项目和笔记完全属于您自己。\n\n主要功能：\n•\n本地优先：除非您主动导出，否则您的数据绝不会离开您的设备。\n• GTD 工作流：专为“Getting \nThings \nDone”方法论打造，包含收件箱（Inbox）、项目（Projects）和上下文（Contexts）。\n• 快速轻量：基于 Rust \n和 Tauri \n构建，启动迅速，性能极快。\n\n• \n专注无干扰：干净、极简的用户界面，助您专注于重要事项。\n• \n开源透明：代码开源且可审计，值得您信赖。\n\n掌控您的任务\n，同时确信您的数据安全无虞。",
+        "Features": [
+          "本地优先的数据存储，最大程度保护隐私",
+          "干净、极简的 GTD (Getting Things Done) \n界面",
+          "基于 Rust 和 Tauri \n构建，性能极快",
+          "完全离线可用，无需互联网连接",
+          "完全开源，安全透明"
+        ],
+        "ReleaseNotes": "• 桌面任务编辑更快，支持属性胶囊控件、常用日期快捷选项和更清晰的快捷操作。\n• 日程视图、归档任务详情、年度日历重复规则和项目取消归档更加可靠。\n• 同步诊断会更清楚地显示时间戳校正情况。",
+        "Images": [
+          {
+            "FileName": "2026-01-27_22-59-40.png",
+            "FileStatus": "Uploaded",
+            "Id": "1152922700023692880",
+            "ImageType": "Screenshot"
+          },
+          {
+            "FileName": "2026-01-27_23-00-37.png",
+            "FileStatus": "Uploaded",
+            "Id": "1152922700023693372",
+            "ImageType": "Screenshot"
+          },
+          {
+            "FileName": "StoreLogo_300.png",
+            "FileStatus": "Uploaded",
+            "Id": "1152922700023693373",
+            "ImageType": "Icon"
+          }
+        ],
+        "RecommendedHardware": [],
+        "MinimumHardware": [],
+        "Title": "Mindwtr",
+        "LicenseTerms": "AGPL-3.0 license",
+        "CopyrightAndTrademarkInfo": "AGPL-3.0 license",
+        "ShortDescription": null,
+        "ShortTitle": null,
+        "VoiceTitle": null,
+        "DevStudio": "Dongda Li"
+      },
+      "PlatformOverrides": {}
+    },
+    "en-us": {
+      "BaseListing": {
+        "Keywords": [
+          "GTD task manager",
+          "todo-app",
+          "productivity",
+          "task-management",
+          "getting-things-done",
+          "gtd-applications",
+          "cross-platform"
+        ],
+        "Description": "Requires Microsoft Visual C++ Redistributable \nto run.\n\nMindwtr is a privacy-focused, local-first Getting Things Done (GTD) \napplication designed to help you organize your life without compromising your \ndata.\n\nUnlike other task managers that store your life on a cloud server, \nMindwtr keeps everything on your device. Your tasks, projects, and notes belong \nto you, and you alone.\n\nKey Features:\n• Local-First: Your data never \nleaves your device unless you explicitly export it.\n• GTD Workflow: Built \nfor the \"Getting Things Done\" methodology with Inbox, Projects, and \nContexts.\n• Fast & Lightweight: Built with Rust and Tauri for \nblazing-fast performance.\n• Distraction-Free: A clean, minimalist \ninterface that helps you focus on what matters.\n• Open Source: Auditable \nand transparent code you can trust.\n\nTake control of your tasks with the peace\nof mind that your data is safe.",
+        "Features": [
+          "Local-first data storage for maximum privacy",
+          "Clean, minimalist GTD (Getting Things Done) interface",
+          "Blazing fast performance using Rust and Tauri",
+          "No internet connection required to function",
+          "Open source and transparent"
+        ],
+        "ReleaseNotes": "• Desktop task editing is faster with attribute pills, quick date shortcuts, and clearer quick actions.\n• Agenda, archived task details, yearly calendar recurrences, and project unarchive behavior are more reliable.\n• Sync diagnostics now surface timestamp clamps more clearly.",
+        "Images": [
+          {
+            "FileName": "2026-01-27_22-59-40.png",
+            "FileStatus": "Uploaded",
+            "Id": "1152922700023693422",
+            "ImageType": "Screenshot"
+          },
+          {
+            "FileName": "2026-01-27_23-00-37.png",
+            "FileStatus": "Uploaded",
+            "Id": "1152922700023694463",
+            "ImageType": "Screenshot"
+          },
+          {
+            "FileName": "StoreLogo_300.png",
+            "FileStatus": "Uploaded",
+            "Id": "1152922700023693371",
+            "ImageType": "Icon"
+          }
+        ],
+        "RecommendedHardware": [],
+        "MinimumHardware": [],
+        "Title": "Mindwtr",
+        "LicenseTerms": "AGPL-3.0 license",
+        "CopyrightAndTrademarkInfo": "AGPL-3.0 license",
+        "ShortDescription": null,
+        "ShortTitle": null,
+        "VoiceTitle": null,
+        "DevStudio": "Dongda Li"
+      },
+      "PlatformOverrides": {}
+    },
+    "es": {
+      "BaseListing": {
+        "Keywords": [
+          "gestor de tareas",
+          "gestor GTD",
+          "aplicación GTD privacidad"
+        ],
+        "Description": "Mindwtr es una aplicación de gestión de tareas\nGTD (Getting Things Done) centrada en la privacidad y con diseño \n\"Local-First\", diseñada para ayudarte a organizar tu vida sin \ncomprometer tus datos.\n\nA diferencia de otros gestores de tareas que almacenan\ntu vida en un servidor en la nube, Mindwtr guarda todo en tu dispositivo. Tus \ntareas, proyectos y notas te pertenecen a ti, y solo a \nti.\n\nCaracterísticas principales:\n• Local-First: Tus datos nunca \nsalen de tu dispositivo a menos que los exportes explícitamente.\n• \nFlujo de trabajo GTD: Construido para la metodología \"Getting Things \nDone\" con Bandeja de entrada, Proyectos y Contextos.\n• Rápido y \nligero: Construido con Rust y Tauri para un rendimiento increíblemente \nrápido.\n• Sin distracciones: Una interfaz limpia y minimalista que te\nayuda a concentrarte en lo importante.\n• Código abierto: Código \nauditable y transparente en el que puedes confiar.\n\nToma el control de tus \ntareas con la tranquilidad de saber que tus datos están seguros.",
+        "Features": [
+          "Almacenamiento de datos local para máxima privacidad",
+          "Interfaz GTD (Getting Things Done) limpia y minimalista",
+          "Rendimiento ultrarrápido usando Rust y Tauri",
+          "No requiere conexión a internet para funcionar",
+          "Código abierto y transparente"
+        ],
+        "ReleaseNotes": "• La edicion de tareas de escritorio es mas rapida con controles tipo pildora, atajos de fecha y acciones mas claras.\n• Agenda, detalles archivados, recurrencias anuales y desarchivado de proyectos son mas fiables.\n• Los diagnosticos de sync muestran mejor los ajustes de marca temporal.",
+        "Images": [
+          {
+            "FileName": "2026-01-27_22-59-40.png",
+            "FileStatus": "Uploaded",
+            "Id": "1152922700023692914",
+            "ImageType": "Screenshot"
+          },
+          {
+            "FileName": "2026-01-27_23-00-37.png",
+            "FileStatus": "Uploaded",
+            "Id": "1152922700023693375",
+            "ImageType": "Screenshot"
+          },
+          {
+            "FileName": "StoreLogo_300.png",
+            "FileStatus": "Uploaded",
+            "Id": "1152922700023693374",
+            "ImageType": "Icon"
+          }
+        ],
+        "RecommendedHardware": [],
+        "MinimumHardware": [],
+        "Title": "Mindwtr",
+        "LicenseTerms": "AGPL-3.0 license",
+        "CopyrightAndTrademarkInfo": "AGPL-3.0 license",
+        "ShortDescription": null,
+        "ShortTitle": null,
+        "VoiceTitle": null,
+        "DevStudio": "Dongda Li"
+      },
+      "PlatformOverrides": {}
+    }
+  },
+  "HardwarePreferences": [],
+  "AutomaticBackupEnabled": true,
+  "CanInstallOnRemovableMedia": true,
+  "IsGameDvrEnabled": false,
+  "GamingOptions": [
+    {
+      "Genres": [],
+      "IsLocalMultiplayer": false,
+      "IsLocalCooperative": false,
+      "IsOnlineMultiplayer": false,
+      "IsOnlineCooperative": false,
+      "IsBroadcastingPrivilegeGranted": true,
+      "IsCrossPlayEnabled": false,
+      "KinectDataForExternal": "Disabled"
+    }
+  ],
+  "HasExternalInAppProducts": false,
+  "MeetAccessibilityGuidelines": false,
+  "NotesForCertification": "",
+  "Status": "Certification",
+  "StatusDetails": {
+    "Errors": [],
+    "Warnings": [
+      {
+        "Code": "SalesUnsupportedWarning",
+        "Details": "The sales resource is no longer supported. To view or edit \nthe sales data for this submission, use the Dev Center dashboard."
+      }
+    ],
+    "CertificationReports": []
+  },
+  "FileUploadUrl": null,
+  "ApplicationPackages": [
+    {
+      "FileName": "mindwtr_0.6.4_x64.msix",
+      "FileStatus": "Uploaded",
+      "Id": "2000000000092778818",
+      "Version": "0.6.4.0",
+      "Architecture": "neutral",
+      "Languages": [
+        "en-US"
+      ],
+      "Capabilities": [
+        "Microsoft.storeFilter.core.notSupported_8wekyb3d8bbwe",
+        "runFullTrust"
+      ],
+      "MinimumDirectXVersion": "None",
+      "MinimumSystemRam": "None"
+    }
+  ],
+  "PackageDeliveryOptions": {
+    "PackageRollout": {
+      "IsPackageRollout": false,
+      "PackageRolloutPercentage": 0,
+      "PackageRolloutStatus": "PackageRolloutNotStarted",
+      "FallbackSubmissionId": "0"
+    },
+    "IsMandatoryUpdate": false,
+    "MandatoryUpdateEffectiveDate": "1601-01-01T00:00:00Z"
+  },
+  "EnterpriseLicensing": "Online",
+  "AllowMicrosoftDecideAppAvailabilityToFutureDeviceFamilies": true,
+  "AllowTargetFutureDeviceFamilies": {
+    "Desktop": true,
+    "Mobile": false,
+    "Xbox": false,
+    "Team": false,
+    "Holographic": false
+  },
+  "FriendlyName": "Submission 3",
+  "Trailers": []
+}

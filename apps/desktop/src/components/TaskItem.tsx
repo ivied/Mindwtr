@@ -4,9 +4,16 @@ import {
     Task,
     TaskStatus,
     TaskEditorFieldId,
+    type TaskEditorPresentation,
+    formatFocusTaskLimitText,
+    getProjectNextActionPromptData,
     getLocalizedWeekdayLabels,
     Project,
     generateUUID,
+    normalizeClockTimeInput,
+    normalizeFocusTaskLimit,
+    tFallback,
+    useTaskStore,
 } from '@mindwtr/core';
 import { cn } from '../lib/utils';
 import { useLanguage } from '../contexts/language-context';
@@ -15,6 +22,7 @@ import { TaskItemDisplay } from './Task/TaskItemDisplay';
 import { TaskItemEditorSurface } from './Task/TaskItemEditorSurface';
 import { TaskItemFieldRenderer } from './Task/TaskItemFieldRenderer';
 import { TaskItemOverlays } from './Task/TaskItemOverlays';
+import { ProjectNextActionPrompt } from './Task/ProjectNextActionPrompt';
 import { TaskQuickActionMenu } from './Task/TaskQuickActionMenu';
 import {
     getRecurrenceRuleValue,
@@ -60,8 +68,15 @@ interface TaskItemProps {
     compactMetaEnabled?: boolean;
     enableDoubleClickEdit?: boolean;
     showHoverHint?: boolean;
-    editorPresentation?: 'inline' | 'modal';
+    editorPresentation?: TaskEditorPresentation;
 }
+
+type ProjectNextActionPromptState = {
+    candidates: Task[];
+    projectId: string;
+    projectTitle: string;
+    sectionId?: string;
+};
 
 export const TaskItem = memo(function TaskItem({
     task,
@@ -81,16 +96,19 @@ export const TaskItem = memo(function TaskItem({
     compactMetaEnabled = true,
     enableDoubleClickEdit = false,
     showHoverHint = true,
-    editorPresentation = 'inline',
+    editorPresentation,
 }: TaskItemProps) {
     const [isEditing, setIsEditing] = useState(false);
     const [autoFocusTitle, setAutoFocusTitle] = useState(false);
     const [quickActionMenu, setQuickActionMenu] = useState<{ x: number; y: number } | null>(null);
+    const taskRootRef = useRef<HTMLDivElement | null>(null);
+    const quickActionReturnFocusRef = useRef<HTMLElement | null>(null);
     const modalEditorRef = useRef<HTMLDivElement | null>(null);
     const lastFocusedBeforeModalRef = useRef<HTMLElement | null>(null);
     const {
         updateTask,
         deleteTask,
+        addTask,
         moveTask,
         projects,
         sections,
@@ -114,6 +132,7 @@ export const TaskItem = memo(function TaskItem({
         task,
         propProject,
         isEditing,
+        hasQuickActionMenu: Boolean(quickActionMenu),
     });
     const {
         setProjectView,
@@ -227,11 +246,15 @@ export const TaskItem = memo(function TaskItem({
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [showWaitingAssignmentPrompt, setShowWaitingAssignmentPrompt] = useState(false);
     const [showWaitingDuePrompt, setShowWaitingDuePrompt] = useState(false);
+    const [projectNextActionPrompt, setProjectNextActionPrompt] = useState<ProjectNextActionPromptState | null>(null);
+    const [projectNextActionTitle, setProjectNextActionTitle] = useState('');
     const [waitingTransitionMode, setWaitingTransitionMode] = useState<'status-change' | 'status-and-due' | null>(null);
     const prioritiesEnabled = settings?.features?.priorities !== false;
     const timeEstimatesEnabled = settings?.features?.timeEstimates !== false;
     const undoNotificationsEnabled = settings?.undoNotificationsEnabled !== false;
+    const showTaskAge = settings?.appearance?.showTaskAge === true;
     const isCompact = settings?.appearance?.density === 'compact';
+    const focusTaskLimit = normalizeFocusTaskLimit(settings?.gtd?.focusTaskLimit);
     const isHighlighted = highlightTaskId === task.id;
     const recurrenceRule = getRecurrenceRuleValue(task.recurrence);
     const recurrenceStrategy = getRecurrenceStrategyValue(task.recurrence);
@@ -241,17 +264,17 @@ export const TaskItem = memo(function TaskItem({
         if (effectiveReadOnly) return undefined;
         if (task.status === 'done' || task.status === 'reference' || task.status === 'archived') return undefined;
         const isFocused = Boolean(task.isFocusedToday);
-        const canToggle = isFocused || focusedCount < 3;
+        const canToggle = isFocused || focusedCount < focusTaskLimit;
         const removeLabel = t('agenda.removeFromFocus');
         const addLabel = t('agenda.addToFocus');
-        const maxLabel = t('agenda.maxFocusItems');
+        const maxLabel = formatFocusTaskLimitText(t('agenda.maxFocusItems'), focusTaskLimit);
         return {
             isFocused,
             canToggle,
             onToggle: () => {
                 if (isFocused) {
                     updateTask(task.id, { isFocusedToday: false });
-                } else if (focusedCount < 3) {
+                } else if (focusedCount < focusTaskLimit) {
                     const updates: Partial<Task> = {
                         isFocusedToday: true,
                         ...(task.status !== 'next' ? { status: 'next' } : {}),
@@ -262,7 +285,7 @@ export const TaskItem = memo(function TaskItem({
             title: isFocused ? removeLabel : (canToggle ? addLabel : maxLabel),
             ariaLabel: isFocused ? removeLabel : addLabel,
         };
-    }, [effectiveReadOnly, focusedCount, task.id, task.isFocusedToday, task.status, t, updateTask]);
+    }, [effectiveReadOnly, focusTaskLimit, focusedCount, task.id, task.isFocusedToday, task.status, t, updateTask]);
     const effectiveFocusToggle = focusToggle ?? defaultFocusToggle;
     const handleToggleChecklistItem = useCallback((index: number) => {
         if (effectiveReadOnly) return;
@@ -489,6 +512,7 @@ export const TaskItem = memo(function TaskItem({
         editTags,
         language,
         nativeDateInputLocale,
+        defaultScheduleTime: normalizeClockTimeInput(settings?.gtd?.defaultScheduleTime) || '',
         popularContextOptions,
         popularTagOptions,
     }), [
@@ -514,6 +538,7 @@ export const TaskItem = memo(function TaskItem({
         editTags,
         language,
         nativeDateInputLocale,
+        settings?.gtd?.defaultScheduleTime,
         popularContextOptions,
         popularTagOptions,
     ]);
@@ -674,11 +699,57 @@ export const TaskItem = memo(function TaskItem({
         setSelectedProjectId(projectId);
         dispatchNavigateEvent('projects');
     }, [setHighlightTask, setSelectedProjectId, task.id]);
-    const undoLabel = useMemo(() => {
-        const translated = t('common.undo');
-        if (translated === 'common.undo') return 'Undo';
-        return translated;
-    }, [t]);
+    const undoLabel = useMemo(() => tFallback(t, 'common.undo', 'Undo'), [t]);
+    const closeProjectNextActionPrompt = useCallback(() => {
+        setProjectNextActionPrompt(null);
+        setProjectNextActionTitle('');
+    }, []);
+    const openProjectNextActionPromptIfNeeded = useCallback((completedTaskId: string) => {
+        const storeState = useTaskStore.getState();
+        const completedTask = storeState._tasksById.get(completedTaskId)
+            ?? storeState._allTasks.find((candidate) => candidate.id === completedTaskId)
+            ?? { ...task, status: 'done' as TaskStatus };
+        const promptData = getProjectNextActionPromptData(
+            completedTask,
+            storeState._allTasks,
+            storeState._allProjects,
+        );
+        if (!promptData) return;
+        setProjectNextActionTitle('');
+        setProjectNextActionPrompt({
+            candidates: promptData.candidates,
+            projectId: promptData.project.id,
+            projectTitle: promptData.project.title,
+            sectionId: completedTask.sectionId,
+        });
+    }, [task]);
+    const handlePromoteProjectNextAction = useCallback((nextTaskId: string) => {
+        void moveTask(nextTaskId, 'next')
+            .then((result) => {
+                if (!result.success) {
+                    throw new Error(result.error || 'Failed to choose next action');
+                }
+                closeProjectNextActionPrompt();
+            })
+            .catch((error) => reportError('Failed to choose project next action', error));
+    }, [closeProjectNextActionPrompt, moveTask]);
+    const handleAddProjectNextAction = useCallback(() => {
+        if (!projectNextActionPrompt) return;
+        const title = projectNextActionTitle.trim();
+        if (!title) return;
+        void addTask(title, {
+            status: 'next',
+            projectId: projectNextActionPrompt.projectId,
+            sectionId: projectNextActionPrompt.sectionId,
+        })
+            .then((result) => {
+                if (!result.success) {
+                    throw new Error(result.error || 'Failed to add next action');
+                }
+                closeProjectNextActionPrompt();
+            })
+            .catch((error) => reportError('Failed to add project next action', error));
+    }, [addTask, closeProjectNextActionPrompt, projectNextActionPrompt, projectNextActionTitle]);
     const closeWaitingAssignmentPrompt = useCallback(() => {
         setShowWaitingAssignmentPrompt(false);
         setWaitingTransitionMode(null);
@@ -719,21 +790,36 @@ export const TaskItem = memo(function TaskItem({
                 if (!result.success) {
                     throw new Error(result.error || 'Failed to change task status');
                 }
-                if (!undoNotificationsEnabled || nextStatus !== 'done' || previousStatus === 'done') return;
-                showToast(
-                    `${task.title} marked Done`,
-                    'info',
-                    5000,
-                    {
-                        label: undoLabel,
-                        onClick: () => {
-                            void moveTask(task.id, previousStatus);
-                        },
+                if (nextStatus === 'done' && previousStatus !== 'done') {
+                    if (undoNotificationsEnabled) {
+                        showToast(
+                            `${task.title} marked Done`,
+                            'info',
+                            5000,
+                            {
+                                label: undoLabel,
+                                onClick: () => {
+                                    closeProjectNextActionPrompt();
+                                    void moveTask(task.id, previousStatus);
+                                },
+                            }
+                        );
                     }
-                );
+                    openProjectNextActionPromptIfNeeded(task.id);
+                }
             })
             .catch((error) => reportError('Failed to change task status', error));
-    }, [moveTask, showToast, task.id, task.status, task.title, undoLabel, undoNotificationsEnabled]);
+    }, [
+        closeProjectNextActionPrompt,
+        moveTask,
+        openProjectNextActionPromptIfNeeded,
+        showToast,
+        task.id,
+        task.status,
+        task.title,
+        undoLabel,
+        undoNotificationsEnabled,
+    ]);
     const hasPendingEdits = useCallback(() => {
         if (editTitle !== task.title) return true;
         if (editDescription !== (task.description || '')) return true;
@@ -777,7 +863,10 @@ export const TaskItem = memo(function TaskItem({
         editReviewAt,
         task,
     ]);
-    const isModalEditor = editorPresentation === 'modal';
+    const taskEditorPresentationSetting = settings?.gtd?.taskEditor?.presentation;
+    const resolvedEditorPresentation: TaskEditorPresentation = editorPresentation
+        ?? (taskEditorPresentationSetting === 'modal' ? 'modal' : 'inline');
+    const isModalEditor = resolvedEditorPresentation === 'modal';
     const getModalFocusableElements = useCallback((): HTMLElement[] => {
         const root = modalEditorRef.current;
         if (!root) return [];
@@ -819,11 +908,32 @@ export const TaskItem = memo(function TaskItem({
         event.preventDefault();
         event.stopPropagation();
         onSelect?.();
+        quickActionReturnFocusRef.current = event.currentTarget.querySelector<HTMLElement>('[data-task-quick-actions-trigger]')
+            ?? event.currentTarget;
         setQuickActionMenu({
             x: event.clientX,
             y: event.clientY,
         });
     }, [isEditing, onSelect, selectionMode]);
+    const handleOpenQuickActionButton = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+        if (selectionMode || isEditing) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onSelect?.();
+        quickActionReturnFocusRef.current = event.currentTarget;
+        const rect = event.currentTarget.getBoundingClientRect();
+        setQuickActionMenu({
+            x: rect.left,
+            y: rect.bottom + 4,
+        });
+    }, [isEditing, onSelect, selectionMode]);
+    const handleCloseQuickActionMenu = useCallback(() => {
+        setQuickActionMenu(null);
+        window.setTimeout(() => {
+            quickActionReturnFocusRef.current?.focus();
+            quickActionReturnFocusRef.current = null;
+        }, 0);
+    }, []);
     useEffect(() => {
         if (!isEditing) return;
         const handleGlobalCancel = (event: Event) => {
@@ -903,20 +1013,48 @@ export const TaskItem = memo(function TaskItem({
             language={language}
             inputContexts={allContexts}
             onDuplicateTask={() => duplicateTask(task.id, false)}
+            onDeleteTask={task.status === 'inbox' ? () => setShowDeleteConfirm(true) : undefined}
             onCancel={handleEditorCancel}
             onSubmit={handleSubmit}
         />
     );
 
-    const selectAriaLabel = (() => {
-        const label = t('task.select');
-        return label === 'task.select' ? 'Select task' : label;
-    })();
+    const selectAriaLabel = tFallback(t, 'task.select', 'Select task');
+    const displayActions = useMemo(() => ({
+        onToggleSelect,
+        onToggleView: () => toggleTaskExpanded(task.id),
+        onEdit: startEditing,
+        onDelete: () => setShowDeleteConfirm(true),
+        onDuplicate: () => duplicateTask(task.id, false),
+        onStatusChange: handleStatusChange,
+        onOpenQuickActions: handleOpenQuickActionButton,
+        onMoveToWaitingWithPrompt: handleMoveToWaitingWithPrompt,
+        onOpenProject: project ? handleOpenProject : undefined,
+        openAttachment,
+        onToggleChecklistItem: handleToggleChecklistItem,
+        focusToggle: effectiveFocusToggle,
+    }), [
+        duplicateTask,
+        effectiveFocusToggle,
+        handleMoveToWaitingWithPrompt,
+        handleOpenProject,
+        handleOpenQuickActionButton,
+        handleStatusChange,
+        handleToggleChecklistItem,
+        onToggleSelect,
+        openAttachment,
+        project,
+        startEditing,
+        task.id,
+        toggleTaskExpanded,
+    ]);
 
     return (
         <>
             <div
+                ref={taskRootRef}
                 data-task-id={task.id}
+                tabIndex={-1}
                 onClickCapture={onSelect ? () => onSelect?.() : undefined}
                 onDoubleClick={(event) => {
                     if (!enableDoubleClickEdit || selectionMode || effectiveReadOnly || isEditing) return;
@@ -927,6 +1065,7 @@ export const TaskItem = memo(function TaskItem({
                 className={cn(
                     "group rounded-lg hover:bg-muted/50 dark:hover:bg-muted/20 transition-colors animate-in fade-in slide-in-from-bottom-2",
                     isCompact ? "p-2.5" : "px-3 py-3",
+                    "focus-within:ring-2 focus-within:ring-inset focus-within:ring-primary/40 focus-within:bg-primary/5",
                     isSelected && "ring-2 ring-inset ring-primary/40 bg-primary/5",
                     isHighlighted && "ring-2 ring-inset ring-primary/70 bg-primary/5"
                 )}
@@ -962,19 +1101,8 @@ export const TaskItem = memo(function TaskItem({
                                 projectColor={projectColor}
                                 selectionMode={selectionMode}
                                 isViewOpen={isTaskExpanded}
-                                actions={{
-                                    onToggleSelect,
-                                    onToggleView: () => toggleTaskExpanded(task.id),
-                                    onEdit: startEditing,
-                                    onDelete: () => setShowDeleteConfirm(true),
-                                    onDuplicate: () => duplicateTask(task.id, false),
-                                    onStatusChange: handleStatusChange,
-                                    onMoveToWaitingWithPrompt: handleMoveToWaitingWithPrompt,
-                                    onOpenProject: project ? handleOpenProject : undefined,
-                                    openAttachment,
-                                    onToggleChecklistItem: handleToggleChecklistItem,
-                                    focusToggle: effectiveFocusToggle,
-                                }}
+                                quickActionsOpen={Boolean(quickActionMenu)}
+                                actions={displayActions}
                                 visibleAttachments={visibleAttachments}
                                 recurrenceRule={recurrenceRule}
                                 recurrenceStrategy={recurrenceStrategy}
@@ -989,6 +1117,7 @@ export const TaskItem = memo(function TaskItem({
                                 dense={isCompact}
                                 actionsOverlay={actionsOverlay}
                                 dragHandle={dragHandle}
+                                showTaskAge={showTaskAge}
                                 showHoverHint={showHoverHint}
                                 t={t}
                             />
@@ -1005,15 +1134,30 @@ export const TaskItem = memo(function TaskItem({
                     t={t}
                     nativeDateInputLocale={nativeDateInputLocale}
                     contextOptions={popularContextOptions}
+                    areas={areas}
                     readOnly={effectiveReadOnly}
-                    onClose={() => setQuickActionMenu(null)}
+                    onClose={handleCloseQuickActionMenu}
                     onDuplicate={() => {
                         duplicateTask(task.id, false);
                     }}
                     onDelete={() => {
                         setShowDeleteConfirm(true);
                     }}
+                    onCreateArea={handleCreateArea}
                     onUpdateTask={(updates) => updateTask(task.id, updates)}
+                />
+            )}
+            {projectNextActionPrompt && (
+                <ProjectNextActionPrompt
+                    isOpen={Boolean(projectNextActionPrompt)}
+                    candidates={projectNextActionPrompt.candidates}
+                    projectTitle={projectNextActionPrompt.projectTitle}
+                    newTitle={projectNextActionTitle}
+                    onAddTask={handleAddProjectNextAction}
+                    onCancel={closeProjectNextActionPrompt}
+                    onChooseTask={handlePromoteProjectNextAction}
+                    onNewTitleChange={setProjectNextActionTitle}
+                    t={t}
                 />
             )}
             <TaskItemOverlays

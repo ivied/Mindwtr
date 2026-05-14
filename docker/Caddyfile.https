@@ -1,0 +1,5 @@
+# Public HTTPS setup. Point MINDWTR_CLOUD_DOMAIN at this host and let
+# Caddy obtain and renew a certificate automatically.
+{$MINDWTR_CLOUD_DOMAIN} {
+	reverse_proxy mindwtr-cloud:8787
+}

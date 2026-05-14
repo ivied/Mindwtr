@@ -16,6 +16,7 @@ export const useProjectsViewStore = () =>
             addProject: state.addProject,
             updateProject: state.updateProject,
             deleteProject: state.deleteProject,
+            restoreProject: state.restoreProject,
             duplicateProject: state.duplicateProject,
             updateTask: state.updateTask,
             addSection: state.addSection,
@@ -28,6 +29,7 @@ export const useProjectsViewStore = () =>
             setHighlightTask: state.setHighlightTask,
             settings: state.settings,
             getDerivedState: state.getDerivedState,
+            focusedProjectCount: state.getDerivedState().focusedProjectCount,
         }),
         shallow
     );

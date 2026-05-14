@@ -663,7 +663,7 @@ jobs:
 
   publish-chocolatey:
     needs: release
-    runs-on: windows-latest
+    runs-on: windows-2025-vs2026
     name: Publish Chocolatey
     timeout-minutes: 45
     permissions:

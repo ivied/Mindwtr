@@ -16,6 +16,8 @@ export interface EntityMergeStats {
     invalidTimestamps: number;
     timestampAdjustments: number;
     timestampAdjustmentIds: string[];
+    futureTimestampClamps: number;
+    futureTimestampClampIds: string[];
     conflictReasonCounts?: Partial<Record<ConflictReason, number>>;
     conflictSamples?: MergeConflictSample[];
 }
@@ -74,8 +76,17 @@ export type SyncHistoryEntry = {
     error?: string;
 };
 
-// Log clock skew warnings if merges show >5 minutes drift.
+// Log clock skew warnings if conflicted merges show >5 minutes drift.
 export const CLOCK_SKEW_THRESHOLD_MS = 5 * 60 * 1000;
+
+// Delete-vs-live conflicts are treated as ambiguous only within a short window;
+// outside it, the later user operation wins.
+export const DELETE_VS_LIVE_AMBIGUOUS_WINDOW_MS = 30 * 1000;
+
+// Reserved revBy marker for deterministic reference repairs. Multiple devices may
+// independently stamp this value; equal-repair ties intentionally fall through to
+// content-signature convergence.
+export const SYNC_REPAIR_REV_BY = 'sync-repair';
 
 export type SyncStep = 'read-local' | 'read-remote' | 'merge' | 'write-local' | 'write-remote';
 
@@ -83,6 +94,7 @@ export type SyncCycleIO = {
     readLocal: () => Promise<AppData>;
     readRemote: () => Promise<AppData | null | undefined>;
     writeLocal: (data: AppData) => Promise<void>;
+    clearPendingRemoteWriteAfterLocalAbort?: (pendingAt: string) => Promise<void>;
     flushPendingLocalBeforeRetryRead?: () => Promise<void>;
     prepareRemoteWrite?: (data: AppData) => Promise<AppData | void>;
     writeRemote: (data: AppData) => Promise<void>;

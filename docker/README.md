@@ -4,15 +4,78 @@ This folder contains Dockerfiles and a compose file to run:
 - **mindwtr-app**: the desktop web/PWA build, served by Nginx
 - **mindwtr-cloud**: the lightweight sync server
 
-## Quick start (compose)
+## Quick start (HTTP compose)
 
 ```bash
+export MINDWTR_CLOUD_AUTH_TOKENS=your_token_here
+export MINDWTR_CLOUD_CORS_ORIGIN=http://localhost:5173
 docker compose -f docker/compose.yaml up --build
 ```
 
 Then open:
 - PWA: `http://localhost:5173`
 - Cloud health: `http://localhost:8787/health`
+- Self-Hosted URL for local testing: `http://localhost:8787`
+- REST API base URL: `http://localhost:8787/v1`
+
+This HTTP compose file is best for local testing. Mindwtr desktop and mobile clients accept HTTP for localhost, private IPs, and local hostnames. Public URLs should use HTTPS.
+
+## HTTPS quick start (Cloud + Caddy)
+
+Use the HTTPS compose file when syncing real desktop or mobile clients to a self-hosted cloud server:
+
+```bash
+cp docker/.env.https.example docker/.env.https.local
+```
+
+Edit `docker/.env.https.local`:
+
+```dotenv
+MINDWTR_CLOUD_DOMAIN=mindwtr.example.com
+MINDWTR_CLOUD_AUTH_TOKENS=your_long_random_token
+MINDWTR_CLOUD_CORS_ORIGIN=https://mindwtr.example.com
+MINDWTR_CADDYFILE=Caddyfile.https
+```
+
+Start the HTTPS stack:
+
+```bash
+docker compose --env-file docker/.env.https.local -f docker/compose.https.yaml up -d
+```
+
+Then check:
+
+```bash
+curl https://mindwtr.example.com/health
+```
+
+In Mindwtr Settings -> Sync -> Self-Hosted, use:
+
+```text
+https://mindwtr.example.com
+```
+
+Mindwtr will automatically append `/v1/data`.
+
+### LAN-only HTTPS
+
+For a hostname that only resolves on your home network, change:
+
+```dotenv
+MINDWTR_CLOUD_DOMAIN=mindwtr.home.arpa
+MINDWTR_CLOUD_CORS_ORIGIN=https://mindwtr.home.arpa
+MINDWTR_CADDYFILE=Caddyfile.local-https
+```
+
+This uses Caddy's internal certificate authority. Each client device must trust Caddy's local root certificate before Mindwtr will accept the HTTPS connection. Public Let's Encrypt certificates are the more reliable option for mobile clients.
+
+After the LAN-only stack starts, you can export Caddy's local root certificate with:
+
+```bash
+docker compose --env-file docker/.env.https.local -f docker/compose.https.yaml cp caddy:/data/caddy/pki/authorities/local/root.crt ./mindwtr-caddy-root.crt
+```
+
+Install that certificate as a trusted root on each device that will sync to this hostname.
 
 ## Configure sync token
 
@@ -34,10 +97,10 @@ Use the **same token** in Mindwtr Settings → Sync → Self-Hosted.
 Set the Self-Hosted URL to the **base** endpoint, for example:
 
 ```
-http://localhost:8787/v1
+http://localhost:8787
 ```
 
-Mindwtr will automatically append `/data` and store `data.json` (and attachments) under that endpoint.
+Mindwtr will automatically append `/v1/data` and store `data.json` (and attachments) under that endpoint.
 
 Example to generate a token:
 

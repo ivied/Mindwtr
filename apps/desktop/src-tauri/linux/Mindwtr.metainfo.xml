@@ -71,6 +71,97 @@
   <url type="bugtracker">https://github.com/dongdongbh/Mindwtr/issues</url>
   <url type="vcs-browser">https://github.com/dongdongbh/Mindwtr</url>
   <releases>
+    <release version="0.9.3" date="2026-05-13">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.9.3</url>
+      <description translate="no">
+        <p>Mindwtr 0.9.3 improves desktop task editing, project navigation, calendar recurrence handling, and sync diagnostics.</p>
+        <ul>
+          <li>Added faster task editing with attribute pills, quick date shortcuts, and Start Date quick actions.</li>
+          <li>Added clear Agenda empty and error states so filtered desktop views no longer appear blank.</li>
+          <li>Improved project sidebar sizing, wrapping, archived-project visibility, and context/tag filter grouping.</li>
+          <li>Made project archive and unarchive safer by preserving task and section state across sync.</li>
+          <li>Expanded yearly calendar recurrence support and surfaced clearer timestamp-clamp sync diagnostics.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.9.2" date="2026-05-11">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.9.2</url>
+      <description translate="no">
+        <p>Mindwtr 0.9.2 improves desktop view persistence, saved-filter sync, and sync reliability for Linux desktop builds.</p>
+        <ul>
+          <li>Remembered desktop view and filter options and restored saved filters during startup.</li>
+          <li>Added saved-filter sync and merge support with local storage for saved filter data.</li>
+          <li>Made sync more reliable with clearer WebDAV weak-fingerprint warnings and stricter cloud data byte checks.</li>
+          <li>Improved quick-add refresh behavior, sidebar sync status, focused project counts, and stale board filter state.</li>
+          <li>Strengthened desktop, cloud, and MCP coverage gates used by the release workflow.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.9.1" date="2026-05-07">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.9.1</url>
+      <description translate="no">
+        <p>Mindwtr 0.9.1 improves desktop startup control, sync safety, and Linux desktop reliability.</p>
+        <ul>
+          <li>Added a launch-at-startup setting for desktop builds.</li>
+          <li>Made sync safer with serialized cycles, capped revision increments, and clearer delete-vs-live history details.</li>
+          <li>Surfaced and aggregated cleartext sync warnings while keeping local and private HTTP sync targets available.</li>
+          <li>Improved project delete undo, global quick-add open guards, and board tag layout.</li>
+          <li>Improved desktop responsiveness with split list selectors and stable sync signature caching.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.9.0" date="2026-05-04">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.9.0</url>
+      <description translate="no">
+        <p>Mindwtr 0.9.0 improves desktop focus, search, quick capture, and sync responsiveness.</p>
+        <ul>
+          <li>Opened global quick add in a focused popup from shortcuts and tray actions.</li>
+          <li>Made global search cover all areas while limiting very large result sets to keep the desktop responsive.</li>
+          <li>Clarified Pomodoro controls with optional task linking and separated timer and task actions.</li>
+          <li>Added hidden future-start task behavior and task-age visibility controls.</li>
+          <li>Improved sync diagnostics and SQLite pruning performance for large local libraries.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.8.9" date="2026-05-01">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.8.9</url>
+      <description translate="no">
+        <p>Mindwtr 0.8.9 improves desktop review, recurrence, sync, and Linux release reliability.</p>
+        <ul>
+          <li>Added desktop review and area quick actions, smoother review interactions, and working task detail links.</li>
+          <li>Added weekly recurrence interval controls and a quarterly preset while improving monthly recurrence repair.</li>
+          <li>Preserved edits during active sync refreshes and ignored deleted-parent attachment cleanup conflicts.</li>
+          <li>Added local area automation support and preserved project IDs during local repair.</li>
+          <li>Kept Linux desktop release builds steadier by retrying Tauri apt dependency installation.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.8.8" date="2026-04-26">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.8.8</url>
+      <description translate="no">
+        <p>Mindwtr 0.8.8 expands desktop calendar planning and improves Linux desktop reliability.</p>
+        <ul>
+          <li>Added multi-view desktop calendar planning with month, day, week, and schedule views plus a scheduled-task composer.</li>
+          <li>Added a default schedule time and safer external-calendar handling by ignoring Mindwtr mirror calendars.</li>
+          <li>Added an Inbox Later shortcut and assignee search operator.</li>
+          <li>Hardened desktop sync with WebDAV retry recovery, cloud merge cleanup, attachment pre-sync orchestration, and fewer false conflict reports.</li>
+          <li>Restored Flatpak audio capture access.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.8.7" date="2026-04-24">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.8.7</url>
+      <description translate="no">
+        <p>Mindwtr 0.8.7 improves desktop task handling, import coverage, Pomodoro flow, and sync reliability.</p>
+        <ul>
+          <li>Added desktop task quick actions from right-click or the More button for due dates, contexts, duplicate, and delete.</li>
+          <li>Expanded OmniFocus import to JSON and ZIP exports, including folders, checklist children, and supported repeat rules.</li>
+          <li>Added Pomodoro auto-start options and restored desktop fullscreen state across launches.</li>
+          <li>Hardened desktop sync with better WebDAV collection handling, Dropbox read fallback, conflict cleanup, recurrence normalization, and SQLite indexes.</li>
+          <li>Updated desktop store screenshots/assets and kept Flathub release metadata from re-adding rejected single-instance D-Bus permissions.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.8.6" date="2026-04-22">
       <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.8.6</url>
       <description translate="no">

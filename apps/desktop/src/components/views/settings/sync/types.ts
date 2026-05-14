@@ -1,4 +1,4 @@
-import type { AppData, SyncBackend } from '@mindwtr/core';
+import type { AppSettings, SettingsSyncPreferences, SyncBackend } from '@mindwtr/core';
 
 export type SettingsSyncLabels = {
     dataTransfer: string;
@@ -15,6 +15,12 @@ export type SettingsSyncLabels = {
     importOmniFocusDesc: string;
     diagnostics: string;
     diagnosticsDesc: string;
+    analyticsHeartbeat: string;
+    analyticsHeartbeatDesc: string;
+    analyticsHeartbeatDisableTitle: string;
+    analyticsHeartbeatDisableDesc: string;
+    analyticsHeartbeatDisableConfirm: string;
+    analyticsHeartbeatKeepEnabled: string;
     debugLogging: string;
     debugLoggingDesc: string;
     logFile: string;
@@ -31,9 +37,13 @@ export type SettingsSyncLabels = {
     syncPreferencesDesc: string;
     syncPreferenceAppearance: string;
     syncPreferenceLanguage: string;
+    syncPreferenceGtd: string;
+    syncPreferenceSavedFilters: string;
     syncPreferenceExternalCalendars: string;
     syncPreferenceAi: string;
     syncPreferenceAiHint: string;
+    backgroundSync: string;
+    backgroundSyncDesc: string;
     syncFolderLocation: string;
     savePath: string;
     browse: string;
@@ -46,6 +56,8 @@ export type SettingsSyncLabels = {
     testConnection: string;
     webdavTestHint: string;
     webdavTestAccessibility: string;
+    allowInsecureHttp: string;
+    allowInsecureHttpHint: string;
     cloudUrl: string;
     cloudHint: string;
     cloudToken: string;
@@ -90,24 +102,31 @@ export type SettingsSyncLabels = {
     attachmentsCleanupDesc: string;
     attachmentsCleanupLastRun: string;
     attachmentsCleanupNever: string;
+    attachmentsCleanupPendingDeletes: string;
+    attachmentsCleanupPendingDeletesClear: string;
+    attachmentsCleanupPendingDeletesConfirm: string;
+    attachmentsCleanupPendingDeletesConfirmTitle: string;
     attachmentsCleanupRun: string;
     attachmentsCleanupRunning: string;
 };
 
 export type CloudProvider = 'selfhosted' | 'dropbox';
 export type DropboxTestState = 'idle' | 'success' | 'error';
-export type SyncPreferences = NonNullable<AppData['settings']['syncPreferences']>;
+export type SyncPreferences = SettingsSyncPreferences;
 
 export type SettingsSyncPageProps = {
     t: SettingsSyncLabels;
     isTauri: boolean;
     loggingEnabled: boolean;
+    analyticsHeartbeatAvailable: boolean;
+    analyticsHeartbeatEnabled: boolean;
     logPath: string;
     onToggleLogging: () => void;
+    onAnalyticsHeartbeatChange: (enabled: boolean) => Promise<void> | void;
     onClearLog: () => void;
     syncBackend: SyncBackend;
     onSetSyncBackend: (backend: SyncBackend) => void;
-    syncPreferences: AppData['settings']['syncPreferences'] | undefined;
+    syncPreferences: AppSettings['syncPreferences'] | undefined;
     onUpdateSyncPreferences: (updates: Partial<SyncPreferences>) => Promise<void> | void;
     syncPath: string;
     onSyncPathChange: (value: string) => void;
@@ -117,16 +136,19 @@ export type SettingsSyncPageProps = {
     webdavUsername: string;
     webdavPassword: string;
     webdavHasPassword: boolean;
+    webdavAllowInsecureHttp: boolean;
     isSavingWebDav: boolean;
     isTestingWebDav: boolean;
     webdavTestState: 'idle' | 'success' | 'error';
     onWebdavUrlChange: (value: string) => void;
     onWebdavUsernameChange: (value: string) => void;
     onWebdavPasswordChange: (value: string) => void;
+    onWebdavAllowInsecureHttpChange: (value: boolean) => void;
     onSaveWebDav: () => Promise<void> | void;
     onTestWebDavConnection: () => Promise<void> | void;
     cloudUrl: string;
     cloudToken: string;
+    cloudAllowInsecureHttp: boolean;
     cloudProvider: CloudProvider;
     dropboxAppKey: string;
     dropboxConfigured: boolean;
@@ -137,6 +159,7 @@ export type SettingsSyncPageProps = {
     dropboxTestState: DropboxTestState;
     onCloudUrlChange: (value: string) => void;
     onCloudTokenChange: (value: string) => void;
+    onCloudAllowInsecureHttpChange: (value: boolean) => void;
     onCloudProviderChange: (provider: CloudProvider) => void;
     onSaveCloud: () => Promise<void> | void;
     onConnectDropbox: () => Promise<void> | void;
@@ -149,12 +172,14 @@ export type SettingsSyncPageProps = {
     syncLastResultAt: string | null;
     syncError: string | null;
     lastSyncDisplay: string;
-    lastSyncStatus: AppData['settings']['lastSyncStatus'];
-    lastSyncStats: AppData['settings']['lastSyncStats'] | null;
-    lastSyncHistory: AppData['settings']['lastSyncHistory'] | null;
+    lastSyncStatus: AppSettings['lastSyncStatus'];
+    lastSyncStats: AppSettings['lastSyncStats'] | null;
+    lastSyncHistory: AppSettings['lastSyncHistory'] | null;
     conflictCount: number;
     lastSyncError?: string;
     attachmentsLastCleanupDisplay: string;
+    pendingRemoteDeleteCount: number;
+    onClearPendingRemoteDeletes: () => Promise<void> | void;
     onRunAttachmentsCleanup: () => Promise<void> | void;
     isCleaningAttachments: boolean;
     snapshots: string[];

@@ -23,7 +23,7 @@ export type RecurrenceByDay =
     | RecurrenceWeekday
     | `${'1' | '2' | '3' | '4' | '-1'}${RecurrenceWeekday}`;
 
-export type SettingsSyncGroup = 'appearance' | 'language' | 'externalCalendars' | 'ai';
+export type SettingsSyncGroup = 'appearance' | 'language' | 'gtd' | 'externalCalendars' | 'ai' | 'savedFilters';
 
 export type SettingsSyncPreferences = Partial<Record<SettingsSyncGroup, boolean>>;
 
@@ -33,9 +33,14 @@ export interface Recurrence {
     rule: RecurrenceRule;
     strategy?: RecurrenceStrategy; // Defaults to 'strict'
     byDay?: RecurrenceByDay[]; // Explicit weekdays for weekly/monthly recurrences
+    weekStart?: RecurrenceWeekday; // RFC 5545 WKST for weekly interval anchoring
     count?: number; // Total occurrences in the series, including the current task
     until?: string; // ISO date/datetime when the series should stop
     completedOccurrences?: number; // Internal counter used to preserve COUNT across generated tasks
+    anchorDay?: number; // Original day-of-month anchor for clamped monthly/yearly recurrences
+    startAnchorDay?: number; // Field-specific anchor for startTime when it differs from dueDate
+    dueAnchorDay?: number; // Field-specific anchor for dueDate
+    reviewAnchorDay?: number; // Field-specific anchor for reviewAt
     rrule?: string; // Optional RFC 5545 fragment (e.g. FREQ=WEEKLY;BYDAY=MO,WE)
 }
 
@@ -60,6 +65,7 @@ export type TaskEditorFieldId =
     | 'checklist';
 
 export type TaskEditorSectionId = 'basic' | 'scheduling' | 'organization' | 'details';
+export type TaskEditorPresentation = 'inline' | 'modal';
 
 export type InboxProcessingMode = 'guided' | 'quick';
 
@@ -97,6 +103,8 @@ export interface Section {
     createdAt: string;
     updatedAt: string;
     deletedAt?: string; // Soft-delete: if set, this item is considered deleted
+    deletedAtBeforeProjectArchive?: string | null; // Original deletion timestamp when project archive hid this section.
+    projectArchivedAt?: string; // Archive timestamp used to identify reversible project-archive mutations.
 }
 
 export interface Area {
@@ -132,7 +140,7 @@ export interface Attachment {
     /** Optional hash (e.g., SHA-256) for integrity checks. */
     fileHash?: string;
     /**
-     * Local runtime status (not synced to remote).
+     * Local availability/transfer status. Persisted locally, but not synced to remote.
      * - available: File exists at `uri`
      * - missing: Metadata exists, file not found at `uri`
      * - uploading/downloading: Transfer in progress
@@ -156,7 +164,7 @@ export interface Task {
     taskMode?: TaskMode; // 'list' for checklist-first tasks
     startTime?: string; // ISO date string
     dueDate?: string; // ISO date string
-    recurrence?: Recurrence | RecurrenceRule;
+    recurrence?: Recurrence | RecurrenceRule; // Legacy string inputs are normalized to Recurrence on load/store writes
     pushCount?: number; // Tracks how many times dueDate was pushed later
     tags: string[];
     contexts: string[]; // e.g., '@home', '@work'
@@ -168,10 +176,14 @@ export interface Task {
     projectId?: string;
     sectionId?: string;
     areaId?: string;
-    isFocusedToday?: boolean; // Marked as today's priority (Top 3 focus)
+    isFocusedToday?: boolean; // Marked as today's focus list.
     timeEstimate?: TimeEstimate; // Estimated time to complete
     reviewAt?: string; // Tickler/review date (ISO string). If set, task is due for review at/after this time.
     completedAt?: string; // ISO timestamp when task was last completed/archived.
+    statusBeforeProjectArchive?: TaskStatus; // Original status when a project archive auto-completed this task.
+    completedAtBeforeProjectArchive?: string | null; // Original completion timestamp before project archive auto-completion.
+    isFocusedTodayBeforeProjectArchive?: boolean | null; // Original focus flag before project archive auto-completion.
+    projectArchivedAt?: string; // Archive timestamp used to identify reversible project-archive mutations.
     rev?: number; // Monotonic revision counter for sync conflict resolution
     revBy?: string; // Device identifier that issued the revision
     createdAt: string;
@@ -191,6 +203,52 @@ export interface SavedSearch {
     groupBy?: string;
 }
 
+export type SavedFilterView = 'focus' | 'next' | 'waiting' | 'someday' | 'contexts' | 'all';
+
+export type SortField =
+    | TaskSortBy
+    | 'priority'
+    | 'energy'
+    | 'timeEstimate'
+    | 'project'
+    | 'updated';
+
+export type FilterPriority = 'none' | TaskPriority;
+
+export type DateRange =
+    | { preset: 'today' | 'this_week' | 'this_month' | 'overdue' | 'no_date' }
+    | { from?: string; to?: string };
+
+export interface FilterCriteria {
+    contexts?: string[];
+    areas?: string[];
+    projects?: string[];
+    tags?: string[];
+    energy?: TaskEnergyLevel[];
+    priority?: FilterPriority[];
+    dueDateRange?: DateRange;
+    startDateRange?: DateRange;
+    statuses?: TaskStatus[];
+    assignedTo?: string[];
+    timeEstimateRange?: { min?: number; max?: number };
+    timeEstimates?: TimeEstimate[];
+    hasDescription?: boolean;
+    isStarred?: boolean;
+}
+
+export interface SavedFilter {
+    id: string;
+    name: string;
+    icon?: string;
+    view: SavedFilterView;
+    criteria: FilterCriteria;
+    sortBy?: SortField;
+    sortOrder?: 'asc' | 'desc';
+    createdAt: string;
+    updatedAt: string;
+    deletedAt?: string;
+}
+
 export interface PendingRemoteAttachmentDelete {
     cloudKey: string;
     title?: string;
@@ -200,124 +258,181 @@ export interface PendingRemoteAttachmentDelete {
 
 import type { MergeStats, SyncHistoryEntry } from './sync';
 
+export type AppTheme = 'light' | 'dark' | 'system' | 'eink' | 'nord' | 'sepia' | 'material3-light' | 'material3-dark' | 'oled';
+export type AppLanguage = 'en' | 'zh' | 'zh-Hant' | 'es' | 'hi' | 'ar' | 'de' | 'ru' | 'ja' | 'fr' | 'pt' | 'pl' | 'ko' | 'it' | 'tr' | 'nl' | 'system';
+export type MobileQuickAccessView = 'review' | 'projects' | 'calendar' | 'contexts';
+
+export interface GtdSettings {
+    timeEstimatePresets?: TimeEstimate[];
+    taskEditor?: TaskEditorSettings;
+    autoArchiveDays?: number;
+    defaultCaptureMethod?: 'text' | 'audio';
+    focusTaskLimit?: number;
+    defaultScheduleTime?: string; // HH:mm, used to prefill manual scheduling fields.
+    saveAudioAttachments?: boolean;
+    inboxProcessing?: {
+        defaultMode?: InboxProcessingMode;
+        twoMinuteEnabled?: boolean;
+        twoMinuteFirst?: boolean;
+        projectFirst?: boolean;
+        contextStepEnabled?: boolean;
+        scheduleEnabled?: boolean;
+        referenceEnabled?: boolean;
+    };
+    weeklyReview?: {
+        includeContextStep?: boolean;
+    };
+    dailyReview?: {
+        includeFocusStep?: boolean;
+    };
+    pomodoro?: {
+        customDurations?: {
+            focusMinutes?: number;
+            breakMinutes?: number;
+        };
+        linkTask?: boolean;
+        autoStartBreaks?: boolean;
+        autoStartFocus?: boolean;
+    };
+}
+
+export interface TaskEditorSettings {
+    order?: TaskEditorFieldId[];
+    hidden?: TaskEditorFieldId[];
+    sections?: Partial<Record<TaskEditorFieldId, TaskEditorSectionId>>;
+    sectionOpen?: Partial<Record<TaskEditorSectionId, boolean>>;
+    presentation?: TaskEditorPresentation;
+    defaultsVersion?: number;
+}
+
+export interface AttachmentSettings {
+    lastCleanupAt?: string;
+    pendingRemoteDeletes?: PendingRemoteAttachmentDelete[];
+}
+
+export interface FeatureSettings {
+    priorities?: boolean;
+    timeEstimates?: boolean;
+    pomodoro?: boolean;
+}
+
+export interface AppearanceSettings {
+    density?: 'comfortable' | 'compact';
+    textSize?: 'default' | 'large' | 'extra-large';
+    showTaskAge?: boolean;
+    showFutureStarts?: boolean;
+    unassignedAreaColor?: string;
+    mobileQuickAccessView?: MobileQuickAccessView;
+}
+
+export interface CalendarSettings {
+    viewMode?: 'month' | 'day' | 'week' | 'schedule';
+    weekVisibleDays?: number;
+}
+
+export interface WindowSettings {
+    decorations?: boolean;
+    closeBehavior?: 'ask' | 'tray' | 'quit';
+    launchAtStartup?: boolean;
+    showTray?: boolean;
+}
+
+export interface NotificationSettings {
+    notificationsEnabled?: boolean;
+    undoNotificationsEnabled?: boolean;
+    startDateNotificationsEnabled?: boolean;
+    dueDateNotificationsEnabled?: boolean;
+    reviewAtNotificationsEnabled?: boolean;
+    dailyDigestMorningEnabled?: boolean;
+    dailyDigestMorningTime?: string; // HH:mm
+    dailyDigestEveningEnabled?: boolean;
+    dailyDigestEveningTime?: string; // HH:mm
+    weeklyReviewEnabled?: boolean;
+    weeklyReviewDay?: number; // 0 = Sunday
+    weeklyReviewTime?: string; // HH:mm
+}
+
+export interface AiSettings {
+    enabled?: boolean;
+    provider?: 'gemini' | 'openai' | 'anthropic';
+    apiKey?: string;
+    baseUrl?: string;
+    model?: string;
+    reasoningEffort?: 'low' | 'medium' | 'high';
+    thinkingBudget?: number;
+    copilotModel?: string;
+    speechToText?: SpeechToTextSettings;
+}
+
+export interface SpeechToTextSettings {
+    enabled?: boolean;
+    provider?: 'openai' | 'gemini' | 'whisper';
+    model?: string;
+    language?: string;
+    mode?: 'smart_parse' | 'transcribe_only';
+    fieldStrategy?: 'smart' | 'title_only' | 'description_only';
+    offlineModelPath?: string;
+}
+
+export interface DiagnosticsSettings {
+    loggingEnabled?: boolean;
+}
+
+export interface AnalyticsSettings {
+    heartbeatEnabled?: boolean;
+}
+
+export interface FilterSettings {
+    areaId?: string;
+}
+
+export interface MigrationSettings {
+    version?: number;
+    lastAutoArchiveAt?: string;
+    lastTombstoneCleanupAt?: string;
+}
+
+export interface AppSettings extends NotificationSettings {
+    gtd?: GtdSettings;
+    attachments?: AttachmentSettings;
+    features?: FeatureSettings;
+    appearance?: AppearanceSettings;
+    theme?: AppTheme;
+    language?: AppLanguage;
+    weekStart?: 'monday' | 'sunday';
+    dateFormat?: string;
+    timeFormat?: string;
+    syncPreferences?: SettingsSyncPreferences;
+    syncPreferencesUpdatedAt?: SettingsSyncUpdatedAt;
+    externalCalendars?: ExternalCalendarSubscription[];
+    calendar?: CalendarSettings;
+    keybindingStyle?: 'vim' | 'emacs';
+    globalQuickAddShortcut?: string;
+    window?: WindowSettings;
+    ai?: AiSettings;
+    savedSearches?: SavedSearch[];
+    savedFilters?: SavedFilter[];
+    sidebarCollapsed?: boolean;
+    taskSortBy?: TaskSortBy;
+    lastSyncAt?: string;
+    lastSyncStatus?: 'idle' | 'syncing' | 'success' | 'error' | 'conflict';
+    lastSyncError?: string;
+    pendingRemoteWriteAt?: string;
+    pendingRemoteWriteRetryAt?: string;
+    pendingRemoteWriteAttempts?: number;
+    lastSyncStats?: MergeStats;
+    lastSyncHistory?: SyncHistoryEntry[];
+    diagnostics?: DiagnosticsSettings;
+    analytics?: AnalyticsSettings;
+    filters?: FilterSettings;
+    deviceId?: string;
+    migrations?: MigrationSettings;
+}
+
 export interface AppData {
     tasks: Task[];
     projects: Project[];
     sections: Section[];
     areas: Area[];
-    settings: {
-        gtd?: {
-            timeEstimatePresets?: TimeEstimate[];
-            taskEditor?: {
-                order?: TaskEditorFieldId[];
-                hidden?: TaskEditorFieldId[];
-                sections?: Partial<Record<TaskEditorFieldId, TaskEditorSectionId>>;
-                sectionOpen?: Partial<Record<TaskEditorSectionId, boolean>>;
-                defaultsVersion?: number;
-            };
-            autoArchiveDays?: number;
-            defaultCaptureMethod?: 'text' | 'audio';
-            saveAudioAttachments?: boolean;
-            inboxProcessing?: {
-                defaultMode?: InboxProcessingMode;
-                twoMinuteEnabled?: boolean;
-                twoMinuteFirst?: boolean;
-                projectFirst?: boolean;
-                contextStepEnabled?: boolean;
-                scheduleEnabled?: boolean;
-                referenceEnabled?: boolean;
-            };
-            weeklyReview?: {
-                includeContextStep?: boolean;
-            };
-            pomodoro?: {
-                customDurations?: {
-                    focusMinutes?: number;
-                    breakMinutes?: number;
-                };
-                autoStartBreaks?: boolean;
-                autoStartFocus?: boolean;
-            };
-        };
-        attachments?: {
-            lastCleanupAt?: string;
-            pendingRemoteDeletes?: PendingRemoteAttachmentDelete[];
-        };
-        features?: {
-            priorities?: boolean;
-            timeEstimates?: boolean;
-            pomodoro?: boolean;
-        };
-        appearance?: {
-            density?: 'comfortable' | 'compact';
-            textSize?: 'default' | 'large' | 'extra-large';
-        };
-        theme?: 'light' | 'dark' | 'system' | 'eink' | 'nord' | 'sepia' | 'material3-light' | 'material3-dark' | 'oled';
-        language?: 'en' | 'zh' | 'zh-Hant' | 'es' | 'hi' | 'ar' | 'de' | 'ru' | 'ja' | 'fr' | 'pt' | 'pl' | 'ko' | 'it' | 'tr' | 'nl' | 'system';
-        weekStart?: 'monday' | 'sunday';
-        dateFormat?: string;
-        timeFormat?: string;
-        syncPreferences?: SettingsSyncPreferences;
-        syncPreferencesUpdatedAt?: SettingsSyncUpdatedAt;
-        externalCalendars?: ExternalCalendarSubscription[];
-        keybindingStyle?: 'vim' | 'emacs';
-        globalQuickAddShortcut?: string;
-        window?: {
-            decorations?: boolean;
-            closeBehavior?: 'ask' | 'tray' | 'quit';
-            showTray?: boolean;
-        };
-        notificationsEnabled?: boolean;
-        undoNotificationsEnabled?: boolean;
-        reviewAtNotificationsEnabled?: boolean;
-        dailyDigestMorningEnabled?: boolean;
-        dailyDigestMorningTime?: string; // HH:mm
-        dailyDigestEveningEnabled?: boolean;
-        dailyDigestEveningTime?: string; // HH:mm
-        weeklyReviewEnabled?: boolean;
-        weeklyReviewDay?: number; // 0 = Sunday
-        weeklyReviewTime?: string; // HH:mm
-        ai?: {
-            enabled?: boolean;
-            provider?: 'gemini' | 'openai' | 'anthropic';
-            apiKey?: string;
-            baseUrl?: string;
-            model?: string;
-            reasoningEffort?: 'low' | 'medium' | 'high';
-            thinkingBudget?: number;
-            copilotModel?: string;
-            speechToText?: {
-                enabled?: boolean;
-                provider?: 'openai' | 'gemini' | 'whisper';
-                model?: string;
-                language?: string;
-                mode?: 'smart_parse' | 'transcribe_only';
-                fieldStrategy?: 'smart' | 'title_only' | 'description_only';
-                offlineModelPath?: string;
-            };
-        };
-        savedSearches?: SavedSearch[];
-        sidebarCollapsed?: boolean;
-        taskSortBy?: TaskSortBy;
-        lastSyncAt?: string;
-        lastSyncStatus?: 'idle' | 'syncing' | 'success' | 'error' | 'conflict';
-        lastSyncError?: string;
-        pendingRemoteWriteAt?: string;
-        pendingRemoteWriteRetryAt?: string;
-        pendingRemoteWriteAttempts?: number;
-        lastSyncStats?: MergeStats;
-        lastSyncHistory?: SyncHistoryEntry[];
-        diagnostics?: {
-            loggingEnabled?: boolean;
-        };
-        filters?: {
-            areaId?: string;
-        };
-        deviceId?: string;
-        migrations?: {
-            version?: number;
-            lastAutoArchiveAt?: string;
-            lastTombstoneCleanupAt?: string;
-        };
-    };
+    settings: AppSettings;
 }

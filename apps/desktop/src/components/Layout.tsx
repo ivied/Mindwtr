@@ -18,13 +18,13 @@ import {
     PauseCircle,
     Book,
     Clock3,
-    RefreshCw,
     BookOpen,
+    AlertTriangle,
     type LucideIcon,
 } from 'lucide-react';
 import { SafeReloadButton } from './SafeReloadButton';
 import { cn } from '../lib/utils';
-import { shallow, useTaskStore, safeParseDate, safeFormatDate, translateWithFallback } from '@mindwtr/core';
+import { shallow, useTaskStore, safeFormatDate, tFallback } from '@mindwtr/core';
 import { useLanguage } from '../contexts/language-context';
 import { useUiStore } from '../store/ui-store';
 import { useObsidianStore } from '../store/obsidian-store';
@@ -92,11 +92,9 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
     const isFocusMode = useUiStore((state) => state.isFocusMode);
     const showToast = useUiStore((state) => state.showToast);
     const isObsidianEnabled = useObsidianStore((state) => state.config.enabled);
-    const tOrFallback = (key: string, fallback: string) => {
-        return translateWithFallback(t, key, fallback);
-    };
     const [syncStatus, setSyncStatus] = useState(() => SyncService.getSyncStatus());
     const [isOnline, setIsOnline] = useState(() => (typeof navigator !== 'undefined' ? navigator.onLine : true));
+    const [cleartextSyncWarning, setCleartextSyncWarning] = useState<string | null>(null);
     const searchShortcutHint = useMemo(() => (
         typeof navigator !== 'undefined' && /mac/i.test(navigator.platform) ? '⌘K' : 'Ctrl+K'
     ), []);
@@ -125,7 +123,7 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
         return () => clearInterval(timer);
     }, [lastSyncAt, getSyncFreshnessBucket]);
 
-    const syncConflictNotice = tOrFallback(
+    const syncConflictNotice = tFallback(t,
         'settings.syncConflictNotice',
         'Sync conflict resolved with last-write-wins. Open sync settings to review the details.'
     );
@@ -137,7 +135,9 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
         showToast(syncConflictNotice, 'info', 6000);
     }, [lastSyncAt, lastSyncStatus, showToast, syncConflictNotice]);
 
-    const syncFreshnessDotClass = !isOnline
+    const syncFreshnessDotClass = syncStatus.inFlight
+        ? 'bg-emerald-400'
+        : !isOnline
         ? 'bg-destructive'
         : lastSyncStatus === 'error'
             ? 'bg-orange-400'
@@ -154,10 +154,32 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
     const syncTooltip = !isOnline
         ? (t('common.offline') || 'Offline')
         : lastSyncStatus === 'error' && lastSyncError
-            ? `${tOrFallback('settings.lastSyncError', 'Sync failed')}: ${lastSyncError}\n${tOrFallback('settings.lastSync', 'Last sync')}: ${fullSyncTimestamp}`
+            ? `${tFallback(t, 'settings.lastSyncError', 'Sync failed')}: ${lastSyncError}\n${tFallback(t, 'settings.lastSync', 'Last sync')}: ${fullSyncTimestamp}`
             : lastSyncStatus === 'conflict'
-                ? `${tOrFallback('settings.lastSyncConflict', 'Conflicts resolved')}\n${syncConflictNotice}\n${tOrFallback('settings.lastSync', 'Last sync')}: ${fullSyncTimestamp}`
-            : `${tOrFallback('settings.lastSync', 'Last sync')}: ${fullSyncTimestamp}`;
+                ? `${tFallback(t, 'settings.lastSyncConflict', 'Conflicts resolved')}\n${syncConflictNotice}\n${tFallback(t, 'settings.lastSync', 'Last sync')}: ${fullSyncTimestamp}`
+            : `${tFallback(t, 'settings.lastSync', 'Last sync')}: ${fullSyncTimestamp}`;
+    const syncStatusLabel = syncStatus.inFlight
+        ? tFallback(t, 'settings.syncing', 'Syncing...')
+        : !isOnline
+            ? tFallback(t, 'common.offline', 'Offline')
+            : lastSyncStatus === 'error'
+                ? tFallback(t, 'settings.lastSyncError', 'Sync failed')
+                : lastSyncStatus === 'conflict'
+                    ? tFallback(t, 'settings.lastSyncConflict', 'Conflicts resolved')
+                    : syncFreshness === 'old'
+                        ? tFallback(t, 'settings.syncStatusOld', 'Old')
+                        : syncFreshness === 'stale'
+                            ? tFallback(t, 'settings.syncStatusStale', 'Stale')
+                            : syncFreshness === 'fresh'
+                                ? tFallback(t, 'settings.syncStatusFresh', 'Fresh')
+                                : tFallback(t, 'settings.syncStatusNever', 'Not synced');
+    const syncStatusLabelClass = syncStatus.inFlight
+        ? 'text-muted-foreground'
+        : !isOnline || lastSyncStatus === 'error' || syncFreshness === 'old'
+        ? 'text-destructive'
+        : lastSyncStatus === 'conflict' || syncFreshness === 'stale'
+            ? 'text-amber-600 dark:text-amber-300'
+            : 'text-muted-foreground';
     const formatCompactSyncTime = useCallback((iso: string) => {
         const date = new Date(iso);
         if (Number.isNaN(date.getTime())) return iso;
@@ -167,11 +189,9 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
             hour12: false,
         }).format(date);
     }, []);
-    const compactSyncLabel = syncStatus.inFlight
-        ? tOrFallback('settings.syncing', 'Syncing...')
-        : lastSyncAt
-            ? `${tOrFallback('settings.lastSync', 'Last sync')}: ${formatCompactSyncTime(lastSyncAt)}`
-            : tOrFallback('settings.lastSyncNever', 'Never');
+    const compactSyncTimeLabel = lastSyncAt
+        ? formatCompactSyncTime(lastSyncAt)
+        : tFallback(t, 'settings.lastSyncNever', 'Never');
     const dismissLabel = t('common.dismiss');
     const dismissText = dismissLabel && dismissLabel !== 'common.dismiss' ? dismissLabel : 'Dismiss';
     const areaById = useMemo(() => new Map(areas.map((area) => [area.id, area])), [areas]);
@@ -182,13 +202,10 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
     );
     const sortedAreas = useMemo(() => [...areas].sort((a, b) => a.order - b.order), [areas]);
     const inboxCount = useMemo(() => {
-        const now = Date.now();
         let count = 0;
         for (const task of tasks) {
             if (task.deletedAt) continue;
             if (task.status !== 'inbox') continue;
-            const start = safeParseDate(task.startTime);
-            if (start && start.getTime() > now) continue;
             if (!taskMatchesAreaFilter(task, resolvedAreaFilter, projectMap, areaById)) continue;
             count += 1;
         }
@@ -341,6 +358,50 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
         return SyncService.subscribeSyncStatus(setSyncStatus);
     }, []);
 
+    const refreshCleartextSyncWarning = useCallback(async () => {
+        const warnings = await Promise.all([
+            (async () => {
+                const config = await SyncService.getWebDavConfig({ silent: true });
+                if (config.url.trim().toLowerCase().startsWith('http://')) {
+                    return tFallback(t,
+                        'settings.cleartextSyncWarningWebdav',
+                        'WebDAV sync is using HTTP. Only local or private-network endpoints are allowed; data is not encrypted.'
+                    );
+                }
+                return null;
+            })().catch(() => undefined),
+            (async () => {
+                if (await SyncService.getCloudProvider() !== 'selfhosted') return null;
+                const config = await SyncService.getCloudConfig({ silent: true });
+                if (config.url.trim().toLowerCase().startsWith('http://')) {
+                    return tFallback(t,
+                        'settings.cleartextSyncWarningCloud',
+                        'Self-hosted sync is using HTTP. Only local or private-network endpoints are allowed; data is not encrypted.'
+                    );
+                }
+                return null;
+            })().catch(() => undefined),
+        ]);
+        const visibleWarnings = warnings.filter((warning): warning is string => Boolean(warning));
+        setCleartextSyncWarning(visibleWarnings.length > 0 ? visibleWarnings.join(' ') : null);
+    }, [t]);
+
+    useEffect(() => {
+        void refreshCleartextSyncWarning();
+        const handleStorage = () => void refreshCleartextSyncWarning();
+        const handleFocus = () => void refreshCleartextSyncWarning();
+        window.addEventListener('storage', handleStorage);
+        window.addEventListener('focus', handleFocus);
+        const timer = setInterval(() => {
+            void refreshCleartextSyncWarning();
+        }, 30_000);
+        return () => {
+            window.removeEventListener('storage', handleStorage);
+            window.removeEventListener('focus', handleFocus);
+            clearInterval(timer);
+        };
+    }, [refreshCleartextSyncWarning]);
+
     const handleAreaFilterChange = (value: string) => {
         updateSettings({ filters: { ...(settings?.filters ?? {}), areaId: value } })
             .catch((error) => reportError('Failed to update area filter', error));
@@ -353,7 +414,7 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
                 href="#main-content"
                 className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:px-3 focus:py-2 focus:rounded-md focus:bg-primary focus:text-primary-foreground"
             >
-                {tOrFallback('accessibility.skipToContent', 'Skip to content')}
+                {tFallback(t, 'accessibility.skipToContent', 'Skip to content')}
             </a>
             {/* Sidebar */}
             {!isFocusMode && (
@@ -396,7 +457,7 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
                     {!isCollapsed && (
                         <>
                             <span className="flex-1 text-left">{t('search.placeholder') || 'Search...'}</span>
-                            <span className="text-xs opacity-50">{searchShortcutHint}</span>
+                            <span className="text-xs text-muted-foreground">{searchShortcutHint}</span>
                         </>
                     )}
                 </button>
@@ -416,7 +477,7 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
                                     className={cn(
                                         "w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-inset",
                                         currentView === `savedSearch:${search.id}`
-                                            ? "bg-primary/10 text-primary"
+                                            ? "bg-primary/5 text-primary"
                                             : "hover:bg-accent text-muted-foreground",
                                         isCollapsed && "justify-center px-2"
                                     )}
@@ -462,16 +523,16 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
                                         className={cn(
                                             "w-full flex items-center rounded-lg text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-inset",
                                             currentView === item.id
-                                                ? "bg-primary/10 text-primary"
+                                                ? "bg-primary/5 text-primary"
                                                 : "hover:bg-accent text-muted-foreground",
                                             isCollapsed ? "justify-center px-2 py-2.5" : "justify-between px-3 py-2.5"
                                         )}
                                         aria-current={currentView === item.id ? 'page' : undefined}
-                                    title={item.labelKey ? tOrFallback(item.labelKey, item.fallbackLabel ?? item.id) : (item.fallbackLabel ?? item.id)}
+                                    title={item.labelKey ? tFallback(t, item.labelKey, item.fallbackLabel ?? item.id) : (item.fallbackLabel ?? item.id)}
                                     >
                                         <div className={cn("flex items-center gap-3", isCollapsed && "gap-0")}>
                                             <item.icon className={cn("w-4 h-4", currentView === item.id && "text-primary")} />
-                                            {!isCollapsed && (item.labelKey ? tOrFallback(item.labelKey, item.fallbackLabel ?? item.id) : (item.fallbackLabel ?? item.id))}
+                                            {!isCollapsed && (item.labelKey ? tFallback(t, item.labelKey, item.fallbackLabel ?? item.id) : (item.fallbackLabel ?? item.id))}
                                         </div>
                                         {!isCollapsed && item.count !== undefined && item.count > 0 && (
                                             <span className={cn(
@@ -492,9 +553,9 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
                     </nav>
                 </div>
 
-                <div className="mt-auto pt-2">
+                <div className="mt-auto border-t border-border/60 px-3 pb-3 pt-3">
                     {!isCollapsed && (
-                        <div className="px-2 pb-2">
+                        <div className="pb-3">
                             <SidebarAreaFilter
                                 areas={sortedAreas}
                                 value={resolvedAreaFilter}
@@ -505,41 +566,70 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
                             />
                         </div>
                     )}
-                    <div className="border-t border-border" />
-                    <div className="flex items-center gap-1 px-2 pb-2 pt-2">
+                    <div className={cn(!isCollapsed && "border-t border-border/50 pt-3")}>
                         <SafeReloadButton isCollapsed={isCollapsed} showToast={showToast} />
                         <button
                             onClick={() => onViewChange('settings')}
                             className={cn(
-                                "flex-1 rounded-md border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-inset text-xs font-medium h-9 px-3 flex items-center",
-                                isCollapsed ? "justify-center" : "justify-between",
+                                "group relative w-full rounded-lg text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-inset",
+                                isCollapsed ? "flex h-10 items-center justify-center px-0" : "px-2.5 py-2",
                                 currentView === 'settings'
-                                    ? "border-primary/50 bg-primary/10 text-primary"
-                                    : "border-border bg-muted/40 hover:bg-accent text-muted-foreground"
+                                    ? "bg-primary/5 text-primary"
+                                    : "text-muted-foreground hover:bg-accent/70 hover:text-accent-foreground"
                             )}
                             aria-current={currentView === 'settings' ? 'page' : undefined}
                             title={!isCollapsed ? `${t('nav.settings')} • ${syncTooltip}` : t('nav.settings')}
                             aria-label={isCollapsed ? `${t('nav.settings')}. ${syncTooltip}` : t('nav.settings')}
                         >
-                            <span className="inline-flex items-center gap-2">
-                                <Settings className="w-4 h-4" />
-                                {!isCollapsed && <span>{t('nav.settings')}</span>}
-                            </span>
-                            {!isCollapsed && (
-                                <span
-                                    className="inline-flex items-center gap-2 text-[11px]"
-                                    role="status"
-                                    aria-live="polite"
-                                    aria-label={syncTooltip}
-                                >
-                                    <RefreshCw className={cn("w-3.5 h-3.5", syncStatus.inFlight && "animate-spin")} />
-                                    <span>{compactSyncLabel}</span>
-                                    <span
-                                        className={cn("w-2 h-2 rounded-full shrink-0", syncFreshnessDotClass)}
-                                        title={syncTooltip}
-                                        aria-hidden="true"
-                                    />
+                            <span className={cn(
+                                "flex min-w-0",
+                                isCollapsed ? "items-center justify-center" : "flex-col items-stretch gap-1.5"
+                            )}>
+                                <span className="inline-flex min-w-0 items-center gap-2 text-sm font-medium">
+                                    <Settings className="h-4 w-4 shrink-0" />
+                                    {!isCollapsed && <span>{t('nav.settings')}</span>}
                                 </span>
+                                {!isCollapsed && (
+                                    <span
+                                        className={cn(
+                                            "inline-flex min-w-0 items-center gap-1.5 pl-6 text-[11px] leading-none text-muted-foreground",
+                                            (!isOnline || lastSyncStatus === 'error' || lastSyncStatus === 'conflict' || syncFreshness === 'old' || syncFreshness === 'stale') && "text-foreground"
+                                        )}
+                                        title={syncTooltip}
+                                        role="status"
+                                        aria-live="polite"
+                                        aria-label={syncTooltip}
+                                    >
+                                        <span
+                                            className={cn(
+                                                "h-1.5 w-1.5 shrink-0 rounded-full",
+                                                syncFreshnessDotClass,
+                                                syncStatus.inFlight && "animate-pulse"
+                                            )}
+                                            aria-hidden="true"
+                                        />
+                                        <span className={cn("min-w-0 truncate", syncStatusLabelClass)}>
+                                            {syncStatusLabel}
+                                        </span>
+                                        <span className="shrink-0 text-muted-foreground" aria-hidden="true">
+                                            ·
+                                        </span>
+                                        <span className="shrink-0 tabular-nums text-muted-foreground">
+                                            {compactSyncTimeLabel}
+                                        </span>
+                                    </span>
+                                )}
+                            </span>
+                            {isCollapsed && (
+                                <span
+                                    className={cn(
+                                        "absolute right-1.5 top-1.5 h-2 w-2 rounded-full ring-2 ring-card",
+                                        syncFreshnessDotClass,
+                                        syncStatus.inFlight && "animate-pulse"
+                                    )}
+                                    title={syncTooltip}
+                                    aria-hidden="true"
+                                />
                             )}
                         </button>
                     </div>
@@ -554,7 +644,7 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
                 data-main-content
                 tabIndex={-1}
                 role="main"
-                aria-label={tOrFallback('accessibility.mainContent', 'Main content')}
+                aria-label={tFallback(t, 'accessibility.mainContent', 'Main content')}
             >
                 <div className={cn(
                     "mx-auto p-8 h-full",
@@ -580,6 +670,16 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
                             >
                                 {dismissText}
                             </button>
+                        </div>
+                    )}
+                    {cleartextSyncWarning && (
+                        <div
+                            role="status"
+                            aria-live="polite"
+                            className="mb-4 flex items-start gap-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-100"
+                        >
+                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" aria-hidden="true" />
+                            <span>{cleartextSyncWarning}</span>
                         </div>
                     )}
                     {children}

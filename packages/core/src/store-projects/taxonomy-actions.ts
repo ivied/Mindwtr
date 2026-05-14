@@ -1,4 +1,4 @@
-import { buildSaveSnapshot, ensureDeviceId, normalizeRevision, normalizeTagId, selectVisibleTasks } from '../store-helpers';
+import { buildSaveSnapshot, ensureDeviceId, getNextDataChangeAt, nextRevision, normalizeTagId, selectVisibleTasks } from '../store-helpers';
 import type { ProjectActionContext, TaxonomyActions } from './shared';
 import { dedupeTagValuesLastWins, formatTagIdPreservingCase } from './shared';
 
@@ -22,7 +22,7 @@ export const createTaxonomyActions = ({
                     ...task,
                     tags: filtered,
                     updatedAt: now,
-                    rev: normalizeRevision(task.rev) + 1,
+                    rev: nextRevision(task.rev),
                     revBy: deviceState.deviceId,
                 };
             });
@@ -35,7 +35,7 @@ export const createTaxonomyActions = ({
                     ...project,
                     tagIds: filtered,
                     updatedAt: now,
-                    rev: normalizeRevision(project.rev) + 1,
+                    rev: nextRevision(project.rev),
                     revBy: deviceState.deviceId,
                 };
             });
@@ -53,7 +53,7 @@ export const createTaxonomyActions = ({
                 projects: newVisibleProjects,
                 _allTasks: newAllTasks,
                 _allProjects: newAllProjects,
-                lastDataChangeAt: changeAt,
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
@@ -83,7 +83,7 @@ export const createTaxonomyActions = ({
                     ...task,
                     tags: dedupeTagValuesLastWins(newTags, nextTagId),
                     updatedAt: now,
-                    rev: normalizeRevision(task.rev) + 1,
+                    rev: nextRevision(task.rev),
                     revBy: deviceState.deviceId,
                 };
             });
@@ -98,7 +98,7 @@ export const createTaxonomyActions = ({
                     ...project,
                     tagIds: dedupeTagValuesLastWins(newTagIds, nextTagId),
                     updatedAt: now,
-                    rev: normalizeRevision(project.rev) + 1,
+                    rev: nextRevision(project.rev),
                     revBy: deviceState.deviceId,
                 };
             });
@@ -116,7 +116,7 @@ export const createTaxonomyActions = ({
                 projects: newVisibleProjects,
                 _allTasks: newAllTasks,
                 _allProjects: newAllProjects,
-                lastDataChangeAt: changeAt,
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
@@ -141,7 +141,7 @@ export const createTaxonomyActions = ({
                     ...task,
                     contexts: filtered,
                     updatedAt: now,
-                    rev: normalizeRevision(task.rev) + 1,
+                    rev: nextRevision(task.rev),
                     revBy: deviceState.deviceId,
                 };
             });
@@ -155,7 +155,7 @@ export const createTaxonomyActions = ({
             return {
                 tasks: newVisibleTasks,
                 _allTasks: newAllTasks,
-                lastDataChangeAt: changeAt,
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
@@ -191,7 +191,7 @@ export const createTaxonomyActions = ({
                     ...task,
                     contexts: unique,
                     updatedAt: now,
-                    rev: normalizeRevision(task.rev) + 1,
+                    rev: nextRevision(task.rev),
                     revBy: deviceState.deviceId,
                 };
             });
@@ -205,7 +205,7 @@ export const createTaxonomyActions = ({
             return {
                 tasks: newVisibleTasks,
                 _allTasks: newAllTasks,
-                lastDataChangeAt: changeAt,
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });

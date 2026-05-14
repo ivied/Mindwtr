@@ -1,0 +1,9 @@
+<en-US>
+Sync is steadier with safer conflict handling, serialized sync runs, and clearer history details. Quick capture blocks duplicate rapid saves, Projects supports task reordering, and Inbox tips make capture paths easier to discover. Local/private HTTP sync targets work more reliably, calendar gestures are smoother, and noisy bundle warnings are gone.
+</en-US>
+<zh-CN>
+同步更稳定：冲突处理更安全，同步会串行执行，历史记录细节更清楚。快速收集会避免重复快速保存，项目支持任务重排，收件箱提示更容易发现收集路径。本地或私有 HTTP 同步目标更可靠，日历手势更顺畅，并移除了嘈杂的打包警告。
+</zh-CN>
+<es-ES>
+Sync es mas estable con mejor manejo de conflictos, ejecuciones serializadas e historial mas claro. Quick capture evita guardados rapidos duplicados, Projects permite reordenar tareas e Inbox muestra mejor las rutas de captura. Los destinos HTTP locales o privados funcionan mejor, los gestos de calendario son mas fluidos y se eliminaron avisos ruidosos.
+</es-ES>

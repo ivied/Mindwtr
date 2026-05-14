@@ -31,6 +31,30 @@ function setInputValue(input: HTMLInputElement, value: string) {
 }
 
 describe('ProjectSelector', () => {
+    it('hides archived and legacy completed projects from the selectable options', () => {
+        const inactiveProjects: Project[] = [
+            ...projects,
+            { id: 'p3', title: 'Archived Project', status: 'archived', color: '#64748b', order: 2, tagIds: [], createdAt: '', updatedAt: '' },
+            { id: 'p4', title: 'Completed Project', status: 'completed' as Project['status'], color: '#64748b', order: 3, tagIds: [], createdAt: '', updatedAt: '' },
+        ];
+
+        const { getByRole, queryByRole } = render(
+            <ProjectSelector
+                projects={inactiveProjects}
+                value=""
+                onChange={vi.fn()}
+                placeholder="Select project"
+                searchPlaceholder="Search projects"
+            />
+        );
+
+        fireEvent.click(getByRole('button', { name: 'Select project' }));
+
+        expect(getByRole('option', { name: 'Alpha' })).toBeInTheDocument();
+        expect(queryByRole('option', { name: 'Archived Project' })).not.toBeInTheDocument();
+        expect(queryByRole('option', { name: 'Completed Project' })).not.toBeInTheDocument();
+    });
+
     it('suppresses create when an exact match exists outside the filtered list', () => {
         const { getByRole, getByLabelText, queryByText } = render(
             <ProjectSelector

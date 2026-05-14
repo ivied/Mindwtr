@@ -78,13 +78,14 @@ function getDefaultStorageDirs(): string[] {
 
 export function resolveMindwtrDataJsonPath(overridePath?: string): string {
   const explicitDbPath = getExplicitDbPath(overridePath);
-  const explicitDataPath = explicitDbPath ? join(dirname(explicitDbPath), DATA_FILE_NAME) : null;
+  if (explicitDbPath) {
+    return join(dirname(explicitDbPath), DATA_FILE_NAME);
+  }
   const candidates = dedupe([
-    explicitDataPath,
     ...getDefaultStorageDirs().map((dir) => join(dir, DATA_FILE_NAME)),
   ]);
 
-  return firstExisting(candidates) || explicitDataPath || candidates[0];
+  return firstExisting(candidates) || candidates[0];
 }
 
 export function resolveMindwtrDbPath(overridePath?: string): string {

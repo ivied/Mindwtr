@@ -1,4 +1,4 @@
-import type { AIProviderId, AIReasoningEffort, AppData } from '@mindwtr/core';
+import type { AIProviderId, AIReasoningEffort, AiSettings } from '@mindwtr/core';
 
 import { useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
@@ -65,6 +65,8 @@ type Labels = {
     speechFieldDescription: string;
 };
 
+type SpeechToTextSettings = NonNullable<AiSettings['speechToText']>;
+
 const looksLikeOfficialOpenAIModel = (model: string, knownModels: string[]): boolean => {
     const trimmed = model.trim();
     if (!trimmed) return true;
@@ -108,8 +110,8 @@ type SettingsAiPageProps = {
     speechOfflineSize: number | null;
     speechDownloadState: 'idle' | 'downloading' | 'success' | 'error';
     speechDownloadError: string | null;
-    onUpdateAISettings: (next: Partial<NonNullable<AppData['settings']['ai']>>) => void;
-    onUpdateSpeechSettings: (next: Partial<NonNullable<NonNullable<AppData['settings']['ai']>['speechToText']>>) => void;
+    onUpdateAISettings: (next: Partial<AiSettings>) => void;
+    onUpdateSpeechSettings: (next: Partial<SpeechToTextSettings>) => void;
     onProviderChange: (provider: AIProviderId) => void;
     onSpeechProviderChange: (provider: 'openai' | 'gemini' | 'whisper') => void;
     onToggleAnthropicThinking: () => void;

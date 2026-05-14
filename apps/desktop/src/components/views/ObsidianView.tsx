@@ -23,6 +23,7 @@ import { cn } from '../../lib/utils';
 import { useLanguage } from '../../contexts/language-context';
 import { useObsidianStore } from '../../store/obsidian-store';
 import { useUiStore } from '../../store/ui-store';
+import { usePersistedViewState } from '../../hooks/usePersistedViewState';
 
 const navigateToSettings = () => {
     dispatchNavigateEvent('settings');
@@ -31,6 +32,26 @@ const navigateToSettings = () => {
 const pageShellClassName = 'h-full px-4 py-3';
 const pageContentClassName = 'mx-auto w-full max-w-[84rem] min-w-0 2xl:max-w-[88rem]';
 const MAX_TASKNOTES_DETECTED_PATHS = 6;
+const OBSIDIAN_VIEW_STATE_STORAGE_KEY = 'mindwtr:view:obsidian:v1';
+
+type ObsidianPersistedViewState = {
+    showCompleted: boolean;
+};
+
+const DEFAULT_OBSIDIAN_VIEW_STATE: ObsidianPersistedViewState = {
+    showCompleted: false,
+};
+
+function sanitizeObsidianViewState(value: unknown, fallback: ObsidianPersistedViewState): ObsidianPersistedViewState {
+    const parsed = value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Partial<ObsidianPersistedViewState>
+        : {};
+    return {
+        showCompleted: typeof parsed.showCompleted === 'boolean'
+            ? parsed.showCompleted
+            : fallback.showCompleted,
+    };
+}
 
 const resolveTaskNotesCreationFolder = (tasks: ObsidianTask[]): string => {
     const folders = tasks
@@ -81,7 +102,18 @@ export function ObsidianView() {
     const [newTaskText, setNewTaskText] = useState('');
     const [isCreatingTask, setIsCreatingTask] = useState(false);
     const [pendingTaskIds, setPendingTaskIds] = useState<Record<string, true>>({});
-    const [showCompleted, setShowCompleted] = useState(false);
+    const [persistedViewState, setPersistedViewState] = usePersistedViewState(
+        OBSIDIAN_VIEW_STATE_STORAGE_KEY,
+        DEFAULT_OBSIDIAN_VIEW_STATE,
+        sanitizeObsidianViewState
+    );
+    const showCompleted = persistedViewState.showCompleted;
+    const setShowCompleted = useCallback((value: boolean | ((current: boolean) => boolean)) => {
+        setPersistedViewState((current) => ({
+            ...current,
+            showCompleted: typeof value === 'function' ? value(current.showCompleted) : value,
+        }));
+    }, [setPersistedViewState]);
 
     const effectiveNewTaskFormat = config.newTaskFormat === 'auto' ? importMode : config.newTaskFormat;
     const taskNotesCreationFolder = resolveTaskNotesCreationFolder(tasks);

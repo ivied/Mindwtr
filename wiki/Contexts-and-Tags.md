@@ -266,6 +266,6 @@ In Mindwtr, both `@contexts` and `#tags` can filter tasks, but they answer diffe
 ## See Also
 
 - [[GTD Workflow in Mindwtr]]
-- [[GTD Best Practices]]
+- [[GTD Workflow in Mindwtr]]
 - [[User Guide Desktop]]
 - [[User Guide Mobile]]

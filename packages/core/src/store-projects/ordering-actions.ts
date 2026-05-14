@@ -1,4 +1,4 @@
-import { buildSaveSnapshot, ensureDeviceId, getTaskOrder, normalizeRevision, selectVisibleTasks } from '../store-helpers';
+import { buildSaveSnapshot, ensureDeviceId, getNextDataChangeAt, getTaskOrder, nextRevision, selectVisibleTasks } from '../store-helpers';
 import type { OrderingActions, Project, ProjectActionContext, Task } from './shared';
 
 export const createOrderingActions = ({
@@ -36,7 +36,7 @@ export const createOrderingActions = ({
                     ...project,
                     order: nextOrder as number,
                     updatedAt: now,
-                    rev: normalizeRevision(project.rev) + 1,
+                    rev: nextRevision(project.rev),
                     revBy: deviceState.deviceId,
                 };
             });
@@ -49,7 +49,7 @@ export const createOrderingActions = ({
             return {
                 projects: newVisibleProjects,
                 _allProjects: newAllProjects,
-                lastDataChangeAt: changeAt,
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
@@ -102,7 +102,7 @@ export const createOrderingActions = ({
                     order: nextOrder as number,
                     orderNum: nextOrder as number,
                     updatedAt: now,
-                    rev: normalizeRevision(task.rev) + 1,
+                    rev: nextRevision(task.rev),
                     revBy: deviceState.deviceId,
                 };
             });
@@ -115,7 +115,7 @@ export const createOrderingActions = ({
             return {
                 tasks: newVisibleTasks,
                 _allTasks: newAllTasks,
-                lastDataChangeAt: changeAt,
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             };
         });
