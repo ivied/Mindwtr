@@ -18,26 +18,57 @@ func eprint(_ s: String) {
     FileHandle.standardError.write((s + "\n").data(using: .utf8) ?? Data())
 }
 
-func parseArgs() -> (input: String, output: String, profile: String?) {
+struct DiarizeArgs {
+    var input: String
+    var output: String
+    var profile: String?
+    /// FluidAudio clustering threshold (cosine distance for splitting/merging
+    /// anonymous speakers during diarization). Default 0.7. Lower = more
+    /// likely to split similar-sounding speakers.
+    var clusteringThreshold: Float = 0.7
+    /// Our own post-process gate for is_user. Cosine SIMILARITY between
+    /// segment embedding and enrolled profile must be ≥ this to label a
+    /// segment as the user. Default 0.55. Higher = stricter user match.
+    var userMatchThreshold: Float = 0.55
+    /// Emit raw 256-d embeddings per segment (large payload — debug only).
+    var includeEmbeddings: Bool = false
+}
+
+func parseArgs() -> DiarizeArgs {
     var input: String?
     var output: String?
-    var profile: String?
-    let args = CommandLine.arguments
+    var args = DiarizeArgs(input: "", output: "")
+    let argv = CommandLine.arguments
     var i = 1
-    while i < args.count {
-        switch args[i] {
+    while i < argv.count {
+        switch argv[i] {
         case "--input":
-            if i + 1 < args.count { input = args[i + 1] }
+            if i + 1 < argv.count { input = argv[i + 1] }
             i += 2
         case "--output":
-            if i + 1 < args.count { output = args[i + 1] }
+            if i + 1 < argv.count { output = argv[i + 1] }
             i += 2
         case "--profile":
-            if i + 1 < args.count { profile = args[i + 1] }
+            if i + 1 < argv.count { args.profile = argv[i + 1] }
             i += 2
+        case "--clustering-threshold":
+            if i + 1 < argv.count, let f = Float(argv[i + 1]) { args.clusteringThreshold = f }
+            i += 2
+        case "--user-match-threshold":
+            if i + 1 < argv.count, let f = Float(argv[i + 1]) { args.userMatchThreshold = f }
+            i += 2
+        case "--include-embeddings":
+            args.includeEmbeddings = true
+            i += 1
         case "--help", "-h":
             print(
-                "Usage: gtd-audio-diarize --input <wav> --output <json> [--profile <profile.json>]"
+                """
+                Usage: gtd-audio-diarize --input <wav> --output <json> [opts]
+                  --profile <profile.json>            enable user identification
+                  --clustering-threshold <0..1>       FluidAudio split threshold (default 0.7)
+                  --user-match-threshold <0..1>       cosine similarity gate for is_user (default 0.55)
+                  --include-embeddings                emit raw 256-d embeddings per segment
+                """
             )
             exit(0)
         default:
@@ -48,7 +79,25 @@ func parseArgs() -> (input: String, output: String, profile: String?) {
         eprint("error: --input and --output required")
         exit(1)
     }
-    return (input, output, profile)
+    args.input = input
+    args.output = output
+    return args
+}
+
+/// Cosine similarity between two L2-normalised embeddings ∈ [-1, 1].
+/// FluidAudio embeddings are not pre-normalised so we normalise here.
+func cosineSimilarity(_ a: [Float], _ b: [Float]) -> Float {
+    guard a.count == b.count, !a.isEmpty else { return 0 }
+    var dot: Float = 0
+    var na: Float = 0
+    var nb: Float = 0
+    for i in 0..<a.count {
+        dot += a[i] * b[i]
+        na += a[i] * a[i]
+        nb += b[i] * b[i]
+    }
+    let denom = (na.squareRoot()) * (nb.squareRoot())
+    return denom > 0 ? dot / denom : 0
 }
 
 func readWavAsMono16kFloat(path: String) throws -> [Float] {
@@ -111,17 +160,21 @@ func loadProfile(path: String) throws -> Profile {
 @main
 struct Diarize {
     static func main() async throws {
-        let (inputPath, outputPath, profilePath) = parseArgs()
-        let samples = try readWavAsMono16kFloat(path: inputPath)
+        let args = parseArgs()
+        let samples = try readWavAsMono16kFloat(path: args.input)
         eprint("samples: \(samples.count) (\(Double(samples.count) / 16_000) s)")
 
         let models = try await DiarizerModels.downloadIfNeeded()
-        let manager = DiarizerManager()
+        var config = DiarizerConfig()
+        config.clusteringThreshold = args.clusteringThreshold
+        let manager = DiarizerManager(config: config)
         manager.initialize(models: models)
 
         var userSpeakerId: String?
-        if let profilePath {
+        var profileEmbedding: [Float] = []
+        if let profilePath = args.profile {
             let profile = try loadProfile(path: profilePath)
+            profileEmbedding = profile.embedding
             let userSpeaker = Speaker(
                 id: "user",
                 name: profile.name,
@@ -131,30 +184,55 @@ struct Diarize {
             )
             await manager.initializeKnownSpeakers([userSpeaker])
             userSpeakerId = userSpeaker.id
-            eprint("known user speaker registered: id=\(userSpeaker.id) name=\(profile.name)")
+            eprint(
+                "user registered: id=\(userSpeaker.id) name=\(profile.name), "
+                    + "clustering_threshold=\(args.clusteringThreshold) "
+                    + "user_match_threshold=\(args.userMatchThreshold)"
+            )
         }
 
         let result = try await manager.performCompleteDiarization(samples, sampleRate: 16_000)
         eprint("segments: \(result.segments.count)")
 
+        // Post-process: re-evaluate is_user with OUR own threshold using cosine
+        // similarity between each segment's embedding and the enrolled profile.
+        // FluidAudio's internal speakerThreshold is hard to reach via the public
+        // API; doing the check ourselves lets us tune precision without touching
+        // FluidAudio internals.
         var seenSpeakers = Set<String>()
         var segmentsJson: [[String: Any]] = []
         for seg in result.segments {
             seenSpeakers.insert(seg.speakerId)
-            segmentsJson.append([
+            var isUser = false
+            var similarity: Float = 0
+            if !profileEmbedding.isEmpty && !seg.embedding.isEmpty {
+                similarity = cosineSimilarity(seg.embedding, profileEmbedding)
+                isUser = similarity >= args.userMatchThreshold
+            } else if let userSpeakerId, seg.speakerId == userSpeakerId {
+                isUser = true
+            }
+            var entry: [String: Any] = [
                 "speaker_id": seg.speakerId,
-                "is_user": userSpeakerId != nil && seg.speakerId == userSpeakerId,
+                "is_user": isUser,
+                "user_similarity": Double(similarity),
+                "fluidaudio_label_is_user": userSpeakerId != nil && seg.speakerId == userSpeakerId,
                 "start_ms": Int((seg.startTimeSeconds * 1000).rounded()),
                 "end_ms": Int((seg.endTimeSeconds * 1000).rounded()),
                 "duration_ms": Int((seg.durationSeconds * 1000).rounded()),
                 "quality_score": Double(seg.qualityScore),
-            ])
+            ]
+            if args.includeEmbeddings {
+                entry["embedding"] = seg.embedding.map { Double($0) }
+            }
+            segmentsJson.append(entry)
         }
 
         let payload: [String: Any] = [
-            "schema": 1,
-            "input_path": inputPath,
+            "schema": 2,
+            "input_path": args.input,
             "user_speaker_id": userSpeakerId ?? "",
+            "clustering_threshold": Double(args.clusteringThreshold),
+            "user_match_threshold": Double(args.userMatchThreshold),
             "speakers_seen": Array(seenSpeakers).sorted(),
             "speaker_count": seenSpeakers.count,
             "segments": segmentsJson,
@@ -163,10 +241,10 @@ struct Diarize {
         let data = try JSONSerialization.data(
             withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]
         )
-        try data.write(to: URL(fileURLWithPath: outputPath))
+        try data.write(to: URL(fileURLWithPath: args.output))
         eprint(
-            "✅ wrote \(seenSpeakers.count) speakers, \(result.segments.count) segments → \(outputPath)"
+            "✅ wrote \(seenSpeakers.count) speakers, \(result.segments.count) segments → \(args.output)"
         )
-        print(outputPath)
+        print(args.output)
     }
 }

@@ -23,7 +23,7 @@ import { MdWikiWriter, type ImageAttachment } from './wiki/md-writer'
 import { resizeToJpeg } from './wiki/image-processor'
 import { detectVoiceChat } from './filter/voice-chat-detect'
 import { Diarizer } from './capture/diarizer'
-import { access } from 'node:fs/promises'
+import { access, writeFile, copyFile } from 'node:fs/promises'
 
 async function main() {
   const config = loadConfigFromEnv()
@@ -90,6 +90,8 @@ async function main() {
         const d = new Diarizer({
           binaryPath: config.audio.diarizeBinaryPath,
           profilePath: config.audio.voiceProfilePath ?? '',
+          clusteringThreshold: config.audio.diarizeClusteringThreshold,
+          userMatchThreshold: config.audio.diarizeUserMatchThreshold,
         })
         try {
           await d.ensureAvailable()
@@ -146,7 +148,7 @@ async function main() {
           archive: wikiWriter
             ? async (ctx) => {
                 const vc = detectVoiceChat(ctx.window ?? null)
-                await wikiWriter.write({
+                const { mdPath } = await wikiWriter.write({
                   source: 'audio',
                   ts: ctx.ts,
                   app: ctx.window?.app ?? 'unknown',
@@ -164,6 +166,17 @@ async function main() {
                   userSpeechMs: ctx.diarize?.userSpeechMs,
                   otherSpeechMs: ctx.diarize?.otherSpeechMs,
                 })
+                const stemPath = mdPath.replace(/\.md$/, '')
+                if (ctx.diarizeRawJson) {
+                  await writeFile(`${stemPath}.diarize.json`, ctx.diarizeRawJson)
+                }
+                if (config.audio.keepWav && ctx.wavPath) {
+                  try {
+                    await copyFile(ctx.wavPath, `${stemPath}.wav`)
+                  } catch (err) {
+                    console.warn(`[wiki] keep-wav copy failed: ${(err as Error).message}`)
+                  }
+                }
               }
             : undefined,
           log: (msg) => console.log(`[audio] ${msg}`),

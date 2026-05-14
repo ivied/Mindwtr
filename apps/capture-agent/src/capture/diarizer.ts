@@ -43,6 +43,10 @@ export interface DiarizerConfig {
   binaryPath: string
   /** Absolute path to a voice profile JSON from gtd-audio-enroll. Empty = skip identification. */
   profilePath: string
+  /** Default 0.7 — passed to FluidAudio. Lower = more aggressive splitting. */
+  clusteringThreshold: number
+  /** Default 0.55 — cosine similarity gate for is_user. Higher = stricter. */
+  userMatchThreshold: number
 }
 
 export class Diarizer {
@@ -58,19 +62,30 @@ export class Diarizer {
     }
   }
 
-  /** Returns null if diarization fails — caller treats as "no info". */
-  async diarize(wavPath: string): Promise<DiarizeResult | null> {
+  /** Returns the parsed result and the raw JSON string (for sidecar). null on failure. */
+  async diarize(
+    wavPath: string
+  ): Promise<{ result: DiarizeResult; rawJson: string } | null> {
     let outDir: string | null = null
     try {
       outDir = await mkdtemp(join(tmpdir(), 'gtd-diar-'))
       const outPath = join(outDir, 'segments.json')
-      const args = ['--input', wavPath, '--output', outPath]
+      const args = [
+        '--input',
+        wavPath,
+        '--output',
+        outPath,
+        '--clustering-threshold',
+        String(this.config.clusteringThreshold),
+        '--user-match-threshold',
+        String(this.config.userMatchThreshold),
+      ]
       if (this.config.profilePath) {
         args.push('--profile', this.config.profilePath)
       }
       await this.runBinary(args)
-      const raw = await readFile(outPath, 'utf8')
-      return parseDiarizeJson(raw)
+      const rawJson = await readFile(outPath, 'utf8')
+      return { result: parseDiarizeJson(rawJson), rawJson }
     } catch {
       return null
     } finally {
