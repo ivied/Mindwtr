@@ -1,0 +1,124 @@
+# Production docker-compose for GTD on Hetzner VPS at 204.168.252.77.
+# Differences from ../compose.yaml (dev):
+#   - No host ports exposed (all traffic goes through cloudflared tunnel).
+#   - Volume paths under ${GTD_DATA_ROOT:-/opt/gtd} instead of relative.
+#   - WIKI_HOST_DIR points at /opt/gtd/wiki (rsync'd from Mac).
+#   - cloudflared service added as the only ingress.
+#   - MINDWTR_WEB_URL points at https://gtd.kurdy.uk.
+#   - CORS allows the production subdomain.
+#
+# Network model: all four services join the `gtd-prod` bridge. Only
+# cloudflared has an outbound connection to Cloudflare's edge — no inbound
+# ports on the VPS firewall.
+
+name: gtd-prod
+
+networks:
+  gtd-prod:
+    driver: bridge
+
+services:
+  mindwtr-cloud:
+    image: ghcr.io/${GHCR_OWNER:-sudorous}/gtd-automation-cloud:${IMAGE_TAG:-latest}
+    container_name: gtd-mindwtr-cloud
+    hostname: mindwtr-cloud
+    restart: always
+    cpus: "1.0"
+    mem_limit: 512m
+    networks: [gtd-prod]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8787/health || exit 1"]
+      interval: 1m30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    environment:
+      - MINDWTR_CLOUD_AUTH_TOKENS=${MINDWTR_CLOUD_AUTH_TOKENS:?MINDWTR_CLOUD_AUTH_TOKENS must be set}
+      - MINDWTR_CLOUD_ALLOW_ANY_TOKEN=false
+      - MINDWTR_CLOUD_CORS_ORIGIN=${MINDWTR_CLOUD_CORS_ORIGIN:-https://gtd.kurdy.uk}
+      - MINDWTR_CLOUD_MAX_BODY_BYTES=${MINDWTR_CLOUD_MAX_BODY_BYTES:-20000000}
+      - MINDWTR_TASK_WEBHOOK_URL=http://ai-service:3030/v1/proposals/task-changes
+      - MINDWTR_TASK_WEBHOOK_TOKEN=${HTTP_AUTH_TOKEN:?HTTP_AUTH_TOKEN must be set}
+    volumes:
+      - ${GTD_DATA_ROOT:-/opt/gtd}/mindwtr-cloud-data:/app/cloud_data
+
+  mindwtr-app:
+    image: ghcr.io/${GHCR_OWNER:-sudorous}/gtd-automation-app:${IMAGE_TAG:-latest}
+    container_name: gtd-mindwtr-app
+    hostname: mindwtr-app
+    restart: always
+    cpus: "0.5"
+    mem_limit: 256m
+    networks: [gtd-prod]
+    depends_on:
+      mindwtr-cloud:
+        condition: service_healthy
+    # Bake the cloud + ai-service URLs into the static build via the
+    # entrypoint runtime-config injection. The app image must support
+    # MINDWTR_CLOUD_URL_RUNTIME / AI_SERVICE_URL_RUNTIME envs — if not,
+    # rebuild the image with the production URLs baked into the Vite build.
+    environment:
+      - MINDWTR_CLOUD_URL_RUNTIME=https://api.gtd.kurdy.uk
+      - AI_SERVICE_URL_RUNTIME=https://ai.gtd.kurdy.uk
+
+  ai-service:
+    image: ghcr.io/${GHCR_OWNER:-sudorous}/gtd-automation-ai-service:${IMAGE_TAG:-latest}
+    container_name: gtd-ai-service
+    hostname: ai-service
+    restart: always
+    cpus: "2.0"
+    mem_limit: 1g
+    networks: [gtd-prod]
+    depends_on:
+      mindwtr-cloud:
+        condition: service_healthy
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN must be set}
+      - MINDWTR_CLOUD_URL=http://mindwtr-cloud:8787
+      - MINDWTR_AUTH_TOKEN=${MINDWTR_CLOUD_AUTH_TOKENS}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-cc/claude-opus-4-6}
+      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      - NOTION_API_KEY=${NOTION_API_KEY:-}
+      - NOTION_DATABASE_ID=${NOTION_DATABASE_ID:-}
+      - NOTION_POLL_INTERVAL_MS=${NOTION_POLL_INTERVAL_MS:-300000}
+      - HTTP_PORT=3030
+      - HTTP_AUTH_TOKEN=${HTTP_AUTH_TOKEN:?HTTP_AUTH_TOKEN must be set}
+      - HTTP_CORS_ORIGINS=${HTTP_CORS_ORIGINS:-https://gtd.kurdy.uk}
+      - TG_NOTIFY_CHAT_ID=${TG_NOTIFY_CHAT_ID:-}
+      - MINDWTR_WEB_URL=https://gtd.kurdy.uk
+      - USER_IDENTITY_NAME=${USER_IDENTITY_NAME:-}
+      - USER_IDENTITY_ALIASES=${USER_IDENTITY_ALIASES:-}
+      - WIKI_DIR=/app/wiki
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - EMBEDDINGS_MODEL=${EMBEDDINGS_MODEL:-text-embedding-3-small}
+      - CONTEXT_STORE_TTL_DAYS=${CONTEXT_STORE_TTL_DAYS:-7}
+      - DATA_DIR=/app/data
+      - PROACTIVE_INTERVAL_MS=${PROACTIVE_INTERVAL_MS:-21600000}
+    volumes:
+      - ${GTD_DATA_ROOT:-/opt/gtd}/ai-service-data:/app/data
+      # wiki/entities/*.md mounted read-only — rsync'd from the Mac via
+      # the sync-wiki.sh cron job (Mac → VPS). Empty dir is fine; the
+      # persons-registry + slug canonicalizer just stay empty until first
+      # sync arrives.
+      - ${GTD_DATA_ROOT:-/opt/gtd}/wiki:/app/wiki:ro
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: gtd-cloudflared
+    restart: always
+    cpus: "0.5"
+    mem_limit: 256m
+    networks: [gtd-prod]
+    depends_on:
+      mindwtr-cloud:
+        condition: service_healthy
+    # The TUNNEL_TOKEN is created in the Cloudflare Zero Trust dashboard
+    # (Networks → Tunnels → Create a tunnel). Routes (gtd.kurdy.uk →
+    # mindwtr-app:5173, etc.) are managed in the same dashboard under the
+    # tunnel's Public Hostname tab. No config file needed locally —
+    # token-mode keeps config in CF.
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?CLOUDFLARE_TUNNEL_TOKEN must be set}
