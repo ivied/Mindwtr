@@ -122,8 +122,8 @@ describe('runOnce', () => {
     await expect(runOnce(deps({ sink }))).rejects.toThrow('network down')
   })
 
-  it('archives all displays but only sends the active one', async () => {
-    const sink = mock(async () => {})
+  it('archives all displays and sends all of them to sink (multi-display dual-route)', async () => {
+    const sink = mock(async (_capture: unknown) => {})
     const archive = mock(async () => {})
     const result = await runOnce(
       deps({
@@ -137,7 +137,10 @@ describe('runOnce', () => {
     )
     expect(result).toBeNull()
     expect(archive).toHaveBeenCalledTimes(2)
-    expect(sink).toHaveBeenCalledTimes(1)
+    expect(sink).toHaveBeenCalledTimes(2)
+    const sinkCalls = (sink as unknown as { mock: { calls: [{ isActiveDisplay: boolean }][] } }).mock.calls
+    expect(sinkCalls.some((c) => c[0].isActiveDisplay === true)).toBe(true)
+    expect(sinkCalls.some((c) => c[0].isActiveDisplay === false)).toBe(true)
   })
 
   it('marks non-active display capture as background', async () => {
@@ -183,7 +186,7 @@ describe('runOnce', () => {
     expect(sink).not.toHaveBeenCalled()
   })
 
-  it('routes only the active display through wiki-only filter (background still archives)', async () => {
+  it('wiki-only filter applies to ALL displays when focused app matches (no sink for either display)', async () => {
     const sink = mock(async () => {})
     const archive = mock(async () => {})
     const result = await runOnce(
