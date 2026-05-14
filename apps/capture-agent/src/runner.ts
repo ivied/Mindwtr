@@ -4,13 +4,17 @@
  *
  * Multi-display semantics:
  * - When `multiDisplay` is true, every tick captures all attached displays.
- *   Each display is OCR'd, deduped, archived (wiki) and conditionally sent
- *   to AI Service.
+ *   Each display is OCR'd, deduped, archived (wiki) and sent to AI Service
+ *   (one sink call per display). Sending all displays is intentional:
+ *   secondary monitors often carry actionable content (chats, mail) while
+ *   the focused window sits on the primary.
  * - "Active display" is the one whose pixel rect contains the focused
- *   window's center. Only the active display can route to AI Service.
- * - When the focused window's app is in `wikiOnlyApps`, even the active
- *   display is wiki-only — the capture is still persisted for context,
- *   just never proposed as an inbox task.
+ *   window's center. It still flows downstream via `isActiveDisplay` on the
+ *   capture record so Proposer/Enricher can weight foreground vs background.
+ * - When the focused window's app is in `wikiOnlyApps`, ALL displays are
+ *   wiki-only for that tick — the captures are persisted for context but
+ *   never proposed. (Rationale: when user is heads-down in a code editor,
+ *   they're not asking the AI to scan their setup.)
  */
 
 import type { DisplayCapture, ScreenshotProvider } from './capture/screenshot'
@@ -117,7 +121,7 @@ export async function runOnce(deps: RunnerDeps): Promise<SkipReason> {
       continue
     }
 
-    const shouldSink = isActiveDisplay && !focusedAppIsWikiOnly
+    const shouldSink = !focusedAppIsWikiOnly
     ;(capture as DesktopCapture & { sentToInbox?: boolean }).sentToInbox = shouldSink
 
     if (deps.archive) {
@@ -130,17 +134,17 @@ export async function runOnce(deps: RunnerDeps): Promise<SkipReason> {
 
     if (shouldSink) {
       await deps.sink(capture)
-      activeResult = null
+      if (isActiveDisplay) activeResult = null
       deps.log?.(
-        `captured ${capture.app} · ${capture.windowTitle} (display ${display.index}/${display.name})`
+        `captured ${capture.app} · ${capture.windowTitle} (display ${display.index}/${display.name}${isActiveDisplay ? ', active' : ', bg'})`
       )
     } else if (isActiveDisplay) {
       activeResult = 'wiki-only'
       deps.log?.(
-        `wiki-only (${focusedAppIsWikiOnly ? 'app' : 'inactive'}): ${capture.app} · display ${display.index}/${display.name}`
+        `wiki-only (focused app is wiki-only): ${capture.app} · display ${display.index}/${display.name}`
       )
     } else {
-      deps.log?.(`bg display ${display.index}/${display.name} archived`)
+      deps.log?.(`wiki-only bg display ${display.index}/${display.name} (focused app is wiki-only)`)
     }
 
     deps.dedup?.markSent({

@@ -72,6 +72,9 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): AgentCo
           ? ''
           : env.AGENT_AUDIO_DIARIZE_BINARY ?? defaultDiarizeBinaryPath(),
       voiceProfilePath: env.AGENT_VOICE_PROFILE_PATH ?? '',
+      diarizeClusteringThreshold: Number(env.AGENT_DIARIZE_CLUSTERING_THRESHOLD ?? 0.7),
+      diarizeUserMatchThreshold: Number(env.AGENT_DIARIZE_USER_MATCH_THRESHOLD ?? 0.55),
+      keepWav: env.AGENT_AUDIO_KEEP_WAV === 'true',
     },
     wiki: {
       dir: env.AGENT_WIKI_DIR ?? '',

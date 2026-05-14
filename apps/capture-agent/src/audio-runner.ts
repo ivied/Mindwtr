@@ -24,6 +24,10 @@ export interface AudioArchiveContext {
   durationMs: number
   rms: number
   diarize: DiarizeResult | null
+  /** Raw JSON from gtd-audio-diarize. Caller can dump as sidecar file. */
+  diarizeRawJson: string | null
+  /** Path to the temp WAV file. Caller can copy if it wants to retain it. */
+  wavPath: string | null
 }
 
 export interface AudioRunnerDeps {
@@ -117,10 +121,13 @@ export async function runAudioOnce(
   }
 
   let diarize: DiarizeResult | null = null
+  let diarizeRawJson: string | null = null
   if (deps.diarizer && chunk.tempPath) {
     try {
-      diarize = await deps.diarizer.diarize(chunk.tempPath)
-      if (diarize) {
+      const out = await deps.diarizer.diarize(chunk.tempPath)
+      if (out) {
+        diarize = out.result
+        diarizeRawJson = out.rawJson
         deps.log?.(
           `diarize: ${diarize.speakerCount} speaker(s), user=${diarize.userSeen ? `${diarize.userSpeechMs}ms` : 'no'} other=${diarize.otherSpeechMs}ms`
         )
@@ -137,6 +144,8 @@ export async function runAudioOnce(
     durationMs: chunk.durationMs,
     rms: energy.rms,
     diarize,
+    diarizeRawJson,
+    wavPath: chunk.tempPath || null,
   }
 
   if (deps.archive) {

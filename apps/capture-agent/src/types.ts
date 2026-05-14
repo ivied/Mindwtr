@@ -119,4 +119,10 @@ export interface AudioConfig {
   diarizeBinaryPath: string
   /** Path to enrolled voice profile JSON. Empty = anonymous diarization. */
   voiceProfilePath: string
+  /** FluidAudio splitting threshold (cosine distance). Default 0.7. */
+  diarizeClusteringThreshold: number
+  /** Our cosine-similarity gate for is_user. Default 0.55. */
+  diarizeUserMatchThreshold: number
+  /** When true, copy the captured WAV next to the wiki MD for offline replay. */
+  keepWav: boolean
 }
