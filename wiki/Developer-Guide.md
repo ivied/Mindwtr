@@ -357,8 +357,22 @@ bun run --filter mindwtr-cloud dev -- --port 8787
 | Method | Endpoint   | Description    |
 | ------ | ---------- | -------------- |
 | `GET`  | `/health`  | Health check   |
+| `HEAD` | `/v1/data` | Get snapshot metadata |
 | `GET`  | `/v1/data` | Get user data  |
-| `PUT`  | `/v1/data` | Save user data |
+| `PUT`  | `/v1/data` | Merge and save user data; returns merge stats |
+| `GET`, `POST` | `/v1/tasks` | List or create tasks |
+| `GET`, `PATCH`, `DELETE` | `/v1/tasks/:id` | Read, update, or soft-delete a task |
+| `POST` | `/v1/tasks/:id/complete` | Mark a task done |
+| `POST` | `/v1/tasks/:id/archive` | Archive a task |
+| `GET`, `POST` | `/v1/projects` | List or create projects |
+| `GET`, `PATCH`, `DELETE` | `/v1/projects/:id` | Read, update, or soft-delete a project |
+| `GET`, `POST` | `/v1/sections` | List or create sections |
+| `GET`, `PATCH`, `DELETE` | `/v1/sections/:id` | Read, update, or soft-delete a section |
+| `GET`, `POST` | `/v1/areas` | List or create areas |
+| `GET`, `PATCH`, `DELETE` | `/v1/areas/:id` | Read, update, or soft-delete an area |
+| `GET` | `/v1/search` | Search tasks and projects |
+| `GET`, `PUT`, `DELETE` | `/v1/attachments/*` | Download, upload, or delete attachment files |
+| `POST`, `DELETE` | `/v1/attachments/orphans` | Scan or remove orphan attachment files |
 
 **Authentication:** `Authorization: Bearer <token>`
 

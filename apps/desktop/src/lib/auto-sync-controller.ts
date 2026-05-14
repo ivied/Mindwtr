@@ -21,6 +21,7 @@ type DesktopAutoSyncControllerOptions = {
     debounceFirstChangeMs?: number;
     debounceContinuousChangeMs?: number;
     initialSyncDelayMs?: number;
+    periodicSyncIntervalMs?: number | null;
 };
 
 export type DesktopAutoSyncController = {
@@ -37,6 +38,7 @@ const DEFAULT_FOCUS_MIN_INTERVAL_MS = 30_000;
 const DEFAULT_DEBOUNCE_FIRST_CHANGE_MS = 2_000;
 const DEFAULT_DEBOUNCE_CONTINUOUS_CHANGE_MS = 5_000;
 const DEFAULT_INITIAL_SYNC_DELAY_MS = 1_500;
+const DEFAULT_PERIODIC_SYNC_INTERVAL_MS = 15 * 60 * 1000;
 
 export const createDesktopAutoSyncController = (
     options: DesktopAutoSyncControllerOptions
@@ -49,11 +51,17 @@ export const createDesktopAutoSyncController = (
     const debounceFirstChangeMs = options.debounceFirstChangeMs ?? DEFAULT_DEBOUNCE_FIRST_CHANGE_MS;
     const debounceContinuousChangeMs = options.debounceContinuousChangeMs ?? DEFAULT_DEBOUNCE_CONTINUOUS_CHANGE_MS;
     const initialSyncDelayMs = options.initialSyncDelayMs ?? DEFAULT_INITIAL_SYNC_DELAY_MS;
+    const periodicSyncIntervalMs = options.periodicSyncIntervalMs ?? DEFAULT_PERIODIC_SYNC_INTERVAL_MS;
+    const periodicSyncEnabled = typeof periodicSyncIntervalMs === 'number'
+        && Number.isFinite(periodicSyncIntervalMs)
+        && periodicSyncIntervalMs > 0;
 
     let lastAutoSyncAt = 0;
     let syncDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     let syncThrottleTimer: ReturnType<typeof setTimeout> | null = null;
     let initialSyncTimer: ReturnType<typeof setTimeout> | null = null;
+    let periodicSyncTimer: ReturnType<typeof setTimeout> | null = null;
+    let disposed = false;
 
     const clearSyncDebounce = () => {
         if (!syncDebounceTimer) return;
@@ -71,6 +79,25 @@ export const createDesktopAutoSyncController = (
         if (!initialSyncTimer) return;
         clearTimer(initialSyncTimer);
         initialSyncTimer = null;
+    };
+
+    const clearPeriodicSync = () => {
+        if (!periodicSyncTimer) return;
+        clearTimer(periodicSyncTimer);
+        periodicSyncTimer = null;
+    };
+
+    const schedulePeriodicSync = () => {
+        clearPeriodicSync();
+        if (!periodicSyncEnabled || disposed) return;
+        periodicSyncTimer = setTimer(() => {
+            periodicSyncTimer = null;
+            if (disposed) return;
+            if (options.isRuntimeActive() && !options.shouldPauseWindowSync?.()) {
+                void requestSync().catch((error) => options.reportError('Sync failed', error));
+            }
+            schedulePeriodicSync();
+        }, periodicSyncIntervalMs);
     };
 
     const autoSyncOrchestrator = createSyncOrchestrator<number | undefined, void>({
@@ -110,6 +137,8 @@ export const createDesktopAutoSyncController = (
         await autoSyncOrchestrator.run(overrideMinIntervalMs);
     };
 
+    schedulePeriodicSync();
+
     return {
         requestSync,
         handleFocus: () => {
@@ -144,9 +173,11 @@ export const createDesktopAutoSyncController = (
             }, initialSyncDelayMs);
         },
         dispose: () => {
+            disposed = true;
             clearSyncDebounce();
             clearSyncThrottle();
             clearInitialSync();
+            clearPeriodicSync();
             autoSyncOrchestrator.reset();
         },
     };

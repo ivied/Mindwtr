@@ -8,10 +8,17 @@ import fs from 'fs'
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
-      "@mindwtr/core": path.resolve(__dirname, "../../packages/core/src/index.ts"),
-    },
+    alias: [
+      { find: "@", replacement: path.resolve(__dirname, "./src") },
+      {
+        find: /^@mindwtr\/core$/,
+        replacement: path.resolve(__dirname, "../../packages/core/src/index.ts"),
+      },
+      {
+        find: /^@mindwtr\/core\/(.+)$/,
+        replacement: path.resolve(__dirname, "../../packages/core/src/$1.ts"),
+      },
+    ],
   },
   // Prevent vite from obscuring rust errors in the console
   clearScreen: false,

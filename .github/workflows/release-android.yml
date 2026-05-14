@@ -204,6 +204,14 @@ jobs:
             apps/mobile/build/play-listing-assets.json
           cat apps/mobile/build/play-listing-assets.json
 
+      - name: Prepare Google Play listing metadata
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/prepare-google-play-listing-metadata.py \
+            metadata \
+            apps/mobile/build/play-listing-metadata.json
+          cat apps/mobile/build/play-listing-metadata.json
+
       - name: Publish to Google Play Store (Production)
         if: startsWith(github.ref, 'refs/tags/') && github.event_name != 'workflow_dispatch'
         env:
@@ -215,6 +223,7 @@ jobs:
           AAB_PATH="apps/mobile/build/mindwtr-${VERSION}.aab"
           NOTES_DIR="apps/mobile/build/play-release-notes"
           LISTING_ASSETS_FILE="apps/mobile/build/play-listing-assets.json"
+          LISTING_METADATA_FILE="apps/mobile/build/play-listing-metadata.json"
 
           if [ ! -f "$AAB_PATH" ]; then
             echo "Missing AAB artifact: $AAB_PATH" >&2
@@ -300,6 +309,32 @@ jobs:
             done < <(jq -r '.[] | [.language, .imageType, .path] | @tsv' "$LISTING_ASSETS_FILE")
           else
             echo "No Google Play listing assets found; skipping listing image upload."
+          fi
+
+          if [ -f "$LISTING_METADATA_FILE" ] && [ "$(jq 'length' "$LISTING_METADATA_FILE")" -gt 0 ]; then
+            while IFS= read -r LISTING_JSON; do
+              LISTING_PAYLOAD_FILE=$(mktemp)
+              printf '%s\n' "$LISTING_JSON" > "$LISTING_PAYLOAD_FILE"
+              LANGUAGE=$(jq -r '.language' "$LISTING_PAYLOAD_FILE")
+              if [ -z "$LANGUAGE" ] || [ "$LANGUAGE" = "null" ]; then
+                echo "Missing Google Play listing language in $LISTING_METADATA_FILE" >&2
+                exit 1
+              fi
+
+              LISTING_FILE=$(mktemp)
+              LISTING_CODE=$(curl -sS -o "$LISTING_FILE" -w "%{http_code}" -X PUT \
+                -H "Authorization: Bearer $ACCESS_TOKEN" \
+                -H "Content-Type: application/json" \
+                "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE/edits/$EDIT_ID/listings/$LANGUAGE" \
+                -d @"$LISTING_PAYLOAD_FILE")
+              if [ "$LISTING_CODE" != "200" ]; then
+                echo "Failed to update Google Play listing metadata for $LANGUAGE (HTTP $LISTING_CODE): $(cat "$LISTING_FILE")" >&2
+                exit 1
+              fi
+              echo "Updated Google Play listing metadata for $LANGUAGE"
+            done < <(jq -c '.[]' "$LISTING_METADATA_FILE")
+          else
+            echo "No Google Play listing metadata found; skipping listing metadata upload."
           fi
 
           PAYLOAD_FILE=$(mktemp)

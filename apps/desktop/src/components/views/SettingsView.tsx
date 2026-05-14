@@ -33,6 +33,11 @@ import {
 import { useKeybindings } from "../../contexts/keybinding-context";
 import { useLanguage, type Language } from "../../contexts/language-context";
 import { isFlatpakRuntime, isTauriRuntime } from "../../lib/runtime";
+import {
+  getCalendarSourceFileName,
+  isLocalCalendarFileUrl,
+  localCalendarFileUrlToPath,
+} from "../../lib/external-calendar-source";
 import { reportError } from "../../lib/report-error";
 import { SyncService } from "../../lib/sync-service";
 import { clearLog } from "../../lib/app-log";
@@ -45,6 +50,11 @@ import {
   labelKeyOverrides,
   type SettingsLabels,
 } from "./settings/labels";
+import {
+  isDesktopAnalyticsHeartbeatConfigured,
+  resetDesktopAnalyticsOptOutMarker,
+  sendDesktopAnalyticsOptOut,
+} from "../../lib/analytics-heartbeat";
 import { SettingsUpdateModal } from "./settings/SettingsUpdateModal";
 import { SettingsSidebar } from "./settings/SettingsSidebar";
 import { useAiSettings } from "./settings/useAiSettings";
@@ -153,6 +163,11 @@ const LANGUAGES: { id: Language; label: string; native: string }[] = [
 const maskCalendarUrl = (url: string): string => {
   const trimmed = url.trim();
   if (!trimmed) return "";
+  if (isLocalCalendarFileUrl(trimmed)) {
+    const path = localCalendarFileUrlToPath(trimmed);
+    const filename = getCalendarSourceFileName(trimmed);
+    return filename ? `Local file /.../${filename}` : `Local file ${path}`;
+  }
   const match = trimmed.match(/^(https?:\/\/)?([^/?#]+)([^?#]*)/i);
   if (!match) {
     return trimmed.length <= 8
@@ -201,6 +216,10 @@ export function SettingsView() {
   }, [isTauri]);
   const [saved, setSaved] = useState(false);
   const notificationsEnabled = settings?.notificationsEnabled !== false;
+  const startDateNotificationsEnabled =
+    settings?.startDateNotificationsEnabled !== false;
+  const dueDateNotificationsEnabled =
+    settings?.dueDateNotificationsEnabled !== false;
   const reviewAtNotificationsEnabled =
     settings?.reviewAtNotificationsEnabled !== false;
   const dailyDigestMorningEnabled =
@@ -213,7 +232,12 @@ export function SettingsView() {
     ? Math.max(0, Math.floor(settings?.gtd?.autoArchiveDays as number))
     : 7;
   const loggingEnabled = settings?.diagnostics?.loggingEnabled === true;
+  const analyticsHeartbeatAvailable = isDesktopAnalyticsHeartbeatConfigured();
+  const analyticsHeartbeatEnabled =
+    analyticsHeartbeatAvailable && settings?.analytics?.heartbeatEnabled !== false;
   const attachmentsLastCleanupAt = settings?.attachments?.lastCleanupAt;
+  const pendingRemoteDeleteCount =
+    settings?.attachments?.pendingRemoteDeletes?.length ?? 0;
   const { requestConfirmation, confirmModal } = useConfirmDialog();
 
   const showSaved = useCallback(() => {
@@ -349,6 +373,33 @@ export function SettingsView() {
     }
   }, [isTauri]);
 
+  const handleClearPendingRemoteDeletes = useCallback(async () => {
+    if (pendingRemoteDeleteCount === 0) return;
+    const confirmed = await requestSettingsConfirmation({
+      title: t.attachmentsCleanupPendingDeletesConfirmTitle,
+      message: t.attachmentsCleanupPendingDeletesConfirm,
+    });
+    if (!confirmed) return;
+    await updateSettings({
+      attachments: {
+        ...(settings?.attachments ?? {}),
+        pendingRemoteDeletes: undefined,
+      },
+    })
+      .then(showSaved)
+      .catch((error) =>
+        reportError("Failed to clear pending attachment deletes", error),
+      );
+  }, [
+    pendingRemoteDeleteCount,
+    requestSettingsConfirmation,
+    settings?.attachments,
+    showSaved,
+    t.attachmentsCleanupPendingDeletesConfirm,
+    t.attachmentsCleanupPendingDeletesConfirmTitle,
+    updateSettings,
+  ]);
+
   const toggleLogging = async () => {
     const nextEnabled = !loggingEnabled;
     await updateSettings({
@@ -362,6 +413,47 @@ export function SettingsView() {
         reportError("Failed to update logging settings", error),
       );
   };
+
+  const handleAnalyticsHeartbeatChange = useCallback(async (enabled: boolean) => {
+    if (!analyticsHeartbeatAvailable) return;
+    if (!enabled) {
+      const confirmed = await requestConfirmation({
+        title: t.analyticsHeartbeatDisableTitle,
+        description: t.analyticsHeartbeatDisableDesc,
+        confirmLabel: t.analyticsHeartbeatDisableConfirm,
+        cancelLabel: t.analyticsHeartbeatKeepEnabled,
+      });
+      if (!confirmed) return;
+    }
+
+    await updateSettings({
+      analytics: {
+        ...(settings?.analytics ?? {}),
+        heartbeatEnabled: enabled,
+      },
+    })
+      .then(async () => {
+        if (enabled) {
+          await resetDesktopAnalyticsOptOutMarker();
+          return;
+        }
+        await sendDesktopAnalyticsOptOut();
+      })
+      .then(showSaved)
+      .catch((error) =>
+        reportError("Failed to update analytics heartbeat setting", error),
+      );
+  }, [
+    analyticsHeartbeatAvailable,
+    requestConfirmation,
+    settings?.analytics,
+    showSaved,
+    t.analyticsHeartbeatDisableConfirm,
+    t.analyticsHeartbeatDisableDesc,
+    t.analyticsHeartbeatDisableTitle,
+    t.analyticsHeartbeatKeepEnabled,
+    updateSettings,
+  ]);
 
   const handleClearLog = async () => {
     await clearLog();
@@ -468,11 +560,15 @@ export function SettingsView() {
           t.windowDecorations,
           t.closeBehavior,
           t.showTray,
+          t.launchAtStartup,
           "theme",
           "font size",
           "text size",
           "dark mode",
           "light mode",
+          "launch at startup",
+          "autostart",
+          "login item",
         ],
       },
       {
@@ -603,6 +699,8 @@ export function SettingsView() {
     webdavPassword,
     setWebdavPassword,
     webdavHasPassword,
+    webdavAllowInsecureHttp,
+    setWebdavAllowInsecureHttp,
     isSavingWebDav,
     isTestingWebDav,
     webdavTestState,
@@ -610,6 +708,8 @@ export function SettingsView() {
     setCloudUrl,
     cloudToken,
     setCloudToken,
+    cloudAllowInsecureHttp,
+    setCloudAllowInsecureHttp,
     cloudProvider,
     dropboxAppKey,
     dropboxConfigured,
@@ -693,6 +793,7 @@ export function SettingsView() {
     setNewCalendarName,
     setNewCalendarUrl,
     handleAddCalendar,
+    handleChooseLocalCalendarFile,
     handleToggleCalendar,
     handleRemoveCalendar,
     handleRequestSystemCalendarPermission,
@@ -777,6 +878,8 @@ export function SettingsView() {
         <SettingsNotificationsPage
           t={t}
           notificationsEnabled={notificationsEnabled}
+          startDateNotificationsEnabled={startDateNotificationsEnabled}
+          dueDateNotificationsEnabled={dueDateNotificationsEnabled}
           reviewAtNotificationsEnabled={reviewAtNotificationsEnabled}
           weeklyReviewEnabled={weeklyReviewEnabled}
           weeklyReviewDay={weeklyReviewDay}
@@ -806,6 +909,7 @@ export function SettingsView() {
           onCalendarNameChange={setNewCalendarName}
           onCalendarUrlChange={setNewCalendarUrl}
           onAddCalendar={handleAddCalendar}
+          onChooseLocalCalendarFile={handleChooseLocalCalendarFile}
           onToggleCalendar={handleToggleCalendar}
           onRemoveCalendar={handleRemoveCalendar}
           onRequestSystemCalendarPermission={
@@ -847,8 +951,11 @@ export function SettingsView() {
           t={t}
           isTauri={isTauri}
           loggingEnabled={loggingEnabled}
+          analyticsHeartbeatAvailable={analyticsHeartbeatAvailable}
+          analyticsHeartbeatEnabled={analyticsHeartbeatEnabled}
           logPath={logPath}
           onToggleLogging={toggleLogging}
+          onAnalyticsHeartbeatChange={handleAnalyticsHeartbeatChange}
           onClearLog={handleClearLog}
           syncBackend={syncBackend}
           onSetSyncBackend={handleSetSyncBackend}
@@ -860,16 +967,19 @@ export function SettingsView() {
           webdavUsername={webdavUsername}
           webdavPassword={webdavPassword}
           webdavHasPassword={webdavHasPassword}
+          webdavAllowInsecureHttp={webdavAllowInsecureHttp}
           isSavingWebDav={isSavingWebDav}
           isTestingWebDav={isTestingWebDav}
           webdavTestState={webdavTestState}
           onWebdavUrlChange={setWebdavUrl}
           onWebdavUsernameChange={setWebdavUsername}
           onWebdavPasswordChange={setWebdavPassword}
+          onWebdavAllowInsecureHttpChange={setWebdavAllowInsecureHttp}
           onSaveWebDav={handleSaveWebDav}
           onTestWebDavConnection={handleTestWebDavConnection}
           cloudUrl={cloudUrl}
           cloudToken={cloudToken}
+          cloudAllowInsecureHttp={cloudAllowInsecureHttp}
           cloudProvider={cloudProvider}
           dropboxAppKey={dropboxAppKey}
           dropboxConfigured={dropboxConfigured}
@@ -880,6 +990,7 @@ export function SettingsView() {
           dropboxTestState={dropboxTestState}
           onCloudUrlChange={setCloudUrl}
           onCloudTokenChange={setCloudToken}
+          onCloudAllowInsecureHttpChange={setCloudAllowInsecureHttp}
           onCloudProviderChange={handleSetCloudProvider}
           onSaveCloud={handleSaveCloud}
           onConnectDropbox={handleConnectDropbox}
@@ -900,6 +1011,8 @@ export function SettingsView() {
           conflictCount={conflictCount}
           lastSyncError={settings?.lastSyncError}
           attachmentsLastCleanupDisplay={attachmentsLastCleanupDisplay}
+          pendingRemoteDeleteCount={pendingRemoteDeleteCount}
+          onClearPendingRemoteDeletes={handleClearPendingRemoteDeletes}
           onRunAttachmentsCleanup={handleAttachmentsCleanup}
           isCleaningAttachments={isCleaningAttachments}
           snapshots={snapshots}
@@ -922,8 +1035,11 @@ export function SettingsView() {
           t={t}
           isTauri={isTauri}
           loggingEnabled={loggingEnabled}
+          analyticsHeartbeatAvailable={analyticsHeartbeatAvailable}
+          analyticsHeartbeatEnabled={analyticsHeartbeatEnabled}
           logPath={logPath}
           onToggleLogging={toggleLogging}
+          onAnalyticsHeartbeatChange={handleAnalyticsHeartbeatChange}
           onClearLog={handleClearLog}
           transferAction={transferAction}
           onExportBackup={handleExportBackup}
@@ -932,6 +1048,8 @@ export function SettingsView() {
           onImportDgt={handleImportDgt}
           onImportOmniFocus={handleImportOmniFocus}
           attachmentsLastCleanupDisplay={attachmentsLastCleanupDisplay}
+          pendingRemoteDeleteCount={pendingRemoteDeleteCount}
+          onClearPendingRemoteDeletes={handleClearPendingRemoteDeletes}
           onRunAttachmentsCleanup={handleAttachmentsCleanup}
           isCleaningAttachments={isCleaningAttachments}
         />

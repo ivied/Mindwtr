@@ -1,8 +1,10 @@
 import React from 'react';
-import { parseMarkdownReferenceHref, translateWithFallback, useTaskStore, shallow } from '@mindwtr/core';
+import { parseMarkdownReferenceHref, tFallback, useTaskStore, shallow } from '@mindwtr/core';
 
 import { useLanguage } from '../contexts/language-context';
 import { dispatchNavigateEvent } from '../lib/navigation-events';
+import { reportError } from '../lib/report-error';
+import { isTauriRuntime } from '../lib/runtime';
 import { cn } from '../lib/utils';
 import { resolveTaskNavigationView } from '../lib/task-navigation';
 import { useUiStore } from '../store/ui-store';
@@ -19,6 +21,26 @@ function isSafeExternalHref(href: string): boolean {
         return ['http:', 'https:', 'mailto:', 'tel:'].includes(url.protocol);
     } catch {
         return false;
+    }
+}
+
+async function openExternalHref(href: string): Promise<void> {
+    const nextHref = href.trim();
+    let openError: unknown = null;
+
+    if (isTauriRuntime()) {
+        try {
+            const { open } = await import('@tauri-apps/plugin-shell');
+            await open(nextHref);
+            return;
+        } catch (error) {
+            openError = error;
+        }
+    }
+
+    const opened = window.open(nextHref, '_blank', 'noopener,noreferrer');
+    if (!opened) {
+        reportError('Failed to open markdown link', openError ?? new Error('Popup blocked'));
     }
 }
 
@@ -49,7 +71,9 @@ export function InternalMarkdownLink({ href, className, children }: InternalMark
                 rel="noreferrer"
                 className={cn('text-primary underline underline-offset-2 hover:opacity-90', className)}
                 onClick={(event) => {
+                    event.preventDefault();
                     event.stopPropagation();
+                    void openExternalHref(href);
                 }}
             >
                 {children}
@@ -57,26 +81,11 @@ export function InternalMarkdownLink({ href, className, children }: InternalMark
         );
     }
 
-    const taskLabel = (() => {
-        const translated = t('taskEdit.tab.task');
-        return translated === 'taskEdit.tab.task' ? 'Task' : translated;
-    })();
-    const projectLabel = (() => {
-        const translated = t('taskEdit.projectLabel');
-        return translated === 'taskEdit.projectLabel' ? 'Project' : translated;
-    })();
-    const deletedTaskLabel = (() => {
-        const translated = t('markdown.referenceDeletedTask');
-        return translated === 'markdown.referenceDeletedTask' ? 'deleted task' : translated;
-    })();
-    const deletedProjectLabel = (() => {
-        const translated = t('markdown.referenceDeletedProject');
-        return translated === 'markdown.referenceDeletedProject' ? 'deleted project' : translated;
-    })();
-    const restoreLabel = (() => {
-        const translated = t('markdown.referenceRestore');
-        return translated === 'markdown.referenceRestore' ? 'Restore' : translated;
-    })();
+    const taskLabel = tFallback(t, 'taskEdit.tab.task', 'Task');
+    const projectLabel = tFallback(t, 'taskEdit.projectLabel', 'Project');
+    const deletedTaskLabel = tFallback(t, 'markdown.referenceDeletedTask', 'deleted task');
+    const deletedProjectLabel = tFallback(t, 'markdown.referenceDeletedProject', 'deleted project');
+    const restoreLabel = tFallback(t, 'markdown.referenceRestore', 'Restore');
 
     if (reference.entityType === 'project') {
         const project = projects.find((candidate) => candidate.id === reference.id && !candidate.deletedAt);
@@ -107,7 +116,7 @@ export function InternalMarkdownLink({ href, className, children }: InternalMark
         }
         const statusLabel = (() => {
             const key = `status.${project.status}` as const;
-            return translateWithFallback(t, key, project.status);
+            return tFallback(t, key, project.status);
         })();
         return (
             <button
@@ -163,7 +172,7 @@ export function InternalMarkdownLink({ href, className, children }: InternalMark
 
     const statusLabel = (() => {
         const key = `status.${task.status}` as const;
-        return translateWithFallback(t, key, task.status);
+        return tFallback(t, key, task.status);
     })();
     const currentTitle = task.title?.trim();
 

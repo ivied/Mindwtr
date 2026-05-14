@@ -1,15 +1,16 @@
 import { SUPPORTED_LANGUAGES } from './i18n/i18n-constants';
 import type { AIProviderId, AIReasoningEffort } from './ai/types';
-import type { AppData } from './types';
+import type { AiSettings, AppearanceSettings, AppData } from './types';
 
 type ThemeValue = NonNullable<AppData['settings']['theme']>;
 type LanguageValue = NonNullable<AppData['settings']['language']>;
 type WeekStartValue = NonNullable<AppData['settings']['weekStart']>;
 type TimeFormatValue = NonNullable<AppData['settings']['timeFormat']>;
 type KeybindingStyleValue = NonNullable<AppData['settings']['keybindingStyle']>;
-type DensityValue = NonNullable<NonNullable<AppData['settings']['appearance']>['density']>;
-type TextSizeValue = NonNullable<NonNullable<AppData['settings']['appearance']>['textSize']>;
-type SpeechToTextSettings = NonNullable<NonNullable<AppData['settings']['ai']>['speechToText']>;
+type DensityValue = NonNullable<AppearanceSettings['density']>;
+type TextSizeValue = NonNullable<AppearanceSettings['textSize']>;
+type MobileQuickAccessViewValue = NonNullable<AppearanceSettings['mobileQuickAccessView']>;
+type SpeechToTextSettings = NonNullable<AiSettings['speechToText']>;
 type SpeechToTextProviderValue = NonNullable<SpeechToTextSettings['provider']>;
 type SpeechToTextModeValue = NonNullable<SpeechToTextSettings['mode']>;
 type SpeechToTextFieldStrategyValue = NonNullable<SpeechToTextSettings['fieldStrategy']>;
@@ -51,6 +52,13 @@ const TEXT_SIZE_VALUE_FLAGS: Record<TextSizeValue, true> = {
     default: true,
     large: true,
     'extra-large': true,
+};
+
+const MOBILE_QUICK_ACCESS_VIEW_VALUE_FLAGS: Record<MobileQuickAccessViewValue, true> = {
+    review: true,
+    projects: true,
+    calendar: true,
+    contexts: true,
 };
 
 const AI_PROVIDER_VALUE_FLAGS: Record<AIProviderId, true> = {
@@ -102,6 +110,9 @@ export const SETTINGS_DENSITY_VALUE_SET = new Set<DensityValue>(SETTINGS_DENSITY
 
 export const SETTINGS_TEXT_SIZE_VALUES = Object.keys(TEXT_SIZE_VALUE_FLAGS) as TextSizeValue[];
 export const SETTINGS_TEXT_SIZE_VALUE_SET = new Set<TextSizeValue>(SETTINGS_TEXT_SIZE_VALUES);
+
+export const SETTINGS_MOBILE_QUICK_ACCESS_VIEW_VALUES = Object.keys(MOBILE_QUICK_ACCESS_VIEW_VALUE_FLAGS) as MobileQuickAccessViewValue[];
+export const SETTINGS_MOBILE_QUICK_ACCESS_VIEW_VALUE_SET = new Set<MobileQuickAccessViewValue>(SETTINGS_MOBILE_QUICK_ACCESS_VIEW_VALUES);
 
 export const AI_PROVIDER_VALUES = Object.keys(AI_PROVIDER_VALUE_FLAGS) as AIProviderId[];
 export const AI_PROVIDER_VALUE_SET = new Set<AIProviderId>(AI_PROVIDER_VALUES);

@@ -60,6 +60,16 @@ export const normalizeSyncBackend = (raw: string | null): SyncBackend => {
     return 'off';
 };
 
+export const resolveSyncBackend = (value: string | null): SyncBackend => normalizeSyncBackend(value);
+
+export const coerceSupportedSyncBackend = (backend: SyncBackend, options?: { allowCloudKit?: boolean }): SyncBackend => (
+    backend === 'cloudkit' && options?.allowCloudKit === false ? 'off' : backend
+);
+
+export const isRemoteSyncBackend = (backend: SyncBackend): boolean => (
+    backend === 'webdav' || backend === 'cloud' || backend === 'cloudkit'
+);
+
 export const canAutoSync = (config: AutoSyncConfig): boolean => {
     if (config.backend === 'off') return false;
     if (config.backend === 'cloudkit') return true;

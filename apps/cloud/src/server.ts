@@ -1,25 +1,32 @@
 #!/usr/bin/env bun
-import { existsSync, readFileSync, realpathSync, unlinkSync } from 'fs';
-import { join } from 'path';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmdirSync, unlinkSync } from 'fs';
+import { join, relative } from 'path';
 import {
     applyTaskUpdates,
+    filterNotDeleted,
     generateUUID,
-    mergeAppData,
+    mergeAppDataWithStats,
     parseQuickAdd,
+    repairMergedSyncReferences,
     searchAll,
     validateAttachmentForUpload,
+    type Area,
     type Attachment,
     type AppData,
+    type Project,
+    type Section,
     type Task,
     type TaskStatus,
 } from '@mindwtr/core';
 import {
     getAuthFailureRateKey,
+    getAuthFailureTokenRateKey,
     getClientIp,
     getToken,
     isAuthorizedToken,
     parseAllowedAuthTokens,
     parseBoolEnv,
+    parseTrustedProxyIps,
     resolveAllowedAuthTokensFromEnv,
     toRateLimitRoute,
     tokenToKey,
@@ -33,11 +40,13 @@ import {
     logError,
     logInfo,
     logWarn,
+    LIST_MAX_LIMIT,
     MAX_TASK_QUICK_ADD_LENGTH,
     MAX_TASK_TITLE_LENGTH,
     normalizeRevision,
     parseArgs,
     parsePagination,
+    preflightResponse,
     RATE_LIMIT_MAX_KEYS,
     UUID_PATTERN,
 } from './server-config';
@@ -48,7 +57,6 @@ import {
     isBodyReadError,
     isPathWithinRoot,
     isRequestAbortError,
-    loadAppData,
     normalizeAttachmentRelativePath,
     pathContainsSymlink,
     readData,
@@ -63,12 +71,31 @@ import {
     asStatus,
     pickTaskList,
     validateAppData,
+    validateAreaCreationProps,
+    validateAreaPatchProps,
+    validateProjectCreationProps,
+    validateProjectPatchProps,
+    validateSectionCreationProps,
+    validateSectionPatchProps,
     validateTaskCreationProps,
     validateTaskPatchProps,
 } from './server-validation';
+import {
+    __serverDataCacheTestUtils,
+    dataMetadataResponse,
+    isTrustedValidatedDataFile,
+    jsonFileResponse,
+    loadAppData,
+    rememberValidatedDataFile,
+    writeCloudData,
+} from './server-data-cache';
 
 const normalizeAttachmentContentType = (value: string | null): string => value?.split(';', 1)[0]?.trim().toLowerCase() || '';
-
+const ANY_TOKEN_NAMESPACE_LIMIT_DEFAULT = 32;
+const TOKEN_NAMESPACE_FILE_PATTERN = /^([a-f0-9]{64})\.json$/;
+const TOKEN_NAMESPACE_DIR_PATTERN = /^[a-f0-9]{64}$/;
+// Relies on POSIX mtime; do not lower below 1 minute without auditing filesystem timestamp resolution and batching.
+const ORPHAN_ATTACHMENT_GC_GRACE_MS = 5 * 60 * 1000;
 const getBlockedAttachmentSignature = (bytes: Uint8Array): string | null => {
     if (bytes.length >= 2 && bytes[0] === 0x4d && bytes[1] === 0x5a) {
         return 'windows-pe';
@@ -100,19 +127,74 @@ const createInternalServerErrorResponse = (message: string, requestId: string): 
     )
 );
 
+const emptyCorsResponse = (status: number): Response => {
+    const headers = new Headers({
+        'Access-Control-Allow-Origin': corsOrigin,
+        'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+        'Access-Control-Allow-Methods': 'GET,HEAD,PUT,POST,PATCH,DELETE,OPTIONS',
+    });
+    return new Response(null, { status, headers });
+};
+
+const normalizeStoredAppData = (data: AppData): AppData => ({
+    tasks: Array.isArray(data.tasks) ? data.tasks : [],
+    projects: Array.isArray(data.projects) ? data.projects : [],
+    sections: Array.isArray(data.sections) ? data.sections : [],
+    areas: Array.isArray(data.areas) ? data.areas : [],
+    settings: isRecord(data.settings) ? data.settings : {},
+});
+
+const validateStoredAppData = (
+    filePath: string,
+    key: string,
+    rawData: unknown,
+): AppData | { error: Response } => {
+    if (isTrustedValidatedDataFile(filePath)) {
+        return normalizeStoredAppData(rawData as AppData);
+    }
+    const validated = validateAppData(rawData);
+    if (!validated.ok) {
+        logWarn('Stored cloud data failed validation', { key, error: validated.error });
+        return { error: errorResponse('Stored data failed validation', 500) };
+    }
+    rememberValidatedDataFile(filePath);
+    return normalizeStoredAppData(validated.data);
+};
+
+const loadExistingDataForMerge = (filePath: string, key: string): AppData | { error: Response } => {
+    if (!existsSync(filePath)) return { tasks: [], projects: [], sections: [], areas: [], settings: {} };
+    const rawData = readData(filePath);
+    if (!rawData) {
+        logWarn('Stored cloud data failed validation', { key, error: 'Invalid JSON' });
+        return { error: errorResponse('Stored data failed validation', 500) };
+    }
+    return validateStoredAppData(filePath, key, rawData);
+};
+
+type BunServer = {
+    port: number;
+    stop?: (closeIdleConnections?: boolean) => void | Promise<void>;
+};
+
+type BunRuntime = {
+    serve: (options: {
+        hostname: string;
+        port: number;
+        fetch: (req: Request) => Response | Promise<Response>;
+    }) => BunServer;
+};
+
+const getBunRuntime = (): BunRuntime | undefined => (
+    (globalThis as typeof globalThis & { Bun?: BunRuntime }).Bun
+);
+
+const IS_MAIN_MODULE = !!getBunRuntime() && (import.meta as ImportMeta & { main?: boolean }).main === true;
+
 type RateLimitState = {
     count: number;
     resetAt: number;
     lastSeenAt: number;
 };
-
-const shutdown = (signal: string) => {
-    logInfo(`received ${signal}, shutting down`);
-    process.exit(0);
-};
-
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 function decodePathParam(rawValue: string): string | null {
     try {
@@ -128,16 +210,171 @@ function parseTaskRouteId(rawValue: string): string | null {
     return UUID_PATTERN.test(decoded) ? decoded : null;
 }
 
+function parseEntityRouteId(rawValue: string): string | null {
+    const decoded = decodePathParam(rawValue);
+    const trimmed = decoded?.trim() ?? '';
+    if (!trimmed || trimmed.length > 200 || trimmed.includes('/')) return null;
+    return trimmed;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+const PROJECT_STATUSES = new Set<Project['status']>(['active', 'someday', 'waiting', 'archived']);
+
+function asProjectStatus(value: unknown): Project['status'] | null {
+    return PROJECT_STATUSES.has(value as Project['status']) ? value as Project['status'] : null;
+}
+
+function readObjectBody(body: unknown): Record<string, unknown> | null {
+    return isRecord(body) ? body : null;
+}
+
+function nextOrder(items: Array<{ order?: number }>): number {
+    return items.reduce((maxOrder, item) => (
+        typeof item.order === 'number' && Number.isFinite(item.order)
+            ? Math.max(maxOrder, item.order)
+            : maxOrder
+    ), -1) + 1;
+}
+
+function parseSearchPaginationValue(searchParams: URLSearchParams, name: string, fallback: number): number | { error: string } {
+    const raw = searchParams.get(name);
+    if (raw == null) return fallback;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed < 0 || (name.toLowerCase().includes('limit') && parsed <= 0)) {
+        return { error: `Invalid ${name}` };
+    }
+    const value = Math.floor(parsed);
+    return name.toLowerCase().includes('limit') ? Math.min(LIST_MAX_LIMIT, value) : value;
+}
+
+function finalizeCloudDataForWrite(data: AppData, nowIso: string): AppData | { error: Response } {
+    const repaired = repairMergedSyncReferences(data, nowIso);
+    const validated = validateAppData(repaired);
+    if (!validated.ok) {
+        return { error: errorResponse(validated.error, 400) };
+    }
+    return repaired;
+}
+
+function namespaceExists(dataDir: string, key: string): boolean {
+    return existsSync(join(dataDir, `${key}.json`)) || existsSync(join(dataDir, key));
+}
+
+function countTokenNamespaces(dataDir: string): number {
+    const namespaces = new Set<string>();
+    for (const entry of readdirSync(dataDir, { withFileTypes: true })) {
+        if (entry.isFile()) {
+            const match = entry.name.match(TOKEN_NAMESPACE_FILE_PATTERN);
+            if (match?.[1]) namespaces.add(match[1]);
+        } else if (entry.isDirectory() && TOKEN_NAMESPACE_DIR_PATTERN.test(entry.name)) {
+            namespaces.add(entry.name);
+        }
+    }
+    return namespaces.size;
+}
+
+function resolveServerMergeTimestamp(..._dataSets: AppData[]): string {
+    return new Date().toISOString();
+}
+
+function collectReferencedAttachmentCloudKeys(data: AppData): Set<string> {
+    const referenced = new Set<string>();
+    const collect = (attachments: Attachment[] | undefined, ownerDeleted?: string) => {
+        if (ownerDeleted) return;
+        for (const attachment of attachments ?? []) {
+            if (attachment.kind !== 'file' || attachment.deletedAt || !attachment.cloudKey) continue;
+            const normalized = normalizeAttachmentRelativePath(attachment.cloudKey);
+            if (normalized) referenced.add(normalized);
+        }
+    };
+    data.tasks.forEach((task) => collect(task.attachments, task.deletedAt));
+    data.projects.forEach((project) => collect(project.attachments, project.deletedAt));
+    return referenced;
+}
+
+function garbageCollectOrphanAttachments(dataDir: string, key: string, data: AppData): {
+    deleted: number;
+    errors: string[];
+    kept: number;
+    scanned: number;
+} {
+    const rootDir = join(dataDir, key, 'attachments');
+    if (!existsSync(rootDir)) return { deleted: 0, errors: [], kept: 0, scanned: 0 };
+    mkdirSync(rootDir, { recursive: true });
+    const rootStat = lstatSync(rootDir);
+    if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
+        return {
+            deleted: 0,
+            errors: ['attachment root is not a normal directory'],
+            kept: 0,
+            scanned: 0,
+        };
+    }
+    const rootRealPath = realpathSync(rootDir);
+    const referenced = collectReferencedAttachmentCloudKeys(data);
+    const errors: string[] = [];
+    let deleted = 0;
+    let kept = 0;
+    let scanned = 0;
+
+    const visit = (dirPath: string) => {
+        for (const dirent of readdirSync(dirPath, { withFileTypes: true })) {
+            const entryPath = join(dirPath, dirent.name);
+            let stat;
+            try {
+                stat = lstatSync(entryPath);
+            } catch (error) {
+                errors.push(`${relative(rootRealPath, entryPath)}: ${(error as Error).message}`);
+                continue;
+            }
+            if (stat.isDirectory()) {
+                visit(entryPath);
+                try {
+                    if (entryPath !== rootRealPath) rmdirSync(entryPath);
+                } catch {
+                    // Directory still has referenced files or concurrent writes.
+                }
+                continue;
+            }
+
+            scanned += 1;
+            const relativePath = normalizeAttachmentRelativePath(relative(rootRealPath, entryPath).replace(/\\/g, '/'));
+            if (!relativePath || referenced.has(relativePath)) {
+                kept += 1;
+                continue;
+            }
+            if (stat.mtimeMs > Date.now() - ORPHAN_ATTACHMENT_GC_GRACE_MS) {
+                kept += 1;
+                continue;
+            }
+            try {
+                unlinkSync(entryPath);
+                deleted += 1;
+            } catch (error) {
+                errors.push(`${relativePath}: ${(error as Error).message}`);
+            }
+        }
+    };
+
+    visit(rootRealPath);
+    return { deleted, errors, kept, scanned };
+}
+
 export const __cloudTestUtils = {
     parseArgs,
     getToken,
     tokenToKey,
     parseAllowedAuthTokens,
     parseBoolEnv,
+    parseTrustedProxyIps,
     resolveAllowedAuthTokensFromEnv,
     isAuthorizedToken,
     getClientIp,
     getAuthFailureRateKey,
+    getAuthFailureTokenRateKey,
     toRateLimitRoute,
     validateAppData,
     asStatus,
@@ -145,12 +382,16 @@ export const __cloudTestUtils = {
     validateTaskPatchProps,
     pickTaskList,
     readJsonBody,
+    resolveServerMergeTimestamp,
     writeData,
+    resolveAttachmentPath,
     normalizeAttachmentRelativePath,
     isPathWithinRoot,
     pathContainsSymlink,
     createWriteLockRunner,
     createInternalServerErrorResponse,
+    ...__serverDataCacheTestUtils,
+    getParsedDataCacheMaxEntries: __serverDataCacheTestUtils.getDataCacheMaxEntries,
 };
 
 type CloudServerOptions = {
@@ -165,6 +406,8 @@ type CloudServerOptions = {
     requestTimeoutMs?: number;
     allowedAuthTokens?: Set<string> | null;
     trustProxyHeaders?: boolean;
+    trustedProxyIps?: Set<string> | null;
+    maxAnyTokenNamespaces?: number;
 };
 
 type CloudServerHandle = {
@@ -179,27 +422,12 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
     const dataDir = String(options.dataDir ?? process.env.MINDWTR_CLOUD_DATA_DIR ?? join(process.cwd(), 'data'));
 
     const rateLimits = new Map<string, RateLimitState>();
-    const windowMs = Number(options.windowMs ?? process.env.MINDWTR_CLOUD_RATE_WINDOW_MS ?? 60_000);
-    const maxPerWindow = Number(options.maxPerWindow ?? process.env.MINDWTR_CLOUD_RATE_MAX ?? 120);
-    const maxAttachmentPerWindow = Number(
-        options.maxAttachmentPerWindow ?? process.env.MINDWTR_CLOUD_ATTACHMENT_RATE_MAX ?? maxPerWindow
-    );
-    const maxBodyBytes = Number(options.maxBodyBytes ?? process.env.MINDWTR_CLOUD_MAX_BODY_BYTES ?? 2_000_000);
-    const maxAttachmentBytes = Number(
-        options.maxAttachmentBytes ?? process.env.MINDWTR_CLOUD_MAX_ATTACHMENT_BYTES ?? 50_000_000
-    );
-    const allowedAuthTokens = options.allowedAuthTokens ?? resolveAllowedAuthTokensFromEnv(process.env);
-    const trustProxyHeaders = options.trustProxyHeaders ?? parseBoolEnv(process.env.MINDWTR_CLOUD_TRUST_PROXY_HEADERS);
-    const withWriteLock = createWriteLockRunner(dataDir);
-    const rateLimitCleanupMs = Number(process.env.MINDWTR_CLOUD_RATE_CLEANUP_MS || 60_000);
-    const requestTimeoutMs = Number(options.requestTimeoutMs ?? process.env.MINDWTR_CLOUD_REQUEST_TIMEOUT_MS ?? 30_000);
 
-    // Optional webhook to ai-service so it can react to task creates, manual
-    // edits, and deletes (implicit signals on Proposal entities + entry point
-    // for Enricher on manually-added cards). Fire-and-forget: errors are
-    // logged but never propagate to the caller. Skipped when the request
-    // itself came from ai-service (X-Mindwtr-Source: ai-service) to avoid
-    // feedback loops.
+    // ── Task-changes webhook (our fork addition) ───────────────────────
+    // Fire-and-forget POST to ai-service on user-originated task
+    // create/edit/delete so the Enricher pipeline picks up Mindwtr-side
+    // changes (FR80). Skipped when the inbound request itself came from
+    // ai-service (X-Mindwtr-Source: ai-service) to avoid feedback loops.
     const taskWebhookUrl = String(process.env.MINDWTR_TASK_WEBHOOK_URL || '').trim();
     const taskWebhookToken = String(process.env.MINDWTR_TASK_WEBHOOK_TOKEN || '').trim();
     const fireTaskWebhook = (
@@ -211,11 +439,35 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
         const body = JSON.stringify(kind === 'delete' ? { kind, taskId } : { kind, taskId, fields });
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (taskWebhookToken) headers.Authorization = `Bearer ${taskWebhookToken}`;
-        // Don't await — webhook is best-effort.
         fetch(taskWebhookUrl, { method: 'POST', headers, body }).catch((err) => {
             console.warn('[task-webhook] fire failed:', (err as Error).message);
         });
     };
+    const windowMs = Number(options.windowMs ?? process.env.MINDWTR_CLOUD_RATE_WINDOW_MS ?? 60_000);
+    const maxPerWindow = Number(options.maxPerWindow ?? process.env.MINDWTR_CLOUD_RATE_MAX ?? 120);
+    const maxAttachmentPerWindow = Number(
+        options.maxAttachmentPerWindow ?? process.env.MINDWTR_CLOUD_ATTACHMENT_RATE_MAX ?? maxPerWindow
+    );
+    const maxBodyBytes = Number(options.maxBodyBytes ?? process.env.MINDWTR_CLOUD_MAX_BODY_BYTES ?? 2_000_000);
+    const maxAttachmentBytes = Number(
+        options.maxAttachmentBytes ?? process.env.MINDWTR_CLOUD_MAX_ATTACHMENT_BYTES ?? 50_000_000
+    );
+    const allowedAuthTokens = options.allowedAuthTokens === undefined
+        ? resolveAllowedAuthTokensFromEnv(process.env)
+        : options.allowedAuthTokens;
+    const trustProxyHeaders = options.trustProxyHeaders ?? parseBoolEnv(process.env.MINDWTR_CLOUD_TRUST_PROXY_HEADERS);
+    const trustedProxyIps = options.trustedProxyIps ?? parseTrustedProxyIps(process.env.MINDWTR_CLOUD_TRUSTED_PROXY_IPS);
+    const rawMaxAnyTokenNamespaces = Number(
+        options.maxAnyTokenNamespaces
+        ?? process.env.MINDWTR_CLOUD_ANY_TOKEN_MAX_NAMESPACES
+        ?? ANY_TOKEN_NAMESPACE_LIMIT_DEFAULT
+    );
+    const maxAnyTokenNamespaces = Number.isFinite(rawMaxAnyTokenNamespaces) && rawMaxAnyTokenNamespaces >= 0
+        ? Math.floor(rawMaxAnyTokenNamespaces)
+        : ANY_TOKEN_NAMESPACE_LIMIT_DEFAULT;
+    const withWriteLock = createWriteLockRunner(dataDir);
+    const rateLimitCleanupMs = Number(process.env.MINDWTR_CLOUD_RATE_CLEANUP_MS || 60_000);
+    const requestTimeoutMs = Number(options.requestTimeoutMs ?? process.env.MINDWTR_CLOUD_REQUEST_TIMEOUT_MS ?? 30_000);
 
     const pruneExpiredRateLimits = (now: number) => {
         for (const [key, state] of rateLimits.entries()) {
@@ -273,6 +525,18 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
         return null;
     };
 
+    const ensureNamespaceWriteAllowed = (key: string): Response | null => {
+        if (allowedAuthTokens) return null;
+        if (namespaceExists(dataDir, key)) return null;
+        if (maxAnyTokenNamespaces <= 0) {
+            return errorResponse('Token namespace creation is disabled', 403);
+        }
+        if (countTokenNamespaces(dataDir) >= maxAnyTokenNamespaces) {
+            return errorResponse('Token namespace limit reached', 403);
+        }
+        return null;
+    };
+
     const unauthorizedResponse = (req: Request, token?: string | null): Response => {
         const requestIp = (() => {
             const bunServer = server as { requestIP?: (request: Request) => { address?: string | null } | null };
@@ -281,13 +545,21 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
         })();
         const authRateKey = getAuthFailureRateKey(req, {
             trustProxyHeaders,
+            trustedProxyIps,
             requestIpAddress: requestIp,
-            token,
-            authHeader: req.headers.get('authorization'),
         });
-        const authRateLimitResponse = checkRateLimit(authRateKey, AUTH_FAILURE_RATE_MAX);
-        if (authRateLimitResponse) {
-            return authRateLimitResponse;
+        const authRateLimitKeys = [
+            authRateKey,
+            getAuthFailureTokenRateKey({
+                token,
+                authHeader: req.headers.get('authorization'),
+            }),
+        ].filter((key): key is string => Boolean(key));
+        for (const key of authRateLimitKeys) {
+            const authRateLimitResponse = checkRateLimit(key, AUTH_FAILURE_RATE_MAX);
+            if (authRateLimitResponse) {
+                return authRateLimitResponse;
+            }
         }
         return errorResponse('Unauthorized', 401);
     };
@@ -315,22 +587,35 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
     } else {
         logInfo('token namespace mode enabled by explicit opt-in', {
             hint: 'set MINDWTR_CLOUD_AUTH_TOKENS to enforce a strict token allowlist',
+            maxNamespaces: String(maxAnyTokenNamespaces),
         });
     }
     if (trustProxyHeaders) {
-        logWarn('trusting proxy IP headers for auth failure rate limiting', {
-            hint: 'enable this only behind a trusted reverse proxy that overwrites forwarded IP headers',
-        });
+        if (trustedProxyIps.size > 0) {
+            logWarn('trusting proxy IP headers for auth failure rate limiting', {
+                trustedProxyIps: String(trustedProxyIps.size),
+                hint: 'only requests from MINDWTR_CLOUD_TRUSTED_PROXY_IPS can supply forwarded client IP headers',
+            });
+        } else {
+            logWarn('MINDWTR_CLOUD_TRUST_PROXY_HEADERS is enabled but no trusted proxy IPs are configured; forwarded IP headers will be ignored', {
+                hint: 'set MINDWTR_CLOUD_TRUSTED_PROXY_IPS to the exact reverse-proxy source IPs',
+            });
+        }
     }
     if (!ensureWritableDir(dataDir)) {
         throw new Error(`Cloud data directory is not writable: ${dataDir}`);
     }
     logInfo(`listening on http://${host}:${port}`);
 
-    const server = Bun.serve({
+    const bunRuntime = getBunRuntime();
+    if (!bunRuntime) {
+        throw new Error('Mindwtr Cloud requires the Bun runtime.');
+    }
+
+    const server = bunRuntime.serve({
         hostname: host,
         port,
-        async fetch(req) {
+        async fetch(req: Request) {
             const requestId = generateRequestId();
             const requestAbortController = new AbortController();
             const requestTimeout = setTimeout(() => {
@@ -338,7 +623,7 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
             }, requestTimeoutMs);
             try {
                 throwIfRequestAborted(requestAbortController.signal);
-                if (req.method === 'OPTIONS') return jsonResponse({ ok: true });
+                if (req.method === 'OPTIONS') return preflightResponse();
 
                 const url = new URL(req.url);
                 const pathname = url.pathname.replace(/\/+$/, '') || '/';
@@ -350,8 +635,13 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                 if (
                     pathname === '/v1/tasks'
                     || pathname === '/v1/projects'
+                    || pathname === '/v1/sections'
+                    || pathname === '/v1/areas'
                     || pathname === '/v1/search'
                     || pathname.startsWith('/v1/tasks/')
+                    || pathname.startsWith('/v1/projects/')
+                    || pathname.startsWith('/v1/sections/')
+                    || pathname.startsWith('/v1/areas/')
                 ) {
                     const token = getToken(req);
                     if (!token) return unauthorizedResponse(req);
@@ -362,6 +652,10 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                     const rateLimitResponse = checkRateLimit(rateKey, maxPerWindow);
                     if (rateLimitResponse) return rateLimitResponse;
                     const filePath = join(dataDir, `${key}.json`);
+                    if (req.method !== 'GET') {
+                        const namespaceResponse = ensureNamespaceWriteAllowed(key);
+                        if (namespaceResponse) return namespaceResponse;
+                    }
 
                     if (req.method === 'GET' && pathname === '/v1/tasks') {
                         const query = url.searchParams.get('query') || '';
@@ -459,7 +753,7 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
 
                             data.tasks.push(task);
                             throwIfRequestAborted(requestAbortController.signal);
-                            writeData(filePath, data);
+                            writeCloudData(filePath, data);
 
                             // Notify ai-service so manually-added cards (Mindwtr UI quick-add,
                             // sync from another device) flow through the Enricher pipeline.
@@ -505,7 +799,7 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                             data.tasks[idx] = updatedTask;
                             if (nextRecurringTask) data.tasks.push(nextRecurringTask);
                             throwIfRequestAborted(requestAbortController.signal);
-                            writeData(filePath, data);
+                            writeCloudData(filePath, data);
                             return jsonResponse({ task: updatedTask });
                         });
                     }
@@ -542,7 +836,6 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                                 return errorResponse('Invalid task status', 400);
                             }
 
-                            const requestSource = req.headers.get('x-mindwtr-source') || '';
                             return await withWriteLock(key, async () => {
                                 throwIfRequestAborted(requestAbortController.signal);
                                 const data = loadAppData(filePath);
@@ -564,7 +857,9 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                                 data.tasks[idx] = updatedTask;
                                 if (nextRecurringTask) data.tasks.push(nextRecurringTask);
                                 throwIfRequestAborted(requestAbortController.signal);
-                                writeData(filePath, data);
+                                writeCloudData(filePath, data);
+
+                                const requestSource = req.headers.get('x-mindwtr-source') || '';
                                 if (requestSource !== 'ai-service') {
                                     fireTaskWebhook('edit', taskId, {
                                         title: updatedTask.title,
@@ -579,7 +874,6 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                         }
 
                         if (req.method === 'DELETE') {
-                            const requestSource = req.headers.get('x-mindwtr-source') || '';
                             return await withWriteLock(key, async () => {
                                 throwIfRequestAborted(requestAbortController.signal);
                                 const data = loadAppData(filePath);
@@ -596,7 +890,9 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                                     revBy: CLOUD_API_REV_BY,
                                 };
                                 throwIfRequestAborted(requestAbortController.signal);
-                                writeData(filePath, data);
+                                writeCloudData(filePath, data);
+
+                                const requestSource = req.headers.get('x-mindwtr-source') || '';
                                 if (requestSource !== 'ai-service') {
                                     fireTaskWebhook('delete', taskId);
                                 }
@@ -610,7 +906,7 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                         const pagination = parsePagination(url.searchParams);
                         if ('error' in pagination) return errorResponse(pagination.error, 400);
                         const data = loadAppData(filePath);
-                        const projects = data.projects.filter((p: any) => !p.deletedAt);
+                        const projects = url.searchParams.get('deleted') === '1' ? data.projects : filterNotDeleted(data.projects);
                         const total = projects.length;
                         const pageProjects = projects.slice(pagination.offset, pagination.offset + pagination.limit);
                         return jsonResponse({
@@ -622,63 +918,422 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                     }
 
                     if (req.method === 'POST' && pathname === '/v1/projects') {
-                        // Used by ai-service applier when an Enricher split-proposal
-                        // gets approved: persist a real Project entity so the
-                        // sub-action tasks become navigable as children rather
-                        // than flat siblings with a "project" tag.
                         const body = await readJsonBody(req, maxBodyBytes, requestAbortController.signal);
                         if (isBodyReadError(body)) {
                             const err = body.__mindwtrError;
                             return errorResponse(String(err?.message || 'Payload too large'), Number(err?.status) || 413);
                         }
-                        if (!body || typeof body !== 'object') return errorResponse('Invalid JSON body');
+                        const bodyRecord = readObjectBody(body);
+                        if (!bodyRecord) return errorResponse('Invalid JSON body');
+                        const rawProps = isRecord(bodyRecord.props) ? bodyRecord.props : {};
+                        const validatedProps = validateProjectCreationProps(rawProps);
+                        if (!validatedProps.ok) return errorResponse(validatedProps.error, 400);
+                        const title = typeof bodyRecord.title === 'string' ? bodyRecord.title.trim() : '';
+                        if (!title) return errorResponse('Missing project title');
+                        if (title.length > MAX_TASK_TITLE_LENGTH) return errorResponse(`Project title too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
+                        const props = validatedProps.props as Record<string, unknown>;
+                        if (props.areaId !== undefined && typeof props.areaId !== 'string') return errorResponse('Invalid area id', 400);
 
                         return await withWriteLock(key, async () => {
                             throwIfRequestAborted(requestAbortController.signal);
                             const data = loadAppData(filePath);
                             const nowIso = new Date().toISOString();
-
-                            const rawTitle = typeof (body as any).title === 'string' ? String((body as any).title) : '';
-                            const title = rawTitle.trim();
-                            if (!title) return errorResponse('Missing project title');
-                            if (title.length > MAX_TASK_TITLE_LENGTH) {
-                                return errorResponse(`Project title too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
+                            const areaId = typeof props.areaId === 'string' ? props.areaId.trim() : '';
+                            if (areaId && !data.areas.some((area) => area.id === areaId && !area.deletedAt)) {
+                                return errorResponse('Area not found', 404);
                             }
-
-                            const props = typeof (body as any).props === 'object' && (body as any).props
-                                ? (body as any).props
-                                : {};
-                            const status = ['active', 'someday', 'waiting', 'archived'].includes(props.status)
-                                ? props.status
-                                : 'active';
-                            const color = typeof props.color === 'string' ? props.color : '#7c3aed';
-                            const order = typeof props.order === 'number' ? props.order : data.projects.length;
-                            const tagIds = Array.isArray(props.tagIds) ? props.tagIds : [];
-                            const areaId = typeof props.areaId === 'string' ? props.areaId : undefined;
-                            const supportNotes = typeof props.supportNotes === 'string' ? props.supportNotes : undefined;
-                            const dueDate = typeof props.dueDate === 'string' ? props.dueDate : undefined;
-                            const isSequential = typeof props.isSequential === 'boolean' ? props.isSequential : undefined;
-
-                            const project: any = {
+                            const rawStatus = props.status;
+                            const status = rawStatus === undefined ? 'active' : asProjectStatus(rawStatus);
+                            if (!status) return errorResponse('Invalid project status', 400);
+                            const rawOrder = props.order;
+                            const rawTagIds = props.tagIds;
+                            const {
+                                status: _status,
+                                color: rawColor,
+                                order: _order,
+                                tagIds: _tagIds,
+                                areaId: _areaId,
+                                ...restProps
+                            } = props;
+                            const project: Project = {
                                 id: generateUUID(),
                                 title,
+                                ...restProps,
+                                areaId: areaId || undefined,
                                 status,
-                                color,
-                                order,
-                                tagIds,
+                                color: typeof rawColor === 'string' && rawColor.trim() ? rawColor : '#6B7280',
+                                order: typeof rawOrder === 'number' && Number.isFinite(rawOrder) ? rawOrder : nextOrder(data.projects),
+                                tagIds: Array.isArray(rawTagIds) ? rawTagIds.filter((item): item is string => typeof item === 'string') : [],
                                 createdAt: nowIso,
                                 updatedAt: nowIso,
+                                rev: 1,
+                                revBy: CLOUD_API_REV_BY,
                             };
-                            if (areaId !== undefined) project.areaId = areaId;
-                            if (supportNotes !== undefined) project.supportNotes = supportNotes;
-                            if (dueDate !== undefined) project.dueDate = dueDate;
-                            if (isSequential !== undefined) project.isSequential = isSequential;
-
                             data.projects.push(project);
+                            const finalized = finalizeCloudDataForWrite(data, nowIso);
+                            if ('error' in finalized) return finalized.error;
                             throwIfRequestAborted(requestAbortController.signal);
-                            writeData(filePath, data);
+                            writeCloudData(filePath, finalized);
                             return jsonResponse({ project }, { status: 201 });
                         });
+                    }
+
+                    const projectMatch = pathname.match(/^\/v1\/projects\/([^/]+)$/);
+                    if (projectMatch) {
+                        const projectId = parseEntityRouteId(projectMatch[1]);
+                        if (!projectId) return errorResponse('Invalid project id', 400);
+
+                        if (req.method === 'GET') {
+                            const data = loadAppData(filePath);
+                            const project = data.projects.find((item) => item.id === projectId && !item.deletedAt);
+                            if (!project) return errorResponse('Project not found', 404);
+                            return jsonResponse({ project });
+                        }
+
+                        if (req.method === 'PATCH') {
+                            const body = await readJsonBody(req, maxBodyBytes, requestAbortController.signal);
+                            if (isBodyReadError(body)) {
+                                const err = body.__mindwtrError;
+                                return errorResponse(String(err?.message || 'Payload too large'), Number(err?.status) || 413);
+                            }
+                            if (!readObjectBody(body)) return errorResponse('Invalid JSON body');
+                            const validatedPatch = validateProjectPatchProps(body);
+                            if (!validatedPatch.ok) return errorResponse(validatedPatch.error, 400);
+                            const updates = validatedPatch.props;
+                            if (typeof updates.title === 'string' && !updates.title.trim()) return errorResponse('Missing project title');
+                            if (typeof updates.title === 'string' && updates.title.length > MAX_TASK_TITLE_LENGTH) {
+                                return errorResponse(`Project title too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
+                            }
+                            if (updates.status !== undefined && !asProjectStatus(updates.status)) return errorResponse('Invalid project status', 400);
+                            if (updates.areaId !== undefined && updates.areaId !== null && typeof updates.areaId !== 'string') return errorResponse('Invalid area id', 400);
+                            if (typeof updates.areaId === 'string' && updates.areaId.trim() === '') return errorResponse('Invalid area id', 400);
+
+                            return await withWriteLock(key, async () => {
+                                throwIfRequestAborted(requestAbortController.signal);
+                                const data = loadAppData(filePath);
+                                const idx = data.projects.findIndex((item) => item.id === projectId && !item.deletedAt);
+                                if (idx < 0) return errorResponse('Project not found', 404);
+                                const areaId = updates.areaId === null
+                                    ? null
+                                    : typeof updates.areaId === 'string'
+                                        ? updates.areaId.trim()
+                                        : undefined;
+                                if (areaId && !data.areas.some((area) => area.id === areaId && !area.deletedAt)) {
+                                    return errorResponse('Area not found', 404);
+                                }
+                                const nowIso = new Date().toISOString();
+                                const existing = data.projects[idx];
+                                data.projects[idx] = {
+                                    ...existing,
+                                    ...updates,
+                                    title: typeof updates.title === 'string' ? updates.title.trim() : existing.title,
+                                    areaId: areaId !== undefined ? areaId ?? undefined : existing.areaId,
+                                    updatedAt: nowIso,
+                                    rev: normalizeRevision(existing.rev) + 1,
+                                    revBy: CLOUD_API_REV_BY,
+                                };
+                                const finalized = finalizeCloudDataForWrite(data, nowIso);
+                                if ('error' in finalized) return finalized.error;
+                                writeCloudData(filePath, finalized);
+                                const project = finalized.projects.find((item) => item.id === projectId);
+                                return jsonResponse({ project });
+                            });
+                        }
+
+                        if (req.method === 'DELETE') {
+                            return await withWriteLock(key, async () => {
+                                throwIfRequestAborted(requestAbortController.signal);
+                                const data = loadAppData(filePath);
+                                const idx = data.projects.findIndex((item) => item.id === projectId && !item.deletedAt);
+                                if (idx < 0) return errorResponse('Project not found', 404);
+                                const nowIso = new Date().toISOString();
+                                const existing = data.projects[idx];
+                                data.projects[idx] = {
+                                    ...existing,
+                                    deletedAt: nowIso,
+                                    updatedAt: nowIso,
+                                    rev: normalizeRevision(existing.rev) + 1,
+                                    revBy: CLOUD_API_REV_BY,
+                                };
+                                const finalized = finalizeCloudDataForWrite(data, nowIso);
+                                if ('error' in finalized) return finalized.error;
+                                writeCloudData(filePath, finalized);
+                                return jsonResponse({ ok: true });
+                            });
+                        }
+                    }
+
+                    if (req.method === 'GET' && pathname === '/v1/sections') {
+                        throwIfRequestAborted(requestAbortController.signal);
+                        const pagination = parsePagination(url.searchParams);
+                        if ('error' in pagination) return errorResponse(pagination.error, 400);
+                        const data = loadAppData(filePath);
+                        let sections = url.searchParams.get('deleted') === '1' ? data.sections : filterNotDeleted(data.sections);
+                        const projectId = url.searchParams.get('projectId');
+                        if (projectId) sections = sections.filter((section) => section.projectId === projectId);
+                        const total = sections.length;
+                        return jsonResponse({
+                            sections: sections.slice(pagination.offset, pagination.offset + pagination.limit),
+                            total,
+                            limit: pagination.limit,
+                            offset: pagination.offset,
+                        });
+                    }
+
+                    if (req.method === 'POST' && pathname === '/v1/sections') {
+                        const body = await readJsonBody(req, maxBodyBytes, requestAbortController.signal);
+                        if (isBodyReadError(body)) {
+                            const err = body.__mindwtrError;
+                            return errorResponse(String(err?.message || 'Payload too large'), Number(err?.status) || 413);
+                        }
+                        const bodyRecord = readObjectBody(body);
+                        if (!bodyRecord) return errorResponse('Invalid JSON body');
+                        const rawProps = isRecord(bodyRecord.props) ? bodyRecord.props : {};
+                        const validatedProps = validateSectionCreationProps(rawProps);
+                        if (!validatedProps.ok) return errorResponse(validatedProps.error, 400);
+                        const title = typeof bodyRecord.title === 'string' ? bodyRecord.title.trim() : '';
+                        const projectId = typeof bodyRecord.projectId === 'string' ? bodyRecord.projectId.trim() : '';
+                        if (!title) return errorResponse('Missing section title');
+                        if (title.length > MAX_TASK_TITLE_LENGTH) return errorResponse(`Section title too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
+                        if (!projectId) return errorResponse('Missing project id');
+
+                        return await withWriteLock(key, async () => {
+                            throwIfRequestAborted(requestAbortController.signal);
+                            const data = loadAppData(filePath);
+                            if (!data.projects.some((project) => project.id === projectId && !project.deletedAt)) {
+                                return errorResponse('Project not found', 404);
+                            }
+                            const nowIso = new Date().toISOString();
+                            const props = validatedProps.props as Record<string, unknown>;
+                            const rawOrder = props.order;
+                            const { order: _order, ...restProps } = props;
+                            const section: Section = {
+                                id: generateUUID(),
+                                projectId,
+                                title,
+                                ...restProps,
+                                order: typeof rawOrder === 'number' && Number.isFinite(rawOrder)
+                                    ? rawOrder
+                                    : nextOrder(data.sections.filter((item) => item.projectId === projectId)),
+                                createdAt: nowIso,
+                                updatedAt: nowIso,
+                                rev: 1,
+                                revBy: CLOUD_API_REV_BY,
+                            };
+                            data.sections.push(section);
+                            const finalized = finalizeCloudDataForWrite(data, nowIso);
+                            if ('error' in finalized) return finalized.error;
+                            writeCloudData(filePath, finalized);
+                            return jsonResponse({ section }, { status: 201 });
+                        });
+                    }
+
+                    const sectionMatch = pathname.match(/^\/v1\/sections\/([^/]+)$/);
+                    if (sectionMatch) {
+                        const sectionId = parseEntityRouteId(sectionMatch[1]);
+                        if (!sectionId) return errorResponse('Invalid section id', 400);
+
+                        if (req.method === 'GET') {
+                            const data = loadAppData(filePath);
+                            const section = data.sections.find((item) => item.id === sectionId && !item.deletedAt);
+                            if (!section) return errorResponse('Section not found', 404);
+                            return jsonResponse({ section });
+                        }
+
+                        if (req.method === 'PATCH') {
+                            const body = await readJsonBody(req, maxBodyBytes, requestAbortController.signal);
+                            if (isBodyReadError(body)) {
+                                const err = body.__mindwtrError;
+                                return errorResponse(String(err?.message || 'Payload too large'), Number(err?.status) || 413);
+                            }
+                            if (!readObjectBody(body)) return errorResponse('Invalid JSON body');
+                            const validatedPatch = validateSectionPatchProps(body);
+                            if (!validatedPatch.ok) return errorResponse(validatedPatch.error, 400);
+                            const updates = validatedPatch.props;
+                            if (typeof updates.title === 'string' && !updates.title.trim()) return errorResponse('Missing section title');
+                            if (typeof updates.title === 'string' && updates.title.length > MAX_TASK_TITLE_LENGTH) {
+                                return errorResponse(`Section title too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
+                            }
+                            if (updates.projectId !== undefined && typeof updates.projectId !== 'string') return errorResponse('Invalid project id', 400);
+
+                            return await withWriteLock(key, async () => {
+                                throwIfRequestAborted(requestAbortController.signal);
+                                const data = loadAppData(filePath);
+                                const idx = data.sections.findIndex((item) => item.id === sectionId && !item.deletedAt);
+                                if (idx < 0) return errorResponse('Section not found', 404);
+                                const projectId = typeof updates.projectId === 'string' ? updates.projectId.trim() : data.sections[idx].projectId;
+                                if (!projectId) return errorResponse('Missing project id');
+                                if (!data.projects.some((project) => project.id === projectId && !project.deletedAt)) {
+                                    return errorResponse('Project not found', 404);
+                                }
+                                const nowIso = new Date().toISOString();
+                                const existing = data.sections[idx];
+                                data.sections[idx] = {
+                                    ...existing,
+                                    ...updates,
+                                    projectId,
+                                    title: typeof updates.title === 'string' ? updates.title.trim() : existing.title,
+                                    updatedAt: nowIso,
+                                    rev: normalizeRevision(existing.rev) + 1,
+                                    revBy: CLOUD_API_REV_BY,
+                                };
+                                const finalized = finalizeCloudDataForWrite(data, nowIso);
+                                if ('error' in finalized) return finalized.error;
+                                writeCloudData(filePath, finalized);
+                                const section = finalized.sections.find((item) => item.id === sectionId);
+                                return jsonResponse({ section });
+                            });
+                        }
+
+                        if (req.method === 'DELETE') {
+                            return await withWriteLock(key, async () => {
+                                throwIfRequestAborted(requestAbortController.signal);
+                                const data = loadAppData(filePath);
+                                const idx = data.sections.findIndex((item) => item.id === sectionId && !item.deletedAt);
+                                if (idx < 0) return errorResponse('Section not found', 404);
+                                const nowIso = new Date().toISOString();
+                                const existing = data.sections[idx];
+                                data.sections[idx] = {
+                                    ...existing,
+                                    deletedAt: nowIso,
+                                    updatedAt: nowIso,
+                                    rev: normalizeRevision(existing.rev) + 1,
+                                    revBy: CLOUD_API_REV_BY,
+                                };
+                                const finalized = finalizeCloudDataForWrite(data, nowIso);
+                                if ('error' in finalized) return finalized.error;
+                                writeCloudData(filePath, finalized);
+                                return jsonResponse({ ok: true });
+                            });
+                        }
+                    }
+
+                    if (req.method === 'GET' && pathname === '/v1/areas') {
+                        throwIfRequestAborted(requestAbortController.signal);
+                        const pagination = parsePagination(url.searchParams);
+                        if ('error' in pagination) return errorResponse(pagination.error, 400);
+                        const data = loadAppData(filePath);
+                        const areas = url.searchParams.get('deleted') === '1' ? data.areas : filterNotDeleted(data.areas);
+                        const total = areas.length;
+                        return jsonResponse({
+                            areas: areas.slice(pagination.offset, pagination.offset + pagination.limit),
+                            total,
+                            limit: pagination.limit,
+                            offset: pagination.offset,
+                        });
+                    }
+
+                    if (req.method === 'POST' && pathname === '/v1/areas') {
+                        const body = await readJsonBody(req, maxBodyBytes, requestAbortController.signal);
+                        if (isBodyReadError(body)) {
+                            const err = body.__mindwtrError;
+                            return errorResponse(String(err?.message || 'Payload too large'), Number(err?.status) || 413);
+                        }
+                        const bodyRecord = readObjectBody(body);
+                        if (!bodyRecord) return errorResponse('Invalid JSON body');
+                        const rawProps = isRecord(bodyRecord.props) ? bodyRecord.props : {};
+                        const validatedProps = validateAreaCreationProps(rawProps);
+                        if (!validatedProps.ok) return errorResponse(validatedProps.error, 400);
+                        const name = typeof bodyRecord.name === 'string' ? bodyRecord.name.trim() : '';
+                        if (!name) return errorResponse('Missing area name');
+                        if (name.length > MAX_TASK_TITLE_LENGTH) return errorResponse(`Area name too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
+
+                        return await withWriteLock(key, async () => {
+                            throwIfRequestAborted(requestAbortController.signal);
+                            const data = loadAppData(filePath);
+                            const nowIso = new Date().toISOString();
+                            const props = validatedProps.props as Record<string, unknown>;
+                            const rawOrder = props.order;
+                            const { order: _order, ...restProps } = props;
+                            const area: Area = {
+                                id: generateUUID(),
+                                name,
+                                ...restProps,
+                                order: typeof rawOrder === 'number' && Number.isFinite(rawOrder) ? rawOrder : nextOrder(data.areas),
+                                createdAt: nowIso,
+                                updatedAt: nowIso,
+                                rev: 1,
+                                revBy: CLOUD_API_REV_BY,
+                            };
+                            data.areas.push(area);
+                            const finalized = finalizeCloudDataForWrite(data, nowIso);
+                            if ('error' in finalized) return finalized.error;
+                            writeCloudData(filePath, finalized);
+                            return jsonResponse({ area }, { status: 201 });
+                        });
+                    }
+
+                    const areaMatch = pathname.match(/^\/v1\/areas\/([^/]+)$/);
+                    if (areaMatch) {
+                        const areaId = parseEntityRouteId(areaMatch[1]);
+                        if (!areaId) return errorResponse('Invalid area id', 400);
+
+                        if (req.method === 'GET') {
+                            const data = loadAppData(filePath);
+                            const area = data.areas.find((item) => item.id === areaId && !item.deletedAt);
+                            if (!area) return errorResponse('Area not found', 404);
+                            return jsonResponse({ area });
+                        }
+
+                        if (req.method === 'PATCH') {
+                            const body = await readJsonBody(req, maxBodyBytes, requestAbortController.signal);
+                            if (isBodyReadError(body)) {
+                                const err = body.__mindwtrError;
+                                return errorResponse(String(err?.message || 'Payload too large'), Number(err?.status) || 413);
+                            }
+                            if (!readObjectBody(body)) return errorResponse('Invalid JSON body');
+                            const validatedPatch = validateAreaPatchProps(body);
+                            if (!validatedPatch.ok) return errorResponse(validatedPatch.error, 400);
+                            const updates = validatedPatch.props;
+                            if (typeof updates.name === 'string' && !updates.name.trim()) return errorResponse('Missing area name');
+                            if (typeof updates.name === 'string' && updates.name.length > MAX_TASK_TITLE_LENGTH) {
+                                return errorResponse(`Area name too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
+                            }
+
+                            return await withWriteLock(key, async () => {
+                                throwIfRequestAborted(requestAbortController.signal);
+                                const data = loadAppData(filePath);
+                                const idx = data.areas.findIndex((item) => item.id === areaId && !item.deletedAt);
+                                if (idx < 0) return errorResponse('Area not found', 404);
+                                const nowIso = new Date().toISOString();
+                                const existing = data.areas[idx];
+                                data.areas[idx] = {
+                                    ...existing,
+                                    ...updates,
+                                    name: typeof updates.name === 'string' ? updates.name.trim() : existing.name,
+                                    updatedAt: nowIso,
+                                    rev: normalizeRevision(existing.rev) + 1,
+                                    revBy: CLOUD_API_REV_BY,
+                                };
+                                const finalized = finalizeCloudDataForWrite(data, nowIso);
+                                if ('error' in finalized) return finalized.error;
+                                writeCloudData(filePath, finalized);
+                                const area = finalized.areas.find((item) => item.id === areaId);
+                                return jsonResponse({ area });
+                            });
+                        }
+
+                        if (req.method === 'DELETE') {
+                            return await withWriteLock(key, async () => {
+                                throwIfRequestAborted(requestAbortController.signal);
+                                const data = loadAppData(filePath);
+                                const idx = data.areas.findIndex((item) => item.id === areaId && !item.deletedAt);
+                                if (idx < 0) return errorResponse('Area not found', 404);
+                                const nowIso = new Date().toISOString();
+                                const existing = data.areas[idx];
+                                data.areas[idx] = {
+                                    ...existing,
+                                    deletedAt: nowIso,
+                                    updatedAt: nowIso,
+                                    rev: normalizeRevision(existing.rev) + 1,
+                                    revBy: CLOUD_API_REV_BY,
+                                };
+                                const finalized = finalizeCloudDataForWrite(data, nowIso);
+                                if ('error' in finalized) return finalized.error;
+                                writeCloudData(filePath, finalized);
+                                return jsonResponse({ ok: true });
+                            });
+                        }
                     }
 
                     if (req.method === 'GET' && pathname === '/v1/search') {
@@ -686,23 +1341,41 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                         const query = url.searchParams.get('query') || '';
                         const pagination = parsePagination(url.searchParams);
                         if ('error' in pagination) return errorResponse(pagination.error, 400);
+                        const taskOffset = parseSearchPaginationValue(url.searchParams, 'taskOffset', pagination.offset);
+                        if (typeof taskOffset !== 'number') return errorResponse(taskOffset.error, 400);
+                        const projectOffset = parseSearchPaginationValue(url.searchParams, 'projectOffset', pagination.offset);
+                        if (typeof projectOffset !== 'number') return errorResponse(projectOffset.error, 400);
+                        const taskLimit = parseSearchPaginationValue(url.searchParams, 'taskLimit', pagination.limit);
+                        if (typeof taskLimit !== 'number') return errorResponse(taskLimit.error, 400);
+                        const projectLimit = parseSearchPaginationValue(url.searchParams, 'projectLimit', pagination.limit);
+                        if (typeof projectLimit !== 'number') return errorResponse(projectLimit.error, 400);
                         const data = loadAppData(filePath);
-                        const tasks = data.tasks.filter((t) => !t.deletedAt);
-                        const projects = data.projects.filter((p: any) => !p.deletedAt);
+                        const tasks = filterNotDeleted(data.tasks);
+                        const projects = filterNotDeleted(data.projects);
                         const results = searchAll(tasks, projects, query);
                         const taskTotal = results.tasks.length;
                         const projectTotal = results.projects.length;
                         return jsonResponse({
-                            tasks: results.tasks.slice(pagination.offset, pagination.offset + pagination.limit),
-                            projects: results.projects.slice(pagination.offset, pagination.offset + pagination.limit),
+                            tasks: results.tasks.slice(taskOffset, taskOffset + taskLimit),
+                            projects: results.projects.slice(projectOffset, projectOffset + projectLimit),
                             taskTotal,
                             projectTotal,
                             limit: pagination.limit,
                             offset: pagination.offset,
+                            taskLimit,
+                            taskOffset,
+                            projectLimit,
+                            projectOffset,
                         });
                     }
 
-                    if (pathname.startsWith('/v1/tasks') || pathname === '/v1/projects' || pathname === '/v1/search') {
+                    if (
+                        pathname.startsWith('/v1/tasks')
+                        || pathname.startsWith('/v1/projects')
+                        || pathname.startsWith('/v1/sections')
+                        || pathname.startsWith('/v1/areas')
+                        || pathname === '/v1/search'
+                    ) {
                         return errorResponse('Method not allowed', 405);
                     }
                 }
@@ -717,27 +1390,50 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                     if (dataRateLimitResponse) return dataRateLimitResponse;
                     const filePath = join(dataDir, `${key}.json`);
 
+                    if (req.method === 'HEAD') {
+                        return await withWriteLock(key, async () => {
+                            throwIfRequestAborted(requestAbortController.signal);
+                            if (!existsSync(filePath)) return emptyCorsResponse(404);
+                            return dataMetadataResponse(filePath);
+                        });
+                    }
+
                     if (req.method === 'GET') {
                         return await withWriteLock(key, async () => {
                             throwIfRequestAborted(requestAbortController.signal);
                             if (!existsSync(filePath)) {
+                                const namespaceResponse = ensureNamespaceWriteAllowed(key);
+                                if (namespaceResponse) return namespaceResponse;
                                 const emptyData: AppData = { tasks: [], projects: [], sections: [], areas: [], settings: {} };
                                 throwIfRequestAborted(requestAbortController.signal);
-                                if (!existsSync(filePath)) writeData(filePath, emptyData);
+                                if (!existsSync(filePath)) writeCloudData(filePath, emptyData);
                                 return jsonResponse(emptyData);
                             }
-                            const data = readData(filePath);
-                            if (!data) return errorResponse('Failed to read data', 500);
-                            const validated = validateAppData(data);
-                            if (!validated.ok) {
-                                logWarn('Stored cloud data failed validation', { key, error: validated.error });
-                                return errorResponse('Stored data failed validation', 500);
+                            let rawData: Uint8Array;
+                            try {
+                                rawData = readFileSync(filePath);
+                            } catch {
+                                return errorResponse('Failed to read data', 500);
                             }
-                            return jsonResponse(validated.data);
+                            if (isTrustedValidatedDataFile(filePath)) {
+                                return jsonFileResponse(rawData);
+                            }
+                            let data: unknown;
+                            try {
+                                const rawText = new TextDecoder('utf-8', { fatal: true }).decode(rawData);
+                                data = JSON.parse(rawText);
+                            } catch {
+                                return errorResponse('Failed to read data', 500);
+                            }
+                            const validated = validateStoredAppData(filePath, key, data);
+                            if ('error' in validated) return validated.error;
+                            return jsonFileResponse(rawData);
                         });
                     }
 
                     if (req.method === 'PUT') {
+                        const namespaceResponse = ensureNamespaceWriteAllowed(key);
+                        if (namespaceResponse) return namespaceResponse;
                         const body = await readJsonBody(req, maxBodyBytes, requestAbortController.signal);
                         if (isBodyReadError(body)) {
                             const err = body.__mindwtrError;
@@ -747,32 +1443,29 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                         if (typeof body !== 'object') return errorResponse('Invalid JSON body');
                         const validated = validateAppData(body);
                         if (!validated.ok) return errorResponse(validated.error, 400);
-                        const requestSource = req.headers.get('x-mindwtr-source') || '';
                         return await withWriteLock(key, async () => {
                             throwIfRequestAborted(requestAbortController.signal);
-                            const existingData = loadAppData(filePath);
-                            const incomingData = validated.data as AppData;
-                            const mergedData = mergeAppData(existingData, incomingData);
-                            const validatedMerged = validateAppData(mergedData);
-                            if (!validatedMerged.ok) {
-                                logWarn('Merged cloud data failed validation', { key, error: validatedMerged.error });
-                                return errorResponse('Merged data failed validation', 500);
-                            }
+                            const existingDataResult = loadExistingDataForMerge(filePath, key);
+                            if ('error' in existingDataResult) return existingDataResult.error;
+                            const existingData = existingDataResult;
+                            const incomingData = validated.data;
+                            const mergeResult = mergeAppDataWithStats(existingData, incomingData, {
+                                nowIso: resolveServerMergeTimestamp(existingData, incomingData),
+                            });
                             throwIfRequestAborted(requestAbortController.signal);
-                            writeData(filePath, validatedMerged.data);
+                            writeCloudData(filePath, mergeResult.data);
 
-                            // Fire task-changes 'create' webhook for tasks that appear in the
-                            // merged snapshot but were absent (or tombstoned) in the prior
-                            // server state — that's how desktop UI's manual-add reaches the
-                            // Enricher (FR80). POST /v1/tasks handles the same for per-task
-                            // creators (mobile, API). Source guard prevents ai-service from
-                            // re-triggering itself.
+                            // Fire 'create' webhook for tasks that appear in the merged
+                            // snapshot but weren't there before. That's how desktop UI's
+                            // manual-add (Mindwtr quick-add) reaches the Enricher (FR80).
+                            // Source guard prevents ai-service from re-triggering itself.
+                            const requestSource = req.headers.get('x-mindwtr-source') || '';
                             if (requestSource !== 'ai-service' && taskWebhookUrl) {
                                 const priorTaskIds = new Set<string>();
                                 for (const t of existingData.tasks ?? []) {
                                     if (t && typeof t.id === 'string') priorTaskIds.add(t.id);
                                 }
-                                for (const task of validatedMerged.data.tasks ?? []) {
+                                for (const task of mergeResult.data.tasks ?? []) {
                                     if (!task || typeof task.id !== 'string') continue;
                                     if (task.deletedAt) continue;
                                     if (priorTaskIds.has(task.id)) continue;
@@ -786,9 +1479,39 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                                 }
                             }
 
-                            return jsonResponse({ ok: true });
+                            return jsonResponse({
+                                ok: true,
+                                stats: mergeResult.stats,
+                                clockSkewWarning: mergeResult.clockSkewWarning ?? null,
+                            });
                         });
                     }
+                }
+
+                if (pathname === '/v1/attachments/orphans') {
+                    const token = getToken(req);
+                    if (!token) return unauthorizedResponse(req);
+                    if (!isAuthorizedToken(token, allowedAuthTokens)) return unauthorizedResponse(req, token);
+                    const key = tokenToKey(token);
+                    const attachmentRateKey = `${key}:${req.method}:${toRateLimitRoute(pathname)}`;
+                    const attachmentRateLimitResponse = checkRateLimit(attachmentRateKey, maxAttachmentPerWindow);
+                    if (attachmentRateLimitResponse) return attachmentRateLimitResponse;
+                    if (req.method !== 'POST' && req.method !== 'DELETE') {
+                        return errorResponse('Method not allowed', 405);
+                    }
+
+                    return await withWriteLock(key, async () => {
+                        throwIfRequestAborted(requestAbortController.signal);
+                        const filePath = join(dataDir, `${key}.json`);
+                        const data = loadAppData(filePath);
+                        const validated = validateAppData(data);
+                        if (!validated.ok) {
+                            logWarn('Stored cloud data failed validation before attachment GC', { key, error: validated.error });
+                            return errorResponse('Stored data failed validation', 500);
+                        }
+                        const result = garbageCollectOrphanAttachments(dataDir, key, data);
+                        return jsonResponse({ ok: result.errors.length === 0, ...result });
+                    });
                 }
 
                 if (pathname.startsWith('/v1/attachments/')) {
@@ -824,12 +1547,15 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                     }
 
                     if (req.method === 'PUT') {
+                        const namespaceResponse = ensureNamespaceWriteAllowed(key);
+                        if (namespaceResponse) return namespaceResponse;
                         const contentType = normalizeAttachmentContentType(req.headers.get('content-type'));
                         if (contentType) {
                             const validation = await validateAttachmentForUpload({
                                 id: 'attachment-upload',
                                 kind: 'file',
                                 title: pathname,
+                                uri: '',
                                 createdAt: '1970-01-01T00:00:00.000Z',
                                 updatedAt: '1970-01-01T00:00:00.000Z',
                                 mimeType: contentType,
@@ -894,21 +1620,42 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
         },
     });
 
+    let stopped = false;
+    const stopServer = async () => {
+        if (stopped) return;
+        stopped = true;
+        clearInterval(cleanupTimer);
+        try {
+            await Promise.resolve((server as { stop?: (closeIdleConnections?: boolean) => void | Promise<void> }).stop?.(true));
+        } catch {
+            // Ignore stop errors during teardown.
+        }
+    };
+    const signalHandlers: Array<[NodeJS.Signals, () => void]> = [];
+    if (IS_MAIN_MODULE) {
+        const handleSignal = (signal: NodeJS.Signals) => {
+            logInfo(`received ${signal}, shutting down`);
+            void stopServer().finally(() => process.exit(0));
+        };
+        for (const signal of ['SIGINT', 'SIGTERM'] as NodeJS.Signals[]) {
+            const handler = () => handleSignal(signal);
+            signalHandlers.push([signal, handler]);
+            process.once(signal, handler);
+        }
+    }
+
     return {
         port: server.port,
         stop: () => {
-            clearInterval(cleanupTimer);
-            try {
-                (server as { stop?: (closeIdleConnections?: boolean) => void }).stop?.(true);
-            } catch {
-                // Ignore stop errors during teardown.
+            for (const [signal, handler] of signalHandlers) {
+                process.off(signal, handler);
             }
+            void stopServer();
         },
     };
 }
 
-const isMainModule = typeof Bun !== 'undefined' && (import.meta as ImportMeta & { main?: boolean }).main === true;
-if (isMainModule) {
+if (IS_MAIN_MODULE) {
     startCloudServer().catch((err) => {
         logError('Failed to start server', err);
         process.exit(1);

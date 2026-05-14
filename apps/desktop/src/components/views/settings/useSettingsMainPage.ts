@@ -4,11 +4,18 @@ import {
     flushPendingSave,
     normalizeDateFormatSetting,
     normalizeTimeFormatSetting,
+    type AppearanceSettings,
     type AppData,
+    type NotificationSettings,
+    type WindowSettings,
 } from '@mindwtr/core';
 
 import type { Language } from '../../../contexts/language-context';
 import type { GlobalQuickAddShortcutSetting } from '../../../lib/global-quick-add-shortcut';
+import {
+    getLaunchAtStartupEnabled,
+    setLaunchAtStartupEnabled as setSystemLaunchAtStartupEnabled,
+} from '../../../lib/launch-at-startup';
 import { reportError } from '../../../lib/report-error';
 import {
     THEME_STORAGE_KEY,
@@ -54,19 +61,27 @@ export function useSettingsMainPage({
     showSaved,
     updateSettings,
 }: UseSettingsMainPageOptions): MainPageProps {
+    const appearanceSettings: AppearanceSettings | undefined = settings?.appearance;
+    const notificationSettings: NotificationSettings = settings ?? {};
+    const windowSettings: WindowSettings | undefined = settings?.window;
     const [themeMode, setThemeMode] = useState<DesktopThemeMode>('system');
+    const [launchAtStartupEnabled, setLaunchAtStartupEnabledState] = useState(
+        windowSettings?.launchAtStartup === true,
+    );
+    const [launchAtStartupLoading, setLaunchAtStartupLoading] = useState(false);
 
     const densityMode = (
-        settings?.appearance?.density === 'compact' ? 'compact' : 'comfortable'
+        appearanceSettings?.density === 'compact' ? 'compact' : 'comfortable'
     ) as MainPageProps['densityMode'];
-    const textSizeMode = coerceDesktopTextSize(settings?.appearance?.textSize);
+    const textSizeMode = coerceDesktopTextSize(appearanceSettings?.textSize);
+    const showTaskAge = appearanceSettings?.showTaskAge === true;
     const dateFormat = normalizeDateFormatSetting(settings?.dateFormat);
     const timeFormat = normalizeTimeFormatSetting(settings?.timeFormat);
-    const undoNotificationsEnabled = settings?.undoNotificationsEnabled !== false;
+    const undoNotificationsEnabled = notificationSettings.undoNotificationsEnabled !== false;
     const weekStart = settings?.weekStart === 'monday' ? 'monday' : 'sunday';
-    const windowDecorationsEnabled = settings?.window?.decorations !== false;
-    const closeBehavior = settings?.window?.closeBehavior ?? 'ask';
-    const trayVisible = settings?.window?.showTray !== false;
+    const windowDecorationsEnabled = windowSettings?.decorations !== false;
+    const closeBehavior = windowSettings?.closeBehavior ?? 'ask';
+    const trayVisible = windowSettings?.showTray !== false;
 
     useEffect(() => {
         const savedTheme = coerceDesktopThemeMode(
@@ -93,6 +108,27 @@ export function useSettingsMainPage({
             .then(({ setTheme }) => setTheme(tauriTheme))
             .catch((error) => reportError('Failed to set theme', error));
     }, [isTauri, themeMode]);
+
+    useEffect(() => {
+        if (!isTauri || isFlatpak) return;
+        let cancelled = false;
+        getLaunchAtStartupEnabled()
+            .then((enabled) => {
+                if (cancelled) return;
+                setLaunchAtStartupEnabledState(enabled);
+                if ((settings?.window?.launchAtStartup === true) === enabled) return;
+                return updateSettings({
+                    window: {
+                        ...(settings?.window ?? {}),
+                        launchAtStartup: enabled,
+                    },
+                });
+            })
+            .catch((error) => reportError('Failed to read launch at startup setting', error));
+        return () => {
+            cancelled = true;
+        };
+    }, [isFlatpak, isTauri, settings?.window, updateSettings]);
 
     const onThemeChange = useCallback((mode: DesktopThemeMode) => {
         localStorage.setItem(THEME_STORAGE_KEY, mode);
@@ -122,6 +158,17 @@ export function useSettingsMainPage({
         })
             .then(showSaved)
             .catch((error) => reportError('Failed to update text size', error));
+    }, [settings?.appearance, showSaved, updateSettings]);
+
+    const onShowTaskAgeChange = useCallback((enabled: boolean) => {
+        updateSettings({
+            appearance: {
+                ...(settings?.appearance ?? {}),
+                showTaskAge: enabled,
+            },
+        })
+            .then(showSaved)
+            .catch((error) => reportError('Failed to update task age display', error));
     }, [settings?.appearance, showSaved, updateSettings]);
 
     const onLanguageChange = useCallback((language: Language) => {
@@ -199,6 +246,30 @@ export function useSettingsMainPage({
             );
     }, [settings?.window, showSaved, updateSettings]);
 
+    const onLaunchAtStartupChange = useCallback((enabled: boolean) => {
+        if (!isTauri) return;
+        setLaunchAtStartupLoading(true);
+        setSystemLaunchAtStartupEnabled(enabled)
+            .then((actualEnabled) => {
+                setLaunchAtStartupEnabledState(actualEnabled);
+                return updateSettings({
+                    window: {
+                        ...(settings?.window ?? {}),
+                        launchAtStartup: actualEnabled,
+                    },
+                });
+            })
+            .then(() => flushPendingSave())
+            .then(showSaved)
+            .catch((error) => {
+                reportError('Failed to update launch at startup setting', error);
+                void getLaunchAtStartupEnabled()
+                    .then(setLaunchAtStartupEnabledState)
+                    .catch(() => undefined);
+            })
+            .finally(() => setLaunchAtStartupLoading(false));
+    }, [isTauri, settings?.window, showSaved, updateSettings]);
+
     const onKeybindingStyleChange = useCallback((style: 'vim' | 'emacs') => {
         setKeybindingStyle(style);
         showSaved();
@@ -222,15 +293,20 @@ export function useSettingsMainPage({
         dateFormat,
         densityMode,
         globalQuickAddShortcut,
+        isFlatpak,
         keybindingStyle,
         language,
+        launchAtStartupEnabled,
+        launchAtStartupLoading,
         onCloseBehaviorChange,
         onDateFormatChange,
         onDensityChange,
         onGlobalQuickAddShortcutChange,
         onKeybindingStyleChange,
         onLanguageChange,
+        onLaunchAtStartupChange,
         onOpenHelp: openHelp,
+        onShowTaskAgeChange,
         onTextSizeChange,
         onThemeChange,
         onTimeFormatChange,
@@ -239,6 +315,8 @@ export function useSettingsMainPage({
         onWeekStartChange,
         onWindowDecorationsChange,
         showCloseBehavior: isTauri && !isFlatpak,
+        showLaunchAtStartup: isTauri && !isFlatpak,
+        showTaskAge,
         showTrayToggle: isTauri && !isFlatpak,
         showWindowDecorations: isLinux,
         textSizeMode,

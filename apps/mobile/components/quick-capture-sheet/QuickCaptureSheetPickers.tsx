@@ -38,12 +38,14 @@ interface QuickCaptureSheetPickersProps {
   showAreaPicker: boolean;
   showContextPicker: boolean;
   showDatePicker: boolean;
+  showDueTimePicker: boolean;
   showPriorityPicker: boolean;
   showProjectPicker: boolean;
   startPickerMode: 'date' | 'time' | null;
   startTime: Date | null;
   dueDate: Date | null;
   onDueDateChange: (event: { type: string }, selectedDate?: Date) => void;
+  onDueTimeChange: (event: { type: string }, selectedDate?: Date) => void;
   onStartTimeChange: (event: { type: string }, selectedDate?: Date) => void;
   t: (key: string) => string;
   tc: ThemeColors;
@@ -67,6 +69,7 @@ export function QuickCaptureSheetPickers({
   onClearContexts,
   onContextQueryChange,
   onDueDateChange,
+  onDueTimeChange,
   onProjectQueryChange,
   onRemoveContext,
   onSelectArea,
@@ -85,6 +88,7 @@ export function QuickCaptureSheetPickers({
   showAreaPicker,
   showContextPicker,
   showDatePicker,
+  showDueTimePicker,
   showPriorityPicker,
   showProjectPicker,
   startPickerMode,
@@ -100,6 +104,15 @@ export function QuickCaptureSheetPickers({
           mode="date"
           display={Platform.OS === 'ios' ? 'inline' : 'default'}
           onChange={onDueDateChange}
+        />
+      )}
+
+      {showDueTimePicker && (
+        <DateTimePicker
+          value={dueDate ?? new Date()}
+          mode="time"
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          onChange={onDueTimeChange}
         />
       )}
 
@@ -125,6 +138,7 @@ export function QuickCaptureSheetPickers({
           navigationBarTranslucent={Platform.OS === 'android'}
           statusBarTranslucent={Platform.OS === 'android'}
           onRequestClose={onCloseContextPicker}
+          accessibilityViewIsModal
         >
           <View style={styles.overlay}>
             <Pressable
@@ -134,7 +148,7 @@ export function QuickCaptureSheetPickers({
               accessibilityLabel={t('common.close')}
             />
             <View style={[styles.pickerCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>
-              <Text style={[styles.pickerTitle, { color: tc.text }]}>{t('taskEdit.contextsLabel')}</Text>
+              <Text style={[styles.pickerTitle, { color: tc.text }]} accessibilityRole="header">{t('taskEdit.contextsLabel')}</Text>
               <TextInput
                 ref={contextInputRef}
                 value={contextQuery}
@@ -176,6 +190,8 @@ export function QuickCaptureSheetPickers({
               )}
               <FlatList
                 style={[styles.pickerList, { borderColor: tc.border }]}
+                accessibilityRole="list"
+                accessibilityLabel={t('taskEdit.contextsLabel')}
                 contentContainerStyle={styles.pickerListContent}
                 data={filteredContexts}
                 keyExtractor={(token) => token}
@@ -203,6 +219,7 @@ export function QuickCaptureSheetPickers({
                         : null,
                     ]}
                     accessibilityRole="button"
+                    accessibilityState={{ selected: contextTags.some((item) => item.toLowerCase() === token.toLowerCase()) }}
                     accessibilityLabel={
                       contextTags.some((item) => item.toLowerCase() === token.toLowerCase())
                         ? `${t('common.delete')}: ${token}`
@@ -229,6 +246,7 @@ export function QuickCaptureSheetPickers({
           navigationBarTranslucent={Platform.OS === 'android'}
           statusBarTranslucent={Platform.OS === 'android'}
           onRequestClose={onCloseAreaPicker}
+          accessibilityViewIsModal
         >
           <View style={styles.overlay}>
             <Pressable
@@ -238,9 +256,11 @@ export function QuickCaptureSheetPickers({
               accessibilityLabel={t('common.close')}
             />
             <View style={[styles.pickerCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>
-              <Text style={[styles.pickerTitle, { color: tc.text }]}>{t('taskEdit.areaLabel')}</Text>
+              <Text style={[styles.pickerTitle, { color: tc.text }]} accessibilityRole="header">{t('taskEdit.areaLabel')}</Text>
               <FlatList
                 style={[styles.pickerList, { borderColor: tc.border }]}
+                accessibilityRole="list"
+                accessibilityLabel={t('taskEdit.areaLabel')}
                 contentContainerStyle={styles.pickerListContent}
                 data={areas.filter((area) => !area.deletedAt)}
                 keyExtractor={(area) => area.id}
@@ -263,6 +283,7 @@ export function QuickCaptureSheetPickers({
                       selectedAreaId === area.id ? { backgroundColor: tc.filterBg, borderRadius: 8 } : null,
                     ]}
                     accessibilityRole="button"
+                    accessibilityState={{ selected: selectedAreaId === area.id }}
                     accessibilityLabel={area.name}
                   >
                     <Text style={[styles.pickerRowText, { color: tc.text }]}>
@@ -285,6 +306,7 @@ export function QuickCaptureSheetPickers({
           navigationBarTranslucent={Platform.OS === 'android'}
           statusBarTranslucent={Platform.OS === 'android'}
           onRequestClose={onCloseProjectPicker}
+          accessibilityViewIsModal
         >
           <View style={styles.overlay}>
             <Pressable
@@ -294,7 +316,7 @@ export function QuickCaptureSheetPickers({
               accessibilityLabel={t('common.close')}
             />
             <View style={[styles.pickerCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>
-              <Text style={[styles.pickerTitle, { color: tc.text }]}>{t('taskEdit.projectLabel')}</Text>
+              <Text style={[styles.pickerTitle, { color: tc.text }]} accessibilityRole="header">{t('taskEdit.projectLabel')}</Text>
               <TextInput
                 value={projectQuery}
                 onChangeText={onProjectQueryChange}
@@ -317,6 +339,8 @@ export function QuickCaptureSheetPickers({
               )}
               <FlatList
                 style={[styles.pickerList, { borderColor: tc.border }]}
+                accessibilityRole="list"
+                accessibilityLabel={t('taskEdit.projectLabel')}
                 contentContainerStyle={styles.pickerListContent}
                 data={filteredProjects}
                 keyExtractor={(project) => project.id}
@@ -357,6 +381,7 @@ export function QuickCaptureSheetPickers({
             navigationBarTranslucent={Platform.OS === 'android'}
             statusBarTranslucent={Platform.OS === 'android'}
             onRequestClose={onClosePriorityPicker}
+            accessibilityViewIsModal
           >
             <View style={styles.overlay}>
                 <Pressable
@@ -367,7 +392,7 @@ export function QuickCaptureSheetPickers({
                 >
                 </Pressable>
                 <View style={[styles.pickerCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>
-                  <Text style={[styles.pickerTitle, { color: tc.text }]}>{t('taskEdit.priorityLabel')}</Text>
+                  <Text style={[styles.pickerTitle, { color: tc.text }]} accessibilityRole="header">{t('taskEdit.priorityLabel')}</Text>
                   <Pressable
                     onPress={() => onSelectPriority(null)}
                     style={styles.pickerRow}
@@ -385,6 +410,7 @@ export function QuickCaptureSheetPickers({
                         selectedPriority === option ? { backgroundColor: tc.filterBg, borderRadius: 8 } : null,
                       ]}
                       accessibilityRole="button"
+                      accessibilityState={{ selected: selectedPriority === option }}
                       accessibilityLabel={t(`priority.${option}`)}
                     >
                       <Text style={[styles.pickerRowText, { color: tc.text }]}>

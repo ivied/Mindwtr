@@ -254,6 +254,7 @@ vi.mock('./settings/useCalendarSettings', () => ({
             setNewCalendarName: vi.fn(),
             setNewCalendarUrl: vi.fn(),
             handleAddCalendar: vi.fn(),
+            handleChooseLocalCalendarFile: vi.fn(),
             handleToggleCalendar: vi.fn(),
             handleRemoveCalendar: vi.fn(),
             handleRequestSystemCalendarPermission: vi.fn(),

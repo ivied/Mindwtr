@@ -182,4 +182,56 @@ describe('ics', () => {
             '2025-04-25',
         ]);
     });
+
+    it('expands yearly all-day recurrence with COUNT', () => {
+        const ics = [
+            'BEGIN:VCALENDAR',
+            'VERSION:2.0',
+            'BEGIN:VEVENT',
+            'UID:event-8',
+            'SUMMARY:New Years Day',
+            'DTSTART;VALUE=DATE:20250101',
+            'RRULE:FREQ=YEARLY;COUNT=5',
+            'END:VEVENT',
+            'END:VCALENDAR',
+        ].join('\n');
+
+        const events = parseIcs(ics, {
+            sourceId: 'cal',
+            rangeStart: new Date('2026-01-01T00:00:00.000Z'),
+            rangeEnd: new Date('2026-01-02T00:00:00.000Z'),
+        });
+
+        expect(events).toHaveLength(1);
+        expect(events[0].title).toBe('New Years Day');
+        expect(events[0].allDay).toBe(true);
+        expect(events[0].start.slice(0, 10)).toBe('2026-01-01');
+        expect(events[0].end.slice(0, 10)).toBe('2026-01-02');
+    });
+
+    it('expands yearly recurrence with BYMONTH and ordinal BYDAY', () => {
+        const ics = [
+            'BEGIN:VCALENDAR',
+            'VERSION:2.0',
+            'BEGIN:VEVENT',
+            'UID:event-9',
+            'SUMMARY:Third Monday',
+            'DTSTART;VALUE=DATE:20250120',
+            'RRULE:FREQ=YEARLY;BYMONTH=1;BYDAY=3MO;COUNT=3',
+            'END:VEVENT',
+            'END:VCALENDAR',
+        ].join('\n');
+
+        const events = parseIcs(ics, {
+            sourceId: 'cal',
+            rangeStart: new Date('2025-01-01T00:00:00.000Z'),
+            rangeEnd: new Date('2028-01-01T00:00:00.000Z'),
+        });
+
+        expect(events.map((event) => event.start.slice(0, 10))).toEqual([
+            '2025-01-20',
+            '2026-01-19',
+            '2027-01-18',
+        ]);
+    });
 });

@@ -1,13 +1,14 @@
 import type { ReactNode } from 'react';
 import React from 'react';
 import { ActivityIndicator, Switch, Text, TouchableOpacity, View } from 'react-native';
+import { translateWithFallback } from '@mindwtr/core';
 
 import type { ThemeColors } from '@/hooks/use-theme-colors';
 
 import { styles } from './settings.styles';
 
 type Translate = (key: string) => string;
-type Localize = (english: string, chinese: string) => string;
+type SettingsTranslator = (key: string, values?: Record<string, string | number | boolean | null | undefined>) => string;
 
 type SyncLastStatusCardProps = {
   conflictCount: number;
@@ -76,6 +77,35 @@ export function SyncLastStatusCard({
   );
 }
 
+type BackgroundSyncInfoCardProps = {
+  isRemoteBackend: boolean;
+  tr: SettingsTranslator;
+  tc: ThemeColors;
+};
+
+export function BackgroundSyncInfoCard({
+  isRemoteBackend,
+  tr,
+  tc,
+}: BackgroundSyncInfoCardProps) {
+  return (
+    <View style={[styles.settingCard, { backgroundColor: tc.cardBg, marginTop: 16 }]}>
+      <View style={styles.settingRow}>
+        <View style={styles.settingInfo}>
+          <Text style={[styles.settingLabel, { color: tc.text }]}>
+            {tr('settings.syncMobile.backgroundSync')}
+          </Text>
+          <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+            {isRemoteBackend
+              ? tr('settings.syncMobile.mindwtrAsksTheSystemToSyncAboutEvery15Minutes')
+              : tr('settings.syncMobile.scheduledBackgroundSyncIsAvailableForWebdavSelfHostedCloud')}
+          </Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
 type SyncBackupSectionProps = {
   backupAction: null | 'export' | 'restore' | 'import' | 'snapshot';
   handleBackup: () => void;
@@ -85,7 +115,7 @@ type SyncBackupSectionProps = {
   handleRestoreBackup: () => void;
   isBackupBusy: boolean;
   isSyncing: boolean;
-  localize: Localize;
+  tr: SettingsTranslator;
   t: Translate;
   tc: ThemeColors;
 };
@@ -99,7 +129,7 @@ export function SyncBackupSection({
   handleRestoreBackup,
   isBackupBusy,
   isSyncing,
-  localize,
+  tr,
   t,
   tc,
 }: SyncBackupSectionProps) {
@@ -120,9 +150,9 @@ export function SyncBackupSection({
           disabled={isSyncing || isBackupBusy}
         >
           <View style={styles.settingInfo}>
-            <Text style={[styles.settingLabel, { color: tc.tint }]}>{localize('Restore Backup', '恢复备份')}</Text>
+            <Text style={[styles.settingLabel, { color: tc.tint }]}>{tr('settings.syncMobile.restoreBackup')}</Text>
             <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-              {localize('Replace local data from a backup JSON file.', '从备份 JSON 文件替换本地数据。')}
+              {tr('settings.syncMobile.replaceLocalDataFromABackupJsonFile')}
             </Text>
           </View>
           {backupAction === 'restore' && <ActivityIndicator size="small" color={tc.tint} />}
@@ -133,9 +163,9 @@ export function SyncBackupSection({
           disabled={isSyncing || isBackupBusy}
         >
           <View style={styles.settingInfo}>
-            <Text style={[styles.settingLabel, { color: tc.tint }]}>{localize('Import from Todoist', '从 Todoist 导入')}</Text>
+            <Text style={[styles.settingLabel, { color: tc.tint }]}>{tr('settings.syncMobile.importFromTodoist')}</Text>
             <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-              {localize('Import Todoist CSV or ZIP exports into Mindwtr projects.', '将 Todoist 的 CSV 或 ZIP 导出导入为 Mindwtr 项目。')}
+              {tr('settings.syncMobile.importTodoistCsvOrZipExportsIntoMindwtrProjects')}
             </Text>
           </View>
           {backupAction === 'import' && <ActivityIndicator size="small" color={tc.tint} />}
@@ -146,9 +176,9 @@ export function SyncBackupSection({
           disabled={isSyncing || isBackupBusy}
         >
           <View style={styles.settingInfo}>
-            <Text style={[styles.settingLabel, { color: tc.tint }]}>{localize('Import from DGT GTD', '从 DGT GTD 导入')}</Text>
+            <Text style={[styles.settingLabel, { color: tc.tint }]}>{tr('settings.syncMobile.importFromDgtGtd')}</Text>
             <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-              {localize('Import DGT GTD JSON or ZIP exports into Mindwtr areas, projects, and tasks.', '将 DGT GTD 的 JSON 或 ZIP 导出导入为 Mindwtr 的领域、项目和任务。')}
+              {tr('settings.syncMobile.importDgtGtdJsonOrZipExportsIntoMindwtrAreas')}
             </Text>
           </View>
           {backupAction === 'import' && <ActivityIndicator size="small" color={tc.tint} />}
@@ -159,9 +189,9 @@ export function SyncBackupSection({
           disabled={isSyncing || isBackupBusy}
         >
           <View style={styles.settingInfo}>
-            <Text style={[styles.settingLabel, { color: tc.tint }]}>{localize('Import from OmniFocus', '从 OmniFocus 导入')}</Text>
+            <Text style={[styles.settingLabel, { color: tc.tint }]}>{tr('settings.syncMobile.importFromOmnifocus')}</Text>
             <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-              {localize('Import OmniFocus CSV, JSON, or ZIP exports into Mindwtr projects and inbox tasks.', '将 OmniFocus 的 CSV、JSON 或 ZIP 导出导入为 Mindwtr 项目和收集箱任务。')}
+              {tr('settings.syncMobile.importOmnifocusCsvJsonOrZipExportsIntoMindwtrProjects')}
             </Text>
           </View>
           {backupAction === 'import' && <ActivityIndicator size="small" color={tc.tint} />}
@@ -178,7 +208,7 @@ type RecoverySnapshotsCardProps = {
   isBackupBusy: boolean;
   isLoadingRecoverySnapshots: boolean;
   isSyncing: boolean;
-  localize: Localize;
+  tr: SettingsTranslator;
   recoverySnapshots: string[];
   recoverySnapshotsOpen: boolean;
   setRecoverySnapshotsOpen: (open: boolean) => void;
@@ -193,7 +223,7 @@ export function RecoverySnapshotsCard({
   isBackupBusy,
   isLoadingRecoverySnapshots,
   isSyncing,
-  localize,
+  tr,
   recoverySnapshots,
   recoverySnapshotsOpen,
   setRecoverySnapshotsOpen,
@@ -206,7 +236,7 @@ export function RecoverySnapshotsCard({
         <View style={styles.settingInfo}>
           <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.recoverySnapshots')}</Text>
           <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-            {localize('Saved automatically before restore and import operations.', '在恢复和导入之前自动保存。')}
+            {tr('settings.syncMobile.savedAutomaticallyBeforeRestoreAndImportOperations')}
           </Text>
         </View>
         <Text style={[styles.chevron, { color: tc.secondaryText }]}>{recoverySnapshotsOpen ? '▾' : '▸'}</Text>
@@ -260,19 +290,23 @@ type SyncPreferencesCardProps = {
   syncAiEnabled: boolean;
   syncAppearanceEnabled: boolean;
   syncExternalCalendarsEnabled: boolean;
+  syncGtdEnabled: boolean;
   syncLanguageEnabled: boolean;
+  syncSavedFiltersEnabled: boolean;
   syncOptionsOpen: boolean;
   t: Translate;
   tc: ThemeColors;
   toggleSyncOptionsOpen: () => void;
-  updateSyncPreferences: (partial: { ai?: boolean; appearance?: boolean; externalCalendars?: boolean; language?: boolean }) => void;
+  updateSyncPreferences: (partial: { ai?: boolean; appearance?: boolean; externalCalendars?: boolean; gtd?: boolean; language?: boolean; savedFilters?: boolean }) => void;
 };
 
 export function SyncPreferencesCard({
   syncAiEnabled,
   syncAppearanceEnabled,
   syncExternalCalendarsEnabled,
+  syncGtdEnabled,
   syncLanguageEnabled,
+  syncSavedFiltersEnabled,
   syncOptionsOpen,
   t,
   tc,
@@ -312,6 +346,28 @@ export function SyncPreferencesCard({
           </View>
           <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}>
             <View style={styles.settingInfo}>
+              <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.syncPreferenceGtd')}</Text>
+            </View>
+            <Switch
+              value={syncGtdEnabled}
+              onValueChange={(value) => updateSyncPreferences({ gtd: value })}
+              trackColor={{ false: '#767577', true: '#3B82F6' }}
+            />
+          </View>
+          <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}>
+            <View style={styles.settingInfo}>
+              <Text style={[styles.settingLabel, { color: tc.text }]}>
+                {translateWithFallback(t, 'settings.syncPreferenceSavedFilters', 'Saved filters')}
+              </Text>
+            </View>
+            <Switch
+              value={syncSavedFiltersEnabled}
+              onValueChange={(value) => updateSyncPreferences({ savedFilters: value })}
+              trackColor={{ false: '#767577', true: '#3B82F6' }}
+            />
+          </View>
+          <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}>
+            <View style={styles.settingInfo}>
               <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.syncPreferenceExternalCalendars')}</Text>
             </View>
             <Switch
@@ -338,18 +394,24 @@ export function SyncPreferencesCard({
 }
 
 type SyncDiagnosticsCardProps = {
+  analyticsHeartbeatAvailable: boolean;
+  analyticsHeartbeatEnabled: boolean;
   handleClearLog: () => void;
   handleShareLog: () => void;
   loggingEnabled: boolean;
+  toggleAnalyticsHeartbeat: (value: boolean) => void;
   t: Translate;
   tc: ThemeColors;
   toggleDebugLogging: (value: boolean) => void;
 };
 
 export function SyncDiagnosticsCard({
+  analyticsHeartbeatAvailable,
+  analyticsHeartbeatEnabled,
   handleClearLog,
   handleShareLog,
   loggingEnabled,
+  toggleAnalyticsHeartbeat,
   t,
   tc,
   toggleDebugLogging,
@@ -358,7 +420,23 @@ export function SyncDiagnosticsCard({
     <>
       <Text style={[styles.sectionTitle, { color: tc.text, marginTop: 24 }]}>{t('settings.diagnostics')}</Text>
       <View style={[styles.settingCard, { backgroundColor: tc.cardBg }]}>
-        <View style={styles.settingRow}>
+        {analyticsHeartbeatAvailable && (
+          <View style={styles.settingRow}>
+            <View style={styles.settingInfo}>
+              <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.analyticsHeartbeat')}</Text>
+              <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>{t('settings.analyticsHeartbeatDesc')}</Text>
+            </View>
+            <Switch
+              value={analyticsHeartbeatEnabled}
+              onValueChange={toggleAnalyticsHeartbeat}
+              trackColor={{ false: '#767577', true: '#3B82F6' }}
+            />
+          </View>
+        )}
+        <View style={[
+          styles.settingRow,
+          analyticsHeartbeatAvailable && { borderTopWidth: 1, borderTopColor: tc.border },
+        ]}>
           <View style={styles.settingInfo}>
             <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.debugLogging')}</Text>
             <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>{t('settings.debugLoggingDesc')}</Text>

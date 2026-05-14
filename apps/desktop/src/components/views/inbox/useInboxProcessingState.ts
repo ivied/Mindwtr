@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import {
     getFrequentTaskTokens,
     getRecentTaskTokens,
-    safeParseDate,
+    normalizeClockTimeInput,
     type AppData,
     type Area,
     type Project,
@@ -82,6 +82,7 @@ export function useInboxProcessingState({
     const [skippedIds, setSkippedIds] = useState<Set<string>>(new Set());
 
     const inboxProcessing = settings?.gtd?.inboxProcessing ?? {};
+    const defaultScheduleTime = normalizeClockTimeInput(settings?.gtd?.defaultScheduleTime) || '';
     const defaultProcessingMode = inboxProcessing.defaultMode === 'quick' ? 'quick' : 'guided';
     const twoMinuteEnabled = inboxProcessing.twoMinuteEnabled !== false;
     const twoMinuteFirst = inboxProcessing.twoMinuteFirst === true;
@@ -160,8 +161,6 @@ export function useInboxProcessingState({
     const inboxCount = useMemo(() => (
         tasks.filter((task) => {
             if (task.status !== 'inbox' || task.deletedAt) return false;
-            const start = safeParseDate(task.startTime);
-            if (start && start > new Date()) return false;
             if (!matchesAreaFilter(task)) return false;
             return true;
         }).length
@@ -279,13 +278,20 @@ export function useInboxProcessingState({
         setDateValue: (value: string) => void,
         setTimeValue: (value: string) => void,
         setTimeDraftValue: (value: string) => void,
+        currentTime: string,
+        currentTimeDraft: string,
     ) => {
         setDateValue(value);
         if (!value) {
             setTimeValue('');
             setTimeDraftValue('');
+            return;
         }
-    }, []);
+        if (defaultScheduleTime && !currentTime && !currentTimeDraft) {
+            setTimeValue(defaultScheduleTime);
+            setTimeDraftValue(defaultScheduleTime);
+        }
+    }, [defaultScheduleTime]);
 
     const handleScheduleTimeCommit = useCallback(() => {
         handleProcessingTimeCommit(scheduleTimeDraft, scheduleTime, setScheduleTimeDraft, setScheduleTime);
@@ -300,16 +306,16 @@ export function useInboxProcessingState({
     }, [handleProcessingTimeCommit, reviewTime, reviewTimeDraft]);
 
     const handleScheduleDateChange = useCallback((value: string) => {
-        handleDateFieldChange(value, setScheduleDate, setScheduleTime, setScheduleTimeDraft);
-    }, [handleDateFieldChange]);
+        handleDateFieldChange(value, setScheduleDate, setScheduleTime, setScheduleTimeDraft, scheduleTime, scheduleTimeDraft);
+    }, [handleDateFieldChange, scheduleTime, scheduleTimeDraft]);
 
     const handleDueDateChange = useCallback((value: string) => {
-        handleDateFieldChange(value, setDueDate, setDueTime, setDueTimeDraft);
-    }, [handleDateFieldChange]);
+        handleDateFieldChange(value, setDueDate, setDueTime, setDueTimeDraft, dueTime, dueTimeDraft);
+    }, [dueTime, dueTimeDraft, handleDateFieldChange]);
 
     const handleReviewDateChange = useCallback((value: string) => {
-        handleDateFieldChange(value, setReviewDate, setReviewTime, setReviewTimeDraft);
-    }, [handleDateFieldChange]);
+        handleDateFieldChange(value, setReviewDate, setReviewTime, setReviewTimeDraft, reviewTime, reviewTimeDraft);
+    }, [handleDateFieldChange, reviewTime, reviewTimeDraft]);
 
     const clearScheduleDate = useCallback(() => {
         setScheduleDate('');

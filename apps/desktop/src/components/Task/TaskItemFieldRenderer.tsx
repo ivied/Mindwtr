@@ -5,10 +5,12 @@ import {
     buildRRuleString,
     continueMarkdownOnEnter,
     hasTimeComponent,
+    normalizeClockTimeInput,
     parseRRuleString,
     resolveAutoTextDirection,
     safeFormatDate,
     safeParseDate,
+    tFallback,
     type Attachment,
     type MarkdownSelection,
     type MarkdownToolbarActionId,
@@ -39,6 +41,7 @@ import {
     TagsField,
     TimeEstimateField,
 } from './fields/TaskMetadataFields';
+import { QuickDateChips } from '../QuickDateChips';
 
 export type MonthlyRecurrenceInfo = {
     pattern: 'date' | 'custom';
@@ -69,6 +72,7 @@ export type TaskItemFieldRendererData = {
     editTags: string;
     language: string;
     nativeDateInputLocale: string;
+    defaultScheduleTime: string;
     popularContextOptions: string[];
     popularTagOptions: string[];
 };
@@ -133,6 +137,7 @@ export function TaskItemFieldRenderer({
         editTags,
         language,
         nativeDateInputLocale,
+        defaultScheduleTime,
         popularContextOptions,
         popularTagOptions,
     } = data;
@@ -318,7 +323,7 @@ export function TaskItemFieldRenderer({
             descriptionTextareaRef.current?.setSelectionRange(next.selection.start, next.selection.end);
         });
     };
-    const clearText = t('common.clear') === 'common.clear' ? 'Clear' : t('common.clear');
+    const clearText = tFallback(t, 'common.clear', 'Clear');
     const dateInputClassName = 'min-w-0 flex-1 text-xs bg-muted/50 border border-border rounded px-2 py-1 text-foreground';
     const timeInputClassName = 'w-24 shrink-0 text-xs bg-muted/50 border border-border rounded px-2 py-1 text-foreground';
     const renderClearButton = (label: string, onClear: () => void, isVisible: boolean) => {
@@ -341,6 +346,7 @@ export function TaskItemFieldRenderer({
         label,
         dateAriaLabel,
         dateValue,
+        selectedDate,
         onDateChange,
         timeInput,
         onClear,
@@ -349,6 +355,7 @@ export function TaskItemFieldRenderer({
         label: string;
         dateAriaLabel: string;
         dateValue: string;
+        selectedDate: Date | null;
         onDateChange: (value: string) => void;
         timeInput: ReactNode;
         onClear: () => void;
@@ -368,6 +375,19 @@ export function TaskItemFieldRenderer({
                 {timeInput}
                 {renderClearButton(label, onClear, hasValue)}
             </div>
+            <QuickDateChips
+                t={t}
+                selectedDate={selectedDate}
+                wrap
+                onSelect={(date) => {
+                    if (!date) {
+                        onClear();
+                        return;
+                    }
+                    onDateChange(safeFormatDate(date, 'yyyy-MM-dd'));
+                }}
+                className="w-full"
+            />
         </div>
     );
 
@@ -431,6 +451,10 @@ export function TaskItemFieldRenderer({
                         setEditStartTime(`${normalizedDate}T${timeValue}`);
                         return;
                     }
+                    if (defaultScheduleTime) {
+                        setEditStartTime(`${normalizedDate}T${defaultScheduleTime}`);
+                        return;
+                    }
                     setEditStartTime(normalizedDate);
                 };
                 const handleTimeChange = (value: string) => {
@@ -446,6 +470,7 @@ export function TaskItemFieldRenderer({
                     label: t('taskEdit.startDateLabel'),
                     dateAriaLabel: t('task.aria.startDate'),
                     dateValue,
+                    selectedDate: parsed,
                     onDateChange: handleDateChange,
                     timeInput: (
                         <input
@@ -477,6 +502,10 @@ export function TaskItemFieldRenderer({
                         setEditDueDate(`${normalizedDate}T${timeValue}`);
                         return;
                     }
+                    if (defaultScheduleTime) {
+                        setEditDueDate(`${normalizedDate}T${defaultScheduleTime}`);
+                        return;
+                    }
                     setEditDueDate(normalizedDate);
                 };
                 const handleTimeChange = (value: string) => {
@@ -492,6 +521,7 @@ export function TaskItemFieldRenderer({
                     label: t('taskEdit.dueDateLabel'),
                     dateAriaLabel: t('task.aria.dueDate'),
                     dateValue,
+                    selectedDate: parsed,
                     onDateChange: handleDateChange,
                     timeInput: (
                         <input
@@ -513,31 +543,6 @@ export function TaskItemFieldRenderer({
                 const parsed = editReviewAt ? safeParseDate(editReviewAt) : null;
                 const dateValue = parsed ? safeFormatDate(parsed, 'yyyy-MM-dd') : '';
                 const timeValue = hasTime && parsed ? safeFormatDate(parsed, 'HH:mm') : '';
-                const normalizeTimeInput = (value: string): string | null => {
-                    const trimmed = value.trim();
-                    if (!trimmed) return '';
-                    const compact = trimmed.replace(/\s+/g, '');
-                    let hours: number;
-                    let minutes: number;
-                    if (/^\d{1,2}:\d{2}$/.test(compact)) {
-                        const [h, m] = compact.split(':');
-                        hours = Number(h);
-                        minutes = Number(m);
-                    } else if (/^\d{3,4}$/.test(compact)) {
-                        if (compact.length === 3) {
-                            hours = Number(compact.slice(0, 1));
-                            minutes = Number(compact.slice(1));
-                        } else {
-                            hours = Number(compact.slice(0, 2));
-                            minutes = Number(compact.slice(2));
-                        }
-                    } else {
-                        return null;
-                    }
-                    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
-                    if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
-                    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
-                };
                 const handleDateChange = (value: string) => {
                     const normalizedDate = normalizeDateInputValue(value);
                     if (!normalizedDate) {
@@ -546,6 +551,10 @@ export function TaskItemFieldRenderer({
                     }
                     if (hasTime && timeValue) {
                         setEditReviewAt(`${normalizedDate}T${timeValue}`);
+                        return;
+                    }
+                    if (defaultScheduleTime) {
+                        setEditReviewAt(`${normalizedDate}T${defaultScheduleTime}`);
                         return;
                     }
                     setEditReviewAt(normalizedDate);
@@ -563,6 +572,7 @@ export function TaskItemFieldRenderer({
                     label: t('taskEdit.reviewDateLabel'),
                     dateAriaLabel: t('task.aria.reviewDate'),
                     dateValue,
+                    selectedDate: parsed,
                     onDateChange: handleDateChange,
                     timeInput: (
                         <input
@@ -573,7 +583,7 @@ export function TaskItemFieldRenderer({
                             placeholder="HH:MM"
                             onChange={(event) => setReviewTimeDraft(event.target.value)}
                             onBlur={() => {
-                                const normalized = normalizeTimeInput(reviewTimeDraft);
+                                const normalized = normalizeClockTimeInput(reviewTimeDraft);
                                 if (normalized === null) {
                                     setReviewTimeDraft(timeValue);
                                     return;

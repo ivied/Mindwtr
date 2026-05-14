@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DropboxConflictError, uploadDropboxAppData, uploadDropboxFile } from './dropbox-sync';
+import { DropboxConflictError, getDropboxAppDataMetadata, uploadDropboxAppData, uploadDropboxFile } from './dropbox-sync';
 
 const buildResponse = (
     status: number,
@@ -36,6 +36,18 @@ describe('desktop dropbox-sync conflict parsing', () => {
         await expect(uploadDropboxAppData('token', appData, 'rev-1', fetcher as typeof fetch))
             .rejects
             .toThrow('Dropbox upload failed: HTTP 409');
+    });
+
+    it('reads metadata rev without downloading app data', async () => {
+        let requestInit: RequestInit | undefined;
+        const fetcher = async (_input: RequestInfo | URL, init?: RequestInit) => {
+            requestInit = init;
+            return buildResponse(200, '{"rev":"rev-fast"}');
+        };
+
+        await expect(getDropboxAppDataMetadata('token', fetcher as typeof fetch)).resolves.toEqual({ rev: 'rev-fast' });
+        expect(requestInit?.method).toBe('POST');
+        expect(JSON.parse(String(requestInit?.body))).toMatchObject({ path: '/data.json' });
     });
 
     it('uploads attachment files as binary octet-stream regardless of source mime type', async () => {

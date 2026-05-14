@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render } from '@testing-library/react';
+import { fireEvent, render, waitFor } from '@testing-library/react';
 import { useTaskStore, type Task } from '@mindwtr/core';
 import { LanguageProvider } from '../../contexts/language-context';
 import { AgendaView } from './AgendaView';
@@ -37,12 +37,14 @@ describe('AgendaView', () => {
             areas: [],
             _allAreas: [],
             settings: {},
+            error: null,
             highlightTaskId: null,
         });
         useUiStore.setState({
             listOptions: {
                 showDetails: false,
                 nextGroupBy: 'none',
+                focusTop3Only: false,
             },
             expandedTaskIds: {},
         });
@@ -137,6 +139,91 @@ describe('AgendaView', () => {
         expect(queryByText('Start today inbox task')).not.toBeInTheDocument();
     });
 
+    it('shows an empty state when active tasks do not produce agenda sections', () => {
+        const inboxTask: Task = {
+            id: 'inbox-task',
+            title: 'Inbox only task',
+            status: 'inbox',
+            tags: [],
+            contexts: [],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+        };
+
+        useTaskStore.setState({
+            tasks: [inboxTask],
+            _allTasks: [inboxTask],
+            projects: [],
+            _allProjects: [],
+            areas: [],
+            _allAreas: [],
+            settings: {},
+            error: null,
+            highlightTaskId: null,
+        });
+
+        const { getByText, queryByText } = renderAgenda();
+
+        expect(getByText('All Clear!')).toBeInTheDocument();
+        expect(getByText('Nothing on deck. Pick a next action to focus on.')).toBeInTheDocument();
+        expect(queryByText('Inbox only task')).not.toBeInTheDocument();
+    });
+
+    it('does not let earlier non-Focus tasks hide the next task in a sequential project', () => {
+        const project = {
+            id: 'project-1',
+            title: 'Sequential project',
+            status: 'active' as const,
+            isSequential: true,
+            color: '#123456',
+            order: 0,
+            tagIds: [],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+        };
+        const inboxBefore: Task = {
+            id: 'inbox-before',
+            title: 'Inbox before',
+            status: 'inbox',
+            projectId: project.id,
+            order: 0,
+            orderNum: 0,
+            tags: [],
+            contexts: [],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+        };
+        const availableNext: Task = {
+            id: 'available-next',
+            title: 'Available next',
+            status: 'next',
+            projectId: project.id,
+            order: 1,
+            orderNum: 1,
+            tags: [],
+            contexts: [],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+        };
+
+        useTaskStore.setState({
+            tasks: [inboxBefore, availableNext],
+            _allTasks: [inboxBefore, availableNext],
+            projects: [project],
+            _allProjects: [project],
+            areas: [],
+            _allAreas: [],
+            settings: {},
+            highlightTaskId: null,
+        });
+
+        const { getByRole, getByText, queryByText } = renderAgenda();
+
+        expect(getByRole('heading', { name: /next actions/i })).toBeInTheDocument();
+        expect(getByText('Available next')).toBeInTheDocument();
+        expect(queryByText('Inbox before')).not.toBeInTheDocument();
+    });
+
     it('shows next tasks with start time today in Today section (not Next Actions)', () => {
         const now = new Date();
         const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 0, 0, 0).toISOString();
@@ -167,6 +254,97 @@ describe('AgendaView', () => {
         expect(getByRole('heading', { name: /today/i })).toBeInTheDocument();
         expect(getByText('Start today next task')).toBeInTheDocument();
         expect(queryByRole('heading', { name: /next actions/i })).not.toBeInTheDocument();
+    });
+
+    it('hides future-start next actions in Focus by default', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-02-28T12:00:00.000Z'));
+
+        const futureStartTask: Task = {
+            id: 'future-start-next-task',
+            title: 'Future start next task',
+            status: 'next',
+            startTime: '2026-03-03T09:00:00.000Z',
+            tags: [],
+            contexts: [],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+        };
+
+        useTaskStore.setState({
+            tasks: [futureStartTask],
+            _allTasks: [futureStartTask],
+            projects: [],
+            _allProjects: [],
+            areas: [],
+            _allAreas: [],
+            settings: {},
+            highlightTaskId: null,
+        });
+
+        const { getByText, queryByText } = renderAgenda();
+
+        expect(queryByText('Future start next task')).not.toBeInTheDocument();
+        expect(getByText('1 task hidden (future start)')).toBeInTheDocument();
+    });
+
+    it('does not show later sequential actions when the first action has a hidden future start', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-02-28T12:00:00.000Z'));
+
+        const project = {
+            id: 'project-1',
+            title: 'Sequential project',
+            status: 'active' as const,
+            isSequential: true,
+            color: '#123456',
+            order: 0,
+            tagIds: [],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+        };
+        const futureFirst: Task = {
+            id: 'future-first',
+            title: 'Future first',
+            status: 'next',
+            projectId: project.id,
+            order: 0,
+            orderNum: 0,
+            startTime: '2026-03-03T09:00:00.000Z',
+            tags: [],
+            contexts: [],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+        };
+        const followingNext: Task = {
+            id: 'following-next',
+            title: 'Following next',
+            status: 'next',
+            projectId: project.id,
+            order: 1,
+            orderNum: 1,
+            tags: [],
+            contexts: [],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+        };
+
+        useTaskStore.setState({
+            tasks: [futureFirst, followingNext],
+            _allTasks: [futureFirst, followingNext],
+            projects: [project],
+            _allProjects: [project],
+            areas: [],
+            _allAreas: [],
+            settings: { appearance: { showFutureStarts: false } },
+            highlightTaskId: null,
+        });
+
+        const { getByText, queryByText } = renderAgenda();
+
+        expect(queryByText('Future first')).not.toBeInTheDocument();
+        expect(queryByText('Following next')).not.toBeInTheDocument();
+        expect(getByText('1 task hidden (future start)')).toBeInTheDocument();
     });
 
     it('shows due-soon next actions before undated tasks and sinks far-future due tasks', () => {
@@ -538,6 +716,256 @@ describe('AgendaView', () => {
 
         expect(getByText('High energy task')).toBeInTheDocument();
         expect(queryByText('Low energy task')).not.toBeInTheDocument();
+    });
+
+    it('shows an empty state when filters match no visible focus tasks', () => {
+        const lowEnergyTask: Task = {
+            id: 'low-energy-task',
+            title: 'Low energy task',
+            status: 'next',
+            energyLevel: 'low',
+            contexts: [],
+            tags: [],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+        };
+
+        useTaskStore.setState({
+            tasks: [lowEnergyTask],
+            _allTasks: [lowEnergyTask],
+            projects: [],
+            _allProjects: [],
+            areas: [],
+            _allAreas: [],
+            settings: {},
+            error: null,
+            highlightTaskId: null,
+        });
+
+        const { getByRole, getByText, queryByText } = renderAgenda();
+
+        fireEvent.click(getByRole('button', { name: /^Show$/i }));
+        fireEvent.click(getByRole('button', { name: 'High energy' }));
+
+        expect(queryByText('Low energy task')).not.toBeInTheDocument();
+        expect(getByText('No tasks match these filters.')).toBeInTheDocument();
+    });
+
+    it('shows store errors inside the Agenda surface', () => {
+        useTaskStore.setState({
+            error: 'Storage request timed out. Try again.',
+        });
+
+        const { getByRole, getByText } = renderAgenda();
+
+        expect(getByRole('alert')).toBeInTheDocument();
+        expect(getByText('Something went wrong')).toBeInTheDocument();
+        expect(getByText('Storage request timed out. Try again.')).toBeInTheDocument();
+    });
+
+    it('applies and clears saved Focus filters from the chip row', () => {
+        const deskTask: Task = {
+            id: 'desk-task',
+            title: 'Desk task',
+            status: 'next',
+            contexts: ['@desk'],
+            tags: [],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+        };
+        const phoneTask: Task = {
+            id: 'phone-task',
+            title: 'Phone task',
+            status: 'next',
+            contexts: ['@phone'],
+            tags: [],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+        };
+
+        useTaskStore.setState({
+            tasks: [deskTask, phoneTask],
+            _allTasks: [deskTask, phoneTask],
+            projects: [],
+            _allProjects: [],
+            areas: [],
+            _allAreas: [],
+            settings: {
+                savedFilters: [{
+                    id: 'filter-desk',
+                    name: 'Desk',
+                    view: 'focus',
+                    criteria: { contexts: ['@desk'] },
+                    createdAt: nowIso,
+                    updatedAt: nowIso,
+                }],
+            },
+            highlightTaskId: null,
+        });
+
+        const { getByRole, getByText, queryByText } = renderAgenda();
+
+        fireEvent.click(getByRole('button', { name: 'Desk' }));
+
+        expect(getByText('Desk task')).toBeInTheDocument();
+        expect(queryByText('Phone task')).not.toBeInTheDocument();
+
+        fireEvent.click(getByRole('button', { name: 'All' }));
+
+        expect(getByText('Desk task')).toBeInTheDocument();
+        expect(getByText('Phone task')).toBeInTheDocument();
+    });
+
+    it('deletes the active saved Focus filter from the chip row', async () => {
+        const deskTask: Task = {
+            id: 'desk-task',
+            title: 'Desk task',
+            status: 'next',
+            contexts: ['@desk'],
+            tags: [],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+        };
+
+        useTaskStore.setState({
+            tasks: [deskTask],
+            _allTasks: [deskTask],
+            projects: [],
+            _allProjects: [],
+            areas: [],
+            _allAreas: [],
+            settings: {
+                savedFilters: [{
+                    id: 'filter-desk',
+                    name: 'Desk',
+                    view: 'focus',
+                    criteria: { contexts: ['@desk'] },
+                    createdAt: nowIso,
+                    updatedAt: nowIso,
+                }],
+            },
+            highlightTaskId: null,
+        });
+
+        const { getByRole, queryByRole } = renderAgenda();
+
+        fireEvent.click(getByRole('button', { name: 'Desk' }));
+        fireEvent.click(getByRole('button', { name: 'Delete saved filter Desk' }));
+        fireEvent.click(getByRole('button', { name: /^Delete$/i }));
+
+        await waitFor(() => {
+            expect(useTaskStore.getState().settings.savedFilters).toEqual([
+                expect.objectContaining({
+                    id: 'filter-desk',
+                    deletedAt: expect.any(String),
+                }),
+            ]);
+        });
+        expect(queryByRole('button', { name: 'Desk' })).not.toBeInTheDocument();
+    });
+
+    it('removes advanced synced criteria from the active saved Focus filter', async () => {
+        const deskTask: Task = {
+            id: 'desk-task',
+            title: 'Desk task',
+            status: 'next',
+            contexts: ['@desk'],
+            tags: [],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+        };
+
+        useTaskStore.setState({
+            tasks: [deskTask],
+            _allTasks: [deskTask],
+            projects: [],
+            _allProjects: [],
+            areas: [],
+            _allAreas: [],
+            settings: {
+                savedFilters: [{
+                    id: 'filter-desk',
+                    name: 'Desk',
+                    view: 'focus',
+                    criteria: {
+                        contexts: ['@desk'],
+                        dueDateRange: { preset: 'this_week' },
+                        hasDescription: true,
+                    },
+                    createdAt: nowIso,
+                    updatedAt: nowIso,
+                }],
+            },
+            highlightTaskId: null,
+        });
+
+        const { getByRole } = renderAgenda();
+
+        fireEvent.click(getByRole('button', { name: 'Desk' }));
+        fireEvent.click(getByRole('button', { name: 'Delete Due Date: This week' }));
+
+        await waitFor(() => {
+            expect(useTaskStore.getState().settings.savedFilters?.[0]).toMatchObject({
+                id: 'filter-desk',
+                criteria: {
+                    contexts: ['@desk'],
+                    hasDescription: true,
+                },
+                updatedAt: expect.any(String),
+            });
+        });
+    });
+
+    it('saves the current Focus filter from existing controls', async () => {
+        const lowEnergyTask: Task = {
+            id: 'low-energy-task',
+            title: 'Low energy task',
+            status: 'next',
+            energyLevel: 'low',
+            contexts: [],
+            tags: [],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+        };
+        const highEnergyTask: Task = {
+            id: 'high-energy-task',
+            title: 'High energy task',
+            status: 'next',
+            energyLevel: 'high',
+            contexts: [],
+            tags: [],
+            createdAt: nowIso,
+            updatedAt: nowIso,
+        };
+
+        useTaskStore.setState({
+            tasks: [lowEnergyTask, highEnergyTask],
+            _allTasks: [lowEnergyTask, highEnergyTask],
+            projects: [],
+            _allProjects: [],
+            areas: [],
+            _allAreas: [],
+            settings: {},
+            highlightTaskId: null,
+        });
+
+        const { getAllByRole, getByDisplayValue, getByRole, getByText } = renderAgenda();
+
+        fireEvent.click(getByRole('button', { name: /^Show$/i }));
+        fireEvent.click(getByRole('button', { name: 'High energy' }));
+        fireEvent.click(getByRole('button', { name: /^Save$/i }));
+        fireEvent.change(getByDisplayValue('High energy'), { target: { value: 'High energy preset' } });
+        const saveButtons = getAllByRole('button', { name: /^Save$/i });
+        fireEvent.click(saveButtons[saveButtons.length - 1]);
+
+        await waitFor(() => {
+            expect(useTaskStore.getState().settings.savedFilters?.[0]).toMatchObject({
+                name: 'High energy preset',
+                view: 'focus',
+                criteria: { energy: ['high'] },
+            });
+        });
+        expect(getByText('High energy preset')).toBeInTheDocument();
     });
 
     it('collapses next actions when the section header is toggled', () => {

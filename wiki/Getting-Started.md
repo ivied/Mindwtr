@@ -109,4 +109,4 @@ Practical rule:
 
 - Check the [[FAQ]]
 - [Report an issue](https://github.com/dongdongbh/Mindwtr/issues)
-- Read the full [[GTD Best Practices]] guide
+- Read the full [[GTD Workflow in Mindwtr]] guide

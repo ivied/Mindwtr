@@ -2,7 +2,7 @@ import { addDays, addMonths, addWeeks, addYears, endOfDay, isAfter, isBefore, is
 import { safeParseDate, safeParseDueDate } from './date';
 import { matchesHierarchicalToken, normalizePrefixedToken } from './hierarchy-utils';
 import { normalizeTaskStatus, TASK_STATUS_SET } from './task-status';
-import type { SearchResults } from './storage';
+import { SEARCH_RESULT_LIMIT, type SearchResults } from './storage';
 import type { Project, Task } from './types';
 
 export type SearchComparator = '<' | '<=' | '>' | '>=' | '=';
@@ -23,9 +23,10 @@ export interface SearchQuery {
 }
 
 const DATE_FIELDS = new Set(['due', 'start', 'review', 'created']);
+const ASSIGNEE_FIELDS = new Set(['assigned', 'assignee', 'assignedto']);
 
 function tokenize(query: string): string[] {
-    const tokens = query.match(/"[^"]+"|\S+/g) || [];
+    const tokens = query.match(/-?[^:\s]+:"[^"]+"|"[^"]+"|\S+/g) || [];
     return tokens.map((t) => t.trim()).filter(Boolean);
 }
 
@@ -205,6 +206,8 @@ export function matchesTask(term: SearchTerm, task: Task, projectById: Map<strin
             const project = projectById?.get(task.projectId);
             result = task.projectId === value || (project ? matchesText(project.title, value) : false);
         }
+    } else if (ASSIGNEE_FIELDS.has(field)) {
+        result = value.trim().length > 0 && matchesText(task.assignedTo, value);
     } else if (DATE_FIELDS.has(field)) {
         if (field === 'due') result = matchDueDateField(task.dueDate, term.comparator, value, now);
         else if (field === 'start') result = matchDateField(task.startTime, term.comparator, value, now);
@@ -277,8 +280,13 @@ export function filterProjectsBySearch(projects: Project[], query: string, now: 
 }
 
 export function searchAll(tasks: Task[], projects: Project[], query: string, now: Date = new Date()): SearchResults {
+    const matchedProjects = filterProjectsBySearch(projects, query, now);
+    const matchedTasks = filterTasksBySearch(tasks, projects, query, now);
+    const limited = matchedProjects.length > SEARCH_RESULT_LIMIT || matchedTasks.length > SEARCH_RESULT_LIMIT;
     return {
-        tasks: filterTasksBySearch(tasks, projects, query, now),
-        projects: filterProjectsBySearch(projects, query, now),
+        tasks: matchedTasks.slice(0, SEARCH_RESULT_LIMIT),
+        projects: matchedProjects.slice(0, SEARCH_RESULT_LIMIT),
+        limited: limited || undefined,
+        limit: limited ? SEARCH_RESULT_LIMIT : undefined,
     };
 }

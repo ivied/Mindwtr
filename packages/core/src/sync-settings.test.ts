@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeAppData } from './sync';
+import { DELETE_VS_LIVE_AMBIGUOUS_WINDOW_MS, mergeAppData } from './sync';
 import { createMockArea, mockAppData } from './sync-test-utils';
 import { AppData } from './types';
 
@@ -14,16 +14,22 @@ describe('Sync Logic', () => {
             expect(merged.settings.theme).toBe('dark');
         });
 
-        it('merges synced language settings per field', () => {
+        it('merges synced language and GTD settings per field', () => {
             const local: AppData = {
                 ...mockAppData(),
                 settings: {
+                    gtd: {
+                        defaultScheduleTime: '08:00',
+                        focusTaskLimit: 3,
+                        inboxProcessing: { scheduleEnabled: true },
+                    },
                     language: 'en',
                     weekStart: 'monday',
                     dateFormat: 'yyyy-MM-dd',
                     timeFormat: '24h',
-                    syncPreferences: { language: true },
+                    syncPreferences: { gtd: true, language: true },
                     syncPreferencesUpdatedAt: {
+                        gtd: '2024-01-01T00:00:00.000Z',
                         preferences: '2024-01-01T00:00:00.000Z',
                         language: '2024-01-01T00:00:00.000Z',
                     },
@@ -32,11 +38,16 @@ describe('Sync Logic', () => {
             const incoming: AppData = {
                 ...mockAppData(),
                 settings: {
+                    gtd: {
+                        defaultScheduleTime: '09:30',
+                        focusTaskLimit: 5,
+                    },
                     language: 'es',
                     weekStart: 'monday',
                     timeFormat: '12h',
-                    syncPreferences: { language: true },
+                    syncPreferences: { gtd: true, language: true },
                     syncPreferencesUpdatedAt: {
+                        gtd: '2024-01-02T00:00:00.000Z',
                         preferences: '2024-01-02T00:00:00.000Z',
                         language: '2024-01-02T00:00:00.000Z',
                     },
@@ -49,6 +60,39 @@ describe('Sync Logic', () => {
             expect(merged.settings.weekStart).toBe('monday');
             expect(merged.settings.dateFormat).toBe('yyyy-MM-dd');
             expect(merged.settings.timeFormat).toBe('12h');
+            expect(merged.settings.gtd?.defaultScheduleTime).toBe('09:30');
+            expect(merged.settings.gtd?.focusTaskLimit).toBe(5);
+            expect(merged.settings.gtd?.inboxProcessing?.scheduleEnabled).toBe(true);
+        });
+
+        it('does not sync default schedule time with the language group', () => {
+            const local: AppData = {
+                ...mockAppData(),
+                settings: {
+                    gtd: { defaultScheduleTime: '08:00' },
+                    language: 'en',
+                    syncPreferences: { language: true },
+                    syncPreferencesUpdatedAt: {
+                        language: '2024-01-01T00:00:00.000Z',
+                    },
+                },
+            };
+            const incoming: AppData = {
+                ...mockAppData(),
+                settings: {
+                    gtd: { defaultScheduleTime: '09:30' },
+                    language: 'es',
+                    syncPreferences: { language: true },
+                    syncPreferencesUpdatedAt: {
+                        language: '2024-01-02T00:00:00.000Z',
+                    },
+                },
+            };
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.settings.language).toBe('es');
+            expect(merged.settings.gtd?.defaultScheduleTime).toBe('08:00');
         });
 
         it('merges language settings even when sync preferences are empty', () => {
@@ -78,7 +122,7 @@ describe('Sync Logic', () => {
             expect(merged.settings.language).toBe('es');
         });
 
-        it('merges settings for disabled preference groups instead of dropping them', () => {
+        it('keeps local settings for disabled preference groups', () => {
             const local: AppData = {
                 ...mockAppData(),
                 settings: {
@@ -102,14 +146,38 @@ describe('Sync Logic', () => {
 
             const merged = mergeAppData(local, incoming);
 
-            expect(merged.settings.theme).toBe('light');
+            expect(merged.settings.theme).toBe('dark');
         });
 
-        it('merges synced appearance settings including text size', () => {
+        it('prevents incoming appearance from applying when the local device opted out', () => {
             const local: AppData = {
                 ...mockAppData(),
                 settings: {
-                    appearance: { density: 'compact' },
+                    theme: 'dark',
+                    syncPreferences: { appearance: false },
+                },
+            };
+            const incoming: AppData = {
+                ...mockAppData(),
+                settings: {
+                    theme: 'light',
+                    syncPreferences: { appearance: true },
+                    syncPreferencesUpdatedAt: {
+                        appearance: '2024-01-02T00:00:00.000Z',
+                    },
+                },
+            };
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.settings.theme).toBe('dark');
+        });
+
+        it('merges synced appearance settings including text size and mobile quick access', () => {
+            const local: AppData = {
+                ...mockAppData(),
+                settings: {
+                    appearance: { density: 'compact', mobileQuickAccessView: 'review' },
                     syncPreferences: { appearance: true },
                     syncPreferencesUpdatedAt: {
                         preferences: '2024-01-01T00:00:00.000Z',
@@ -120,7 +188,7 @@ describe('Sync Logic', () => {
             const incoming: AppData = {
                 ...mockAppData(),
                 settings: {
-                    appearance: { density: 'compact', textSize: 'large' },
+                    appearance: { density: 'compact', textSize: 'large', mobileQuickAccessView: 'calendar' },
                     syncPreferences: { appearance: true },
                     syncPreferencesUpdatedAt: {
                         preferences: '2024-01-02T00:00:00.000Z',
@@ -131,7 +199,65 @@ describe('Sync Logic', () => {
 
             const merged = mergeAppData(local, incoming);
 
-            expect(merged.settings.appearance).toEqual({ density: 'compact', textSize: 'large' });
+            expect(merged.settings.appearance).toEqual({ density: 'compact', textSize: 'large', mobileQuickAccessView: 'calendar' });
+        });
+
+        it('merges synced future-start visibility preference', () => {
+            const local: AppData = {
+                ...mockAppData(),
+                settings: {
+                    appearance: { showFutureStarts: false },
+                    syncPreferences: { appearance: true },
+                    syncPreferencesUpdatedAt: {
+                        preferences: '2024-01-01T00:00:00.000Z',
+                        appearance: '2024-01-01T00:00:00.000Z',
+                    },
+                },
+            };
+            const incoming: AppData = {
+                ...mockAppData(),
+                settings: {
+                    appearance: { showFutureStarts: true },
+                    syncPreferences: { appearance: true },
+                    syncPreferencesUpdatedAt: {
+                        preferences: '2024-01-02T00:00:00.000Z',
+                        appearance: '2024-01-02T00:00:00.000Z',
+                    },
+                },
+            };
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.settings.appearance).toEqual({ showFutureStarts: true });
+        });
+
+        it('falls back to local mobile quick access when incoming appearance is malformed', () => {
+            const local: AppData = {
+                ...mockAppData(),
+                settings: {
+                    appearance: { mobileQuickAccessView: 'projects' },
+                    syncPreferences: { appearance: true },
+                    syncPreferencesUpdatedAt: {
+                        preferences: '2024-01-01T00:00:00.000Z',
+                        appearance: '2024-01-01T00:00:00.000Z',
+                    },
+                },
+            };
+            const incoming: AppData = {
+                ...mockAppData(),
+                settings: {
+                    appearance: { mobileQuickAccessView: 'trash' as AppData['settings']['appearance']['mobileQuickAccessView'] },
+                    syncPreferences: { appearance: true },
+                    syncPreferencesUpdatedAt: {
+                        preferences: '2024-01-02T00:00:00.000Z',
+                        appearance: '2024-01-02T00:00:00.000Z',
+                    },
+                },
+            };
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.settings.appearance?.mobileQuickAccessView).toBe('projects');
         });
 
         it('deep-clones merged settings arrays to avoid shared references', () => {
@@ -166,6 +292,349 @@ describe('Sync Logic', () => {
 
             incomingCalendars[0].name = 'Mutated Incoming';
             expect(merged.settings.externalCalendars?.[0]?.name).toBe('Team');
+        });
+
+        it('keeps local file calendar sources out of synced settings merges', () => {
+            const localCalendars = [
+                { id: 'cal-local', name: 'Local', url: 'file:///home/user/agenda.ics', enabled: true },
+            ];
+            const local: AppData = {
+                ...mockAppData(),
+                settings: {
+                    externalCalendars: localCalendars,
+                    syncPreferencesUpdatedAt: {
+                        externalCalendars: '2024-01-01T00:00:00.000Z',
+                    },
+                },
+            };
+            const incoming: AppData = {
+                ...mockAppData(),
+                settings: {
+                    externalCalendars: [
+                        { id: 'cal-file', name: 'File', url: 'file:///tmp/other.ics', enabled: true },
+                        { id: 'cal-team', name: 'Team', url: 'https://calendar.example.com/team.ics', enabled: true },
+                    ],
+                    syncPreferencesUpdatedAt: {
+                        externalCalendars: '2024-01-02T00:00:00.000Z',
+                    },
+                },
+            };
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.settings.externalCalendars).toEqual([
+                { id: 'cal-team', name: 'Team', url: 'https://calendar.example.com/team.ics', enabled: true },
+                localCalendars[0],
+            ]);
+        });
+
+        it('merges saved filters by id when their sync group is enabled', () => {
+            const localFilter = {
+                id: 'filter-local',
+                name: 'Local Desk',
+                view: 'focus' as const,
+                criteria: { contexts: ['@desk'] },
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt: '2024-01-01T00:00:00.000Z',
+            };
+            const incomingFilter = {
+                id: 'filter-incoming',
+                name: 'Incoming Week',
+                view: 'focus' as const,
+                criteria: { dueDateRange: { preset: 'this_week' as const } },
+                createdAt: '2024-01-02T00:00:00.000Z',
+                updatedAt: '2024-01-02T00:00:00.000Z',
+            };
+            const local: AppData = {
+                ...mockAppData(),
+                settings: {
+                    savedFilters: [localFilter],
+                    syncPreferences: { savedFilters: true },
+                    syncPreferencesUpdatedAt: {
+                        savedFilters: '2024-01-01T00:00:00.000Z',
+                    },
+                },
+            };
+            const incoming: AppData = {
+                ...mockAppData(),
+                settings: {
+                    savedFilters: [incomingFilter],
+                    syncPreferences: { savedFilters: true },
+                    syncPreferencesUpdatedAt: {
+                        savedFilters: '2024-01-02T00:00:00.000Z',
+                    },
+                },
+            };
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.settings.savedFilters).toEqual([localFilter, incomingFilter]);
+            expect(merged.settings.savedFilters).not.toBe(incoming.settings.savedFilters);
+        });
+
+        it('keeps the newer saved filter when the same id changed on both devices', () => {
+            const localFilter = {
+                id: 'filter-shared',
+                name: 'Local Name',
+                view: 'focus' as const,
+                criteria: { contexts: ['@desk'] },
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt: '2024-01-03T00:00:00.000Z',
+            };
+            const incomingFilter = {
+                id: 'filter-shared',
+                name: 'Incoming Name',
+                view: 'focus' as const,
+                criteria: { tags: ['#incoming'] },
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt: '2024-01-04T00:00:00.000Z',
+            };
+            const local: AppData = {
+                ...mockAppData(),
+                settings: {
+                    savedFilters: [localFilter],
+                    syncPreferences: { savedFilters: true },
+                    syncPreferencesUpdatedAt: {
+                        savedFilters: '2024-01-03T00:00:00.000Z',
+                    },
+                },
+            };
+            const incoming: AppData = {
+                ...mockAppData(),
+                settings: {
+                    savedFilters: [incomingFilter],
+                    syncPreferences: { savedFilters: true },
+                    syncPreferencesUpdatedAt: {
+                        savedFilters: '2024-01-04T00:00:00.000Z',
+                    },
+                },
+            };
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.settings.savedFilters).toEqual([incomingFilter]);
+        });
+
+        it('keeps saved filter tombstones from resurrecting older copies', () => {
+            const deletedFilter = {
+                id: 'filter-shared',
+                name: 'Desk',
+                view: 'focus' as const,
+                criteria: { contexts: ['@desk'] },
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt: '2024-01-05T00:00:00.000Z',
+                deletedAt: '2024-01-05T00:00:00.000Z',
+            };
+            const staleActiveFilter = {
+                id: 'filter-shared',
+                name: 'Desk',
+                view: 'focus' as const,
+                criteria: { contexts: ['@desk'] },
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt: '2024-01-02T00:00:00.000Z',
+            };
+            const local: AppData = {
+                ...mockAppData(),
+                settings: {
+                    savedFilters: [deletedFilter],
+                    syncPreferences: { savedFilters: true },
+                    syncPreferencesUpdatedAt: {
+                        savedFilters: '2024-01-05T00:00:00.000Z',
+                    },
+                },
+            };
+            const incoming: AppData = {
+                ...mockAppData(),
+                settings: {
+                    savedFilters: [staleActiveFilter],
+                    syncPreferences: { savedFilters: true },
+                    syncPreferencesUpdatedAt: {
+                        savedFilters: '2024-01-06T00:00:00.000Z',
+                    },
+                },
+            };
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.settings.savedFilters).toEqual([deletedFilter]);
+        });
+
+        it('keeps saved filter tombstones when a live copy is only slightly newer', () => {
+            const deletedAt = '2024-01-05T00:00:00.000Z';
+            const liveUpdatedAt = new Date(Date.parse(deletedAt) + DELETE_VS_LIVE_AMBIGUOUS_WINDOW_MS - 1).toISOString();
+            const deletedFilter = {
+                id: 'filter-shared',
+                name: 'Desk',
+                view: 'focus' as const,
+                criteria: { contexts: ['@desk'] },
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt: deletedAt,
+                deletedAt,
+            };
+            const slightlyNewerActiveFilter = {
+                id: 'filter-shared',
+                name: 'Desk active',
+                view: 'focus' as const,
+                criteria: { contexts: ['@desk'], tags: ['#active'] },
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt: liveUpdatedAt,
+            };
+            const local: AppData = {
+                ...mockAppData(),
+                settings: {
+                    savedFilters: [deletedFilter],
+                    syncPreferences: { savedFilters: true },
+                    syncPreferencesUpdatedAt: {
+                        savedFilters: deletedAt,
+                    },
+                },
+            };
+            const incoming: AppData = {
+                ...mockAppData(),
+                settings: {
+                    savedFilters: [slightlyNewerActiveFilter],
+                    syncPreferences: { savedFilters: true },
+                    syncPreferencesUpdatedAt: {
+                        savedFilters: liveUpdatedAt,
+                    },
+                },
+            };
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.settings.savedFilters).toEqual([deletedFilter]);
+        });
+
+        it('lets a live saved filter edit win outside the delete ambiguity window', () => {
+            const deletedAt = '2024-01-05T00:00:00.000Z';
+            const liveUpdatedAt = new Date(Date.parse(deletedAt) + DELETE_VS_LIVE_AMBIGUOUS_WINDOW_MS + 1).toISOString();
+            const deletedFilter = {
+                id: 'filter-shared',
+                name: 'Desk',
+                view: 'focus' as const,
+                criteria: { contexts: ['@desk'] },
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt: deletedAt,
+                deletedAt,
+            };
+            const newerActiveFilter = {
+                id: 'filter-shared',
+                name: 'Desk active',
+                view: 'focus' as const,
+                criteria: { contexts: ['@desk'], tags: ['#active'] },
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt: liveUpdatedAt,
+            };
+            const local: AppData = {
+                ...mockAppData(),
+                settings: {
+                    savedFilters: [deletedFilter],
+                    syncPreferences: { savedFilters: true },
+                    syncPreferencesUpdatedAt: {
+                        savedFilters: deletedAt,
+                    },
+                },
+            };
+            const incoming: AppData = {
+                ...mockAppData(),
+                settings: {
+                    savedFilters: [newerActiveFilter],
+                    syncPreferences: { savedFilters: true },
+                    syncPreferencesUpdatedAt: {
+                        savedFilters: liveUpdatedAt,
+                    },
+                },
+            };
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.settings.savedFilters).toEqual([newerActiveFilter]);
+        });
+
+        it('chooses the same saved filter winner when update timestamps tie', () => {
+            const updatedAt = '2024-01-05T00:00:00.000Z';
+            const localFilter = {
+                id: 'filter-shared',
+                name: 'Desk',
+                view: 'focus' as const,
+                criteria: { contexts: ['@desk'] },
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt,
+            };
+            const incomingFilter = {
+                id: 'filter-shared',
+                name: 'Desk active',
+                view: 'focus' as const,
+                criteria: { contexts: ['@desk'], tags: ['#active'] },
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt,
+            };
+            const local: AppData = {
+                ...mockAppData(),
+                settings: {
+                    savedFilters: [localFilter],
+                    syncPreferences: { savedFilters: true },
+                    syncPreferencesUpdatedAt: {
+                        savedFilters: updatedAt,
+                    },
+                },
+            };
+            const incoming: AppData = {
+                ...mockAppData(),
+                settings: {
+                    savedFilters: [incomingFilter],
+                    syncPreferences: { savedFilters: true },
+                    syncPreferencesUpdatedAt: {
+                        savedFilters: updatedAt,
+                    },
+                },
+            };
+
+            const forward = mergeAppData(local, incoming);
+            const reverse = mergeAppData(incoming, local);
+
+            expect(forward.settings.savedFilters).toEqual(reverse.settings.savedFilters);
+            expect(forward.settings.savedFilters).toEqual([expect.objectContaining({ id: 'filter-shared' })]);
+        });
+
+        it('keeps local saved filters when the local device opted out', () => {
+            const localFilter = {
+                id: 'filter-local',
+                name: 'Local',
+                view: 'focus' as const,
+                criteria: { tags: ['#local'] },
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt: '2024-01-01T00:00:00.000Z',
+            };
+            const incomingFilter = {
+                id: 'filter-incoming',
+                name: 'Incoming',
+                view: 'focus' as const,
+                criteria: { tags: ['#incoming'] },
+                createdAt: '2024-01-02T00:00:00.000Z',
+                updatedAt: '2024-01-02T00:00:00.000Z',
+            };
+            const local: AppData = {
+                ...mockAppData(),
+                settings: {
+                    savedFilters: [localFilter],
+                    syncPreferences: { savedFilters: false },
+                },
+            };
+            const incoming: AppData = {
+                ...mockAppData(),
+                settings: {
+                    savedFilters: [incomingFilter],
+                    syncPreferences: { savedFilters: true },
+                    syncPreferencesUpdatedAt: {
+                        savedFilters: '2024-01-02T00:00:00.000Z',
+                    },
+                },
+            };
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.settings.savedFilters).toEqual([localFilter]);
         });
 
         it('falls back to local values when incoming synced settings are malformed', () => {

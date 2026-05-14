@@ -46,6 +46,7 @@ const createManualScheduler = (startMs = 0) => {
         setTimer,
         clearTimer,
         advanceBy,
+        getTimerCount: () => timers.size,
     };
 };
 
@@ -81,6 +82,7 @@ describe('createDesktopAutoSyncController', () => {
             reportError: vi.fn(),
             isRuntimeActive: () => true,
             minIntervalMs: 0,
+            periodicSyncIntervalMs: null,
         });
 
         const first = controller.requestSync();
@@ -105,6 +107,7 @@ describe('createDesktopAutoSyncController', () => {
             now: scheduler.now,
             setTimer: scheduler.setTimer,
             clearTimer: scheduler.clearTimer,
+            periodicSyncIntervalMs: null,
         });
 
         await controller.requestSync();
@@ -133,6 +136,7 @@ describe('createDesktopAutoSyncController', () => {
             isRuntimeActive: () => true,
             setTimer: scheduler.setTimer,
             clearTimer: scheduler.clearTimer,
+            periodicSyncIntervalMs: null,
         });
 
         controller.handleDataChange();
@@ -165,6 +169,7 @@ describe('createDesktopAutoSyncController', () => {
             setTimer: scheduler.setTimer,
             clearTimer: scheduler.clearTimer,
             minIntervalMs: 0,
+            periodicSyncIntervalMs: null,
         });
 
         controller.handleBlur();
@@ -184,5 +189,69 @@ describe('createDesktopAutoSyncController', () => {
         await waitForAssertion(() => {
             expect(performSync).toHaveBeenCalledTimes(2);
         });
+    });
+
+    it('runs a periodic heartbeat while the runtime is active', async () => {
+        const scheduler = createManualScheduler();
+        let pauseWindowSync = false;
+
+        const performSync = vi.fn(async () => ({ success: true }));
+        const controller = createDesktopAutoSyncController({
+            canSync: async () => true,
+            performSync,
+            flushPendingSave: async () => undefined,
+            reportError: vi.fn(),
+            isRuntimeActive: () => true,
+            shouldPauseWindowSync: () => pauseWindowSync,
+            now: scheduler.now,
+            setTimer: scheduler.setTimer,
+            clearTimer: scheduler.clearTimer,
+            minIntervalMs: 0,
+            periodicSyncIntervalMs: 15 * 60 * 1000,
+        });
+
+        await scheduler.advanceBy(15 * 60 * 1000 - 1);
+        expect(performSync).not.toHaveBeenCalled();
+
+        await scheduler.advanceBy(1);
+        await waitForAssertion(() => {
+            expect(performSync).toHaveBeenCalledTimes(1);
+        });
+
+        pauseWindowSync = true;
+        await scheduler.advanceBy(15 * 60 * 1000);
+        expect(performSync).toHaveBeenCalledTimes(1);
+
+        pauseWindowSync = false;
+        await scheduler.advanceBy(15 * 60 * 1000);
+        await waitForAssertion(() => {
+            expect(performSync).toHaveBeenCalledTimes(2);
+        });
+
+        controller.dispose();
+    });
+
+    it('cleans up the periodic heartbeat timer on dispose', async () => {
+        const scheduler = createManualScheduler();
+
+        const performSync = vi.fn(async () => ({ success: true }));
+        const controller = createDesktopAutoSyncController({
+            canSync: async () => true,
+            performSync,
+            flushPendingSave: async () => undefined,
+            reportError: vi.fn(),
+            isRuntimeActive: () => true,
+            now: scheduler.now,
+            setTimer: scheduler.setTimer,
+            clearTimer: scheduler.clearTimer,
+            periodicSyncIntervalMs: 15 * 60 * 1000,
+        });
+
+        expect(scheduler.getTimerCount()).toBe(1);
+        controller.dispose();
+        expect(scheduler.getTimerCount()).toBe(0);
+
+        await scheduler.advanceBy(15 * 60 * 1000);
+        expect(performSync).not.toHaveBeenCalled();
     });
 });

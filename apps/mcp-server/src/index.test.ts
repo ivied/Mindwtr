@@ -3,6 +3,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import { NotFoundError } from './errors.js';
 import { parseArgs, parseBooleanFlag, registerMindwtrTools, resolveServerModeFlags } from './index.js';
+import type { Area, Project, Task } from './queries.js';
+import type { MindwtrService } from './service.js';
 
 type RegisteredTool = {
   name: string;
@@ -19,23 +21,57 @@ const createMockServer = () => {
   return { server, tools };
 };
 
-const createMockService = () => ({
-  listTasks: async () => [{ id: 't1' }],
-  listProjects: async () => [{ id: 'p1' }],
-  listAreas: async () => [{ id: 'a1' }],
-  getTask: async () => ({ id: 't1' }),
-  getProject: async () => ({ id: 'p1' }),
-  addTask: async () => ({ id: 't1' }),
-  updateTask: async () => ({ id: 't1' }),
-  completeTask: async () => ({ id: 't1' }),
-  deleteTask: async () => ({ id: 't1' }),
-  restoreTask: async () => ({ id: 't1' }),
-  addProject: async () => ({ id: 'p1' }),
-  updateProject: async () => ({ id: 'p1' }),
-  deleteProject: async () => ({ id: 'p1' }),
-  addArea: async () => ({ id: 'a1' }),
-  updateArea: async () => ({ id: 'a1' }),
-  deleteArea: async () => ({ id: 'a1' }),
+const iso = '2026-01-01T00:00:00.000Z';
+
+const mockTask = (overrides: Partial<Task> = {}): Task => ({
+  id: 't1',
+  title: 'Task 1',
+  status: 'inbox',
+  tags: [],
+  contexts: [],
+  createdAt: iso,
+  updatedAt: iso,
+  ...overrides,
+});
+
+const mockProject = (overrides: Partial<Project> = {}): Project => ({
+  id: 'p1',
+  title: 'Project 1',
+  status: 'active',
+  color: '#6B7280',
+  order: 0,
+  tagIds: [],
+  createdAt: iso,
+  updatedAt: iso,
+  ...overrides,
+});
+
+const mockArea = (overrides: Partial<Area> = {}): Area => ({
+  id: 'a1',
+  name: 'Area 1',
+  order: 0,
+  createdAt: iso,
+  updatedAt: iso,
+  ...overrides,
+});
+
+const createMockService = (): MindwtrService => ({
+  listTasks: async () => [mockTask()],
+  listProjects: async () => [mockProject()],
+  listAreas: async () => [mockArea()],
+  getTask: async () => mockTask(),
+  getProject: async () => mockProject(),
+  addTask: async () => mockTask(),
+  updateTask: async () => mockTask(),
+  completeTask: async () => mockTask(),
+  deleteTask: async () => mockTask(),
+  restoreTask: async () => mockTask(),
+  addProject: async () => mockProject(),
+  updateProject: async () => mockProject(),
+  deleteProject: async () => mockProject(),
+  addArea: async () => mockArea(),
+  updateArea: async () => mockArea(),
+  deleteArea: async () => mockArea(),
   close: async () => undefined,
 });
 
@@ -183,11 +219,11 @@ describe('mcp server index', () => {
       ...createMockService(),
       addTask: async (input: any) => {
         receivedInput = input;
-        return { id: 't1' };
+        return mockTask();
       },
       updateTask: async (input: any) => {
         receivedInput = input;
-        return { id: 't1' };
+        return mockTask();
       },
     }, false);
 
@@ -217,7 +253,7 @@ describe('mcp server index', () => {
       ...createMockService(),
       addTask: async (input: any) => {
         receivedInput = input;
-        return { id: 't1' };
+        return mockTask();
       },
     }, false);
     const addHandler = tools.get('mindwtr_add_task')?.handler;

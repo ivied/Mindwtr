@@ -1,5 +1,6 @@
 use crate::obsidian_paths::normalize_obsidian_inbox_file;
 use crate::*;
+use std::path::PathBuf;
 
 const KEYRING_FALLBACK_WARNING_EVENT: &str = "keyring-fallback-warning";
 
@@ -8,11 +9,107 @@ fn keyring_enabled() -> bool {
 }
 
 fn emit_keyring_fallback_warning(app: &tauri::AppHandle, secret_name: &str) {
-    let message = format!(
-        "{secret_name} stored in plaintext because the system keyring is unavailable."
-    );
+    let message =
+        format!("{secret_name} stored in plaintext because the system keyring is unavailable.");
     if let Err(error) = app.emit(KEYRING_FALLBACK_WARNING_EVENT, message) {
         log::warn!("Failed to emit keyring fallback warning: {error}");
+    }
+}
+
+fn calendar_file_url_to_path(raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    if !trimmed
+        .get(..7)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("file://"))
+    {
+        return None;
+    }
+
+    let path = &trimmed[7..];
+    #[cfg(target_os = "windows")]
+    let path = {
+        let mut path = path;
+        let bytes = path.as_bytes();
+        if bytes.len() >= 3 && bytes[0] == b'/' && bytes[2] == b':' {
+            path = &path[1..];
+        }
+        path
+    };
+    let candidate = PathBuf::from(percent_decode_file_path(path)?);
+    if !candidate.is_absolute() {
+        return None;
+    }
+    let has_ics_extension = candidate
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("ics"));
+    if !has_ics_extension {
+        return None;
+    }
+    Some(candidate)
+}
+
+fn percent_decode_file_path(path: &str) -> Option<String> {
+    let bytes = path.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hi = bytes.get(index + 1).and_then(|value| hex_value(*value))?;
+            let lo = bytes.get(index + 2).and_then(|value| hex_value(*value))?;
+            decoded.push((hi << 4) | lo);
+            index += 3;
+            continue;
+        }
+        decoded.push(bytes[index]);
+        index += 1;
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn hex_value(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn is_valid_calendar_url(raw: &str) -> bool {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    lower.starts_with("https://")
+        || lower.starts_with("http://")
+        || lower.starts_with("webcal://")
+        || calendar_file_url_to_path(trimmed).is_some()
+}
+
+pub(crate) fn expand_external_calendar_file_scopes(app: &tauri::AppHandle, raw: Option<&str>) {
+    let Some(raw) = raw else {
+        return;
+    };
+    let Ok(calendars) = serde_json::from_str::<Vec<ExternalCalendarSubscription>>(raw) else {
+        return;
+    };
+    for calendar in calendars {
+        let Some(path) = calendar_file_url_to_path(&calendar.url) else {
+            continue;
+        };
+        if let Err(error) = app.fs_scope().allow_file(&path) {
+            log::warn!(
+                "Failed to expand Tauri fs scope for calendar file {:?}: {error}",
+                path
+            );
+        } else {
+            log::info!(
+                "Expanded Tauri fs scope to include calendar file {:?}",
+                path
+            );
+        }
     }
 }
 
@@ -67,10 +164,16 @@ pub(crate) fn read_config_toml(path: &Path) -> AppConfigToml {
             config.webdav_username = parse_toml_string_value(value);
         } else if key == "webdav_password" {
             config.webdav_password = parse_toml_string_value(value);
+        } else if key == "webdav_allow_insecure_http" {
+            config.webdav_allow_insecure_http = parse_toml_string_value(value);
+        } else if key == "webdav_allow_weak_fingerprint" {
+            config.webdav_allow_weak_fingerprint = parse_toml_string_value(value);
         } else if key == "cloud_url" {
             config.cloud_url = parse_toml_string_value(value);
         } else if key == "cloud_token" {
             config.cloud_token = parse_toml_string_value(value);
+        } else if key == "cloud_allow_insecure_http" {
+            config.cloud_allow_insecure_http = parse_toml_string_value(value);
         } else if key == "dropbox_tokens" {
             config.dropbox_tokens = parse_toml_string_value(value);
         } else if key == "obsidian_config" {
@@ -143,6 +246,18 @@ fn write_config_toml_with_header(
             serialize_toml_string_value(webdav_password)
         ));
     }
+    if let Some(webdav_allow_insecure_http) = &config.webdav_allow_insecure_http {
+        lines.push(format!(
+            "webdav_allow_insecure_http = {}",
+            serialize_toml_string_value(webdav_allow_insecure_http)
+        ));
+    }
+    if let Some(webdav_allow_weak_fingerprint) = &config.webdav_allow_weak_fingerprint {
+        lines.push(format!(
+            "webdav_allow_weak_fingerprint = {}",
+            serialize_toml_string_value(webdav_allow_weak_fingerprint)
+        ));
+    }
     if let Some(cloud_url) = &config.cloud_url {
         lines.push(format!(
             "cloud_url = {}",
@@ -153,6 +268,12 @@ fn write_config_toml_with_header(
         lines.push(format!(
             "cloud_token = {}",
             serialize_toml_string_value(cloud_token)
+        ));
+    }
+    if let Some(cloud_allow_insecure_http) = &config.cloud_allow_insecure_http {
+        lines.push(format!(
+            "cloud_allow_insecure_http = {}",
+            serialize_toml_string_value(cloud_allow_insecure_http)
         ));
     }
     if let Some(dropbox_tokens) = &config.dropbox_tokens {
@@ -214,11 +335,20 @@ fn merge_config(base: &mut AppConfigToml, overrides: AppConfigToml) {
     if overrides.webdav_password.is_some() {
         base.webdav_password = overrides.webdav_password;
     }
+    if overrides.webdav_allow_insecure_http.is_some() {
+        base.webdav_allow_insecure_http = overrides.webdav_allow_insecure_http;
+    }
+    if overrides.webdav_allow_weak_fingerprint.is_some() {
+        base.webdav_allow_weak_fingerprint = overrides.webdav_allow_weak_fingerprint;
+    }
     if overrides.cloud_url.is_some() {
         base.cloud_url = overrides.cloud_url;
     }
     if overrides.cloud_token.is_some() {
         base.cloud_token = overrides.cloud_token;
+    }
+    if overrides.cloud_allow_insecure_http.is_some() {
+        base.cloud_allow_insecure_http = overrides.cloud_allow_insecure_http;
     }
     if overrides.dropbox_tokens.is_some() {
         base.dropbox_tokens = overrides.dropbox_tokens;
@@ -296,8 +426,11 @@ fn config_has_values(config: &AppConfigToml) -> bool {
         || config.webdav_url.is_some()
         || config.webdav_username.is_some()
         || config.webdav_password.is_some()
+        || config.webdav_allow_insecure_http.is_some()
+        || config.webdav_allow_weak_fingerprint.is_some()
         || config.cloud_url.is_some()
         || config.cloud_token.is_some()
+        || config.cloud_allow_insecure_http.is_some()
         || config.dropbox_tokens.is_some()
         || config.obsidian_config.is_some()
         || config.external_calendars.is_some()
@@ -662,7 +795,9 @@ pub(crate) fn get_webdav_config(app: tauri::AppHandle) -> Result<Value, String> 
     Ok(serde_json::json!({
         "url": config.webdav_url.unwrap_or_default(),
         "username": config.webdav_username.unwrap_or_default(),
-        "hasPassword": password.is_some()
+        "hasPassword": password.is_some(),
+        "allowInsecureHttp": config.webdav_allow_insecure_http.as_deref() == Some("true"),
+        "allowWeakFingerprint": config.webdav_allow_weak_fingerprint.as_deref() != Some("false")
     }))
 }
 
@@ -672,6 +807,8 @@ pub(crate) fn set_webdav_config(
     url: String,
     username: String,
     password: String,
+    allow_insecure_http: Option<bool>,
+    allow_weak_fingerprint: Option<bool>,
 ) -> Result<bool, String> {
     let url = url.trim().to_string();
     let config_path = get_config_path(&app);
@@ -681,10 +818,24 @@ pub(crate) fn set_webdav_config(
         config.webdav_url = None;
         config.webdav_username = None;
         config.webdav_password = None;
+        config.webdav_allow_insecure_http = None;
+        config.webdav_allow_weak_fingerprint = None;
         let _ = set_keyring_secret(&app, KEYRING_WEB_DAV_PASSWORD, None);
     } else {
         config.webdav_url = Some(url);
         config.webdav_username = Some(username.trim().to_string());
+        config.webdav_allow_insecure_http = Some(if allow_insecure_http.unwrap_or(false) {
+            "true".to_string()
+        } else {
+            "false".to_string()
+        });
+        if let Some(allow_weak_fingerprint) = allow_weak_fingerprint {
+            config.webdav_allow_weak_fingerprint = Some(if allow_weak_fingerprint {
+                "true".to_string()
+            } else {
+                "false".to_string()
+            });
+        }
         if !password.trim().is_empty() {
             let next_password = password.trim().to_string();
             match set_keyring_secret(&app, KEYRING_WEB_DAV_PASSWORD, Some(next_password.clone())) {
@@ -735,7 +886,8 @@ pub(crate) fn get_cloud_config(app: tauri::AppHandle) -> Result<Value, String> {
     }
     Ok(serde_json::json!({
         "url": config.cloud_url.unwrap_or_default(),
-        "token": token.unwrap_or_default()
+        "token": token.unwrap_or_default(),
+        "allowInsecureHttp": config.cloud_allow_insecure_http.as_deref() == Some("true")
     }))
 }
 
@@ -744,6 +896,7 @@ pub(crate) fn set_cloud_config(
     app: tauri::AppHandle,
     url: String,
     token: String,
+    allow_insecure_http: Option<bool>,
 ) -> Result<bool, String> {
     let url = url.trim().to_string();
     let config_path = get_config_path(&app);
@@ -760,9 +913,15 @@ pub(crate) fn set_cloud_config(
     if url.is_empty() {
         config.cloud_url = None;
         config.cloud_token = None;
+        config.cloud_allow_insecure_http = None;
         let _ = set_keyring_secret(&app, KEYRING_CLOUD_TOKEN, None);
     } else {
         config.cloud_url = Some(url);
+        config.cloud_allow_insecure_http = Some(if allow_insecure_http.unwrap_or(false) {
+            "true".to_string()
+        } else {
+            "false".to_string()
+        });
         match set_keyring_secret(&app, KEYRING_CLOUD_TOKEN, next_token.clone()) {
             Ok(_) => {
                 config.cloud_token = None;
@@ -810,15 +969,6 @@ pub(crate) fn set_external_calendars(
 ) -> Result<bool, String> {
     let config_path = get_config_path(&app);
     let mut config = read_config(&app);
-    let is_valid_calendar_url = |raw: &str| {
-        let trimmed = raw.trim();
-        if trimmed.is_empty() {
-            return false;
-        }
-        trimmed.starts_with("https://")
-            || trimmed.starts_with("http://")
-            || trimmed.starts_with("webcal://")
-    };
     let sanitized: Vec<ExternalCalendarSubscription> = calendars
         .into_iter()
         .filter(|c| is_valid_calendar_url(&c.url))
@@ -834,5 +984,51 @@ pub(crate) fn set_external_calendars(
 
     config.external_calendars = Some(serde_json::to_string(&sanitized).map_err(|e| e.to_string())?);
     write_config_files(&config_path, &get_secrets_path(&app), &config)?;
+    expand_external_calendar_file_scopes(&app, config.external_calendars.as_deref());
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_network_calendar_urls() {
+        assert!(is_valid_calendar_url("https://calendar.example/work.ics"));
+        assert!(is_valid_calendar_url("http://calendar.example/work.ics"));
+        assert!(is_valid_calendar_url("webcal://calendar.example/work.ics"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn accepts_absolute_file_calendar_urls() {
+        let path = calendar_file_url_to_path("file:///tmp/My%20Calendar.ICS").unwrap();
+        assert!(path.is_absolute());
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("My Calendar.ICS")
+        );
+        assert!(is_valid_calendar_url("file:///tmp/My%20Calendar.ICS"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn accepts_absolute_windows_file_calendar_urls() {
+        let path = calendar_file_url_to_path("file:///C:/Users/demo/My%20Calendar.ICS").unwrap();
+        assert!(path.is_absolute());
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("My Calendar.ICS")
+        );
+        assert!(is_valid_calendar_url(
+            "file:///C:/Users/demo/My%20Calendar.ICS"
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_file_calendar_urls() {
+        assert!(!is_valid_calendar_url("file://agenda.ics"));
+        assert!(!is_valid_calendar_url("file:///tmp/agenda.txt"));
+        assert!(!is_valid_calendar_url("file:///tmp/bad%ZZ.ics"));
+    }
 }

@@ -23,11 +23,7 @@ type LogEntry = {
 
 const writeLog = (entry: LogEntry) => {
   const line = `${JSON.stringify(entry)}\n`;
-  if (entry.level === 'error') {
-    process.stderr.write(line);
-  } else {
-    process.stdout.write(line);
-  }
+  process.stderr.write(line);
 };
 
 const logError = (message: string, error?: unknown) => {
@@ -126,6 +122,8 @@ export const resolveServerModeFlags = (flags: Record<string, string | boolean>) 
 const taskStatusSchema = z.enum(['inbox', 'next', 'waiting', 'someday', 'reference', 'done', 'archived']);
 const taskStatusOrAllSchema = z.enum(['inbox', 'next', 'waiting', 'someday', 'reference', 'done', 'archived', 'all']);
 const projectStatusSchema = z.enum(['active', 'someday', 'waiting', 'archived']);
+const taskPrioritySchema = z.enum(['low', 'medium', 'high', 'urgent']);
+const timeEstimateSchema = z.enum(['5min', '10min', '15min', '30min', '1hr', '2hr', '3hr', '4hr', '4hr+']);
 const taskTokenSchema = z.string().trim().min(1).max(MAX_TASK_TITLE_LENGTH);
 const isoDateLikeSchema = z
   .string()
@@ -158,10 +156,10 @@ const addTaskSchema = z.object({
   contexts: z.array(taskTokenSchema).optional().describe('Context tags (e.g. ["@home", "@work"])'),
   tags: z.array(taskTokenSchema).optional().describe('Tags (e.g. ["#urgent", "#personal"])'),
   description: z.string().optional().describe('Task description/notes'),
-  priority: z.string().optional().describe('Priority level'),
+  priority: taskPrioritySchema.optional().describe('Priority level: low, medium, high, urgent'),
   energyLevel: z.enum(['low', 'medium', 'high']).optional().describe('Energy level: low, medium, high'),
   assignedTo: z.string().optional().describe('Person this task is assigned to or waiting for'),
-  timeEstimate: z.string().optional().describe('Time estimate (e.g. "30m", "2h")'),
+  timeEstimate: timeEstimateSchema.optional().describe('Time estimate: 5min, 10min, 15min, 30min, 1hr, 2hr, 3hr, 4hr, 4hr+'),
 });
 const normalizeAddTaskInput = (data: z.infer<typeof addTaskSchema>) => {
   const hasTitle = typeof data.title === 'string' && data.title.trim().length > 0;
@@ -198,10 +196,10 @@ const updateTaskSchema = z.object({
   contexts: z.array(taskTokenSchema).nullable().optional(),
   tags: z.array(taskTokenSchema).nullable().optional(),
   description: z.string().nullable().optional(),
-  priority: z.string().nullable().optional(),
+  priority: taskPrioritySchema.nullable().optional(),
   energyLevel: z.enum(['low', 'medium', 'high']).nullable().optional(),
   assignedTo: z.string().nullable().optional(),
-  timeEstimate: z.string().nullable().optional(),
+  timeEstimate: timeEstimateSchema.nullable().optional(),
   reviewAt: isoDateLikeSchema.nullable().optional(),
   isFocusedToday: z.boolean().optional(),
 });

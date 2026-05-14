@@ -23,6 +23,7 @@ Release automation and version metadata are centered in:
 ## Standard Release Flow
 
 1. Make sure `main` is in the intended release state and commit any pre-release work first.
+   - If the previous version is already released, put follow-up fixes under `Unreleased` in `CHANGELOG.md` and target the next patch version, for example `v0.9.1` after `v0.9.0`.
 2. Bump the version with:
 
 ```bash
@@ -34,7 +35,7 @@ This updates workspace package versions and bumps the Android `versionCode`.
 3. Run the release hard gates before tagging:
    - FOSS/static gate:
      - inspect `git diff vPREV..HEAD -- apps/mobile/package.json`
-     - inspect F-Droid/FOSS config files (`apps/mobile/plugins/android-manifest-fixes.js`, `apps/mobile/scripts/`, `.github/workflows/release-android-foss.yml`, `docs/izzyonandroid.yml`)
+     - inspect F-Droid/FOSS config files (`apps/mobile/plugins/android-manifest-fixes.js`, `apps/mobile/scripts/`, `.github/workflows/release-android-foss.yml`, `config/izzyonandroid.yml`)
      - run `python3 scripts/ci/repair-package-lock.py --check apps/desktop/package-lock.json`
    - CloudKit schema gate:
      - inspect synced schema files against the previous tag
@@ -89,6 +90,7 @@ For larger releases, also verify:
 - desktop updater metadata
 - mobile store metadata / Fastlane inputs
 - wiki/docs changes for user-visible features
+- cross-backend sync smoke with a small seed dataset: add, update, delete, and attachment transfer should converge across Cloud, WebDAV/file sync, and any platform-native backend available to the release tester; a second sync should report no new conflicts
 
 ---
 
@@ -133,5 +135,6 @@ If a bad release is detected:
 ## Related
 
 - [[Developer Guide]]
-- [[Deployment Guide]]
+- [[Docker Deployment]]
+- [[Cloud Deployment]]
 - [Repository release notes](https://github.com/dongdongbh/Mindwtr/tree/main/docs/release-notes)

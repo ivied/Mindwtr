@@ -1,8 +1,11 @@
 import type { Language } from '../../../contexts/language-context';
 import {
     type GlobalQuickAddShortcutSetting,
+    GLOBAL_QUICK_ADD_SHORTCUT_DISABLED,
     getGlobalQuickAddShortcutOptions,
 } from '../../../lib/global-quick-add-shortcut';
+
+const FLATPAK_QUICK_ADD_COMMAND = 'flatpak run tech.dongdongbh.mindwtr --quick-add';
 
 type ThemeMode = 'system' | 'light' | 'dark' | 'eink' | 'nord' | 'sepia';
 type DensityMode = 'comfortable' | 'compact';
@@ -26,6 +29,8 @@ type Labels = {
     textSizeDefault: string;
     textSizeLarge: string;
     textSizeExtraLarge: string;
+    showTaskAge: string;
+    showTaskAgeDesc: string;
     system: string;
     light: string;
     dark: string;
@@ -51,6 +56,9 @@ type Labels = {
     undoNotificationsDesc: string;
     globalQuickAddShortcut: string;
     globalQuickAddShortcutDesc: string;
+    globalQuickAddFlatpakDesc: string;
+    globalQuickAddFlatpakCommand: string;
+    globalQuickAddFlatpakCommandDesc: string;
     keybindingVim: string;
     keybindingEmacs: string;
     viewShortcuts: string;
@@ -61,6 +69,8 @@ type Labels = {
     closeBehaviorAsk: string;
     closeBehaviorTray: string;
     closeBehaviorQuit: string;
+    launchAtStartup: string;
+    launchAtStartupDesc: string;
     showTray: string;
     showTrayDesc: string;
 };
@@ -75,6 +85,8 @@ export type SettingsMainPageProps = {
     onDensityChange: (mode: DensityMode) => void;
     textSizeMode: TextSizeMode;
     onTextSizeChange: (mode: TextSizeMode) => void;
+    showTaskAge: boolean;
+    onShowTaskAgeChange: (enabled: boolean) => void;
     language: Language;
     onLanguageChange: (lang: Language) => void;
     weekStart: WeekStart;
@@ -87,6 +99,7 @@ export type SettingsMainPageProps = {
     onKeybindingStyleChange: (style: 'vim' | 'emacs') => void;
     globalQuickAddShortcut: GlobalQuickAddShortcutSetting;
     onGlobalQuickAddShortcutChange: (shortcut: GlobalQuickAddShortcutSetting) => void;
+    isFlatpak?: boolean;
     undoNotificationsEnabled: boolean;
     onUndoNotificationsChange: (enabled: boolean) => void;
     onOpenHelp: () => void;
@@ -97,6 +110,10 @@ export type SettingsMainPageProps = {
     showCloseBehavior?: boolean;
     closeBehavior?: 'ask' | 'tray' | 'quit';
     onCloseBehaviorChange?: (behavior: 'ask' | 'tray' | 'quit') => void;
+    showLaunchAtStartup?: boolean;
+    launchAtStartupEnabled?: boolean;
+    launchAtStartupLoading?: boolean;
+    onLaunchAtStartupChange?: (enabled: boolean) => void;
     showTrayToggle?: boolean;
     trayVisible?: boolean;
     onTrayVisibleChange?: (visible: boolean) => void;
@@ -133,14 +150,26 @@ function SettingsCard({ children }: { children: React.ReactNode }) {
     );
 }
 
-function Toggle({ enabled, onChange }: { enabled: boolean; onChange: () => void }) {
+function Toggle({
+    disabled = false,
+    enabled,
+    label,
+    onChange,
+}: {
+    disabled?: boolean;
+    enabled: boolean;
+    label: string;
+    onChange: () => void;
+}) {
     return (
         <button
             type="button"
+            disabled={disabled}
+            aria-label={label}
             onClick={onChange}
             className={`inline-flex h-[22px] w-10 items-center rounded-full transition-colors ${
                 enabled ? 'bg-primary' : 'bg-muted'
-            }`}
+            } ${disabled ? 'cursor-not-allowed opacity-60' : ''}`}
             aria-pressed={enabled}
         >
             <span
@@ -160,6 +189,8 @@ export function SettingsMainPage({
     onDensityChange,
     textSizeMode,
     onTextSizeChange,
+    showTaskAge,
+    onShowTaskAgeChange,
     language,
     onLanguageChange,
     weekStart,
@@ -172,6 +203,7 @@ export function SettingsMainPage({
     onKeybindingStyleChange,
     globalQuickAddShortcut,
     onGlobalQuickAddShortcutChange,
+    isFlatpak = false,
     undoNotificationsEnabled,
     onUndoNotificationsChange,
     onOpenHelp,
@@ -182,17 +214,23 @@ export function SettingsMainPage({
     showCloseBehavior = false,
     closeBehavior = 'ask',
     onCloseBehaviorChange,
+    showLaunchAtStartup = false,
+    launchAtStartupEnabled = false,
+    launchAtStartupLoading = false,
+    onLaunchAtStartupChange,
     showTrayToggle = false,
     trayVisible = true,
     onTrayVisibleChange,
 }: SettingsMainPageProps) {
-    const hasWindowSection = showWindowDecorations || showCloseBehavior || showTrayToggle;
+    const hasWindowSection = showWindowDecorations || showCloseBehavior || showLaunchAtStartup || showTrayToggle;
     const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
     const isWindows = typeof navigator !== 'undefined' && /win/i.test(navigator.userAgent);
     const globalQuickAddOptions = getGlobalQuickAddShortcutOptions({
+        isFlatpak,
         isMac,
         isWindows,
     });
+    const quickAddShortcutValue = isFlatpak ? GLOBAL_QUICK_ADD_SHORTCUT_DISABLED : globalQuickAddShortcut;
 
     return (
         <div className="space-y-5">
@@ -236,6 +274,13 @@ export function SettingsMainPage({
                         <option value="large">{t.textSizeLarge}</option>
                         <option value="extra-large">{t.textSizeExtraLarge}</option>
                     </select>
+                </SettingsRow>
+                <SettingsRow title={t.showTaskAge} description={t.showTaskAgeDesc}>
+                    <Toggle
+                        enabled={showTaskAge}
+                        label={t.showTaskAge}
+                        onChange={() => onShowTaskAgeChange(!showTaskAge)}
+                    />
                 </SettingsRow>
             </SettingsCard>
 
@@ -335,11 +380,16 @@ export function SettingsMainPage({
                         {t.viewShortcuts}
                     </button>
                 </SettingsRow>
-                <SettingsRow title={t.globalQuickAddShortcut} description={t.globalQuickAddShortcutDesc}>
+                <SettingsRow
+                    title={t.globalQuickAddShortcut}
+                    description={isFlatpak ? t.globalQuickAddFlatpakDesc : t.globalQuickAddShortcutDesc}
+                >
                     <select
-                        value={globalQuickAddShortcut}
+                        aria-label={t.globalQuickAddShortcut}
+                        disabled={isFlatpak}
+                        value={quickAddShortcutValue}
                         onChange={(e) => onGlobalQuickAddShortcutChange(e.target.value as GlobalQuickAddShortcutSetting)}
-                        className={selectCls}
+                        className={`${selectCls} ${isFlatpak ? 'cursor-not-allowed opacity-70' : ''}`}
                     >
                         {globalQuickAddOptions.map((option) => (
                             <option key={option.value} value={option.value}>
@@ -348,9 +398,19 @@ export function SettingsMainPage({
                         ))}
                     </select>
                 </SettingsRow>
+                {isFlatpak && (
+                    <div className="px-4 py-3">
+                        <div className="text-[13px] font-medium">{t.globalQuickAddFlatpakCommand}</div>
+                        <div className="text-xs text-muted-foreground mt-0.5">{t.globalQuickAddFlatpakCommandDesc}</div>
+                        <code className="mt-2 block break-all rounded-md border border-border bg-muted/50 px-2.5 py-2 text-xs text-foreground select-all">
+                            {FLATPAK_QUICK_ADD_COMMAND}
+                        </code>
+                    </div>
+                )}
                 <SettingsRow title={t.undoNotifications} description={t.undoNotificationsDesc}>
                     <Toggle
                         enabled={undoNotificationsEnabled}
+                        label={t.undoNotifications}
                         onChange={() => onUndoNotificationsChange(!undoNotificationsEnabled)}
                     />
                 </SettingsRow>
@@ -365,6 +425,7 @@ export function SettingsMainPage({
                             <SettingsRow title={t.windowDecorations} description={t.windowDecorationsDesc}>
                                 <Toggle
                                     enabled={windowDecorationsEnabled}
+                                    label={t.windowDecorations}
                                     onChange={() => onWindowDecorationsChange?.(!windowDecorationsEnabled)}
                                 />
                             </SettingsRow>
@@ -386,7 +447,18 @@ export function SettingsMainPage({
                             <SettingsRow title={t.showTray} description={t.showTrayDesc}>
                                 <Toggle
                                     enabled={trayVisible}
+                                    label={t.showTray}
                                     onChange={() => onTrayVisibleChange?.(!trayVisible)}
+                                />
+                            </SettingsRow>
+                        )}
+                        {showLaunchAtStartup && (
+                            <SettingsRow title={t.launchAtStartup} description={t.launchAtStartupDesc}>
+                                <Toggle
+                                    disabled={launchAtStartupLoading}
+                                    enabled={launchAtStartupEnabled}
+                                    label={t.launchAtStartup}
+                                    onChange={() => onLaunchAtStartupChange?.(!launchAtStartupEnabled)}
                                 />
                             </SettingsRow>
                         )}

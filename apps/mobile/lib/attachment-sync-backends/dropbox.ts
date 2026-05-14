@@ -1,5 +1,5 @@
 import type { AppData, Attachment } from '@mindwtr/core';
-import { validateAttachmentForUpload } from '@mindwtr/core';
+import { isAbortError, validateAttachmentForUpload } from '@mindwtr/core';
 import {
   DropboxFileNotFoundError,
   downloadDropboxFile,
@@ -29,10 +29,37 @@ import {
   writeBytesSafely,
 } from '../attachment-sync-utils';
 
+export type DropboxAttachmentSyncOptions = {
+  signal?: AbortSignal;
+};
+
+type PendingDropboxUploadMutation = {
+  attachment: Attachment;
+  cloudKey: string;
+  fileSize?: number;
+  totalBytes: number;
+};
+
+const createAbortError = (): Error => {
+  const error = new Error('Dropbox attachment sync aborted');
+  error.name = 'AbortError';
+  return error;
+};
+
+const assertNotAborted = (signal?: AbortSignal): void => {
+  if (!signal?.aborted) return;
+  throw createAbortError();
+};
+
+const isAbortLikeError = (error: unknown, signal?: AbortSignal): boolean => (
+  Boolean(signal?.aborted) || isAbortError(error)
+);
+
 export const syncDropboxAttachments = async (
   appData: AppData,
   dropboxClientId: string,
-  fetcher: typeof fetch = fetch
+  fetcher: typeof fetch = fetch,
+  options: DropboxAttachmentSyncOptions = {}
 ): Promise<boolean> => {
   if (!dropboxClientId) return false;
   const attachmentsDir = await getAttachmentsDir();
@@ -40,6 +67,7 @@ export const syncDropboxAttachments = async (
 
   let didMutate = false;
   const downloadQueue: Attachment[] = [];
+  const pendingUploadMutations: PendingDropboxUploadMutation[] = [];
   let uploadCount = 0;
   let uploadLimitLogged = false;
 
@@ -71,6 +99,7 @@ export const syncDropboxAttachments = async (
       uploadCount += 1;
       let localReadFailed = false;
       try {
+        assertNotAborted(options.signal);
         let fileSize = await getAttachmentByteSize(attachment, uri);
         let fileData: Uint8Array | null = null;
         if (!Number.isFinite(fileSize ?? NaN)) {
@@ -114,14 +143,17 @@ export const syncDropboxAttachments = async (
           fetcher
         );
 
-        attachment.cloudKey = cloudKey;
-        if (!Number.isFinite(attachment.size ?? NaN) && Number.isFinite(fileSize ?? NaN)) {
-          attachment.size = Number(fileSize);
-        }
-        attachment.localStatus = 'available';
-        didMutate = true;
-        reportProgress(attachment.id, 'upload', totalBytes, totalBytes, 'completed');
+        assertNotAborted(options.signal);
+        pendingUploadMutations.push({
+          attachment,
+          cloudKey,
+          fileSize: Number.isFinite(fileSize ?? NaN) ? Number(fileSize) : undefined,
+          totalBytes,
+        });
       } catch (error) {
+        if (isAbortLikeError(error, options.signal)) {
+          throw error;
+        }
         if (localReadFailed) {
           if (markAttachmentUnrecoverable(attachment)) {
             didMutate = true;
@@ -145,6 +177,16 @@ export const syncDropboxAttachments = async (
     }
   }
 
+  for (const pending of pendingUploadMutations) {
+    pending.attachment.cloudKey = pending.cloudKey;
+    if (!Number.isFinite(pending.attachment.size ?? NaN) && Number.isFinite(pending.fileSize ?? NaN)) {
+      pending.attachment.size = Number(pending.fileSize);
+    }
+    pending.attachment.localStatus = 'available';
+    didMutate = true;
+    reportProgress(pending.attachment.id, 'upload', pending.totalBytes, pending.totalBytes, 'completed');
+  }
+
   if (!attachmentsDir) return didMutate;
 
   let downloadCount = 0;
@@ -162,6 +204,7 @@ export const syncDropboxAttachments = async (
 
     const cloudKey = attachment.cloudKey;
     try {
+      assertNotAborted(options.signal);
       reportProgress(attachment.id, 'download', 0, attachment.size ?? 0, 'active');
       const data = await runDropboxAuthorized(
         dropboxClientId,
@@ -180,6 +223,9 @@ export const syncDropboxAttachments = async (
       }
       reportProgress(attachment.id, 'download', bytes.length, bytes.length, 'completed');
     } catch (error) {
+      if (isAbortLikeError(error, options.signal)) {
+        throw error;
+      }
       if (error instanceof DropboxFileNotFoundError && attachment.cloudKey) {
         if (markAttachmentUnrecoverable(attachment)) {
           didMutate = true;

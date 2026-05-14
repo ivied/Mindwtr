@@ -1,6 +1,6 @@
 # Cloud Deployment
 
-This page is an operations-focused companion to [[Cloud Sync]]. It covers how to run the `apps/cloud` server reliably in production-like self-hosted environments.
+This page covers how to run the `apps/cloud` server reliably in production-like self-hosted environments.
 
 ## Scope
 
@@ -10,9 +10,10 @@ This page is an operations-focused companion to [[Cloud Sync]]. It covers how to
 
 Client compatibility note:
 
-- Mindwtr Cloud clients require **HTTPS** for normal device URLs.
-- `http://localhost` is allowed for development, but `http://192.168.x.x` or other private-LAN HTTP URLs are not accepted by the Cloud sync client.
-- If you want LAN-only deployment, add TLS at the reverse proxy layer. If you need plain HTTP on a private LAN, use WebDAV instead.
+- Mindwtr Cloud clients require **HTTPS** for public URLs.
+- HTTP is accepted only for local/private targets such as `localhost`, `127.0.0.1`, `10.x.x.x`, `172.16.x.x` through `172.31.x.x`, `192.168.x.x`, loopback/private IPv6 addresses, `*.local`, and `*.home.arpa`.
+- For custom DNS, VPN, Tailscale, ZeroTier, or other names that are not recognized as local/private, add TLS at the reverse proxy layer.
+- The **Allow insecure connections (HTTP)** setting is for trusted local/private endpoints only; it is not a public HTTP override.
 
 ## Deployment Topology
 
@@ -26,7 +27,13 @@ Recommended layout:
 The same cloud service handles both:
 
 - Sync traffic under `/v1/data`
-- Task automation endpoints such as `/v1/tasks`, `/v1/projects`, and `/v1/search`
+- Task automation endpoints such as `/v1/tasks`, `/v1/projects`, `/v1/areas`, `/v1/sections`, and `/v1/search`
+
+`PUT /v1/data` is merge-based, not a blind replacement. The server reads the current namespace snapshot, merges it with the uploaded snapshot using Mindwtr's normal revision-aware sync rules, validates the merged data, and then writes it back. A client that uploads an older or partial view should not expect to erase newer remote records simply by sending a full JSON payload.
+
+REST reference fields must point to live records. For example, creating or patching a project with an `areaId` whose area was soft-deleted returns `404 Area not found` rather than attaching the project to a tombstone. Use `areaId: null` to clear a project area; an empty string is rejected.
+
+For endpoint-level request and response details, see [[Cloud API]].
 
 ## Environment Baseline
 
@@ -54,6 +61,7 @@ Optional but useful:
 | `MINDWTR_CLOUD_TOKEN` | Legacy single-token alias. | Still supported for backward compatibility, but deprecated. |
 | `MINDWTR_CLOUD_TOKEN_FILE` | Path to a file containing the legacy single token. | Still supported for backward compatibility, but deprecated. |
 | `MINDWTR_CLOUD_ALLOW_ANY_TOKEN` | Allows any syntactically valid bearer token. | Explicit opt-in only. Best avoided outside controlled environments. |
+| `MINDWTR_CLOUD_ANY_TOKEN_MAX_NAMESPACES` | Maximum number of distinct namespaces that may be created when any-token mode is enabled. | Defaults to `32`; set only for controlled automation environments. |
 
 ### Networking and storage
 
@@ -62,6 +70,7 @@ Optional but useful:
 | `MINDWTR_CLOUD_CORS_ORIGIN` | Allowed browser origin for CORS. | `http://localhost:5173` in non-production |
 | `MINDWTR_CLOUD_DATA_DIR` | Directory for JSON namespaces, attachments, and locks. | `./data` |
 | `MINDWTR_CLOUD_TRUST_PROXY_HEADERS` | Trust `X-Forwarded-For`/proxy IP headers for auth-failure rate limiting. | `false` |
+| `MINDWTR_CLOUD_TRUSTED_PROXY_IPS` | Comma-separated proxy IP allowlist used when proxy headers are trusted. | Empty; forwarded IPs are ignored unless the direct peer is trusted. |
 
 ### Request limits
 
@@ -95,19 +104,65 @@ Optional but useful:
 Operational guidance:
 
 - Keep proxy body limits aligned with `MINDWTR_CLOUD_MAX_BODY_BYTES` and `MINDWTR_CLOUD_MAX_ATTACHMENT_BYTES`.
-- If you enable `MINDWTR_CLOUD_TRUST_PROXY_HEADERS`, do so only behind a proxy that overwrites forwarded IP headers.
+- Leave `MINDWTR_CLOUD_TRUST_PROXY_HEADERS=false` unless the server is only reachable through your reverse proxy. If you enable it, set `MINDWTR_CLOUD_TRUSTED_PROXY_IPS` to the proxy addresses that are allowed to supply forwarded client IPs.
 - If you rotate from `MINDWTR_CLOUD_TOKEN` to `MINDWTR_CLOUD_AUTH_TOKENS`, remember that token changes also change the namespace key.
+- Avoid `MINDWTR_CLOUD_ALLOW_ANY_TOKEN=true` for public deployments. It is capped by `MINDWTR_CLOUD_ANY_TOKEN_MAX_NAMESPACES`, but fixed token allowlists are still the production model.
 
 ## Docker Runbook
 
-Example `docker-compose.yml` service:
+Start with [[Docker Deployment]] for the supported Compose entry points. This section is the operations checklist for running the same cloud container in production-like environments.
+
+For a local HTTP-only smoke test, use `docker/compose.yaml`.
+
+For public desktop or mobile client URLs, use the HTTPS stack:
+
+```bash
+cp docker/.env.https.example docker/.env.https.local
+```
+
+Edit `docker/.env.https.local`:
+
+```dotenv
+MINDWTR_CLOUD_DOMAIN=mindwtr.example.com
+MINDWTR_CLOUD_AUTH_TOKENS=your_long_random_token
+MINDWTR_CLOUD_CORS_ORIGIN=https://mindwtr.example.com
+MINDWTR_CADDYFILE=Caddyfile.https
+```
+
+Start the stack:
+
+```bash
+docker compose --env-file docker/.env.https.local -f docker/compose.https.yaml up -d
+```
+
+Set Mindwtr's Self-Hosted URL to the base URL, for example `https://mindwtr.example.com`. Mindwtr appends `/v1/data` automatically.
+
+Use `Caddyfile.local-https` for LAN-only hostnames with Caddy's internal CA:
+
+```dotenv
+MINDWTR_CLOUD_DOMAIN=mindwtr.home.arpa
+MINDWTR_CLOUD_CORS_ORIGIN=https://mindwtr.home.arpa
+MINDWTR_CADDYFILE=Caddyfile.local-https
+```
+
+Every device must trust Caddy's local root certificate before a client will accept this certificate. Public certificates are usually simpler for mobile clients.
+
+After the LAN-only stack starts, export the local root certificate:
+
+```bash
+docker compose --env-file docker/.env.https.local -f docker/compose.https.yaml cp caddy:/data/caddy/pki/authorities/local/root.crt ./mindwtr-caddy-root.crt
+```
+
+Install that certificate as a trusted root on each device that will sync to this hostname.
+
+Minimal cloud service shape:
 
 ```yaml
 services:
   mindwtr-cloud:
-    image: oven/bun:1.3
-    working_dir: /app
-    command: ["bun", "run", "--filter", "mindwtr-cloud", "start", "--", "--host", "0.0.0.0", "--port", "8787"]
+    build:
+      context: .
+      dockerfile: docker/cloud/Dockerfile
     environment:
       MINDWTR_CLOUD_DATA_DIR: /data
       MINDWTR_CLOUD_AUTH_TOKENS: ${MINDWTR_CLOUD_AUTH_TOKENS}
@@ -115,14 +170,13 @@ services:
       MINDWTR_CLOUD_RATE_MAX: "120"
       MINDWTR_CLOUD_ATTACHMENT_RATE_MAX: "120"
     volumes:
-      - ./apps/cloud:/app
       - ./mindwtr-cloud-data:/data
     restart: unless-stopped
 ```
 
 Operational notes:
 
-- Pin the Bun image tag instead of floating latest for stable upgrades.
+- The repository Dockerfile uses a multi-stage runtime image and pins the Bun base image by digest for repeatable rebuilds.
 - Mount `/data` on durable disk, not ephemeral container FS.
 - Keep tokens in secrets manager or `.env` outside git.
 - For Docker secrets, use `MINDWTR_CLOUD_AUTH_TOKENS_FILE` instead of inlining the token in compose.
@@ -137,6 +191,23 @@ At proxy layer:
 - Forward `Authorization` header unchanged.
 - Set request timeout high enough for large attachment uploads.
 - Restrict access by IP/VPN if possible.
+
+Example Caddyfile:
+
+```caddyfile
+mindwtr.example.com {
+  reverse_proxy mindwtr-cloud:8787
+}
+```
+
+For LAN-only internal certificates:
+
+```caddyfile
+mindwtr.home.arpa {
+  tls internal
+  reverse_proxy mindwtr-cloud:8787
+}
+```
 
 Example nginx snippets:
 
@@ -164,6 +235,21 @@ Restore:
 3. Start server.
 4. Check `GET /health` and run a client sync validation.
 
+## Attachment Cleanup
+
+When a user deletes an attachment, clients keep a `pendingRemoteDeletes` record until the backend delete succeeds. Those pending deletes are intentionally not aged out, because removing them before a successful remote delete can leave private files behind.
+
+Mindwtr Cloud also provides authenticated orphan cleanup for attachment files that are no longer referenced by the current `data.json` snapshot:
+
+```text
+POST /v1/attachments/orphans
+DELETE /v1/attachments/orphans
+```
+
+Run this after restore operations or as a periodic maintenance task if you want server-side cleanup of files that became unreachable outside the normal client delete flow. The endpoint scans the authenticated token namespace only and returns counts for scanned, kept, deleted, and failed file paths.
+
+The cleanup skips attachment files modified in the last five minutes so an upload followed by a later `/v1/data` reference cannot be deleted by a concurrent maintenance run.
+
 ## Upgrade Procedure
 
 Safe rolling procedure:
@@ -174,6 +260,7 @@ Safe rolling procedure:
    - `GET /health`
    - authenticated `GET /v1/data`
    - authenticated `GET /v1/tasks`
+   - authenticated `GET /v1/projects`, `GET /v1/areas`, and `GET /v1/sections`
    - small and large attachment upload/download
 4. Deploy to production.
 5. Monitor logs for `rate limit`, `invalid payload`, and `permission denied` errors.
@@ -206,6 +293,11 @@ Add host/container metrics:
 - p95 request latency
 - non-2xx response rate
 
+Clock note:
+
+- The server participates in merge and repair on `PUT /v1/data`, so host clock drift can still affect request logs and rate-limit windows. Keep NTP or equivalent time sync enabled.
+- Merge repair timestamps use the server wall clock. This prevents a client clock that is a few minutes fast from poisoning server-generated repair metadata.
+
 ## Failure Modes
 
 - Permission errors: volume ownership/permissions mismatch.
@@ -215,6 +307,7 @@ Add host/container metrics:
 
 ## Related Pages
 
-- [[Cloud Sync]]
+- [[Cloud API]]
+- [[Cloud API]]
 - [[Data and Sync]]
 - [[Docker Deployment]]

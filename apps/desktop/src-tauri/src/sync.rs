@@ -645,6 +645,10 @@ fn ensure_webdav_parent_collections_blocking(
     })
 }
 
+fn is_webdav_mkcol_conflict_error(error: &str) -> bool {
+    error.starts_with("WebDAV MKCOL failed (409")
+}
+
 fn webdav_get_json_blocking(app: &tauri::AppHandle) -> Result<Value, String> {
     let config = read_config(app);
     let url = normalize_webdav_url(&config.webdav_url.unwrap_or_default());
@@ -729,7 +733,13 @@ fn webdav_put_json_blocking(app: &tauri::AppHandle, data: &Value) -> Result<bool
     if response.status() == reqwest::StatusCode::NOT_FOUND
         || response.status() == reqwest::StatusCode::CONFLICT
     {
-        ensure_webdav_parent_collections_blocking(&client, &url, &username, &password)?;
+        if let Err(error) =
+            ensure_webdav_parent_collections_blocking(&client, &url, &username, &password)
+        {
+            if !is_webdav_mkcol_conflict_error(&error) {
+                return Err(error);
+            }
+        }
         response = send_put()?;
     }
 
@@ -788,6 +798,16 @@ mod tests {
                 "https://example.com/remote.php/dav/files/user/mindwtr/nested".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn webdav_mkcol_conflict_errors_are_retryable() {
+        assert!(is_webdav_mkcol_conflict_error(
+            "WebDAV MKCOL failed (409 Conflict)"
+        ));
+        assert!(!is_webdav_mkcol_conflict_error(
+            "WebDAV MKCOL failed (500 Internal Server Error)"
+        ));
     }
 }
 

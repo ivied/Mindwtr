@@ -10,7 +10,7 @@ The free, open-source, cross-platform GTD app. Local-first, no account required.
 
 _New to GTD? Read [GTD in 15 minutes](https://hamberg.no/gtd) for a quick introduction._
 
-[Install](#installation) · [Getting Started](https://github.com/dongdongbh/Mindwtr/wiki/Getting-Started) · [Data & Sync](https://github.com/dongdongbh/Mindwtr/wiki/Data-and-Sync) · [Cloud Sync](https://github.com/dongdongbh/Mindwtr/wiki/Cloud-Sync) · [MCP Server](https://github.com/dongdongbh/Mindwtr/wiki/MCP-Server)
+[Install](#installation) · [Getting Started](https://github.com/dongdongbh/Mindwtr/wiki/Getting-Started) · [Data & Sync](https://github.com/dongdongbh/Mindwtr/wiki/Data-and-Sync) · [Cloud Deployment](https://github.com/dongdongbh/Mindwtr/wiki/Cloud-Deployment) · [MCP Server](https://github.com/dongdongbh/Mindwtr/wiki/MCP-Server)
 
 [![CI](https://github.com/dongdongbh/Mindwtr/actions/workflows/ci.yml/badge.svg)](https://github.com/dongdongbh/Mindwtr/actions/workflows/ci.yml)
 [![GitHub license](https://img.shields.io/github/license/dongdongbh/Mindwtr?color=brightgreen)](LICENSE)
@@ -103,7 +103,7 @@ _Don't show me a cockpit when I just want to ride a bike._
 - GTD workflow end-to-end: Capture, Clarify, Organize, Reflect, Engage.
 - Focus view combines time-based agenda with next actions.
 - Local-first data model with native iCloud / CloudKit sync on supported Apple builds, plus file sync, WebDAV, Dropbox, and self-hosted cloud options.
-- Projects support sections and areas for larger multi-step planning.
+- Projects support sections, areas, and reorderable project task order for larger multi-step planning.
 - Obsidian vault import with note deep links on desktop.
 - Optional AI copilot (BYOK + local/self-hosted compatible models).
 - Cross-platform apps for desktop and mobile, plus PWA.
@@ -114,7 +114,7 @@ _Don't show me a cockpit when I just want to ride a bike._
 
 ### GTD Workflow
 
-- **Capture** - Quick add tasks from anywhere (global hotkey, tray, share sheet, voice)
+- **Capture** - Quick add tasks from anywhere (global hotkey popup, tray, share sheet, voice)
 - **Clarify** - Guided inbox processing with 2-minute rule
 - **Organize** - Projects, sections, contexts, and status lists
 - **Reflect** - Weekly review wizard with reminders
@@ -125,18 +125,18 @@ _Don't show me a cockpit when I just want to ride a bike._
 
 - 📥 **Inbox** - Capture zone with processing wizard
 - 🎯 **Focus** - Agenda (time-based) + Next Actions in one view
-- 📁 **Projects** - Multi-step outcomes with sections and areas
+- 📁 **Projects** - Multi-step outcomes with sections, areas, and manual task ordering
 - 🏷️ **Contexts** - Slash-delimited contexts with parent matching (@work/meetings)
 - ⏳ **Waiting For** - Delegated items
 - 💭 **Someday/Maybe** - Deferred ideas
-- 📅 **Calendar** - Time-based planning
+- 📅 **Calendar** - Time-based planning with adjustable mobile week density
 - 📋 **Board** - Kanban-style drag-and-drop
 - 📝 **Review** - Daily + weekly review workflows
 - 📦 **Archived** - Hidden history, searchable when needed
 
 ### Productivity Features
 
-- 🔍 **Global Search** - Search operators (status:, context:, due:<=7d)
+- 🔍 **Global Search** - Search all areas globally with operators (status:, context:, assigned:, due:<=7d)
 - 📦 **Bulk Actions** - Multi-select, batch move/tag/delete
 - 📎 **Attachments** - Files and links on tasks
 - ✏️ **Markdown Notes** - Rich text descriptions with preview
@@ -147,7 +147,7 @@ _Don't show me a cockpit when I just want to ride a bike._
 - ✅ **Audio Capture** - Quick voice capture with automatic transcription and task creation
 - 🧭 **Copilot Suggestions** - Optional context/tag/time hints while typing
 - 🍅 **Pomodoro Focus (Optional)** - 15/3, 25/5, 50/10 timer panel in Focus view with one optional custom preset
-- 🔔 **Notifications** - Due date reminders with snooze
+- 🔔 **Notifications** - Separate start and due reminders with snooze
 - 📊 **Daily Digest** - Morning briefing + evening review
 - 📅 **Weekly Review** - Customizable weekly reminder
 
@@ -172,11 +172,11 @@ _Don't show me a cockpit when I just want to ride a bike._
 ### Cross-Platform
 
 - 🖥️ **Desktop** - Tauri v2 (macOS, Linux, Windows)
-- 📱 **Mobile** - React Native/Expo (iOS via App Store/TestFlight, Android)
+- 📱 **Mobile** - React Native/Expo (iOS via App Store/TestFlight, Android) with in-app tips for gestures and app shortcuts
 - 📲 **Android Widget** - Home screen focus/next widget
 - ⌨️ **Keyboard Shortcuts** - Vim and Emacs presets
 - 🎨 **Themes** - Light/Dark
-- 🌍 **i18n** - English, Chinese (Simplified), Chinese (Traditional), Spanish, Hindi, Arabic, German, Russian, Japanese, French, Portuguese, Polish, Korean, Italian, Turkish
+- 🌍 **i18n** - English, Chinese (Simplified), Chinese (Traditional), Spanish, Hindi, Arabic, German, Russian, Japanese, French, Portuguese, Polish, Korean, Italian, Turkish, Dutch
 - 🐳 **Docker** - Run the PWA + self-hosted sync server with Docker
 
 </details>
@@ -373,8 +373,8 @@ You can help in several ways:
 - ❓ [FAQ](https://github.com/dongdongbh/Mindwtr/wiki/FAQ)
 - 🔄 [Data & Sync](https://github.com/dongdongbh/Mindwtr/wiki/Data-and-Sync)
 - 🔗 [Markdown Links](https://github.com/dongdongbh/Mindwtr/wiki/Markdown-Links)
-- ☁️ [Cloud Sync](https://github.com/dongdongbh/Mindwtr/wiki/Cloud-Sync)
 - 🛠️ [Cloud Deployment](https://github.com/dongdongbh/Mindwtr/wiki/Cloud-Deployment)
+- ☁️ [Cloud API](https://github.com/dongdongbh/Mindwtr/wiki/Cloud-API)
 - 🧠 [MCP Server](https://github.com/dongdongbh/Mindwtr/wiki/MCP-Server)
 - 📝 [Release Notes Index](docs/release-notes/README.md)
 

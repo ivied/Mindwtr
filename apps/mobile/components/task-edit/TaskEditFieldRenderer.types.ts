@@ -40,10 +40,13 @@ export type TaskEditFieldRendererProps = {
     fieldId: TaskEditorFieldId;
     addFileAttachment: () => void | Promise<void>;
     addImageAttachment: () => void | Promise<void>;
+    applyAssignedToSuggestion: (value: string) => void;
     applyContextSuggestion: (token: string) => void;
     applyTagSuggestion: (token: string) => void;
     areas: Area[];
+    assignedToSuggestions: string[];
     availableStatusOptions: TaskStatus[];
+    applyQuickDate: (mode: 'start' | 'due' | 'review', selectedDate: Date | null) => void;
     commitContextDraft: () => void;
     commitTagDraft: () => void;
     contextInputDraft: string;

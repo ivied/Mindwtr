@@ -8,6 +8,8 @@ import {
     addBreadcrumb,
     CLOCK_SKEW_THRESHOLD_MS,
     getInMemoryAppDataSnapshot,
+    isConnectionAllowed,
+    SYNC_LOCAL_INSECURE_URL_OPTIONS,
     translateWithFallback,
     type SyncBackend,
 } from '@mindwtr/core';
@@ -22,6 +24,7 @@ import {
     inspectDesktopTodoistImport,
     restoreDesktopBackup,
 } from '../../../lib/data-transfer';
+import { isValidHttpUrl } from './sync/sync-page-utils';
 
 export type { SyncBackend };
 export type DropboxTestState = 'idle' | 'success' | 'error';
@@ -59,11 +62,13 @@ export const useSyncSettings = ({
     const [webdavUsername, setWebdavUsername] = useState('');
     const [webdavPassword, setWebdavPassword] = useState('');
     const [webdavHasPassword, setWebdavHasPassword] = useState(false);
+    const [webdavAllowInsecureHttp, setWebdavAllowInsecureHttp] = useState(false);
     const [isSavingWebDav, setIsSavingWebDav] = useState(false);
     const [isTestingWebDav, setIsTestingWebDav] = useState(false);
     const [webdavTestState, setWebdavTestState] = useState<WebDavTestState>('idle');
     const [cloudUrl, setCloudUrl] = useState('');
     const [cloudToken, setCloudToken] = useState('');
+    const [cloudAllowInsecureHttp, setCloudAllowInsecureHttp] = useState(false);
     const [cloudProvider, setCloudProvider] = useState<CloudProvider>('selfhosted');
     const [dropboxAppKey, setDropboxAppKey] = useState('');
     const [dropboxConfigured, setDropboxConfigured] = useState(false);
@@ -99,6 +104,38 @@ export const useSyncSettings = ({
     const resolveText = useCallback((key: string, fallback: string): string => {
         return translateWithFallback(t, key, fallback);
     }, [t]);
+
+    const isManualInsecureOverride = useCallback((url: string, allowInsecureHttp: boolean): boolean => {
+        if (!allowInsecureHttp) return false;
+        try {
+            if (new URL(url).protocol !== 'http:') return false;
+        } catch {
+            return false;
+        }
+        return !isConnectionAllowed(url, SYNC_LOCAL_INSECURE_URL_OPTIONS);
+    }, []);
+
+    const validateSyncHttpUrl = useCallback((url: string, allowInsecureHttp: boolean): boolean => {
+        if (!isValidHttpUrl(url)) {
+            const message = 'Enter a valid http(s) URL.';
+            setSyncError(message);
+            showToast(message, 'error');
+            return false;
+        }
+        if (!isConnectionAllowed(url, {
+            ...SYNC_LOCAL_INSECURE_URL_OPTIONS,
+            allowInsecureHttp,
+        })) {
+            const message = 'Public HTTP sync URLs are blocked. Use HTTPS, or enable insecure HTTP only for a trusted private network.';
+            setSyncError(message);
+            showToast(message, 'error');
+            return false;
+        }
+        if (isManualInsecureOverride(url, allowInsecureHttp)) {
+            showToast('Only use insecure HTTP on trusted networks. Sync data will be sent unencrypted.', 'info');
+        }
+        return true;
+    }, [isManualInsecureOverride, showToast]);
 
     const formatText = useCallback((
         key: string,
@@ -142,6 +179,7 @@ export const useSyncSettings = ({
                 setWebdavUsername(cfg.username);
                 setWebdavPassword(cfg.password ?? '');
                 setWebdavHasPassword(cfg.hasPassword === true);
+                setWebdavAllowInsecureHttp(cfg.allowInsecureHttp === true);
             })
             .catch((error) => {
                 setSyncError('Failed to load WebDAV config.');
@@ -151,6 +189,7 @@ export const useSyncSettings = ({
             .then((cfg) => {
                 setCloudUrl(cfg.url);
                 setCloudToken(cfg.token);
+                setCloudAllowInsecureHttp(cfg.allowInsecureHttp === true);
             })
             .catch((error) => {
                 setSyncError('Failed to load Cloud config.');
@@ -277,11 +316,13 @@ export const useSyncSettings = ({
     const handleSaveWebDav = useCallback(async () => {
         const trimmedUrl = webdavUrl.trim();
         const trimmedPassword = webdavPassword.trim();
+        if (trimmedUrl && !validateSyncHttpUrl(trimmedUrl, webdavAllowInsecureHttp)) return;
         setIsSavingWebDav(true);
         try {
             await SyncService.setWebDavConfig({
                 url: trimmedUrl,
                 username: webdavUsername.trim(),
+                allowInsecureHttp: webdavAllowInsecureHttp,
                 ...(trimmedPassword ? { password: trimmedPassword } : {}),
             });
             if (!trimmedUrl) {
@@ -294,7 +335,7 @@ export const useSyncSettings = ({
         } finally {
             setIsSavingWebDav(false);
         }
-    }, [showSaved, webdavPassword, webdavUrl, webdavUsername]);
+    }, [showSaved, validateSyncHttpUrl, webdavAllowInsecureHttp, webdavPassword, webdavUrl, webdavUsername]);
 
     const handleTestWebDavConnection = useCallback(async () => {
         const trimmedUrl = webdavUrl.trim();
@@ -305,6 +346,7 @@ export const useSyncSettings = ({
             showToast(message, 'error');
             return;
         }
+        if (!validateSyncHttpUrl(trimmedUrl, webdavAllowInsecureHttp)) return;
 
         setIsTestingWebDav(true);
         try {
@@ -313,6 +355,7 @@ export const useSyncSettings = ({
                 username: webdavUsername.trim(),
                 password: webdavPassword,
                 hasPassword: webdavHasPassword,
+                allowInsecureHttp: webdavAllowInsecureHttp,
             });
             setWebdavTestState('success');
             setSyncError(null);
@@ -325,15 +368,18 @@ export const useSyncSettings = ({
         } finally {
             setIsTestingWebDav(false);
         }
-    }, [showToast, toErrorMessage, webdavPassword, webdavUrl, webdavUsername]);
+    }, [showToast, toErrorMessage, validateSyncHttpUrl, webdavAllowInsecureHttp, webdavHasPassword, webdavPassword, webdavUrl, webdavUsername]);
 
     const handleSaveCloud = useCallback(async () => {
+        const trimmedUrl = cloudUrl.trim();
+        if (trimmedUrl && !validateSyncHttpUrl(trimmedUrl, cloudAllowInsecureHttp)) return;
         await SyncService.setCloudConfig({
-            url: cloudUrl.trim(),
+            url: trimmedUrl,
             token: cloudToken.trim(),
+            allowInsecureHttp: cloudAllowInsecureHttp,
         });
         showSaved();
-    }, [cloudUrl, cloudToken, showSaved]);
+    }, [cloudAllowInsecureHttp, cloudUrl, cloudToken, showSaved, validateSyncHttpUrl]);
 
     const handleSetCloudProvider = useCallback(async (provider: CloudProvider) => {
         setCloudProvider(provider);
@@ -803,6 +849,8 @@ export const useSyncSettings = ({
         webdavPassword,
         setWebdavPassword,
         webdavHasPassword,
+        webdavAllowInsecureHttp,
+        setWebdavAllowInsecureHttp,
         isSavingWebDav,
         isTestingWebDav,
         webdavTestState,
@@ -810,6 +858,8 @@ export const useSyncSettings = ({
         setCloudUrl,
         cloudToken,
         setCloudToken,
+        cloudAllowInsecureHttp,
+        setCloudAllowInsecureHttp,
         cloudProvider,
         setCloudProvider,
         dropboxAppKey,

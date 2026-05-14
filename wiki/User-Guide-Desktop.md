@@ -42,25 +42,29 @@ Your capture zone. All new tasks land here before processing.
 
 ### 🎯 Focus
 
-Your unified dashboard combining daily planning and next actions.
+Your unified dashboard for daily engagement. Focus is not a full inventory of every task with status `next`; it narrows the list to work that is available now.
 
-- **Today's Focus** — Up to 3 starred priority tasks for deep work.
+- **Today's Focus** — Starred priority tasks for deep work, up to your configured Focus limit.
 - **Overdue** — Past due items.
 - **Due Today** — Tasks due today.
 - **Next Actions** — Ready tasks without due dates, filtered by context.
 - **Review Due** — Items with tickler dates.
 
+Focus hides future-start tasks and later tasks in sequential projects. Use **Contexts**, **Projects**, or **Search** when you need to inspect broader task inventory.
+
 **Features:**
-- **Context Filters**: Filter Next Actions by context (e.g., @home, @work) or tag.
-- **Top 3 Only**: Toggle to hide everything except your top 3 focus tasks (Zen Mode).
-- **Pomodoro (Optional)**: Enable in **Settings → GTD → Features → Pomodoro timer** to show a task-linked focus/break timer panel (15/3, 25/5, 50/10, plus one optional custom preset).
+- **Context Filters**: Filter Next Actions by context (e.g., @home, @work) or tag. The filter picker groups contexts and tags so long metadata lists stay scannable.
+- **Group by Context**: Use the list grouping control to group Next Actions by primary context, with context-less tasks collected under **No context**.
+- **Saved Filters**: Save reusable Focus criteria such as projects, contexts, tags, priority, energy level, and time estimates.
+- **Zen Mode**: Toggle to hide everything except Today's Focus tasks.
+- **Pomodoro (Optional)**: Enable in **Settings → GTD → Features → Pomodoro timer** to show a focus/break timer panel (15/3, 25/5, 50/10, plus one optional custom preset). Leave it as **Timer only**, or turn on **Link timer to task** to show the Timer task picker and **Mark task done** action.
 
 ### 📁 Projects
 
 Multi-step outcomes containing related tasks.
 
-- **Sequential mode** — Only first incomplete task shows in the Next Actions list (Focus view)
-- **Parallel mode** — All tasks show in the Next Actions list
+- **Sequential mode** — Only the first available project task appears in Focus
+- **Parallel mode** — All available project tasks can appear in Focus
 - **Status** — Active, Waiting, Someday, Archived
 - **Areas of Focus** — Group projects by higher-level areas (e.g., Work, Health) to keep your sidebar organized.
 - **Project tags** — Tag projects and filter by tag
@@ -154,6 +158,9 @@ Use checklists as templates:
 - Click a task to open a **read-only view** of all details.
 - Press **Edit** (or `e`) to switch to edit mode.
 - The editor starts minimal. Use **More options** to reveal advanced fields.
+- Status, Priority, and Energy Level use pill controls instead of dropdowns for faster keyboard and pointer selection.
+- Date fields include quick chips for **Today**, **Tomorrow**, **+3 days**, **Next week**, **Next month**, and **No date**.
+- In **Settings → GTD → Task Editor Layout**, choose whether the desktop editor opens as the inline side peek or a centered pop-up.
 
 ---
 
@@ -170,24 +177,25 @@ Powerful search with operators to find anything instantly.
 
 #### Search Operators
 
-| Operator   | Example            | Description                   |
-| ---------- | ------------------ | ----------------------------- |
-| `status:`  | `status:next`      | Filter by task status         |
-| `-status:` | `-status:done`     | Exclude a status              |
-| `context:` | `context:@home`    | Filter by context             |
-| `tag:`     | `tag:#focused`     | Filter by tag                 |
-| `project:` | `project:HomeReno` | Filter by project name or ID  |
-| `due:`     | `due:today`        | Tasks due on date             |
-| `due:<=`   | `due:<=7d`         | Tasks due within 7 days       |
-| `start:`   | `start:>=tomorrow` | Tasks starting from date      |
-| `created:` | `created:>=30d`    | Tasks created in last 30 days |
-| `OR`       | `@home OR @work`   | Match either condition        |
+| Operator    | Example            | Description                   |
+| ----------- | ------------------ | ----------------------------- |
+| `status:`   | `status:next`      | Filter by task status         |
+| `-status:`  | `-status:done`     | Exclude a status              |
+| `context:`  | `context:@home`    | Filter by context             |
+| `tag:`      | `tag:#focused`     | Filter by tag                 |
+| `assigned:` | `assigned:Tom`     | Filter by delegated assignee  |
+| `project:`  | `project:HomeReno` | Filter by project name or ID  |
+| `due:`      | `due:today`        | Tasks due on date             |
+| `due:<=`    | `due:<=7d`         | Tasks due within 7 days       |
+| `start:`    | `start:>=tomorrow` | Tasks starting from date      |
+| `created:`  | `created:>=30d`    | Tasks created in last 30 days |
+| `OR`        | `@home OR @work`   | Match either condition        |
 
 **Date formats:** `today`, `tomorrow`, `7d` (7 days), `2w` (2 weeks), `1m` (1 month), `2025-01-15`
 
 #### Saved Searches
 
-Save frequently used searches for quick access:
+Saved Searches are shortcuts for reusable search queries:
 
 1. Enter your search query with operators
 2. Click **"Save Search"** button
@@ -195,6 +203,8 @@ Save frequently used searches for quick access:
 4. Access from the **Saved Searches** section in the sidebar
 
 **To delete a saved search:** Open the saved search, then click the trash icon.
+
+Saved Searches are separate from **Saved Filters** in Focus. Focus Saved Filters sync as filter criteria and are edited from the Focus filter controls.
 
 ---
 
@@ -423,6 +433,7 @@ Access Settings from the sidebar.
 - **Appearance**: Light, Dark, or System
 - **Language**: English, Chinese (Simplified), Chinese (Traditional), Spanish, Hindi, Arabic, German, Russian, Japanese, French, Portuguese, Polish, Korean, Italian, Turkish
 - **Keyboard Shortcuts**: Vim or Emacs preset
+- **Launch at Startup**: Start Mindwtr automatically when you sign in
 
 ### Notifications
 
@@ -440,12 +451,14 @@ Access Settings from the sidebar.
 
 ### GTD
 - **Auto-Archive** — Automatically move completed tasks to the Archive after a set number of days (default: 7 days)
+- **Focus task limit** — Choose how many tasks can be marked for Today's Focus
 - **Features** — Optional signals you can enable when needed:
   - **Priorities** — Show a priority flag on tasks
   - **Time Estimates** — Add a duration field for time blocking
 - **Inbox Processing** — Keep guided inbox processing for teaching GTD, or switch the default to **Quick** mode for a compact one-screen flow
   - Choose whether to show the 2-minute shortcut, ask for project early, include contexts/tags, allow scheduling, and offer reference during processing
 - **Task Editor Layout** — Choose which fields are shown by default, move fields between sections, and reorder them
+  - Choose the editor opening style: **Side peek** for inline edits or **Pop-up** for focused editing
   - You can move fields like **Due Date** into **Scheduling** and choose which sections expand by default
 - **Manage** — Maintain your reusable metadata from one place
   - Edit **Areas**, **Contexts**, and **Tags** without hunting through individual tasks
@@ -457,7 +470,7 @@ Access Settings from the sidebar.
 - **WebDAV** — Sync to a WebDAV server (Nextcloud, ownCloud, etc.)
 
 **Settings sync options:**
-- Choose which preferences sync across devices (theme, language/date format, external calendar URLs, AI settings)
+- Choose which preferences sync across devices (theme, language/date format, GTD defaults, external calendar URLs, AI settings, Saved Filters)
 - API keys and local model paths are never synced
 
 **Sync status:**

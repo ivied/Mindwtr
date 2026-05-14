@@ -42,7 +42,6 @@ Mindwtr is **simple by default and powerful when needed**. We focus on reducing 
 
 ### GTD Methodology
 - [[GTD Overview]] — Introduction to Getting Things Done
-- [[GTD Best Practices]] — Master the GTD methodology
 - [[GTD Workflow in Mindwtr]] — How to implement GTD with this app
 - [[Contexts and Tags]] — Location and energy-based contexts
 - [[Weekly Review]] — Step-by-step review process
@@ -52,7 +51,7 @@ Mindwtr is **simple by default and powerful when needed**. We focus on reducing 
 - [[Backup and Restore]] — Export backups, restore local data, and use recovery snapshots
 - [[Todoist Import]] — Import Todoist CSV or ZIP exports into Mindwtr
 - [[DGT GTD Import]] — Import DGT GTD JSON or ZIP exports into Mindwtr
-- [[OmniFocus Import]] — Import OmniFocus CSV exports into Mindwtr
+- [[OmniFocus Import]] — Import OmniFocus CSV, JSON, or ZIP exports into Mindwtr
 - [[iCloud Sync]] — Native Apple-only iCloud / CloudKit backend
 - [[Sync Algorithm]] — Conflict rules, tombstones, and merge behavior
 - Self-hosted cloud setup is split between [[Data and Sync]] (client setup) and [[Cloud Deployment]] (server operations)
@@ -70,8 +69,10 @@ Mindwtr is **simple by default and powerful when needed**. We focus on reducing 
 - [[Architecture]] — Technical architecture and design
 - [[Core API]] — `@mindwtr/core` package documentation
 - [[MCP Server]] — Local MCP server setup and tool usage
-- [[Deployment Guide]] — Platform deployment entry points
+- [[Docker Deployment]] — Self-hosted deployment entry point
+- [[Cloud Deployment]] — Operations reference for self-hosted sync
 - [[Performance Guide]] — Performance-focused implementation notes
+- [[Testing Strategy]] — Test layers, release gates, and manual smoke checks
 - [Release Notes (Repository)](https://github.com/dongdongbh/Mindwtr/tree/main/docs/release-notes) — Version-by-version release notes
 - [Contributing (Repository Guide)](https://github.com/dongdongbh/Mindwtr/blob/main/docs/CONTRIBUTING.md) — How to contribute to Mindwtr
 
@@ -82,8 +83,8 @@ Mindwtr is **simple by default and powerful when needed**. We focus on reducing 
 | Feature               | Description                                        |
 | --------------------- | -------------------------------------------------- |
 | 📥 **Inbox**           | Capture everything with quick-add                  |
-| 🎯 **Focus**           | Combined daily agenda and next actions             |
-| 🍅 **Pomodoro Focus**  | Optional task-linked focus/break timer in Focus view |
+| 🎯 **Focus**           | Daily agenda and available next actions            |
+| 🍅 **Pomodoro Focus**  | Optional focus/break timer in Focus view            |
 | 📁 **Projects**        | Multi-step outcomes with sequential/parallel modes |
 | 🧭 **Areas of Focus**  | Group projects by higher-level areas               |
 | 🏷️ **Contexts & Tags** | @home, @work, #focused, #lowenergy                 |
@@ -108,14 +109,14 @@ Mindwtr is **simple by default and powerful when needed**. We focus on reducing 
 | :--- | :---: | :---: |
 | **Core GTD Views** | ✅ | ✅ |
 | **Inbox & Capture** | ✅ (Global Hotkey) | ✅ (Share Sheet, Widget) |
-| **Focus View** | ✅ (Top 3 + Next) | ✅ (Zen Mode) |
+| **Focus View** | ✅ (configurable focus limit + available Next) | ✅ (Zen Mode) |
 | **Projects** | ✅ | ✅ |
 | **Areas of Focus** | ✅ | ✅ |
 | **Contexts & Tags** | ✅ | ✅ |
 | **Board View (Kanban)** | ✅ | ✅ |
 | **Calendar View** | ✅ | ✅ |
 | **Weekly Review** | ✅ | ✅ |
-| **Focus/Zen Mode** | ✅ (Sidebar toggle + Top 3) | ✅ (Zen toggle) |
+| **Focus/Zen Mode** | ✅ (Sidebar toggle + focus limit) | ✅ (Zen toggle) |
 | **Pomodoro Focus** | ✅ (Optional in Focus) | ✅ (Optional in Focus) |
 | **Notifications** | ✅ | ✅ |
 | **Widgets** | ❌ | ✅ (Android) |

@@ -36,7 +36,7 @@ env:
 
 jobs:
   standalone:
-    runs-on: windows-latest
+    runs-on: windows-2025-vs2026
     name: Windows Release
     timeout-minutes: 120
     env:
@@ -333,12 +333,15 @@ jobs:
           MS_CLIENT_ID: ${{ secrets.MS_CLIENT_ID }}
           MS_CLIENT_SECRET: ${{ secrets.MS_CLIENT_SECRET }}
           MS_STORE_APP_ID: ${{ secrets.MS_STORE_APP_ID || '9N0V5B0B6FRX' }}
+          APP_VERSION: ${{ steps.version.outputs.version }}
+          MSIX_VERSION: ${{ steps.version.outputs.msix_version }}
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
 
-          $msixPath = (Resolve-Path "mindwtr_${{ steps.version.outputs.version }}_x64.msix").Path
+          $msixPath = (Resolve-Path "mindwtr_$($env:APP_VERSION)_x64.msix").Path
           $msixFileName = [System.IO.Path]::GetFileName($msixPath)
+          $msixVersion = $env:MSIX_VERSION
 
           $isStoreBusy = {
             param([string]$text)
@@ -708,6 +711,28 @@ jobs:
           $submissionId = $submission.id
           $fileUploadUrl = $submission.fileUploadUrl
           Write-Host "Created submission $submissionId"
+
+          $existingSameVersionPackage = $null
+          if ($submission.applicationPackages) {
+            $existingSameVersionPackage = $submission.applicationPackages | Where-Object {
+              ($_.PSObject.Properties.Name -contains 'version' -and $_.version -eq $msixVersion) -or
+              ($_.PSObject.Properties.Name -contains 'fileName' -and $_.fileName -eq $msixFileName)
+            } | Select-Object -First 1
+          }
+          if ($existingSameVersionPackage) {
+            $existingVersion = if ($existingSameVersionPackage.PSObject.Properties.Name -contains 'version') { $existingSameVersionPackage.version } else { '<unknown>' }
+            $existingFileName = if ($existingSameVersionPackage.PSObject.Properties.Name -contains 'fileName') { $existingSameVersionPackage.fileName } else { '<unknown>' }
+            Write-Warning "Microsoft Store already has package $existingFileName version $existingVersion. Deleting this draft submission and skipping publish for $msixFileName."
+            try {
+              Invoke-RestMethodWithRetry -Method Delete `
+                -Uri "https://manage.devcenter.microsoft.com/v1.0/my/applications/$applicationId/submissions/$submissionId" `
+                -Headers $headers
+              Write-Host "Deleted duplicate-version draft submission $submissionId."
+            } catch {
+              Write-Warning "Failed to delete duplicate-version draft submission ${submissionId}: $($_.Exception.Message)"
+            }
+            exit 0
+          }
 
           $packages = [System.Collections.ArrayList]::new()
           if ($submission.applicationPackages) {

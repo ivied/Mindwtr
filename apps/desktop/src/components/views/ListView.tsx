@@ -53,7 +53,17 @@ export const ListView = memo(function ListView({ title, statusFilter }: ListView
         tasks,
         projects,
         areas,
-        settings,
+        lastDataChangeAt,
+        highlightTaskId,
+    } = useTaskStore((state) => ({
+        tasks: state.tasks,
+        projects: state.projects,
+        areas: state.areas,
+        lastDataChangeAt: state.lastDataChangeAt,
+        highlightTaskId: state.highlightTaskId,
+    }), shallow);
+    const settings = useTaskStore((state) => state.settings);
+    const {
         updateSettings,
         addTask,
         addProject,
@@ -66,14 +76,8 @@ export const ListView = memo(function ListView({ title, statusFilter }: ListView
         batchDeleteTasks,
         batchUpdateTasks,
         queryTasks,
-        lastDataChangeAt,
-        highlightTaskId,
         setHighlightTask,
     } = useTaskStore((state) => ({
-        tasks: state.tasks,
-        projects: state.projects,
-        areas: state.areas,
-        settings: state.settings,
         updateSettings: state.updateSettings,
         addTask: state.addTask,
         addProject: state.addProject,
@@ -86,8 +90,6 @@ export const ListView = memo(function ListView({ title, statusFilter }: ListView
         batchDeleteTasks: state.batchDeleteTasks,
         batchUpdateTasks: state.batchUpdateTasks,
         queryTasks: state.queryTasks,
-        lastDataChangeAt: state.lastDataChangeAt,
-        highlightTaskId: state.highlightTaskId,
         setHighlightTask: state.setHighlightTask,
     }), shallow);
     const { t } = useLanguage();
@@ -359,10 +361,6 @@ export const ListView = memo(function ListView({ title, statusFilter }: ListView
                     deferredFilterInputs.areaById
                 )) return false;
 
-                if (deferredFilterInputs.statusFilter === 'inbox') {
-                    const start = safeParseDate(t.startTime);
-                    if (start && start > now) return false;
-                }
                 if (deferredFilterInputs.statusFilter === 'next') {
                     const start = safeParseDate(t.startTime);
                     if (start && start > now) return false;

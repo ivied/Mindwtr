@@ -37,6 +37,7 @@ type TaskListQuickAddProps = {
   t: (key: string) => string;
   themeColors: ThemeColors;
   title: string;
+  trailingAccessory?: React.ReactNode;
   trigger: TriggerState | null;
   typeaheadIndex: number;
   typeaheadOpen: boolean;
@@ -63,6 +64,7 @@ export function TaskListQuickAdd({
   t,
   themeColors,
   title,
+  trailingAccessory,
   trigger,
   typeaheadIndex,
   typeaheadOpen,
@@ -82,7 +84,7 @@ export function TaskListQuickAdd({
           style={[styles.input, { backgroundColor: themeColors.inputBg, borderColor: themeColors.border, color: themeColors.text }]}
           autoCapitalize="sentences"
           autoCorrect={false}
-          placeholder={t('inbox.addPlaceholder')}
+          placeholder={projectId ? t('projects.addTaskPlaceholder') : t('inbox.addPlaceholder')}
           placeholderTextColor={themeColors.secondaryText}
           value={newTaskTitle}
           onChangeText={(text) => {
@@ -98,6 +100,7 @@ export function TaskListQuickAdd({
           accessibilityLabel={inputLabel}
           accessibilityHint={inputHint}
         />
+        {trailingAccessory}
         <TouchableOpacity
           onPress={handleAddTask}
           style={[

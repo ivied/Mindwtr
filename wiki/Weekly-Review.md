@@ -211,4 +211,4 @@ If you miss a week:
 
 - [[GTD Overview]]
 - [[GTD Workflow in Mindwtr]]
-- [[GTD Best Practices]]
+- [[GTD Workflow in Mindwtr]]

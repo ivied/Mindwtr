@@ -1,0 +1,9 @@
+<en-US>
+Mindwtr 0.9.3 makes task editing faster with pill controls and quick date shortcuts. Archived task details, Focus lists, yearly calendar recurrences, and project unarchive behavior are more reliable. Android builds also improve app metadata handling.
+</en-US>
+<zh-CN>
+Mindwtr 0.9.3 让任务编辑更快，支持属性胶囊控件和常用日期快捷选项。归档任务详情、专注列表、年度日历重复规则和项目取消归档更加可靠。Android 构建也改进了应用元数据处理。
+</zh-CN>
+<es-ES>
+Mindwtr 0.9.3 acelera la edicion de tareas con controles tipo pildora y atajos de fecha. Los detalles archivados, listas de Focus, recurrencias anuales y desarchivado de proyectos son mas fiables. Los builds Android tambien mejoran el manejo de metadatos.
+</es-ES>

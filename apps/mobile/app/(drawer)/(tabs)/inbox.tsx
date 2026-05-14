@@ -1,0 +1,96 @@
+import { useMemo, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+
+import { useTaskStore } from '@mindwtr/core';
+import { TaskList } from '../../../components/task-list';
+import { InboxProcessingModal } from '../../../components/inbox-processing-modal';
+import { ErrorBoundary } from '../../../components/ErrorBoundary';
+
+import { useLanguage } from '../../../contexts/language-context';
+import { useThemeColors } from '@/hooks/use-theme-colors';
+import { useMobileAreaFilter } from '@/hooks/use-mobile-area-filter';
+import { taskMatchesAreaFilter } from '@/lib/area-filter';
+import { useQuickCapture } from '../../../contexts/quick-capture-context';
+
+export default function InboxScreen() {
+  const { tasks, projects, settings } = useTaskStore();
+  const { t } = useLanguage();
+  const tc = useThemeColors();
+  const { openQuickCapture } = useQuickCapture();
+  const [showProcessing, setShowProcessing] = useState(false);
+  const { areaById, resolvedAreaFilter } = useMobileAreaFilter();
+  const projectById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
+
+  const inboxTasks = useMemo(() => {
+    return tasks.filter(t => {
+      if (t.deletedAt) return false;
+      if (t.status !== 'inbox') return false;
+      if (!taskMatchesAreaFilter(t, resolvedAreaFilter, projectById, areaById)) return false;
+      return true;
+    });
+  }, [tasks, resolvedAreaFilter, projectById, areaById]);
+
+  const defaultCaptureMethod = settings.gtd?.defaultCaptureMethod ?? 'text';
+  const emptyHint = defaultCaptureMethod === 'audio'
+    ? t('inbox.emptyAddHintVoice')
+    : t('inbox.emptyAddHint');
+  const emptyActionLabel = defaultCaptureMethod === 'audio'
+    ? t('quickAdd.audioCaptureLabel')
+    : t('nav.addTask');
+
+  const processButton = inboxTasks.length > 0 ? (
+    <TouchableOpacity
+      style={[styles.processHeaderButton, { backgroundColor: tc.tint }]}
+      onPress={() => setShowProcessing(true)}
+      hitSlop={8}
+      accessibilityRole="button"
+      accessibilityLabel={t('inbox.processButton')}
+    >
+      <Text style={styles.processHeaderButtonText}>
+        ▷ {t('inbox.processButton')} ({inboxTasks.length})
+      </Text>
+    </TouchableOpacity>
+  ) : null;
+
+  return (
+    <View style={[styles.container, { backgroundColor: tc.bg }]}>
+      <TaskList
+        statusFilter="inbox"
+        title={t('inbox.title')}
+        showHeader={false}
+        enableBulkActions={false}
+        showSort={false}
+        allowAdd={false}
+        showQuickAddHelp={false}
+        emptyText={t('inbox.empty')}
+        emptyHint={emptyHint}
+        emptyActionLabel={emptyActionLabel}
+        onEmptyAction={() => openQuickCapture({ autoRecord: defaultCaptureMethod === 'audio' })}
+        headerAccessory={processButton}
+        defaultEditTab="task"
+      />
+      <ErrorBoundary>
+        <InboxProcessingModal
+          visible={showProcessing}
+          onClose={() => setShowProcessing(false)}
+        />
+      </ErrorBoundary>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  processHeaderButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+  processHeaderButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+});

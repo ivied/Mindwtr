@@ -31,7 +31,7 @@ Mindwtr can talk to any service that exposes an **OpenAI-compatible Chat Complet
 Use this setup for:
 
 - **Official OpenAI**: leave **Custom base URL** blank and use your OpenAI API key.
-- **Local servers**: Ollama, LM Studio, LocalAI, vLLM, and similar.
+- **Local servers**: llama.cpp, Ollama, LM Studio, LocalAI, vLLM, and similar.
 - **Hosted OpenAI-compatible providers**: for example GLM or other vendors that expose an OpenAI-compatible endpoint.
 
 1. If needed, start or obtain access to an OpenAI-compatible endpoint.
@@ -46,6 +46,7 @@ Use this setup for:
 Mindwtr appends `/chat/completions` automatically, so use the provider base URL rather than the full chat-completions path unless your service requires the full path.
 
 Common base URLs:
+- **llama.cpp**: `http://localhost:8080/v1`
 - **Ollama**: `http://localhost:11434/v1`
 - **LM Studio**: `http://localhost:1234/v1`
 - **LocalAI / vLLM**: `http://localhost:8080/v1`

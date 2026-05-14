@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     areSyncPayloadsEqual,
     assertNoPendingAttachmentUploads,
+    computeSyncPayloadFingerprint,
     findPendingAttachmentUploads,
     normalizeCloudUrl,
     sanitizeAppDataForRemote,
@@ -122,6 +123,7 @@ describe('sync-helpers sanitizeAppDataForRemote', () => {
                 weeklyReviewEnabled: true,
                 window: { decorations: false, closeBehavior: 'tray' },
                 diagnostics: { loggingEnabled: true },
+                analytics: { heartbeatEnabled: false },
                 taskSortBy: 'updatedAt',
                 sidebarCollapsed: true,
                 deviceId: 'local-device-id',
@@ -142,24 +144,37 @@ describe('sync-helpers sanitizeAppDataForRemote', () => {
                     appearance: true,
                     language: false,
                     externalCalendars: true,
+                    savedFilters: true,
                     ai: true,
                 },
                 syncPreferencesUpdatedAt: {
                     appearance: now,
                     language: now,
                     externalCalendars: now,
+                    savedFilters: now,
                     ai: now,
                     preferences: now,
                 },
                 theme: 'dark',
-                appearance: { density: 'compact', textSize: 'large' },
+                appearance: { density: 'compact', textSize: 'large', mobileQuickAccessView: 'contexts' },
                 keybindingStyle: 'emacs',
                 globalQuickAddShortcut: 'ctrl+alt+m',
                 language: 'zh',
                 weekStart: 'monday',
                 dateFormat: 'yyyy-MM-dd',
                 timeFormat: '24h',
-                externalCalendars: [{ id: 'cal-1', name: 'Work', url: 'https://example.com/work.ics', enabled: true }],
+                externalCalendars: [
+                    { id: 'cal-1', name: 'Work', url: 'https://example.com/work.ics', enabled: true },
+                    { id: 'cal-local', name: 'Local', url: 'file:///home/user/agenda.ics', enabled: true },
+                ],
+                savedFilters: [{
+                    id: 'filter-1',
+                    name: 'Desk',
+                    view: 'focus',
+                    criteria: { contexts: ['@desk'] },
+                    createdAt: now,
+                    updatedAt: now,
+                }],
                 ai: {
                     enabled: true,
                     provider: 'openai',
@@ -178,9 +193,12 @@ describe('sync-helpers sanitizeAppDataForRemote', () => {
         expect(sanitized.settings.syncPreferences).toEqual(data.settings.syncPreferences);
         expect(sanitized.settings.syncPreferencesUpdatedAt).toEqual(data.settings.syncPreferencesUpdatedAt);
         expect(sanitized.settings.theme).toBe('dark');
-        expect(sanitized.settings.appearance).toEqual({ density: 'compact', textSize: 'large' });
+        expect(sanitized.settings.appearance).toEqual({ density: 'compact', textSize: 'large', mobileQuickAccessView: 'contexts' });
         expect(sanitized.settings.keybindingStyle).toBe('emacs');
-        expect(sanitized.settings.externalCalendars).toEqual(data.settings.externalCalendars);
+        expect(sanitized.settings.externalCalendars).toEqual([
+            { id: 'cal-1', name: 'Work', url: 'https://example.com/work.ics', enabled: true },
+        ]);
+        expect(sanitized.settings.savedFilters).toEqual(data.settings.savedFilters);
 
         expect(sanitized.settings.language).toBeUndefined();
         expect(sanitized.settings.weekStart).toBeUndefined();
@@ -199,10 +217,49 @@ describe('sync-helpers sanitizeAppDataForRemote', () => {
         expect(sanitized.settings.window).toBeUndefined();
         expect(sanitized.settings.notificationsEnabled).toBeUndefined();
         expect(sanitized.settings.diagnostics).toBeUndefined();
+        expect(sanitized.settings.analytics).toBeUndefined();
         expect(sanitized.settings.gtd).toBeUndefined();
         expect(sanitized.settings.features).toBeUndefined();
         expect(sanitized.settings.taskSortBy).toBeUndefined();
         expect(sanitized.settings.sidebarCollapsed).toBeUndefined();
+    });
+
+    it('includes synced GTD preferences', () => {
+        const data = createData([]);
+        data.settings = {
+            syncPreferences: { gtd: true, language: true },
+            gtd: {
+                defaultScheduleTime: '09:30',
+                focusTaskLimit: 5,
+                inboxProcessing: { scheduleEnabled: true },
+            },
+            language: 'en',
+            timeFormat: '24h',
+        };
+
+        const sanitized = sanitizeAppDataForRemote(data);
+
+        expect(sanitized.settings.gtd).toEqual({ defaultScheduleTime: '09:30', focusTaskLimit: 5 });
+        expect(sanitized.settings.language).toBe('en');
+        expect(sanitized.settings.timeFormat).toBe('24h');
+    });
+
+    it('does not include the default schedule time with only synced date/time preferences', () => {
+        const data = createData([]);
+        data.settings = {
+            syncPreferences: { language: true },
+            gtd: {
+                defaultScheduleTime: '09:30',
+            },
+            language: 'en',
+            timeFormat: '24h',
+        };
+
+        const sanitized = sanitizeAppDataForRemote(data);
+
+        expect(sanitized.settings.gtd).toBeUndefined();
+        expect(sanitized.settings.language).toBe('en');
+        expect(sanitized.settings.timeFormat).toBe('24h');
     });
 
     it('sanitizes file attachment URIs while preserving cloud metadata', () => {
@@ -250,7 +307,7 @@ describe('sync-helpers sanitizeAppDataForRemote', () => {
         expect(attachment?.localStatus).toBeUndefined();
     });
 
-    it('tombstones live file attachments that have neither uri nor cloudKey', () => {
+    it('keeps live file attachments that have neither uri nor cloudKey unless marked missing', () => {
         const data = createData([
             fileAttachment({
                 id: 'missing-reference',
@@ -262,9 +319,28 @@ describe('sync-helpers sanitizeAppDataForRemote', () => {
         const sanitized = sanitizeAppDataForRemote(data);
         const attachment = sanitized.tasks[0]?.attachments?.[0];
         expect(attachment).toBeDefined();
+        expect(attachment?.deletedAt).toBeUndefined();
+        expect(attachment?.uri).toBe('');
+        expect(attachment?.cloudKey).toBeUndefined();
+    });
+
+    it('tombstones missing local file attachments that have no cloud key', () => {
+        const data = createData([
+            fileAttachment({
+                id: 'missing-local-file',
+                uri: '',
+                cloudKey: undefined,
+                localStatus: 'missing',
+            }),
+        ]);
+
+        const sanitized = sanitizeAppDataForRemote(data);
+        const attachment = sanitized.tasks[0]?.attachments?.[0];
+        expect(attachment).toBeDefined();
         expect(attachment?.deletedAt).toBeDefined();
         expect(attachment?.uri).toBe('');
         expect(attachment?.cloudKey).toBeUndefined();
+        expect(attachment?.localStatus).toBeUndefined();
     });
 
     it('tombstones local-only file attachments on deleted tasks before remote sync', () => {
@@ -338,5 +414,39 @@ describe('sync-helpers areSyncPayloadsEqual', () => {
         };
 
         expect(areSyncPayloadsEqual(left, right)).toBe(false);
+    });
+});
+
+describe('sync-helpers computeSyncPayloadFingerprint', () => {
+    it('ignores device-local sync status fields', () => {
+        const left: AppData = {
+            tasks: [],
+            projects: [],
+            sections: [],
+            areas: [],
+            settings: {
+                lastSyncAt: '2026-04-01T00:00:00.000Z',
+                lastSyncStatus: 'success',
+                lastSyncError: undefined,
+            },
+        };
+        const right: AppData = {
+            ...left,
+            settings: {
+                lastSyncAt: '2026-04-02T00:00:00.000Z',
+                lastSyncStatus: 'error',
+                lastSyncError: 'temporary network error',
+            },
+        };
+
+        expect(computeSyncPayloadFingerprint(left)).toBe(computeSyncPayloadFingerprint(right));
+    });
+
+    it('changes when sync-eligible content changes', () => {
+        const left = createData([]);
+        const right = createData([]);
+        right.tasks[0].title = 'Changed';
+
+        expect(computeSyncPayloadFingerprint(left)).not.toBe(computeSyncPayloadFingerprint(right));
     });
 });

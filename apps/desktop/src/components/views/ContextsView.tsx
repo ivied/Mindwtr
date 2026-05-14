@@ -10,8 +10,9 @@ import {
     getUsedTaskTokens,
     buildBulkTaskTokenUpdates,
     collectBulkTaskTokens,
+    tFallback,
 } from '@mindwtr/core';
-import { Tag, Filter } from 'lucide-react';
+import { AtSign, ChevronDown, ChevronRight, Filter, Hash, Tag, type LucideIcon } from 'lucide-react';
 import { TokenPickerModal } from '../TokenPickerModal';
 import { ListBulkActions } from './list/ListBulkActions';
 import { cn } from '../../lib/utils';
@@ -29,11 +30,41 @@ import {
     useVirtualList,
 } from './list/useVirtualList';
 import { StoreTaskItem } from './list/StoreTaskItem';
+import { usePersistedViewState } from '../../hooks/usePersistedViewState';
 
 type BulkTokenPickerState = {
     field: 'tags' | 'contexts';
     action: 'add' | 'remove';
 } | null;
+
+const CONTEXTS_VIEW_STATE_STORAGE_KEY = 'mindwtr:view:contexts:v1';
+const NO_CONTEXT_TOKEN = '__no_context__';
+const CONTEXT_STATUS_VALUES: Array<TaskStatus | 'all'> = ['all', 'inbox', 'next', 'waiting', 'someday', 'reference', 'done'];
+
+type ContextsPersistedViewState = {
+    selectedContext: string | null;
+    statusFilter: TaskStatus | 'all';
+};
+
+const DEFAULT_CONTEXTS_VIEW_STATE: ContextsPersistedViewState = {
+    selectedContext: null,
+    statusFilter: 'all',
+};
+
+function sanitizeContextsViewState(value: unknown, fallback: ContextsPersistedViewState): ContextsPersistedViewState {
+    const parsed = value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Partial<ContextsPersistedViewState>
+        : {};
+    const selectedContext = typeof parsed.selectedContext === 'string' && parsed.selectedContext.trim()
+        ? parsed.selectedContext
+        : null;
+    return {
+        selectedContext,
+        statusFilter: CONTEXT_STATUS_VALUES.includes(parsed.statusFilter as TaskStatus | 'all')
+            ? parsed.statusFilter as TaskStatus | 'all'
+            : fallback.statusFilter,
+    };
+}
 
 export function ContextsView() {
     const perf = usePerformanceMonitor('ContextsView');
@@ -51,20 +82,38 @@ export function ContextsView() {
     const batchDeleteTasks = useTaskStore((state) => state.batchDeleteTasks);
     const batchUpdateTasks = useTaskStore((state) => state.batchUpdateTasks);
     const { t } = useLanguage();
-    const [selectedContext, setSelectedContext] = useState<string | null>(null);
-    const NO_CONTEXT_TOKEN = '__no_context__';
-    const [statusFilter, setStatusFilter] = useState<TaskStatus | 'all'>('all');
+    const [persistedViewState, setPersistedViewState] = usePersistedViewState(
+        CONTEXTS_VIEW_STATE_STORAGE_KEY,
+        DEFAULT_CONTEXTS_VIEW_STATE,
+        sanitizeContextsViewState
+    );
+    const selectedContext = persistedViewState.selectedContext;
+    const statusFilter = persistedViewState.statusFilter;
     const [searchQuery, setSearchQuery] = useState('');
     const [selectionMode, setSelectionMode] = useState(false);
     const [multiSelectedIds, setMultiSelectedIds] = useState<Set<string>>(new Set());
     const [bulkTokenPicker, setBulkTokenPicker] = useState<BulkTokenPickerState>(null);
     const [isBatchDeleting, setIsBatchDeleting] = useState(false);
+    const [contextsCollapsed, setContextsCollapsed] = useState(false);
+    const [tagsCollapsed, setTagsCollapsed] = useState(false);
     const listScrollRef = useRef<HTMLDivElement>(null);
     const rowHeightsRef = useRef<Map<string, number>>(new Map());
     const [measureVersion, setMeasureVersion] = useState(0);
     const [listScrollTop, setListScrollTop] = useState(0);
     const [listHeight, setListHeight] = useState(0);
     const { requestConfirmation, confirmModal } = useConfirmDialog();
+    const setSelectedContext = useCallback((value: string | null) => {
+        setPersistedViewState((current) => ({
+            ...current,
+            selectedContext: value,
+        }));
+    }, [setPersistedViewState]);
+    const setStatusFilter = useCallback((value: TaskStatus | 'all') => {
+        setPersistedViewState((current) => ({
+            ...current,
+            statusFilter: value,
+        }));
+    }, [setPersistedViewState]);
     const areaById = useMemo(() => new Map(areas.map((area) => [area.id, area])), [areas]);
     const resolvedAreaFilter = useMemo(
         () => resolveAreaFilter(settings?.filters?.areaId, areas),
@@ -110,10 +159,17 @@ export function ContextsView() {
         ? baseTasks
         : baseTasks.filter(t => t.status === statusFilter);
 
-    // Extract all unique contexts from active tasks
-    const allContexts = Array.from(new Set(
-        scopedTasks.flatMap(t => [...(t.contexts || []), ...(t.tags || [])])
-    )).sort();
+    // Extract unique context and tag tokens separately for the selector sidebar.
+    const allContextTokens = Array.from(new Set(scopedTasks.flatMap(t => t.contexts || []))).sort();
+    const allTagTokens = Array.from(new Set(scopedTasks.flatMap(t => t.tags || []))).sort();
+    const allTokens = [...allContextTokens, ...allTagTokens];
+
+    useEffect(() => {
+        // Keep persisted context selections through the empty startup frame; reset only after active tasks expose tokens.
+        if (allTokens.length === 0) return;
+        if (!selectedContext || selectedContext === NO_CONTEXT_TOKEN || allTokens.includes(selectedContext)) return;
+        setSelectedContext(null);
+    }, [allTokens, selectedContext, setSelectedContext]);
 
     const matchesSelected = (task: typeof activeTasks[number], context: string) => {
         const tokens = [...(task.contexts || []), ...(task.tags || [])];
@@ -308,6 +364,70 @@ export function ContextsView() {
         { value: 'reference', label: t('status.reference') },
         { value: 'done', label: t('status.done') },
     ];
+    const contextsLabel = tFallback(t, 'taskEdit.contextsLabel', 'Contexts');
+    const tagsLabel = tFallback(t, 'taskEdit.tagsLabel', 'Tags');
+    const allTokensLabel = `${contextsLabel} & ${tagsLabel}`;
+
+    const renderTokenRow = (token: string, marker: '@' | '#') => {
+        const taskCount = scopedTasks.filter(t => matchesSelected(t, token)).length;
+        return (
+            <button
+                key={token}
+                type="button"
+                onClick={() => setSelectedContext(token)}
+                aria-label={`${token} (${taskCount})`}
+                className={cn(
+                    "flex w-full items-center gap-2 rounded-lg p-2 text-left text-sm transition-colors",
+                    selectedContext === token ? "bg-primary/10 text-primary font-medium" : "hover:bg-muted/40 text-foreground"
+                )}
+            >
+                <span className="w-4 text-center text-muted-foreground">{marker}</span>
+                <span className="flex-1 truncate">{token.replace(marker === '@' ? /^@/ : /^#/, '')}</span>
+                <span className="text-xs text-muted-foreground">
+                    {taskCount}
+                </span>
+            </button>
+        );
+    };
+
+    const renderTokenSection = ({
+        label,
+        tokens,
+        marker,
+        icon: Icon,
+        collapsed,
+        onToggle,
+    }: {
+        label: string;
+        tokens: string[];
+        marker: '@' | '#';
+        icon: LucideIcon;
+        collapsed: boolean;
+        onToggle: () => void;
+    }) => {
+        const ToggleIcon = collapsed ? ChevronRight : ChevronDown;
+        return (
+            <div className="mt-3 border-t border-border/60 pt-3">
+                <button
+                    type="button"
+                    onClick={onToggle}
+                    aria-expanded={!collapsed}
+                    aria-label={`${label} (${tokens.length})`}
+                    className="flex w-full items-center gap-2 px-1 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground"
+                >
+                    <ToggleIcon className="h-3.5 w-3.5" aria-hidden="true" />
+                    <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span className="flex-1 text-left">{label}</span>
+                    <span>{tokens.length}</span>
+                </button>
+                {!collapsed && (
+                    <div className="mt-1 space-y-1">
+                        {tokens.map((token) => renderTokenRow(token, marker))}
+                    </div>
+                )}
+            </div>
+        );
+    };
 
     const handleBulkTokenConfirm = async (value: string) => {
         if (!bulkTokenPicker || selectedIdsArray.length === 0) return;
@@ -343,24 +463,28 @@ export function ContextsView() {
                         </div>
 
                         <div className="space-y-1 overflow-y-auto flex-1">
-                            <div
+                            <button
+                                type="button"
                                 onClick={() => setSelectedContext(null)}
+                                aria-label={`${allTokensLabel} (${scopedTasks.filter((t) => hasContext(t)).length})`}
                                 className={cn(
-                                    "flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors text-sm",
+                                    "flex w-full items-center gap-2 rounded-lg p-2 text-left text-sm transition-colors",
                                     selectedContext === null ? "bg-primary/10 text-primary font-medium" : "hover:bg-muted/40 text-foreground"
                                 )}
                             >
                                 <Tag className="w-4 h-4" />
-                                <span className="flex-1">{t('contexts.all')}</span>
+                                <span className="flex-1">{allTokensLabel}</span>
                                 <span className="text-xs text-muted-foreground">
                                     {scopedTasks.filter((t) => hasContext(t)).length}
                                 </span>
-                            </div>
+                            </button>
 
-                            <div
+                            <button
+                                type="button"
                                 onClick={() => setSelectedContext(NO_CONTEXT_TOKEN)}
+                                aria-label={`${t('contexts.none')} (${scopedTasks.filter((t) => !hasContext(t)).length})`}
                                 className={cn(
-                                    "flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors text-sm",
+                                    "flex w-full items-center gap-2 rounded-lg p-2 text-left text-sm transition-colors",
                                     selectedContext === NO_CONTEXT_TOKEN ? "bg-primary/10 text-primary font-medium" : "hover:bg-muted/40 text-foreground"
                                 )}
                             >
@@ -369,29 +493,31 @@ export function ContextsView() {
                                 <span className="text-xs text-muted-foreground">
                                     {scopedTasks.filter((t) => !hasContext(t)).length}
                                 </span>
-                            </div>
+                            </button>
 
-                            {allContexts.map(context => (
-                                <div
-                                    key={context}
-                                    onClick={() => setSelectedContext(context)}
-                                    className={cn(
-                                        "flex items-center gap-2 p-2 rounded-lg cursor-pointer transition-colors text-sm",
-                                        selectedContext === context ? "bg-primary/10 text-primary font-medium" : "hover:bg-muted/40 text-foreground"
-                                    )}
-                                >
-                                    <span className="text-muted-foreground">@</span>
-                                    <span className="flex-1 truncate">{context.replace(/^@/, '')}</span>
-                                    <span className="text-xs text-muted-foreground">
-                                        {scopedTasks.filter(t => matchesSelected(t, context)).length}
-                                    </span>
-                                </div>
-                            ))}
-
-                            {allContexts.length === 0 && (
+                            {allTokens.length === 0 ? (
                                 <div className="text-sm text-muted-foreground text-center py-8">
                                     {t('contexts.noContexts')}
                                 </div>
+                            ) : (
+                                <>
+                                    {renderTokenSection({
+                                        label: contextsLabel,
+                                        tokens: allContextTokens,
+                                        marker: '@',
+                                        icon: AtSign,
+                                        collapsed: contextsCollapsed,
+                                        onToggle: () => setContextsCollapsed((value) => !value),
+                                    })}
+                                    {renderTokenSection({
+                                        label: tagsLabel,
+                                        tokens: allTagTokens,
+                                        marker: '#',
+                                        icon: Hash,
+                                        collapsed: tagsCollapsed,
+                                        onToggle: () => setTagsCollapsed((value) => !value),
+                                    })}
+                                </>
                             )}
                         </div>
                     </div>
@@ -404,7 +530,7 @@ export function ContextsView() {
                             </div>
                             <div>
                                 <h2 className="text-2xl font-bold">
-                                    {selectedContext === NO_CONTEXT_TOKEN ? t('contexts.none') : (selectedContext ?? t('contexts.all'))}
+                                    {selectedContext === NO_CONTEXT_TOKEN ? t('contexts.none') : (selectedContext ?? allTokensLabel)}
                                 </h2>
                                 <p className="text-muted-foreground text-sm">
                                     {filteredTasks.length} {t('common.tasks')}

@@ -8,14 +8,15 @@ import {
     parseRRuleString,
     safeFormatDate,
     safeParseDate,
+    tFallback,
     type RecurrenceByDay,
     type RecurrenceRule,
     type RecurrenceStrategy,
 } from '@mindwtr/core';
 
+import { QuickDateChips } from '../QuickDateChips';
 import { buildRecurrenceValue } from './recurrence-utils';
 import type {
-    MonthlyRecurrenceByDay,
     ShowDatePickerMode,
     TaskEditFieldRendererProps,
 } from './TaskEditFieldRenderer.types';
@@ -27,6 +28,7 @@ type TaskEditScheduleFieldProps = TaskEditFieldRendererProps & {
 };
 
 export function TaskEditScheduleField({
+    applyQuickDate,
     customWeekdays,
     dailyInterval,
     editedTask,
@@ -62,6 +64,9 @@ export function TaskEditScheduleField({
         { color: active ? '#fff' : tc.secondaryText },
     ]);
     const parsedRecurrenceRRule = parseRRuleString(recurrenceRRuleValue);
+    const monthlyInterval = recurrenceRuleValue === 'monthly' && parsedRecurrenceRRule.interval && parsedRecurrenceRRule.interval > 0
+        ? parsedRecurrenceRRule.interval
+        : 1;
     const recurrenceEndMode: 'never' | 'until' | 'count' = parsedRecurrenceRRule.count
         ? 'count'
         : parsedRecurrenceRRule.until
@@ -146,20 +151,31 @@ export function TaskEditScheduleField({
             </View>
         );
     };
+    const renderQuickDateChips = (
+        mode: 'start' | 'due' | 'review',
+        selectedDate: Date | null
+    ) => (
+        <QuickDateChips
+            t={t}
+            tc={tc}
+            selectedDate={selectedDate}
+            onSelect={(date) => applyQuickDate(mode, date)}
+        />
+    );
     const formatStartDateTime = (dateStr?: string) => {
         if (!dateStr) return t('common.notSet');
         const parsed = safeParseDate(dateStr);
         if (!parsed) return t('common.notSet');
-        if (!hasTimeComponent(dateStr)) {
-            return parsed.toLocaleDateString();
-        }
-        return parsed.toLocaleString(undefined, {
-            year: 'numeric',
-            month: 'numeric',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-        });
+        return safeFormatDate(
+            parsed,
+            hasTimeComponent(dateStr) ? 'P p' : 'P',
+            t('common.notSet')
+        ) || t('common.notSet');
+    };
+    const dateOnlyLabel = tFallback(t, 'taskEdit.dateOnly', 'Date only');
+    const clearTimePart = (value?: string): string | undefined => {
+        const parsed = safeParseDate(value);
+        return parsed ? safeFormatDate(parsed, 'yyyy-MM-dd') : undefined;
     };
 
     switch (fieldId) {
@@ -201,7 +217,9 @@ export function TaskEditScheduleField({
                                             recurrence: buildEditedRecurrence('monthly', {
                                                 byDay: undefined,
                                                 byMonthDay: undefined,
-                                                interval: undefined,
+                                                interval: parsedRecurrenceRRule.rule === 'monthly' && parsedRecurrenceRRule.interval && parsedRecurrenceRRule.interval > 0
+                                                    ? parsedRecurrenceRRule.interval
+                                                    : 1,
                                             }),
                                         }));
                                         return;
@@ -228,10 +246,6 @@ export function TaskEditScheduleField({
                                         }));
                                         return;
                                     }
-                                    setEditedTask((prev) => ({
-                                        ...prev,
-                                        recurrence: buildRecurrenceValue(option.value, recurrenceStrategyValue),
-                                    }));
                                 }}
                             >
                                 <Text style={getStatusTextStyle(
@@ -243,38 +257,63 @@ export function TaskEditScheduleField({
                         ))}
                     </View>
                     {recurrenceRuleValue === 'weekly' && (
-                        <View style={[styles.weekdayRow, { marginTop: 10 }]}>
-                            {recurrenceWeekdayButtons.map((day) => {
-                                const active = customWeekdays.includes(day.key);
-                                return (
-                                    <TouchableOpacity
-                                        key={day.key}
-                                        style={[
-                                            styles.weekdayButton,
-                                            {
-                                                borderColor: tc.border,
-                                                backgroundColor: active ? tc.filterBg : tc.cardBg,
-                                            },
-                                        ]}
-                                        onPress={() => {
-                                            const next = active
-                                                ? customWeekdays.filter((value) => value !== day.key)
-                                                : [...customWeekdays, day.key];
-                                            setCustomWeekdays(next);
-                                            setEditedTask((prev) => ({
-                                                ...prev,
-                                                recurrence: buildEditedRecurrence('weekly', {
-                                                    byDay: next,
-                                                    byMonthDay: undefined,
-                                                }),
-                                            }));
-                                        }}
-                                    >
-                                        <Text style={[styles.weekdayButtonText, { color: tc.text }]}>{day.label}</Text>
-                                    </TouchableOpacity>
-                                );
-                            })}
-                        </View>
+                        <>
+                            <View style={[styles.customRow, { marginTop: 8, borderColor: tc.border }]}>
+                                <Text style={[styles.modalLabel, { color: tc.secondaryText }]}>{t('recurrence.repeatEvery')}</Text>
+                                <TextInput
+                                    value={String(Math.max(parsedRecurrenceRRule.interval ?? 1, 1))}
+                                    onChangeText={(value) => {
+                                        const parsed = Number.parseInt(value, 10);
+                                        const interval = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 52) : 1;
+                                        setEditedTask((prev) => ({
+                                            ...prev,
+                                            recurrence: buildEditedRecurrence('weekly', {
+                                                ...(customWeekdays.length > 0 ? { byDay: customWeekdays } : {}),
+                                                byMonthDay: undefined,
+                                                interval,
+                                            }),
+                                        }));
+                                    }}
+                                    keyboardType="number-pad"
+                                    style={[styles.customInput, { backgroundColor: tc.inputBg, borderColor: tc.border, color: tc.text }]}
+                                    accessibilityLabel={t('recurrence.repeatEvery')}
+                                    accessibilityHint={t('recurrence.weekUnit')}
+                                />
+                                <Text style={[styles.modalLabel, { color: tc.secondaryText }]}>{t('recurrence.weekUnit')}</Text>
+                            </View>
+                            <View style={[styles.weekdayRow, { marginTop: 10 }]}>
+                                {recurrenceWeekdayButtons.map((day) => {
+                                    const active = customWeekdays.includes(day.key);
+                                    return (
+                                        <TouchableOpacity
+                                            key={day.key}
+                                            style={[
+                                                styles.weekdayButton,
+                                                {
+                                                    borderColor: tc.border,
+                                                    backgroundColor: active ? tc.filterBg : tc.cardBg,
+                                                },
+                                            ]}
+                                            onPress={() => {
+                                                const next = active
+                                                    ? customWeekdays.filter((value) => value !== day.key)
+                                                    : [...customWeekdays, day.key];
+                                                setCustomWeekdays(next);
+                                                setEditedTask((prev) => ({
+                                                    ...prev,
+                                                    recurrence: buildEditedRecurrence('weekly', {
+                                                        byDay: next,
+                                                        byMonthDay: undefined,
+                                                    }),
+                                                }));
+                                            }}
+                                        >
+                                            <Text style={[styles.weekdayButtonText, { color: tc.text }]}>{day.label}</Text>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                            </View>
+                        </>
                     )}
                     {recurrenceRuleValue === 'daily' && (
                         <View style={[styles.customRow, { marginTop: 8, borderColor: tc.border }]}>
@@ -302,33 +341,53 @@ export function TaskEditScheduleField({
                         </View>
                     )}
                     {recurrenceRuleValue === 'monthly' && (
-                        <View style={[styles.statusContainer, { marginTop: 8 }]}>
-                            <TouchableOpacity
-                                style={getStatusChipStyle(monthlyPattern === 'date')}
-                                onPress={() => {
-                                    setEditedTask((prev) => ({
-                                        ...prev,
-                                        recurrence: buildEditedRecurrence('monthly', {
-                                            byDay: undefined,
-                                            byMonthDay: undefined,
-                                            interval: undefined,
-                                        }),
-                                    }));
-                                }}
-                            >
-                                <Text style={getStatusTextStyle(monthlyPattern === 'date')}>
-                                    {t('recurrence.monthlyOnDay')}
-                                </Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={getStatusChipStyle(monthlyPattern === 'custom')}
-                                onPress={openCustomRecurrence}
-                            >
-                                <Text style={getStatusTextStyle(monthlyPattern === 'custom')}>
-                                    {t('recurrence.custom')}
-                                </Text>
-                            </TouchableOpacity>
-                        </View>
+                        <>
+                            <View style={[styles.customRow, { marginTop: 8, borderColor: tc.border }]}>
+                                <Text style={[styles.modalLabel, { color: tc.secondaryText }]}>{t('recurrence.repeatEvery')}</Text>
+                                <TextInput
+                                    value={String(monthlyInterval)}
+                                    onChangeText={(value) => {
+                                        const parsed = Number.parseInt(value, 10);
+                                        const interval = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 120) : 1;
+                                        setEditedTask((prev) => ({
+                                            ...prev,
+                                            recurrence: buildEditedRecurrence('monthly', { interval }),
+                                        }));
+                                    }}
+                                    keyboardType="number-pad"
+                                    style={[styles.customInput, { backgroundColor: tc.inputBg, borderColor: tc.border, color: tc.text }]}
+                                    accessibilityLabel={t('recurrence.repeatEvery')}
+                                    accessibilityHint={t('recurrence.monthUnit')}
+                                />
+                                <Text style={[styles.modalLabel, { color: tc.secondaryText }]}>{t('recurrence.monthUnit')}</Text>
+                            </View>
+                            <View style={[styles.statusContainer, { marginTop: 8 }]}>
+                                <TouchableOpacity
+                                    style={getStatusChipStyle(monthlyPattern === 'date')}
+                                    onPress={() => {
+                                        setEditedTask((prev) => ({
+                                            ...prev,
+                                            recurrence: buildEditedRecurrence('monthly', {
+                                                byDay: undefined,
+                                                byMonthDay: undefined,
+                                            }),
+                                        }));
+                                    }}
+                                >
+                                    <Text style={getStatusTextStyle(monthlyPattern === 'date')}>
+                                        {t('recurrence.monthlyOnDay')}
+                                    </Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={getStatusChipStyle(monthlyPattern === 'custom')}
+                                    onPress={openCustomRecurrence}
+                                >
+                                    <Text style={getStatusTextStyle(monthlyPattern === 'custom')}>
+                                        {t('recurrence.custom')}
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
+                        </>
                     )}
                     {!!recurrenceRuleValue && (
                         <View style={{ marginTop: 8 }}>
@@ -474,6 +533,14 @@ export function TaskEditScheduleField({
                                     </Text>
                                 </TouchableOpacity>
                             )}
+                            {!!editedTask.startTime && hasTime && (
+                                <TouchableOpacity
+                                    style={[styles.clearDateBtn, { borderColor: tc.border, backgroundColor: tc.filterBg }]}
+                                    onPress={() => setEditedTask((prev) => ({ ...prev, startTime: clearTimePart(prev.startTime) }))}
+                                >
+                                    <Text style={[styles.clearDateText, { color: tc.secondaryText }]}>{dateOnlyLabel}</Text>
+                                </TouchableOpacity>
+                            )}
                             {!!editedTask.startTime && (
                                 <TouchableOpacity
                                     style={[styles.clearDateBtn, { borderColor: tc.border, backgroundColor: tc.filterBg }]}
@@ -483,6 +550,7 @@ export function TaskEditScheduleField({
                                 </TouchableOpacity>
                             )}
                         </View>
+                        {renderQuickDateChips('start', parsed)}
                         {renderInlineIOSDatePicker(['start', 'start-time'])}
                     </View>
                 </View>
@@ -513,6 +581,14 @@ export function TaskEditScheduleField({
                                     </Text>
                                 </TouchableOpacity>
                             )}
+                            {!!editedTask.dueDate && hasTime && (
+                                <TouchableOpacity
+                                    style={[styles.clearDateBtn, { borderColor: tc.border, backgroundColor: tc.filterBg }]}
+                                    onPress={() => setEditedTask((prev) => ({ ...prev, dueDate: clearTimePart(prev.dueDate) }))}
+                                >
+                                    <Text style={[styles.clearDateText, { color: tc.secondaryText }]}>{dateOnlyLabel}</Text>
+                                </TouchableOpacity>
+                            )}
                             {!!editedTask.dueDate && (
                                 <TouchableOpacity
                                     style={[styles.clearDateBtn, { borderColor: tc.border, backgroundColor: tc.filterBg }]}
@@ -522,34 +598,49 @@ export function TaskEditScheduleField({
                                 </TouchableOpacity>
                             )}
                         </View>
+                        {renderQuickDateChips('due', parsed)}
                         {renderInlineIOSDatePicker(['due', 'due-time'])}
                     </View>
                 </View>
             );
         }
-        case 'reviewAt':
+        case 'reviewAt': {
+            const parsed = editedTask.reviewAt ? safeParseDate(editedTask.reviewAt) : null;
+            const hasTime = hasTimeComponent(editedTask.reviewAt);
             return (
                 <View style={styles.formGroup}>
                     <Text style={[styles.label, { color: tc.secondaryText }]}>{t('taskEdit.reviewDateLabel')}</Text>
-                    <View style={styles.dateRow}>
-                        <TouchableOpacity
-                            style={[styles.dateBtn, styles.flex1, { backgroundColor: tc.inputBg, borderColor: tc.border }]}
-                            onPress={() => openDatePicker('review')}
-                        >
-                            <Text style={{ color: tc.text }}>{formatDate(editedTask.reviewAt)}</Text>
-                        </TouchableOpacity>
-                        {!!editedTask.reviewAt && (
+                    <View>
+                        <View style={styles.dateRow}>
                             <TouchableOpacity
-                                style={[styles.clearDateBtn, { borderColor: tc.border, backgroundColor: tc.filterBg }]}
-                                onPress={() => setEditedTask((prev) => ({ ...prev, reviewAt: undefined }))}
+                                style={[styles.dateBtn, styles.flex1, { backgroundColor: tc.inputBg, borderColor: tc.border }]}
+                                onPress={() => openDatePicker('review')}
                             >
-                                <Text style={[styles.clearDateText, { color: tc.secondaryText }]}>{t('common.clear')}</Text>
+                                <Text style={{ color: tc.text }}>{formatStartDateTime(editedTask.reviewAt)}</Text>
                             </TouchableOpacity>
-                        )}
+                            {!!editedTask.reviewAt && hasTime && (
+                                <TouchableOpacity
+                                    style={[styles.clearDateBtn, { borderColor: tc.border, backgroundColor: tc.filterBg }]}
+                                    onPress={() => setEditedTask((prev) => ({ ...prev, reviewAt: clearTimePart(prev.reviewAt) }))}
+                                >
+                                    <Text style={[styles.clearDateText, { color: tc.secondaryText }]}>{dateOnlyLabel}</Text>
+                                </TouchableOpacity>
+                            )}
+                            {!!editedTask.reviewAt && (
+                                <TouchableOpacity
+                                    style={[styles.clearDateBtn, { borderColor: tc.border, backgroundColor: tc.filterBg }]}
+                                    onPress={() => setEditedTask((prev) => ({ ...prev, reviewAt: undefined }))}
+                                >
+                                    <Text style={[styles.clearDateText, { color: tc.secondaryText }]}>{t('common.clear')}</Text>
+                                </TouchableOpacity>
+                            )}
+                        </View>
+                        {renderQuickDateChips('review', parsed)}
+                        {renderInlineIOSDatePicker(['review'])}
                     </View>
-                    {renderInlineIOSDatePicker(['review'])}
                 </View>
             );
+        }
         default:
             return null;
     }

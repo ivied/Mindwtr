@@ -10,6 +10,7 @@ type Labels = {
     calendarName: string;
     calendarUrl: string;
     calendarAdd: string;
+    calendarChooseLocalFile: string;
     calendarRemove: string;
     externalCalendars: string;
     calendarSystemTitle: string;
@@ -63,6 +64,7 @@ type SettingsIntegrationsPageProps = {
     onCalendarNameChange: (value: string) => void;
     onCalendarUrlChange: (value: string) => void;
     onAddCalendar: () => void;
+    onChooseLocalCalendarFile: () => Promise<void> | void;
     onToggleCalendar: (id: string, enabled: boolean) => void;
     onRemoveCalendar: (id: string) => void;
     onRequestSystemCalendarPermission: () => void;
@@ -104,6 +106,7 @@ export function SettingsIntegrationsPage({
     onCalendarNameChange,
     onCalendarUrlChange,
     onAddCalendar,
+    onChooseLocalCalendarFile,
     onToggleCalendar,
     onRemoveCalendar,
     onRequestSystemCalendarPermission,
@@ -145,6 +148,7 @@ export function SettingsIntegrationsPage({
                 onCalendarNameChange={onCalendarNameChange}
                 onCalendarUrlChange={onCalendarUrlChange}
                 onAddCalendar={onAddCalendar}
+                onChooseLocalCalendarFile={isTauri ? onChooseLocalCalendarFile : undefined}
                 onToggleCalendar={onToggleCalendar}
                 onRemoveCalendar={onRemoveCalendar}
                 onRequestSystemCalendarPermission={onRequestSystemCalendarPermission}

@@ -32,6 +32,7 @@ const renderWithProviders = () => {
 
 describe('BoardView', () => {
     beforeEach(() => {
+        window.localStorage.clear();
         useTaskStore.setState({
             tasks: [],
             projects: [],
@@ -39,7 +40,7 @@ describe('BoardView', () => {
             settings: {},
         });
         useUiStore.setState({
-            boardFilters: { selectedProjectIds: [], open: false },
+            boardFilters: { selectedProjectIds: [] },
         });
     });
 

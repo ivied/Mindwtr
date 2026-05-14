@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { AppData } from '@mindwtr/core';
+import type { AiSettings, AppSettings } from '@mindwtr/core';
 import { isAIKeyRequired } from './ai-config';
 
-const createSettings = (ai: AppData['settings']['ai']): AppData['settings'] => ({ ai });
+const createSettings = (ai: AiSettings): AppSettings => ({ ai });
 
 describe('isAIKeyRequired', () => {
     it('requires key for default OpenAI endpoint', () => {

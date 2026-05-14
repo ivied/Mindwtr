@@ -5,15 +5,21 @@ import type { SettingsSyncPageProps } from './types';
 type DiagnosticsSectionProps = Pick<
     SettingsSyncPageProps,
     | 't'
+    | 'analyticsHeartbeatAvailable'
+    | 'analyticsHeartbeatEnabled'
     | 'loggingEnabled'
     | 'logPath'
+    | 'onAnalyticsHeartbeatChange'
     | 'onToggleLogging'
     | 'onClearLog'
 >;
 
 export function DiagnosticsSection({
+    analyticsHeartbeatAvailable,
+    analyticsHeartbeatEnabled,
     logPath,
     loggingEnabled,
+    onAnalyticsHeartbeatChange,
     onClearLog,
     onToggleLogging,
     t,
@@ -26,6 +32,31 @@ export function DiagnosticsSection({
             </h2>
             <div className="bg-card border border-border rounded-lg p-6 space-y-4">
                 <p className="text-sm text-muted-foreground">{t.diagnosticsDesc}</p>
+                {analyticsHeartbeatAvailable && (
+                    <div className="flex items-start justify-between gap-4">
+                        <div>
+                            <p className="text-sm font-medium">{t.analyticsHeartbeat}</p>
+                            <p className="text-xs text-muted-foreground">{t.analyticsHeartbeatDesc}</p>
+                        </div>
+                        <button
+                            type="button"
+                            role="switch"
+                            aria-checked={analyticsHeartbeatEnabled}
+                            onClick={() => void onAnalyticsHeartbeatChange(!analyticsHeartbeatEnabled)}
+                            className={cn(
+                                'relative inline-flex h-5 w-9 items-center rounded-full border transition-colors',
+                                analyticsHeartbeatEnabled ? 'bg-primary border-primary' : 'bg-muted/50 border-border'
+                            )}
+                        >
+                            <span
+                                className={cn(
+                                    'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
+                                    analyticsHeartbeatEnabled ? 'translate-x-4' : 'translate-x-1'
+                                )}
+                            />
+                        </button>
+                    </div>
+                )}
                 <div className="flex items-start justify-between gap-4">
                     <div>
                         <p className="text-sm font-medium">{t.debugLogging}</p>

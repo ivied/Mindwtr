@@ -12,12 +12,27 @@ Mindwtr maps directly to GTD concepts:
 | ------------- | -------------------------------------- |
 | Inbox         | Inbox view                             |
 | Clarify       | Processing wizard                      |
-| Next Actions  | Focus view (Next Actions list)         |
+| Next Actions  | Focus view for available actions; Contexts/Projects/Search for full inventory |
 | Projects      | Projects view                          |
 | Waiting For   | Waiting For view (status: `waiting`)   |
 | Someday/Maybe | Someday/Maybe view (status: `someday`) |
 | Calendar      | Calendar view (tasks with due dates)   |
 | Weekly Review | Review wizard                          |
+
+---
+
+## Patterns
+
+Use these patterns to keep the system light:
+
+- Write next actions as visible physical steps: "Call insurance" beats "Handle insurance."
+- Keep project support material in project notes. Do not flood Focus with future actions that cannot be done yet.
+- Break large tasks into chunks or time boxes, such as "Spend 30 minutes sorting photos."
+- Use contexts for tools, places, energy, and people: `@phone`, `@errands`, `#focused`, `@Alex`.
+- Put delegated work in Waiting For with a follow-up date or person context.
+- Keep the calendar for hard landscape: appointments, deadlines, and time-specific commitments.
+- During Weekly Review, promote future project notes into real next actions when they become available.
+- Choose one next action per project for a lean system, or multiple only when they are truly parallel.
 
 ---
 
@@ -137,7 +152,7 @@ Create projects for multi-step outcomes:
 ### Starting the Review
 
 - **Desktop:** Go to Weekly Review in sidebar
-- **Mobile:** Tap Review tab or access from drawer
+- **Mobile:** Tap the Review tab in the bottom bar
 
 ### The Steps
 
@@ -177,6 +192,8 @@ Use the **Focus** view to see:
 - Overdue items
 - Due today
 
+Focus is not a full inventory view. It hides future-start tasks and later tasks in sequential projects so the list reflects actions that are available now. Use **Contexts**, **Projects**, or **Search** when you need to inspect all next actions, including deferred or blocked items.
+
 ### Context Filtering
 
 1. Go to **Focus** or **Contexts** view
@@ -185,7 +202,7 @@ Use the **Focus** view to see:
 
 ### Today's Focus
 
-Star up to 3 tasks as today's priorities:
+Star tasks as today's priorities up to your configured Focus limit:
 - **Desktop:** Click the star icon
 - **Mobile:** Tap the star badge
 
@@ -196,7 +213,7 @@ Star up to 3 tasks as today's priorities:
 ### Morning
 
 1. Open **Focus** view to see today's priorities
-2. Set up to 3 focus tasks for the day
+2. Set focus tasks for the day up to your configured Focus limit
 3. Start working on the first one (mark as Focus)
 
 ### Throughout the Day
@@ -256,6 +273,5 @@ Set up recurring tasks for habits:
 ## See Also
 
 - [[GTD Overview]]
-- [[GTD Best Practices]]
 - [[Contexts and Tags]]
 - [[Weekly Review]]

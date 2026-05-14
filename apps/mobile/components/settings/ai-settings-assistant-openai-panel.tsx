@@ -7,7 +7,7 @@ import type { ThemeColors } from '@/hooks/use-theme-colors';
 
 import { styles } from './settings.styles';
 
-type Localize = (english: string, chinese: string) => string;
+type SettingsTranslator = (key: string, values?: Record<string, string | number | boolean | null | undefined>) => string;
 type Translate = (key: string) => string;
 
 type AiSettingsAssistantOpenAiPanelProps = {
@@ -15,7 +15,7 @@ type AiSettingsAssistantOpenAiPanelProps = {
     aiBaseUrl: string;
     aiReasoningEffort: AIReasoningEffort;
     isFossBuild: boolean;
-    localize: Localize;
+    tr: SettingsTranslator;
     onAiApiKeyChange: (value: string) => void;
     onAiBaseUrlChange: (value: string) => void;
     onAiReasoningEffortChange: (value: AIReasoningEffort) => void;
@@ -28,7 +28,7 @@ export function AiSettingsAssistantOpenAiPanel({
     aiBaseUrl,
     aiReasoningEffort,
     isFossBuild,
-    localize,
+    tr,
     onAiApiKeyChange,
     onAiBaseUrlChange,
     onAiReasoningEffortChange,
@@ -90,10 +90,7 @@ export function AiSettingsAssistantOpenAiPanel({
                     <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>{t('settings.aiApiKeyHint')}</Text>
                     {isFossBuild && (
                         <Text style={[styles.settingDescription, { color: tc.secondaryText, marginTop: 6 }]}>
-                            {localize(
-                                'Use the API key for your local or self-hosted OpenAI-compatible server if it requires one.',
-                                '如果你的本地或自托管 OpenAI 兼容服务需要 API Key，请在这里填写。'
-                            )}
+                            {tr('settings.aiMobile.useTheApiKeyForYourLocalOrSelfHosted')}
                         </Text>
                     )}
                 </View>

@@ -11,6 +11,8 @@ export interface ExternalCalendarEvent {
     /** Stable id: `${sourceId}:${uid}:${startIso}` */
     id: string;
     sourceId: string;
+    /** Device calendar event id when the event came from the OS calendar provider. */
+    nativeEventId?: string;
     title: string;
     start: string; // ISO string
     end: string; // ISO string
@@ -30,7 +32,7 @@ export interface ParseIcsOptions {
 type IcsParams = Record<string, string>;
 
 type ParsedRRule = {
-    freq: 'DAILY' | 'WEEKLY' | 'MONTHLY';
+    freq: 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
     interval: number;
     until?: Date;
     count?: number;
@@ -38,6 +40,7 @@ type ParsedRRule = {
         weekday: number; // 0=Sun..6=Sat
         ordinal?: number;
     }>;
+    byMonth?: number[];
     byMonthDay?: number[];
 };
 
@@ -213,7 +216,7 @@ function parseRRule(raw: string): ParsedRRule | null {
     }
 
     const freq = map.FREQ?.toUpperCase();
-    if (freq !== 'DAILY' && freq !== 'WEEKLY' && freq !== 'MONTHLY') return null;
+    if (freq !== 'DAILY' && freq !== 'WEEKLY' && freq !== 'MONTHLY' && freq !== 'YEARLY') return null;
 
     const interval = Math.max(1, parseInt(map.INTERVAL || '1', 10) || 1);
     const count = map.COUNT ? parseInt(map.COUNT, 10) : undefined;
@@ -236,6 +239,13 @@ function parseRRule(raw: string): ParsedRRule | null {
             .filter((token): token is NonNullable<typeof token> => Boolean(token))
         : undefined;
 
+    const byMonth = map.BYMONTH
+        ? map.BYMONTH
+            .split(',')
+            .map((token) => parseInt(token.trim(), 10))
+            .filter((m) => Number.isFinite(m) && m >= 1 && m <= 12)
+        : undefined;
+
     const byMonthDay = map.BYMONTHDAY
         ? map.BYMONTHDAY
             .split(',')
@@ -251,6 +261,7 @@ function parseRRule(raw: string): ParsedRRule | null {
         byDay: byDay && byDay.length > 0
             ? Array.from(new Map(byDay.map((token) => [`${token.ordinal ?? ''}:${token.weekday}`, token])).values())
             : undefined,
+        byMonth: byMonth && byMonth.length > 0 ? Array.from(new Set(byMonth)) : undefined,
         byMonthDay: byMonthDay && byMonthDay.length > 0 ? Array.from(new Set(byMonthDay)) : undefined,
     };
 }
@@ -317,6 +328,61 @@ function getMonthlyCandidates(
 
     return [new Date(year, month, fallbackMonthDay, eventTime.h, eventTime.m, eventTime.s, eventTime.ms)]
         .filter((candidate) => candidate.getMonth() === month);
+}
+
+function getYearlyCandidates(
+    year: number,
+    rule: ParsedRRule,
+    eventTime: { h: number; m: number; s: number; ms: number },
+    fallbackMonth: number,
+    fallbackMonthDay: number,
+): Date[] {
+    const monthNumbers = rule.byMonth && rule.byMonth.length > 0 ? rule.byMonth : [fallbackMonth];
+    const candidates = new Map<number, Date>();
+
+    for (const monthNumber of monthNumbers) {
+        const month = monthNumber - 1;
+
+        if (rule.byMonthDay && rule.byMonthDay.length > 0) {
+            for (const monthDay of rule.byMonthDay) {
+                const candidate = new Date(year, month, monthDay, eventTime.h, eventTime.m, eventTime.s, eventTime.ms);
+                if (candidate.getMonth() === month) {
+                    candidates.set(candidate.getTime(), candidate);
+                }
+            }
+            continue;
+        }
+
+        if (rule.byDay && rule.byDay.length > 0) {
+            for (const token of rule.byDay) {
+                if (typeof token.ordinal === 'number') {
+                    const nth = getNthWeekdayOfMonth(year, month, token.weekday, token.ordinal);
+                    if (!nth) continue;
+                    const candidate = new Date(year, month, nth.getDate(), eventTime.h, eventTime.m, eventTime.s, eventTime.ms);
+                    candidates.set(candidate.getTime(), candidate);
+                    continue;
+                }
+
+                const firstOfMonth = new Date(year, month, 1);
+                const offset = (token.weekday - firstOfMonth.getDay() + 7) % 7;
+                let day = 1 + offset;
+                while (true) {
+                    const candidate = new Date(year, month, day, eventTime.h, eventTime.m, eventTime.s, eventTime.ms);
+                    if (candidate.getMonth() !== month) break;
+                    candidates.set(candidate.getTime(), candidate);
+                    day += 7;
+                }
+            }
+            continue;
+        }
+
+        const candidate = new Date(year, month, fallbackMonthDay, eventTime.h, eventTime.m, eventTime.s, eventTime.ms);
+        if (candidate.getMonth() === month) {
+            candidates.set(candidate.getTime(), candidate);
+        }
+    }
+
+    return Array.from(candidates.values()).sort((a, b) => a.getTime() - b.getTime());
 }
 
 function intersectsRange(start: Date, end: Date, rangeStart: Date, rangeEnd: Date): boolean {
@@ -411,12 +477,31 @@ function expandRecurringEvent(event: ParsedVEvent, options: ParseIcsOptions): Ex
             return out;
         }
 
-        // MONTHLY
-        const eventTime = { h: event.start.getHours(), m: event.start.getMinutes(), s: event.start.getSeconds(), ms: event.start.getMilliseconds() };
+        if (rule.freq === 'MONTHLY') {
+            const eventTime = { h: event.start.getHours(), m: event.start.getMinutes(), s: event.start.getSeconds(), ms: event.start.getMilliseconds() };
 
-        let monthCursor = new Date(event.start.getFullYear(), event.start.getMonth(), 1, 0, 0, 0, 0);
-        while (monthCursor.getTime() <= windowEnd.getTime() && generated < maxPerEvent) {
-            for (const candidate of getMonthlyCandidates(monthCursor, rule, eventTime, event.start.getDate())) {
+            let monthCursor = new Date(event.start.getFullYear(), event.start.getMonth(), 1, 0, 0, 0, 0);
+            while (monthCursor.getTime() <= windowEnd.getTime() && generated < maxPerEvent) {
+                for (const candidate of getMonthlyCandidates(monthCursor, rule, eventTime, event.start.getDate())) {
+                    if (candidate.getTime() < event.start.getTime()) continue;
+                    if (candidate.getTime() > windowEnd.getTime()) return out;
+                    if (shouldStop(candidate)) return out;
+                    addOccurrence(candidate);
+                    generated += 1;
+                    if (countLimit && generated >= countLimit) return out;
+                    if (generated >= maxPerEvent) return out;
+                }
+                monthCursor = addMonths(monthCursor, rule.interval);
+            }
+
+            return out;
+        }
+
+        const eventTime = { h: event.start.getHours(), m: event.start.getMinutes(), s: event.start.getSeconds(), ms: event.start.getMilliseconds() };
+        let yearCursor = event.start.getFullYear();
+        while (yearCursor <= windowEnd.getFullYear() && generated < maxPerEvent) {
+            const candidates = getYearlyCandidates(yearCursor, rule, eventTime, event.start.getMonth() + 1, event.start.getDate());
+            for (const candidate of candidates) {
                 if (candidate.getTime() < event.start.getTime()) continue;
                 if (candidate.getTime() > windowEnd.getTime()) return out;
                 if (shouldStop(candidate)) return out;
@@ -425,7 +510,7 @@ function expandRecurringEvent(event: ParsedVEvent, options: ParseIcsOptions): Ex
                 if (countLimit && generated >= countLimit) return out;
                 if (generated >= maxPerEvent) return out;
             }
-            monthCursor = addMonths(monthCursor, rule.interval);
+            yearCursor += rule.interval;
         }
 
         return out;
@@ -491,30 +576,52 @@ function expandRecurringEvent(event: ParsedVEvent, options: ParseIcsOptions): Ex
         return out;
     }
 
-    // MONTHLY
-    const eventTime = { h: event.start.getHours(), m: event.start.getMinutes(), s: event.start.getSeconds(), ms: event.start.getMilliseconds() };
+    if (rule.freq === 'MONTHLY') {
+        const eventTime = { h: event.start.getHours(), m: event.start.getMinutes(), s: event.start.getSeconds(), ms: event.start.getMilliseconds() };
 
-    let monthCursor = new Date(event.start.getFullYear(), event.start.getMonth(), 1, 0, 0, 0, 0);
-    if (monthCursor.getTime() < windowStart.getTime()) {
-        const approxMonths = (windowStart.getFullYear() - monthCursor.getFullYear()) * 12 + (windowStart.getMonth() - monthCursor.getMonth());
-        const jumps = Math.floor(approxMonths / rule.interval);
-        monthCursor = addMonths(monthCursor, jumps * rule.interval);
-        while (addMonths(monthCursor, rule.interval).getTime() < windowStart.getTime()) {
+        let monthCursor = new Date(event.start.getFullYear(), event.start.getMonth(), 1, 0, 0, 0, 0);
+        if (monthCursor.getTime() < windowStart.getTime()) {
+            const approxMonths = (windowStart.getFullYear() - monthCursor.getFullYear()) * 12 + (windowStart.getMonth() - monthCursor.getMonth());
+            const jumps = Math.floor(approxMonths / rule.interval);
+            monthCursor = addMonths(monthCursor, jumps * rule.interval);
+            while (addMonths(monthCursor, rule.interval).getTime() < windowStart.getTime()) {
+                monthCursor = addMonths(monthCursor, rule.interval);
+            }
+        }
+
+        while (monthCursor.getTime() <= windowEnd.getTime() && generated < maxPerEvent) {
+            for (const candidate of getMonthlyCandidates(monthCursor, rule, eventTime, event.start.getDate())) {
+                if (candidate.getTime() < event.start.getTime()) continue;
+                if (candidate.getTime() > windowEnd.getTime()) continue;
+                if (shouldStop(candidate)) return out;
+                addOccurrence(candidate);
+                generated += 1;
+                if (countLimit && generated >= countLimit) return out;
+                if (generated >= maxPerEvent) return out;
+            }
             monthCursor = addMonths(monthCursor, rule.interval);
         }
+
+        return out;
     }
 
-    while (monthCursor.getTime() <= windowEnd.getTime() && generated < maxPerEvent) {
-        for (const candidate of getMonthlyCandidates(monthCursor, rule, eventTime, event.start.getDate())) {
+    const eventTime = { h: event.start.getHours(), m: event.start.getMinutes(), s: event.start.getSeconds(), ms: event.start.getMilliseconds() };
+    let yearCursor = event.start.getFullYear();
+    if (yearCursor < windowStart.getFullYear()) {
+        const diffYears = windowStart.getFullYear() - yearCursor;
+        yearCursor += Math.floor(diffYears / rule.interval) * rule.interval;
+    }
+
+    while (yearCursor <= windowEnd.getFullYear() && generated < maxPerEvent) {
+        for (const candidate of getYearlyCandidates(yearCursor, rule, eventTime, event.start.getMonth() + 1, event.start.getDate())) {
             if (candidate.getTime() < event.start.getTime()) continue;
-            if (candidate.getTime() > windowEnd.getTime()) continue;
+            if (candidate.getTime() > windowEnd.getTime()) return out;
             if (shouldStop(candidate)) return out;
             addOccurrence(candidate);
             generated += 1;
-            if (countLimit && generated >= countLimit) return out;
             if (generated >= maxPerEvent) return out;
         }
-        monthCursor = addMonths(monthCursor, rule.interval);
+        yearCursor += rule.interval;
     }
 
     return out;

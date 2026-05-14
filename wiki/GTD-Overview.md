@@ -141,6 +141,6 @@ See also: [[Contexts and Tags]]
 
 ## See Also
 
-- [[GTD Best Practices]]
+- [[GTD Workflow in Mindwtr]]
 - [[GTD Workflow in Mindwtr]]
 - [[Weekly Review]]

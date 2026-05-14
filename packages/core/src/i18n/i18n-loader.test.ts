@@ -18,6 +18,18 @@ describe('i18n-loader sync fallback', () => {
         expect(zhHant['nav.settings']).toBe('設置');
     });
 
+    it('includes common notice copy for toast titles', async () => {
+        const en = await loadTranslations('en');
+        const es = await loadTranslations('es');
+        const zhHans = await loadTranslations('zh');
+        const zhHant = await loadTranslations('zh-Hant');
+
+        expect(en['common.notice']).toBe('Notice');
+        expect(es['common.notice']).toBe('Notice');
+        expect(zhHans['common.notice']).toBe('提示');
+        expect(zhHant['common.notice']).toBe('提示');
+    });
+
     it('includes discard-confirmation translations for Chinese locales', async () => {
         const zhHans = await loadTranslations('zh');
         const zhHant = await loadTranslations('zh-Hant');

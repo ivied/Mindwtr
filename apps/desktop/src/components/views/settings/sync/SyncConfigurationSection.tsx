@@ -16,16 +16,19 @@ type SyncConfigurationSectionProps = Pick<
     | 'webdavUsername'
     | 'webdavPassword'
     | 'webdavHasPassword'
+    | 'webdavAllowInsecureHttp'
     | 'isSavingWebDav'
     | 'isTestingWebDav'
     | 'webdavTestState'
     | 'onWebdavUrlChange'
     | 'onWebdavUsernameChange'
     | 'onWebdavPasswordChange'
+    | 'onWebdavAllowInsecureHttpChange'
     | 'onSaveWebDav'
     | 'onTestWebDavConnection'
     | 'cloudUrl'
     | 'cloudToken'
+    | 'cloudAllowInsecureHttp'
     | 'cloudProvider'
     | 'dropboxConfigured'
     | 'dropboxConnected'
@@ -35,6 +38,7 @@ type SyncConfigurationSectionProps = Pick<
     | 'dropboxTestState'
     | 'onCloudUrlChange'
     | 'onCloudTokenChange'
+    | 'onCloudAllowInsecureHttpChange'
     | 'onCloudProviderChange'
     | 'onSaveCloud'
     | 'onConnectDropbox'
@@ -163,17 +167,21 @@ const renderDropboxPanel = ({
 );
 
 const renderSelfHostedCloudPanel = ({
+    cloudAllowInsecureHttp,
     cloudToken,
     cloudUrl,
     cloudUrlError,
+    onCloudAllowInsecureHttpChange,
     onCloudTokenChange,
     onCloudUrlChange,
     onSaveCloud,
     t,
 }: Pick<
     SyncConfigurationSectionProps,
+    | 'cloudAllowInsecureHttp'
     | 'cloudToken'
     | 'cloudUrl'
+    | 'onCloudAllowInsecureHttpChange'
     | 'onCloudTokenChange'
     | 'onCloudUrlChange'
     | 'onSaveCloud'
@@ -197,6 +205,19 @@ const renderSelfHostedCloudPanel = ({
                 <p className="text-xs text-destructive">Enter a valid http(s) URL.</p>
             )}
         </div>
+
+        <label className="flex items-start gap-3 rounded-md border border-border bg-muted/30 p-3">
+            <input
+                type="checkbox"
+                checked={cloudAllowInsecureHttp}
+                onChange={(e) => onCloudAllowInsecureHttpChange(e.target.checked)}
+                className="mt-1 h-4 w-4 accent-primary"
+            />
+            <span>
+                <span className="block text-sm font-medium">{t.allowInsecureHttp}</span>
+                <span className="block text-xs text-muted-foreground">{t.allowInsecureHttpHint}</span>
+            </span>
+        </label>
 
         <div className="flex flex-col gap-2">
             <label className="text-sm font-medium">{t.cloudToken}</label>
@@ -226,10 +247,12 @@ const renderWebDavPanel = ({
     isTestingWebDav,
     onSaveWebDav,
     onTestWebDavConnection,
+    onWebdavAllowInsecureHttpChange,
     onWebdavPasswordChange,
     onWebdavUrlChange,
     onWebdavUsernameChange,
     t,
+    webdavAllowInsecureHttp,
     webdavHasPassword,
     webdavPassword,
     webdavTestState,
@@ -243,10 +266,12 @@ const renderWebDavPanel = ({
     | 'isTestingWebDav'
     | 'onSaveWebDav'
     | 'onTestWebDavConnection'
+    | 'onWebdavAllowInsecureHttpChange'
     | 'onWebdavPasswordChange'
     | 'onWebdavUrlChange'
     | 'onWebdavUsernameChange'
     | 't'
+    | 'webdavAllowInsecureHttp'
     | 'webdavHasPassword'
     | 'webdavPassword'
     | 'webdavTestState'
@@ -271,6 +296,19 @@ const renderWebDavPanel = ({
                 <p className="text-xs text-destructive">Enter a valid http(s) URL.</p>
             )}
         </div>
+
+        <label className="flex items-start gap-3 rounded-md border border-border bg-muted/30 p-3">
+            <input
+                type="checkbox"
+                checked={webdavAllowInsecureHttp}
+                onChange={(e) => onWebdavAllowInsecureHttpChange(e.target.checked)}
+                className="mt-1 h-4 w-4 accent-primary"
+            />
+            <span>
+                <span className="block text-sm font-medium">{t.allowInsecureHttp}</span>
+                <span className="block text-xs text-muted-foreground">{t.allowInsecureHttpHint}</span>
+            </span>
+        </label>
 
         <div className="grid sm:grid-cols-2 gap-2">
             <div className="flex flex-col gap-2">
@@ -327,6 +365,7 @@ const renderWebDavPanel = ({
 );
 
 export function SyncConfigurationSection({
+    cloudAllowInsecureHttp,
     cloudProvider,
     cloudToken,
     cloudUrl,
@@ -342,6 +381,7 @@ export function SyncConfigurationSection({
     isTauri,
     isTestingWebDav,
     onBrowseSyncPath,
+    onCloudAllowInsecureHttpChange,
     onCloudProviderChange,
     onCloudTokenChange,
     onCloudUrlChange,
@@ -354,12 +394,14 @@ export function SyncConfigurationSection({
     onSyncPathChange,
     onTestDropboxConnection,
     onTestWebDavConnection,
+    onWebdavAllowInsecureHttpChange,
     onWebdavPasswordChange,
     onWebdavUrlChange,
     onWebdavUsernameChange,
     syncBackend,
     syncPath,
     t,
+    webdavAllowInsecureHttp,
     webdavHasPassword,
     webdavPassword,
     webdavTestState,
@@ -438,10 +480,12 @@ export function SyncConfigurationSection({
                     isTestingWebDav,
                     onSaveWebDav,
                     onTestWebDavConnection,
+                    onWebdavAllowInsecureHttpChange,
                     onWebdavPasswordChange,
                     onWebdavUrlChange,
                     onWebdavUsernameChange,
                     t,
+                    webdavAllowInsecureHttp,
                     webdavHasPassword,
                     webdavPassword,
                     webdavTestState,
@@ -485,9 +529,11 @@ export function SyncConfigurationSection({
                         </div>
 
                         {syncBackend === 'cloud' && cloudProvider === 'selfhosted' && renderSelfHostedCloudPanel({
+                            cloudAllowInsecureHttp,
                             cloudToken,
                             cloudUrl,
                             cloudUrlError,
+                            onCloudAllowInsecureHttpChange,
                             onCloudTokenChange,
                             onCloudUrlChange,
                             onSaveCloud,

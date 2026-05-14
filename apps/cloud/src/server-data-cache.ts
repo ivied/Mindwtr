@@ -1,0 +1,243 @@
+import { lstatSync, type Stats } from 'fs';
+import type { AppData } from '@mindwtr/core';
+
+import { corsOrigin, logWarn } from './server-config';
+import {
+    loadAppData as loadAppDataFromStorage,
+    writeData,
+} from './server-storage';
+
+const DATA_CACHE_MAX_ENTRIES = 64;
+
+type DataMetadataCacheEntry = {
+    ctimeMs: number;
+    etag: string;
+    ino: number;
+    lastModified: string;
+    mtimeMs: number;
+    size: number;
+};
+
+type DataFileIdentity = {
+    ctimeMs: number;
+    ino: number;
+    mtimeMs: number;
+    size: number;
+};
+
+type ParsedDataCacheEntry = DataFileIdentity & {
+    data: AppData;
+};
+
+const dataMetadataCache = new Map<string, DataMetadataCacheEntry>();
+const validatedDataCache = new Map<string, DataFileIdentity>();
+const parsedDataCache = new Map<string, ParsedDataCacheEntry>();
+
+// The app-data caches are process-local and are valid only when callers respect
+// the cloud write lock. Cross-process deployments are still safe because every
+// cache hit is rechecked against the file's stat identity after atomic rename;
+// uncoordinated writers can defeat that invariant and are unsupported.
+const getDataFileIdentity = (filePath: string): DataFileIdentity | null => {
+    try {
+        const stat = lstatSync(filePath);
+        return {
+            ctimeMs: stat.ctimeMs,
+            ino: stat.ino,
+            mtimeMs: stat.mtimeMs,
+            size: stat.size,
+        };
+    } catch {
+        return null;
+    }
+};
+
+const sameDataFileIdentity = (left: DataFileIdentity | undefined, right: DataFileIdentity | null): boolean => (
+    !!left
+    && !!right
+    && left.size === right.size
+    && left.mtimeMs === right.mtimeMs
+    && left.ctimeMs === right.ctimeMs
+    && left.ino === right.ino
+);
+
+const trimDataCache = <T>(cache: Map<string, T>, maxEntries: number = DATA_CACHE_MAX_ENTRIES): void => {
+    while (cache.size > maxEntries) {
+        const oldestKey = cache.keys().next().value as string | undefined;
+        if (!oldestKey) return;
+        cache.delete(oldestKey);
+    }
+};
+
+const promoteCacheEntry = <T>(cache: Map<string, T>, key: string, entry: T): void => {
+    cache.delete(key);
+    cache.set(key, entry);
+};
+
+export const isTrustedValidatedDataFile = (filePath: string): boolean => {
+    const cached = validatedDataCache.get(filePath);
+    if (cached && sameDataFileIdentity(cached, getDataFileIdentity(filePath))) {
+        promoteCacheEntry(validatedDataCache, filePath, cached);
+        return true;
+    }
+    if (cached) {
+        validatedDataCache.delete(filePath);
+    }
+    return false;
+};
+
+const cloneAppData = (data: AppData): AppData => structuredClone(data) as AppData;
+
+const tryCloneAppData = (data: AppData, context: string): AppData | null => {
+    try {
+        return cloneAppData(data);
+    } catch (error) {
+        logWarn('Failed to clone cloud app data cache entry', {
+            context,
+            error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+    }
+};
+
+const rememberParsedDataFile = (filePath: string, data: AppData): void => {
+    const identity = getDataFileIdentity(filePath);
+    if (identity) {
+        const cachedData = tryCloneAppData(data, 'rememberParsedDataFile');
+        if (!cachedData) {
+            parsedDataCache.delete(filePath);
+            return;
+        }
+        promoteCacheEntry(parsedDataCache, filePath, { ...identity, data: cachedData });
+        trimDataCache(parsedDataCache);
+    } else {
+        parsedDataCache.delete(filePath);
+    }
+};
+
+export const loadAppData = (filePath: string): AppData => {
+    const identity = getDataFileIdentity(filePath);
+    const cached = parsedDataCache.get(filePath);
+    if (cached && sameDataFileIdentity(cached, identity)) {
+        const data = tryCloneAppData(cached.data, 'loadAppData.cacheHit');
+        if (data) {
+            promoteCacheEntry(parsedDataCache, filePath, cached);
+            return data;
+        }
+        parsedDataCache.delete(filePath);
+    }
+
+    const data = loadAppDataFromStorage(filePath);
+    rememberParsedDataFile(filePath, data);
+    return data;
+};
+
+export const rememberValidatedDataFile = (filePath: string): void => {
+    const identity = getDataFileIdentity(filePath);
+    if (identity) {
+        promoteCacheEntry(validatedDataCache, filePath, identity);
+        trimDataCache(validatedDataCache);
+    } else {
+        validatedDataCache.delete(filePath);
+    }
+};
+
+export const writeCloudData = (filePath: string, data: AppData): void => {
+    try {
+        writeData(filePath, data);
+    } catch (error) {
+        parsedDataCache.delete(filePath);
+        throw error;
+    }
+    rememberParsedDataFile(filePath, data);
+    rememberValidatedDataFile(filePath);
+};
+
+const formatStatEtagPart = (value: number): string => {
+    if (!Number.isFinite(value)) return '0';
+    return Math.max(0, Math.trunc(value)).toString(36);
+};
+
+const buildDataMetadataEtag = (stat: Stats): string => (
+    `W/"mindwtr-${formatStatEtagPart(stat.ino)}-${formatStatEtagPart(stat.size)}`
+    + `-${formatStatEtagPart(stat.mtimeMs)}-${formatStatEtagPart(stat.ctimeMs)}"`
+);
+
+const getDataMetadata = (filePath: string, stat: Stats): DataMetadataCacheEntry => {
+    const cached = dataMetadataCache.get(filePath);
+    if (
+        cached
+        && cached.size === stat.size
+        && cached.mtimeMs === stat.mtimeMs
+        && cached.ctimeMs === stat.ctimeMs
+        && cached.ino === stat.ino
+    ) {
+        promoteCacheEntry(dataMetadataCache, filePath, cached);
+        return cached;
+    }
+    if (cached) {
+        dataMetadataCache.delete(filePath);
+    }
+
+    const entry: DataMetadataCacheEntry = {
+        ctimeMs: stat.ctimeMs,
+        etag: buildDataMetadataEtag(stat),
+        ino: stat.ino,
+        lastModified: stat.mtime.toUTCString(),
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+    };
+    promoteCacheEntry(dataMetadataCache, filePath, entry);
+    trimDataCache(dataMetadataCache);
+    return entry;
+};
+
+export const dataMetadataResponse = (filePath: string): Response => {
+    const stat = lstatSync(filePath);
+    const metadata = getDataMetadata(filePath, stat);
+    const headers = new Headers({
+        'Access-Control-Allow-Origin': corsOrigin,
+        'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+        'Access-Control-Allow-Methods': 'GET,HEAD,PUT,POST,PATCH,DELETE,OPTIONS',
+        'Content-Length': String(metadata.size),
+        'ETag': metadata.etag,
+        'Last-Modified': metadata.lastModified,
+    });
+    return new Response(null, { status: 200, headers });
+};
+
+export const jsonFileResponse = (body: string | Uint8Array): Response => {
+    const contentLength = typeof body === 'string'
+        ? new TextEncoder().encode(body).byteLength
+        : body.byteLength;
+    const responseBody = typeof body === 'string'
+        ? body
+        : body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer;
+    const headers = new Headers({
+        'Access-Control-Allow-Origin': corsOrigin,
+        'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+        'Access-Control-Allow-Methods': 'GET,HEAD,PUT,POST,PATCH,DELETE,OPTIONS',
+        'Content-Length': String(contentLength),
+        'Content-Type': 'application/json; charset=utf-8',
+    });
+    return new Response(responseBody, { status: 200, headers });
+};
+
+export const __serverDataCacheTestUtils = {
+    clearDataCaches: () => {
+        dataMetadataCache.clear();
+        parsedDataCache.clear();
+        validatedDataCache.clear();
+    },
+    dataMetadataResponse,
+    getDataCacheMaxEntries: () => DATA_CACHE_MAX_ENTRIES,
+    getDataMetadataCacheSize: () => dataMetadataCache.size,
+    getParsedDataCacheSize: () => parsedDataCache.size,
+    getValidatedDataCacheSize: () => validatedDataCache.size,
+    hasDataMetadataCacheEntry: (filePath: string) => dataMetadataCache.has(filePath),
+    hasParsedDataCacheEntry: (filePath: string) => parsedDataCache.has(filePath),
+    hasValidatedDataCacheEntry: (filePath: string) => validatedDataCache.has(filePath),
+    isTrustedValidatedDataFile,
+    loadAppData,
+    rememberValidatedDataFile,
+    writeCloudData,
+};

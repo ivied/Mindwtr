@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 import type { ThemeColors } from '@/hooks/use-theme-colors';
 
@@ -10,11 +10,13 @@ import { styles } from './settings.styles';
 type Translate = (key: string) => string;
 
 export type SelfHostedSyncSettings = {
+    allowInsecureHttp: boolean;
     token: string;
     url: string;
 };
 
 type SyncSelfHostedBackendPanelProps = {
+    initialAllowInsecureHttp: boolean;
     initialToken: string;
     initialUrl: string;
     isSyncing: boolean;
@@ -28,6 +30,7 @@ type SyncSelfHostedBackendPanelProps = {
 };
 
 export function SyncSelfHostedBackendPanel({
+    initialAllowInsecureHttp,
     initialToken,
     initialUrl,
     isSyncing,
@@ -39,6 +42,7 @@ export function SyncSelfHostedBackendPanel({
     t,
     tc,
 }: SyncSelfHostedBackendPanelProps) {
+    const [allowInsecureHttp, setAllowInsecureHttp] = useState(initialAllowInsecureHttp);
     const [token, setToken] = useState(initialToken);
     const [url, setUrl] = useState(initialUrl);
 
@@ -47,11 +51,15 @@ export function SyncSelfHostedBackendPanel({
     }, [initialUrl]);
 
     useEffect(() => {
+        setAllowInsecureHttp(initialAllowInsecureHttp);
+    }, [initialAllowInsecureHttp]);
+
+    useEffect(() => {
         setToken(initialToken);
     }, [initialToken]);
 
     const urlError = url.trim() ? !isValidHttpUrl(url.trim()) : false;
-    const settings = { token, url };
+    const settings = { allowInsecureHttp, token, url };
     const canUseActions = url.trim().length > 0 && !urlError;
 
     return (
@@ -73,6 +81,19 @@ export function SyncSelfHostedBackendPanel({
                     {urlError && (
                         <Text style={[styles.settingDescription, { color: '#EF4444' }]}>{t('settings.invalidUrlHttp')}</Text>
                     )}
+                </View>
+                <View style={[styles.inputGroup, { borderTopWidth: 1, borderTopColor: tc.border }]}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <View style={styles.settingInfo}>
+                            <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.allowInsecureHttp')}</Text>
+                            <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>{t('settings.allowInsecureHttpHint')}</Text>
+                        </View>
+                        <Switch
+                            value={allowInsecureHttp}
+                            onValueChange={setAllowInsecureHttp}
+                            trackColor={{ false: '#767577', true: '#3B82F6' }}
+                        />
+                    </View>
                 </View>
                 <View style={[styles.inputGroup, { borderTopWidth: 1, borderTopColor: tc.border }]}>
                     <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.cloudToken')}</Text>

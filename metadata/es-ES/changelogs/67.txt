@@ -1,0 +1,3 @@
+La edicion de tareas es mas rapida con controles tipo pildora y atajos de fecha.
+Los detalles archivados, listas de Focus, recurrencias anuales y desarchivado de proyectos son mas fiables.
+Los builds F-Droid conservan metadatos Expo necesarios sin codigo de referencia de tienda.

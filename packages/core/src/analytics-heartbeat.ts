@@ -1,11 +1,14 @@
 type StorageLike = {
     getItem: (key: string) => string | null | Promise<string | null>;
     setItem: (key: string, value: string) => void | Promise<void>;
+    removeItem?: (key: string) => void | Promise<void>;
 };
 
 type HeartbeatFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
-export type SendDailyHeartbeatOptions = {
+export type AnalyticsHeartbeatEvent = 'heartbeat' | 'opt_out';
+
+type SendHeartbeatRequestOptions = {
     endpointUrl?: string | null;
     distinctId?: string | null;
     platform?: string | null;
@@ -18,11 +21,15 @@ export type SendDailyHeartbeatOptions = {
     storageKey?: string;
     enabled?: boolean;
     timeoutMs?: number;
-    fetcher?: HeartbeatFetch;
+    fetcher: HeartbeatFetch;
     now?: () => Date;
 };
 
+export type SendDailyHeartbeatOptions = SendHeartbeatRequestOptions;
+export type SendHeartbeatOptOutOptions = SendHeartbeatRequestOptions;
+
 export const HEARTBEAT_LAST_SENT_DAY_KEY = 'mindwtr-analytics-last-heartbeat-day';
+export const HEARTBEAT_OPT_OUT_SENT_KEY = 'mindwtr-analytics-opt-out-sent';
 
 const trimValue = (value: string | null | undefined): string => String(value ?? '').trim();
 
@@ -39,27 +46,55 @@ const parseEndpoint = (value: string): string | null => {
     }
 };
 
-export async function sendDailyHeartbeat(options: SendDailyHeartbeatOptions): Promise<boolean> {
+const buildHeartbeatPayload = (
+    options: SendHeartbeatRequestOptions,
+    event: AnalyticsHeartbeatEvent
+): Record<string, string> | null => {
+    const distinctId = trimValue(options.distinctId);
+    const platform = trimValue(options.platform);
+    const channel = trimValue(options.channel);
+    const appVersion = trimValue(options.appVersion);
+    const deviceClass = trimValue(options.deviceClass);
+    const osMajor = trimValue(options.osMajor);
+    const locale = trimValue(options.locale);
+
+    if (!distinctId || !platform || !channel || !appVersion) return null;
+
+    const payload: Record<string, string> = {
+        distinct_id: distinctId,
+        platform,
+        channel,
+        app_version: appVersion,
+        // Compatibility for servers that still expect `version`.
+        version: appVersion,
+    };
+    if (event !== 'heartbeat') {
+        payload.event = event;
+    }
+    if (event === 'opt_out') {
+        payload.analytics_enabled = 'false';
+    }
+    if (deviceClass) payload.device_class = deviceClass;
+    if (osMajor) payload.os_major = osMajor;
+    if (locale) payload.locale = locale;
+    return payload;
+};
+
+async function sendHeartbeatRequest(
+    options: SendHeartbeatRequestOptions,
+    event: AnalyticsHeartbeatEvent
+): Promise<boolean> {
     let timeout: ReturnType<typeof setTimeout> | null = null;
     try {
         if (!options || options.enabled === false) return false;
 
         const endpoint = parseEndpoint(trimValue(options.endpointUrl));
-        const distinctId = trimValue(options.distinctId);
-        const platform = trimValue(options.platform);
-        const channel = trimValue(options.channel);
-        const appVersion = trimValue(options.appVersion);
-        const deviceClass = trimValue(options.deviceClass);
-        const osMajor = trimValue(options.osMajor);
-        const locale = trimValue(options.locale);
         const storage = options.storage;
+        const payload = buildHeartbeatPayload(options, event);
 
         if (
             !endpoint
-            || !distinctId
-            || !platform
-            || !channel
-            || !appVersion
+            || !payload
             || !storage
             || typeof storage.getItem !== 'function'
             || typeof storage.setItem !== 'function'
@@ -67,13 +102,9 @@ export async function sendDailyHeartbeat(options: SendDailyHeartbeatOptions): Pr
             return false;
         }
 
-        const storageKey = trimValue(options.storageKey) || HEARTBEAT_LAST_SENT_DAY_KEY;
         const now = options.now ? options.now() : new Date();
-        const today = getIsoDay(now);
-        const lastSentDay = await storage.getItem(storageKey);
-        if (lastSentDay === today) return false;
 
-        const fetcher: HeartbeatFetch = options.fetcher ?? (globalThis.fetch as HeartbeatFetch);
+        const fetcher = options.fetcher;
         if (typeof fetcher !== 'function') return false;
 
         const timeoutMs = Number.isFinite(options.timeoutMs) ? Math.max(500, options.timeoutMs as number) : 5_000;
@@ -81,18 +112,6 @@ export async function sendDailyHeartbeat(options: SendDailyHeartbeatOptions): Pr
         timeout = controller
             ? setTimeout(() => controller.abort(), timeoutMs)
             : null;
-
-        const payload: Record<string, string> = {
-            distinct_id: distinctId,
-            platform,
-            channel,
-            app_version: appVersion,
-            // Compatibility for servers that still expect `version`.
-            version: appVersion,
-        };
-        if (deviceClass) payload.device_class = deviceClass;
-        if (osMajor) payload.os_major = osMajor;
-        if (locale) payload.locale = locale;
 
         const response = await fetcher(endpoint, {
             method: 'POST',
@@ -103,11 +122,61 @@ export async function sendDailyHeartbeat(options: SendDailyHeartbeatOptions): Pr
             ...(controller ? { signal: controller.signal } : {}),
         });
         if (!response.ok) return false;
-        await storage.setItem(storageKey, today);
+        if (event === 'heartbeat') {
+            const storageKey = trimValue(options.storageKey) || HEARTBEAT_LAST_SENT_DAY_KEY;
+            await storage.setItem(storageKey, getIsoDay(now));
+        } else {
+            const storageKey = trimValue(options.storageKey) || HEARTBEAT_OPT_OUT_SENT_KEY;
+            await storage.setItem(storageKey, now.toISOString());
+        }
         return true;
     } catch {
         return false;
     } finally {
         if (timeout) clearTimeout(timeout);
+    }
+}
+
+export async function sendDailyHeartbeat(options: SendDailyHeartbeatOptions): Promise<boolean> {
+    try {
+        if (!options || options.enabled === false) return false;
+        const storage = options.storage;
+        if (!storage || typeof storage.getItem !== 'function') return false;
+        const storageKey = trimValue(options.storageKey) || HEARTBEAT_LAST_SENT_DAY_KEY;
+        const now = options.now ? options.now() : new Date();
+        const today = getIsoDay(now);
+        const lastSentDay = await storage.getItem(storageKey);
+        if (lastSentDay === today) return false;
+        return await sendHeartbeatRequest(options, 'heartbeat');
+    } catch {
+        return false;
+    }
+}
+
+export async function sendHeartbeatOptOut(options: SendHeartbeatOptOutOptions): Promise<boolean> {
+    try {
+        if (!options || options.enabled === false) return false;
+        const storage = options.storage;
+        if (!storage || typeof storage.getItem !== 'function') return false;
+        const storageKey = trimValue(options.storageKey) || HEARTBEAT_OPT_OUT_SENT_KEY;
+        const optOutSentAt = trimValue(await storage.getItem(storageKey));
+        if (optOutSentAt) return false;
+        return await sendHeartbeatRequest({ ...options, storageKey }, 'opt_out');
+    } catch {
+        return false;
+    }
+}
+
+export async function resetHeartbeatOptOutMarker(
+    storage: StorageLike,
+    storageKey = HEARTBEAT_OPT_OUT_SENT_KEY
+): Promise<void> {
+    if (!storage) return;
+    if (typeof storage.removeItem === 'function') {
+        await storage.removeItem(storageKey);
+        return;
+    }
+    if (typeof storage.setItem === 'function') {
+        await storage.setItem(storageKey, '');
     }
 }

@@ -9,7 +9,7 @@ import {
     writeFileSync,
 } from 'fs';
 import { basename, dirname, join, relative, resolve, sep } from 'path';
-import type { AppData, Task } from '@mindwtr/core';
+import type { AppData } from '@mindwtr/core';
 import {
     ATTACHMENT_PATH_ALLOWLIST,
     CLOUD_DATA_LOCK_REFRESH_MS,
@@ -45,6 +45,18 @@ const DEFAULT_DATA: AppData = { tasks: [], projects: [], sections: [], areas: []
 const isObjectRecord = (value: unknown): value is Record<string, unknown> => (
     typeof value === 'object' && value !== null && !Array.isArray(value)
 );
+
+const toAppDataShape = (value: unknown): AppData | null => {
+    if (!isObjectRecord(value)) return null;
+    if (!Array.isArray(value.tasks) || !Array.isArray(value.projects)) return null;
+    return {
+        tasks: value.tasks as AppData['tasks'],
+        projects: value.projects as AppData['projects'],
+        sections: Array.isArray(value.sections) ? value.sections as AppData['sections'] : [],
+        areas: Array.isArray(value.areas) ? value.areas as AppData['areas'] : [],
+        settings: (isObjectRecord(value.settings) ? value.settings : {}) as AppData['settings'],
+    };
+};
 
 export function createRequestAbortError(message: string, status = 408): RequestAbortError {
     const error = new Error(message) as RequestAbortError;
@@ -112,6 +124,51 @@ function isPathWithinRoot(pathValue: string, rootPath: string): boolean {
 
 export { isPathWithinRoot };
 
+function isFsErrorWithCode(error: unknown, code: string): boolean {
+    return typeof error === 'object'
+        && error !== null
+        && 'code' in error
+        && (error as { code?: unknown }).code === code;
+}
+
+function ensureDirectoryWithinRoot(rootRealPath: string, targetDir: string): boolean {
+    if (!isPathWithinRoot(targetDir, rootRealPath)) return false;
+    const rel = relative(rootRealPath, targetDir);
+    if (!rel || rel === '.') return true;
+    const segments = rel.split(/[\\/]+/).filter(Boolean);
+    let currentPath = rootRealPath;
+
+    for (const segment of segments) {
+        currentPath = join(currentPath, segment);
+        try {
+            const stat = lstatSync(currentPath);
+            if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
+        } catch (error) {
+            if (!isFsErrorWithCode(error, 'ENOENT')) return false;
+            try {
+                mkdirSync(currentPath, { mode: 0o700 });
+            } catch (mkdirError) {
+                if (!isFsErrorWithCode(mkdirError, 'EEXIST')) return false;
+            }
+            try {
+                const stat = lstatSync(currentPath);
+                if (stat.isSymbolicLink() || !stat.isDirectory()) return false;
+            } catch {
+                return false;
+            }
+        }
+
+        try {
+            const currentRealPath = realpathSync(currentPath);
+            if (!isPathWithinRoot(currentRealPath, rootRealPath)) return false;
+        } catch {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 export function normalizeAttachmentRelativePath(rawPath: string): string | null {
     const decoded = decodeAttachmentPath(rawPath);
     if (!decoded) return null;
@@ -135,9 +192,13 @@ export function resolveAttachmentPath(
 ): { rootRealPath: string; filePath: string } | null {
     const relativePath = normalizeAttachmentRelativePath(rawPath);
     if (!relativePath) return null;
-    const rootDir = resolve(join(dataDir, key, 'attachments'));
-    mkdirSync(rootDir, { recursive: true });
+    const dataRoot = resolve(dataDir);
+    mkdirSync(dataRoot, { recursive: true });
+    const dataRootRealPath = realpathSync(dataRoot);
+    const rootDir = resolve(join(dataRootRealPath, key, 'attachments'));
+    if (!ensureDirectoryWithinRoot(dataRootRealPath, rootDir)) return null;
     const rootRealPath = realpathSync(rootDir);
+    if (!isPathWithinRoot(rootRealPath, dataRootRealPath)) return null;
     const filePath = resolve(join(rootRealPath, relativePath));
     if (!isPathWithinRoot(filePath, rootRealPath)) return null;
     return { rootRealPath, filePath };
@@ -163,11 +224,9 @@ export function pathContainsSymlink(rootRealPath: string, targetPath: string): b
 }
 
 export function writeAttachmentFileSafely(rootRealPath: string, filePath: string, body: Uint8Array): boolean {
-    mkdirSync(dirname(filePath), { recursive: true });
     const parentPath = dirname(filePath);
-    if (pathContainsSymlink(rootRealPath, parentPath)) {
-        return false;
-    }
+    if (!ensureDirectoryWithinRoot(rootRealPath, parentPath)) return false;
+    if (pathContainsSymlink(rootRealPath, parentPath)) return false;
     const parentRealPath = realpathSync(parentPath);
     if (!isPathWithinRoot(parentRealPath, rootRealPath)) {
         return false;
@@ -211,10 +270,10 @@ export function writeAttachmentFileSafely(rootRealPath: string, filePath: string
     }
 }
 
-export function readData(filePath: string): any | null {
+export function readData(filePath: string): AppData | null {
     try {
         const raw = readFileSync(filePath, 'utf8');
-        return JSON.parse(raw);
+        return toAppDataShape(JSON.parse(raw));
     } catch {
         return null;
     }
@@ -222,31 +281,25 @@ export function readData(filePath: string): any | null {
 
 export function loadAppData(filePath: string): AppData {
     const raw = readData(filePath);
-    if (!raw || typeof raw !== 'object') return { ...DEFAULT_DATA };
-    const record = raw as Record<string, unknown>;
+    if (!raw) return { ...DEFAULT_DATA };
     const nowIso = new Date().toISOString();
-    const normalizedAreas = Array.isArray(record.areas)
-        ? (record.areas as unknown[]).map((area) => {
-            if (!isObjectRecord(area)) return area;
-            const createdAt = typeof area.createdAt === 'string' && area.createdAt.trim().length > 0
-                ? area.createdAt
-                : (typeof area.updatedAt === 'string' && area.updatedAt.trim().length > 0 ? area.updatedAt : nowIso);
+    const normalizedAreas = raw.areas.map((area) => {
+        if (!isObjectRecord(area)) return area;
+        const createdAt = typeof area.createdAt === 'string' && area.createdAt.trim().length > 0
+            ? area.createdAt
+            : (typeof area.updatedAt === 'string' && area.updatedAt.trim().length > 0 ? area.updatedAt : nowIso);
             const updatedAt = typeof area.updatedAt === 'string' && area.updatedAt.trim().length > 0
                 ? area.updatedAt
                 : createdAt;
             return {
                 ...area,
-                createdAt,
-                updatedAt,
-            };
-        })
-        : [];
+            createdAt,
+            updatedAt,
+        };
+    }) as AppData['areas'];
     return {
-        tasks: Array.isArray(record.tasks) ? (record.tasks as Task[]) : [],
-        projects: Array.isArray(record.projects) ? (record.projects as any) : [],
-        sections: Array.isArray(record.sections) ? (record.sections as any) : [],
-        areas: normalizedAreas as any,
-        settings: typeof record.settings === 'object' && record.settings ? (record.settings as any) : {},
+        ...raw,
+        areas: normalizedAreas,
     };
 }
 

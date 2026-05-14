@@ -2,6 +2,7 @@ import { SyncConfigurationSection } from './sync/SyncConfigurationSection';
 import { SyncStatusSection } from './sync/SyncStatusSection';
 import type { SettingsSyncPageProps } from './sync/types';
 import { isValidHttpUrl } from './sync/sync-page-utils';
+import { isConnectionAllowed, SYNC_LOCAL_INSECURE_URL_OPTIONS } from '@mindwtr/core';
 
 export function SettingsSyncPage(props: SettingsSyncPageProps) {
     const {
@@ -16,16 +17,28 @@ export function SettingsSyncPage(props: SettingsSyncPageProps) {
         && /mac/i.test(`${navigator.platform || ''} ${navigator.userAgent || ''}`);
     const webdavUrlError = webdavUrl.trim() ? !isValidHttpUrl(webdavUrl.trim()) : false;
     const cloudUrlError = cloudUrl.trim() ? !isValidHttpUrl(cloudUrl.trim()) : false;
+    const webdavConnectionAllowed = !webdavUrlError && webdavUrl.trim()
+        ? isConnectionAllowed(webdavUrl.trim(), {
+            ...SYNC_LOCAL_INSECURE_URL_OPTIONS,
+            allowInsecureHttp: props.webdavAllowInsecureHttp,
+        })
+        : !webdavUrl.trim();
+    const cloudConnectionAllowed = !cloudUrlError && cloudUrl.trim()
+        ? isConnectionAllowed(cloudUrl.trim(), {
+            ...SYNC_LOCAL_INSECURE_URL_OPTIONS,
+            allowInsecureHttp: props.cloudAllowInsecureHttp,
+        })
+        : !cloudUrl.trim();
     const isSyncTargetValid =
         syncBackend === 'file'
             ? !!syncPath.trim()
             : syncBackend === 'cloudkit'
                 ? true
                 : syncBackend === 'webdav'
-                    ? !!webdavUrl.trim() && !webdavUrlError
+                    ? !!webdavUrl.trim() && !webdavUrlError && webdavConnectionAllowed
                     : syncBackend === 'cloud'
                         ? (cloudProvider === 'selfhosted'
-                            ? !!cloudUrl.trim() && !cloudUrlError
+                            ? !!cloudUrl.trim() && !cloudUrlError && cloudConnectionAllowed
                             : props.dropboxConfigured && !!props.dropboxAppKey.trim() && props.dropboxConnected)
                         : false;
 

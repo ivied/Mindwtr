@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import type { AIProviderId, AIReasoningEffort, AppData, AudioCaptureMode, AudioFieldStrategy } from '@mindwtr/core';
+import type { AIProviderId, AIReasoningEffort, AiSettings, AppData, AudioCaptureMode, AudioFieldStrategy } from '@mindwtr/core';
 import {
     DEFAULT_ANTHROPIC_THINKING_BUDGET,
     DEFAULT_GEMINI_THINKING_BUDGET,
@@ -32,8 +32,9 @@ type UseAiSettingsOptions = {
     enabled?: boolean;
 };
 
-type AiSettingsUpdate = Partial<NonNullable<AppData['settings']>['ai']>;
-type SpeechSettingsUpdate = Partial<NonNullable<NonNullable<AppData['settings']>['ai']>['speechToText']>;
+type AiSettingsUpdate = Partial<AiSettings>;
+type SpeechSettings = NonNullable<AiSettings['speechToText']>;
+type SpeechSettingsUpdate = Partial<SpeechSettings>;
 
 export function useAiSettings({ isTauri, settings, updateSettings, showSaved, enabled = true }: UseAiSettingsOptions) {
     const [aiApiKey, setAiApiKey] = useState('');

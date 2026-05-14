@@ -134,22 +134,46 @@ export function RecurrenceField({
                 </label>
             )}
             {editRecurrence === 'weekly' && (
-                <div className="pt-1">
-                    <span className="text-[10px] text-muted-foreground">{t('recurrence.repeatOn')}</span>
-                    <WeekdaySelector
-                        value={editRecurrenceRRule || buildRRuleString('weekly', undefined, undefined, {
-                            count: parsedRecurrenceRRule.count,
-                            until: parsedRecurrenceRRule.until,
-                        })}
-                        onChange={(rrule) => {
-                            const parsed = parseRRuleString(rrule);
-                            onRecurrenceRRuleChange(buildRRuleString('weekly', parsed.byDay, parsed.interval, {
+                <div className="pt-1 space-y-2">
+                    <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-muted-foreground">{t('recurrence.repeatEvery')}</span>
+                        <input
+                            type="number"
+                            min={1}
+                            max={52}
+                            value={Math.max(parsedRecurrenceRRule.interval ?? 1, 1)}
+                            onChange={(event) => {
+                                const intervalValue = Number(event.target.valueAsNumber);
+                                const safeInterval = Number.isFinite(intervalValue) && intervalValue > 0
+                                    ? Math.min(Math.round(intervalValue), 52)
+                                    : 1;
+                                onRecurrenceRRuleChange(buildRecurrenceRRule('weekly', {
+                                    byDay: parsedRecurrenceRRule.byDay,
+                                    byMonthDay: undefined,
+                                    interval: safeInterval,
+                                }));
+                            }}
+                            className="w-20 text-xs bg-muted/50 border border-border rounded px-2 py-1 text-foreground"
+                        />
+                        <span className="text-[10px] text-muted-foreground">{t('recurrence.weekUnit')}</span>
+                    </div>
+                    <div>
+                        <span className="text-[10px] text-muted-foreground">{t('recurrence.repeatOn')}</span>
+                        <WeekdaySelector
+                            value={editRecurrenceRRule || buildRRuleString('weekly', undefined, undefined, {
                                 count: parsedRecurrenceRRule.count,
                                 until: parsedRecurrenceRRule.until,
-                            }));
-                        }}
-                        className="pt-1"
-                    />
+                            })}
+                            onChange={(rrule) => {
+                                const parsed = parseRRuleString(rrule);
+                                onRecurrenceRRuleChange(buildRRuleString('weekly', parsed.byDay, parsedRecurrenceRRule.interval, {
+                                    count: parsedRecurrenceRRule.count,
+                                    until: parsedRecurrenceRRule.until,
+                                }));
+                            }}
+                            className="pt-1"
+                        />
+                    </div>
                 </div>
             )}
             {editRecurrence && (
@@ -223,13 +247,33 @@ export function RecurrenceField({
             )}
             {editRecurrence === 'monthly' && (
                 <div className="pt-1 space-y-2">
+                    <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-muted-foreground">{t('recurrence.repeatEvery')}</span>
+                        <input
+                            type="number"
+                            min={1}
+                            max={120}
+                            value={Math.max(parsedRecurrenceRRule.interval ?? 1, 1)}
+                            onChange={(event) => {
+                                const intervalValue = Number(event.target.valueAsNumber);
+                                const safeInterval = Number.isFinite(intervalValue) && intervalValue > 0
+                                    ? Math.min(Math.round(intervalValue), 120)
+                                    : 1;
+                                onRecurrenceRRuleChange(buildRecurrenceRRule('monthly', {
+                                    interval: safeInterval,
+                                }));
+                            }}
+                            className="w-20 text-xs bg-muted/50 border border-border rounded px-2 py-1 text-foreground"
+                        />
+                        <span className="text-[10px] text-muted-foreground">{t('recurrence.monthUnit')}</span>
+                    </div>
                     <span className="text-[10px] text-muted-foreground">{t('recurrence.repeatOn')}</span>
                     <div className="flex flex-wrap gap-2">
                         <button
                             type="button"
-                            onClick={() => onRecurrenceRRuleChange(buildRRuleString('monthly', undefined, undefined, {
-                                count: parsedRecurrenceRRule.count,
-                                until: parsedRecurrenceRRule.until,
+                            onClick={() => onRecurrenceRRuleChange(buildRecurrenceRRule('monthly', {
+                                byDay: undefined,
+                                byMonthDay: undefined,
                             }))}
                             className={cn(
                                 'text-[10px] px-2 py-1 rounded border transition-colors',

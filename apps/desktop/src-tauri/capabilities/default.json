@@ -3,7 +3,8 @@
   "identifier": "default",
   "description": "enables the default permissions",
   "windows": [
-    "main"
+    "main",
+    "quick-add"
   ],
   "permissions": [
     "core:default",
@@ -57,10 +58,10 @@
           "path": "$DATA/mindwtr/whisper-models/**"
         },
         {
-          "path": "$HOME"
+          "path": "$RUNTIME/doc"
         },
         {
-          "path": "$HOME/**"
+          "path": "$RUNTIME/doc/**"
         }
       ]
     },

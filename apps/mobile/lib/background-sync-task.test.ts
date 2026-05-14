@@ -1,0 +1,157 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const backgroundTaskMock = vi.hoisted(() => ({
+  BackgroundTaskResult: {
+    Success: 1,
+    Failed: 2,
+  },
+  BackgroundTaskStatus: {
+    Restricted: 1,
+    Available: 2,
+  },
+  getStatusAsync: vi.fn(),
+  registerTaskAsync: vi.fn(),
+  unregisterTaskAsync: vi.fn(),
+}));
+
+const taskManagerMock = vi.hoisted(() => {
+  const state = {
+    executor: null as null | (() => Promise<number>),
+  };
+  return {
+    state,
+    defineTask: vi.fn((_name: string, executor: () => Promise<number>) => {
+      state.executor = executor;
+    }),
+    isAvailableAsync: vi.fn(),
+    isTaskDefined: vi.fn(),
+    isTaskRegisteredAsync: vi.fn(),
+  };
+});
+
+const coreMock = vi.hoisted(() => ({
+  flushPendingSave: vi.fn(),
+}));
+
+const syncServiceMock = vi.hoisted(() => ({
+  getMobileSyncConfigurationStatus: vi.fn(),
+  performMobileSync: vi.fn(),
+}));
+
+vi.mock('expo-background-task', () => backgroundTaskMock);
+vi.mock('expo-task-manager', () => taskManagerMock);
+vi.mock('@mindwtr/core', () => coreMock);
+vi.mock('./sync-service', () => syncServiceMock);
+vi.mock('./sync-service-utils', () => ({
+  isRemoteSyncBackend: (backend: string) => backend === 'webdav' || backend === 'cloud',
+}));
+vi.mock('./app-log', () => ({
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
+}));
+
+const loadModule = async () => import('./background-sync-task');
+
+describe('mobile background sync task', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    taskManagerMock.state.executor = null;
+    taskManagerMock.isTaskDefined.mockReturnValue(false);
+    taskManagerMock.isAvailableAsync.mockResolvedValue(true);
+    taskManagerMock.isTaskRegisteredAsync.mockResolvedValue(false);
+    backgroundTaskMock.getStatusAsync.mockResolvedValue(backgroundTaskMock.BackgroundTaskStatus.Available);
+    backgroundTaskMock.registerTaskAsync.mockResolvedValue(undefined);
+    backgroundTaskMock.unregisterTaskAsync.mockResolvedValue(undefined);
+    coreMock.flushPendingSave.mockResolvedValue(undefined);
+    syncServiceMock.getMobileSyncConfigurationStatus.mockResolvedValue({ backend: 'off', configured: false });
+    syncServiceMock.performMobileSync.mockResolvedValue({ success: true });
+  });
+
+  it('registers the task for configured remote sync backends', async () => {
+    syncServiceMock.getMobileSyncConfigurationStatus.mockResolvedValue({ backend: 'webdav', configured: true });
+
+    const module = await loadModule();
+    const result = await module.syncMobileBackgroundSyncRegistration();
+
+    expect(backgroundTaskMock.registerTaskAsync).toHaveBeenCalledWith(module.MOBILE_BACKGROUND_SYNC_TASK_NAME, {
+      minimumInterval: module.MOBILE_BACKGROUND_SYNC_MINIMUM_INTERVAL_MINUTES,
+    });
+    expect(backgroundTaskMock.unregisterTaskAsync).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      action: 'registered',
+      available: true,
+      backend: 'webdav',
+      configured: true,
+      registered: true,
+    });
+  });
+
+  it('unregisters the task when sync is unavailable or unsupported', async () => {
+    taskManagerMock.isTaskRegisteredAsync.mockResolvedValue(true);
+    syncServiceMock.getMobileSyncConfigurationStatus.mockResolvedValue({ backend: 'file', configured: true });
+
+    const module = await loadModule();
+    const result = await module.syncMobileBackgroundSyncRegistration();
+
+    expect(backgroundTaskMock.registerTaskAsync).not.toHaveBeenCalled();
+    expect(backgroundTaskMock.unregisterTaskAsync).toHaveBeenCalledWith(module.MOBILE_BACKGROUND_SYNC_TASK_NAME);
+    expect(result).toMatchObject({
+      action: 'unregistered',
+      backend: 'file',
+      registered: false,
+    });
+  });
+
+  it('skips registration when the platform reports background tasks as restricted', async () => {
+    backgroundTaskMock.getStatusAsync.mockResolvedValue(backgroundTaskMock.BackgroundTaskStatus.Restricted);
+    syncServiceMock.getMobileSyncConfigurationStatus.mockResolvedValue({ backend: 'cloud', configured: true });
+
+    const module = await loadModule();
+    const result = await module.syncMobileBackgroundSyncRegistration();
+
+    expect(backgroundTaskMock.registerTaskAsync).not.toHaveBeenCalled();
+    expect(backgroundTaskMock.unregisterTaskAsync).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      action: 'unchanged',
+      available: false,
+      backend: 'cloud',
+      configured: true,
+    });
+  });
+
+  it('runs the task body without UI dependencies', async () => {
+    syncServiceMock.getMobileSyncConfigurationStatus.mockResolvedValue({ backend: 'cloudkit', configured: true });
+    syncServiceMock.performMobileSync.mockResolvedValue({ success: true });
+
+    await loadModule();
+    expect(taskManagerMock.defineTask).toHaveBeenCalledTimes(1);
+
+    const result = await taskManagerMock.state.executor?.();
+
+    expect(coreMock.flushPendingSave).toHaveBeenCalledTimes(1);
+    expect(syncServiceMock.performMobileSync).toHaveBeenCalledTimes(1);
+    expect(result).toBe(backgroundTaskMock.BackgroundTaskResult.Success);
+  });
+
+  it('treats unsupported or unconfigured task runs as a successful no-op', async () => {
+    syncServiceMock.getMobileSyncConfigurationStatus.mockResolvedValue({ backend: 'file', configured: true });
+
+    await loadModule();
+    const result = await taskManagerMock.state.executor?.();
+
+    expect(coreMock.flushPendingSave).not.toHaveBeenCalled();
+    expect(syncServiceMock.performMobileSync).not.toHaveBeenCalled();
+    expect(result).toBe(backgroundTaskMock.BackgroundTaskResult.Success);
+  });
+
+  it('returns failed when background sync work fails', async () => {
+    syncServiceMock.getMobileSyncConfigurationStatus.mockResolvedValue({ backend: 'webdav', configured: true });
+    syncServiceMock.performMobileSync.mockResolvedValue({ success: false, error: 'auth failed' });
+
+    await loadModule();
+    const result = await taskManagerMock.state.executor?.();
+
+    expect(result).toBe(backgroundTaskMock.BackgroundTaskResult.Failed);
+  });
+});

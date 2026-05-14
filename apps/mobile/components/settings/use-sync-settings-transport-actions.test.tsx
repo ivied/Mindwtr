@@ -23,6 +23,16 @@ const mocked = vi.hoisted(() => ({
         setItem: vi.fn(),
     },
     cloudGetJson: vi.fn(),
+    isConnectionAllowed: vi.fn((url: string, options?: { allowInsecureHttp?: boolean }) => {
+        if (options?.allowInsecureHttp) return true;
+        try {
+            const parsed = new URL(url);
+            return parsed.protocol === 'https:' || parsed.hostname === 'nas.local';
+        } catch {
+            return false;
+        }
+    }),
+    normalizeCloudUrl: vi.fn((url: string) => `${url.replace(/\/+$/, '')}/v1/data`),
     normalizeWebdavUrl: vi.fn((url: string) => {
         const trimmed = url.replace(/\/+$/, '');
         return trimmed.toLowerCase().endsWith('/data.json') || trimmed.toLowerCase().endsWith('.json')
@@ -30,6 +40,7 @@ const mocked = vi.hoisted(() => ({
             : `${trimmed}/data.json`;
     }),
     resetSyncStatusForBackendSwitch: vi.fn(),
+    syncMobileBackgroundSyncRegistration: vi.fn(),
     showSettingsErrorToast: vi.fn(),
     showSettingsWarning: vi.fn(),
     showToast: vi.fn(),
@@ -44,7 +55,10 @@ vi.mock('@mindwtr/core', () => ({
     addBreadcrumb: mocked.addBreadcrumb,
     CLOCK_SKEW_THRESHOLD_MS: 60_000,
     cloudGetJson: mocked.cloudGetJson,
+    isConnectionAllowed: mocked.isConnectionAllowed,
+    normalizeCloudUrl: mocked.normalizeCloudUrl,
     normalizeWebdavUrl: mocked.normalizeWebdavUrl,
+    SYNC_LOCAL_INSECURE_URL_OPTIONS: { allowLocalHostnames: true, allowPrivateIpRanges: true },
     webdavGetJson: mocked.webdavGetJson,
 }));
 
@@ -70,6 +84,10 @@ vi.mock('@/lib/dropbox-auth', () => ({
 
 vi.mock('@/lib/sync-service', () => ({
     performMobileSync: vi.fn(),
+}));
+
+vi.mock('@/lib/background-sync-task', () => ({
+    syncMobileBackgroundSyncRegistration: mocked.syncMobileBackgroundSyncRegistration,
 }));
 
 vi.mock('@/lib/sync-service-utils', () => ({
@@ -118,7 +136,11 @@ function Harness({
         isFossBuild: false,
         lastSyncStats: null,
         lastSyncStatus: 'idle',
-        localize: (english) => english,
+        tr: (key: string) =>
+            ({
+                'settings.syncMobile.connectionOk': 'Connection OK',
+                'settings.syncMobile.webdavEndpointIsReachable': 'WebDAV endpoint is reachable.',
+            }[key] ?? key),
         resetSyncStatusForBackendSwitch: mocked.resetSyncStatusForBackendSwitch,
         showSettingsErrorToast: mocked.showSettingsErrorToast,
         showSettingsWarning: mocked.showSettingsWarning,
@@ -150,6 +172,8 @@ beforeEach(() => {
     mocked.cloudGetJson.mockReset();
     mocked.normalizeWebdavUrl.mockClear();
     mocked.resetSyncStatusForBackendSwitch.mockReset();
+    mocked.syncMobileBackgroundSyncRegistration.mockReset();
+    mocked.syncMobileBackgroundSyncRegistration.mockResolvedValue({ action: 'unchanged' });
     mocked.showSettingsErrorToast.mockReset();
     mocked.showSettingsWarning.mockReset();
     mocked.showToast.mockReset();
@@ -228,6 +252,7 @@ describe('useSyncSettingsTransportActions', () => {
         await act(async () => {
             await latestHookResult?.handleTestConnection('webdav', {
                 webdav: {
+                    allowInsecureHttp: false,
                     password: 'secret',
                     url: 'http://nas.local/remote.php/dav/files/alice/mindwtr/',
                     username: 'alice',
@@ -239,12 +264,12 @@ describe('useSyncSettingsTransportActions', () => {
         expect(mocked.webdavGetJson).toHaveBeenCalledWith(
             'http://nas.local/remote.php/dav/files/alice/mindwtr/data.json',
             expect.objectContaining({
-                allowInsecureHttp: true,
                 password: 'secret',
                 timeoutMs: 10_000,
                 username: 'alice',
             }),
         );
+        expect(mocked.webdavGetJson.mock.calls[0][1]).not.toMatchObject({ allowInsecureHttp: true });
         expect(mocked.showToast).toHaveBeenCalledWith(expect.objectContaining({
             message: 'WebDAV endpoint is reachable.',
             title: 'Connection OK',

@@ -113,6 +113,7 @@ function SidebarHarness() {
                 getProjectColor={(project) => project.color}
                 tasksByProject={{}}
                 projects={projects}
+                focusedProjectCount={projects.filter((project) => project.isFocused && !project.deletedAt).length}
                 toggleProjectFocus={vi.fn()}
                 updateProject={vi.fn()}
                 reorderProjects={vi.fn()}
@@ -159,6 +160,7 @@ function renderSidebarWithSpy(onSelectProject = vi.fn()) {
             getProjectColor={(project) => project.color}
             tasksByProject={{}}
             projects={projects}
+            focusedProjectCount={projects.filter((project) => project.isFocused && !project.deletedAt).length}
             toggleProjectFocus={vi.fn()}
             updateProject={vi.fn()}
             reorderProjects={vi.fn()}
@@ -228,6 +230,7 @@ describe('ProjectsSidebar', () => {
                 getProjectColor={(project) => project.color}
                 tasksByProject={{}}
                 projects={[buildProject('project-long', longTitle, 0)]}
+                focusedProjectCount={0}
                 toggleProjectFocus={vi.fn()}
                 updateProject={vi.fn()}
                 reorderProjects={vi.fn()}
@@ -290,6 +293,7 @@ describe('ProjectsSidebar', () => {
                 getProjectColor={(project) => project.color}
                 tasksByProject={{}}
                 projects={[waitingProject, archivedProject]}
+                focusedProjectCount={0}
                 toggleProjectFocus={vi.fn()}
                 updateProject={vi.fn()}
                 reorderProjects={vi.fn()}

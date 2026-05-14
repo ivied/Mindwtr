@@ -1,5 +1,6 @@
 import { createWithEqualityFn } from 'zustand/traditional';
 import { useShallow } from 'zustand/react/shallow';
+import { subscribeWithSelector } from 'zustand/middleware';
 export { shallow } from 'zustand/shallow';
 
 import type { AppData } from './types';
@@ -176,6 +177,13 @@ const scheduleErrorAutoClear = (error: string | null) => {
     }, ERROR_AUTO_CLEAR_MS);
 };
 
+export const resetForTests = () => {
+    if (errorAutoClearTimer) {
+        clearTimeout(errorAutoClearTimer);
+        errorAutoClearTimer = null;
+    }
+};
+
 type EntityCollectionConfig = {
     allKey: '_allTasks' | '_allProjects' | '_allSections' | '_allAreas';
     visibleKey: 'tasks' | 'projects' | 'sections' | 'areas';
@@ -261,7 +269,7 @@ const normalizeEntityCollectionUpdate = <T extends { id: string }>(
         resolvedAll = currentAll;
     }
 
-    const resolvedMap = source === 'map' && nextMapRaw instanceof Map
+    const resolvedMap = mapChanged && nextMapRaw instanceof Map
         ? nextMapRaw
         : resolvedAll === currentAll
             ? currentMap
@@ -459,7 +467,7 @@ export const flushPendingSave = async (): Promise<void> => {
     }
 };
 
-export const useTaskStore = createWithEqualityFn<TaskStore>()((rawSet, get) => {
+export const useTaskStore = createWithEqualityFn<TaskStore>()(subscribeWithSelector((rawSet, get) => {
     const set: typeof rawSet = (partial) => rawSet((state) => {
         const nextState = typeof partial === 'function' ? partial(state) : partial;
         return prepareStoreStateUpdate(state, nextState) as Partial<TaskStore> | TaskStore;
@@ -509,7 +517,7 @@ export const useTaskStore = createWithEqualityFn<TaskStore>()((rawSet, get) => {
             debouncedSave,
         }),
     };
-});
+}));
 
 const originalSetState = useTaskStore.setState;
 // Zustand callers outside our action creators can still use setState directly.

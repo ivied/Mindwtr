@@ -19,6 +19,7 @@ import {
     parseQuickAdd,
     DEFAULT_PROJECT_COLOR,
     getUsedTaskTokens,
+    isSelectableProjectForTaskAssignment,
 } from '@mindwtr/core';
 
 import type { AIResponseAction } from '../ai-response-modal';
@@ -39,6 +40,8 @@ type ShowToast = (options: {
     message: string;
     tone: 'warning' | 'error' | 'success' | 'info';
     durationMs?: number;
+    actionLabel?: string;
+    onAction?: () => void | Promise<void>;
 }) => void;
 
 type TaskEditActionsParams = {
@@ -71,6 +74,7 @@ type TaskEditActionsParams = {
     recurrenceRuleValue: RecurrenceRule | '';
     recurrenceStrategyValue: RecurrenceStrategy;
     resetTaskChecklist: (taskId: string) => Promise<unknown>;
+    restoreTask: (taskId: string) => Promise<unknown>;
     sections: Array<{ id: string; projectId?: string; deletedAt?: string | null }>;
     setAiModal: React.Dispatch<React.SetStateAction<AIResponseModalState>>;
     setEditedTask: React.Dispatch<React.SetStateAction<Partial<Task>>>;
@@ -117,6 +121,7 @@ export function useTaskEditActions({
     recurrenceRRuleValue,
     recurrenceStrategyValue,
     resetTaskChecklist,
+    restoreTask,
     sections,
     setAiModal,
     setEditedTask,
@@ -188,18 +193,32 @@ export function useTaskEditActions({
             });
             return;
         }
+        if (
+            parsedProps.projectId
+            && !projects.some((project) => project.id === parsedProps.projectId && isSelectableProjectForTaskAssignment(project))
+        ) {
+            delete parsedProps.projectId;
+        }
 
         const existingProjectId = editedTask.projectId ?? task?.projectId;
         const hasProjectCommand = Boolean(parsedProps.projectId || projectTitle);
         let resolvedProjectId = parsedProps.projectId;
         if (!resolvedProjectId && projectTitle) {
             try {
-                const created = await addProject(
-                    projectTitle,
-                    DEFAULT_PROJECT_COLOR,
-                    projectFilterAreaId ? { areaId: projectFilterAreaId } : undefined,
-                );
-                resolvedProjectId = created?.id;
+                const inactiveProject = projects.find((project) => (
+                    project.title.toLowerCase() === projectTitle.toLowerCase()
+                    && !isSelectableProjectForTaskAssignment(project)
+                ));
+                if (inactiveProject) {
+                    resolvedProjectId = undefined;
+                } else {
+                    const created = await addProject(
+                        projectTitle,
+                        DEFAULT_PROJECT_COLOR,
+                        projectFilterAreaId ? { areaId: projectFilterAreaId } : undefined,
+                    );
+                    resolvedProjectId = created?.id;
+                }
             } catch (error) {
                 logTaskError('Failed to create project from quick add', error);
             }
@@ -486,8 +505,18 @@ export function useTaskEditActions({
     const handleDeleteTask = useCallback(async () => {
         if (!task) return;
         await deleteTask(task.id).catch((error) => logTaskError('Failed to delete task', error));
+        if (settings.undoNotificationsEnabled !== false) {
+            showToast({
+                title: t('common.notice') || 'Notice',
+                message: t('list.taskDeleted') || 'Task deleted',
+                tone: 'info',
+                actionLabel: t('common.undo') || 'Undo',
+                onAction: () => { void restoreTask(task.id); },
+                durationMs: 5200,
+            });
+        }
         onClose();
-    }, [deleteTask, onClose, task]);
+    }, [deleteTask, onClose, restoreTask, settings.undoNotificationsEnabled, showToast, t, task]);
 
     const handleConvertToReference = useCallback(() => {
         if (!task) return;

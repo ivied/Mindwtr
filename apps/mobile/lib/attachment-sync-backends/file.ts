@@ -22,14 +22,18 @@ import {
   StorageAccessFramework,
   writeBytesSafely,
 } from '../attachment-sync-utils';
+import { assertAttachmentSyncNotAborted, isAttachmentSyncAbortError } from './common';
 
 export const syncFileAttachments = async (
   appData: AppData,
-  syncPath: string
+  syncPath: string,
+  signal?: AbortSignal
 ): Promise<boolean> => {
+  assertAttachmentSyncNotAborted(signal);
   const syncDir = await resolveFileSyncDir(syncPath);
   if (!syncDir) return false;
 
+  assertAttachmentSyncNotAborted(signal);
   const attachmentsDir = await getAttachmentsDir();
   if (!attachmentsDir) return false;
 
@@ -39,6 +43,7 @@ export const syncFileAttachments = async (
   for (const attachment of attachmentsById.values()) {
     if (attachment.kind !== 'file') continue;
     if (attachment.deletedAt) continue;
+    assertAttachmentSyncNotAborted(signal);
 
     const uri = attachment.uri || '';
     const isHttp = isHttpAttachmentUri(uri);
@@ -62,6 +67,7 @@ export const syncFileAttachments = async (
       }
       if (!remoteExists) {
         try {
+          assertAttachmentSyncNotAborted(signal);
           const size = await getAttachmentByteSize(attachment, uri);
           if (size != null) {
             const validation = await validateAttachmentForUpload(attachment, size, FILE_BACKEND_VALIDATION_CONFIG);
@@ -74,21 +80,27 @@ export const syncFileAttachments = async (
             const targetUri = `${syncDir.attachmentsDirUri}${filename}`;
             if (isContentAttachmentUri(uri)) {
               const bytes = await readFileAsBytes(uri);
+              assertAttachmentSyncNotAborted(signal);
               await writeBytesSafely(targetUri, bytes);
             } else {
+              assertAttachmentSyncNotAborted(signal);
               await copyFileSafely(uri, targetUri);
             }
           } else {
             const base64 = await readFileAsBytes(uri).then(bytesToBase64);
+            assertAttachmentSyncNotAborted(signal);
             let targetUri = await findSafEntry(syncDir.attachmentsDirUri, filename);
             if (!targetUri && StorageAccessFramework?.createFileAsync) {
+              assertAttachmentSyncNotAborted(signal);
               targetUri = await StorageAccessFramework.createFileAsync(syncDir.attachmentsDirUri, filename, attachment.mimeType || DEFAULT_CONTENT_TYPE);
             }
             if (targetUri && StorageAccessFramework?.writeAsStringAsync) {
+              assertAttachmentSyncNotAborted(signal);
               await StorageAccessFramework.writeAsStringAsync(targetUri, base64, { encoding: FileSystem.EncodingType.Base64 });
             }
           }
         } catch (error) {
+          if (isAttachmentSyncAbortError(error, signal)) throw error;
           logAttachmentWarn(`Failed to copy attachment ${attachment.title} to sync folder`, error);
           continue;
         }

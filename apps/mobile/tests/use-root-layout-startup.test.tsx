@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { useRootLayoutStartup } from '@/app/_effects/use-root-layout-startup';
+import { useRootLayoutStartup } from '@/hooks/root-layout/use-root-layout-startup';
 
 const {
   alert,
@@ -71,7 +71,9 @@ vi.mock('expo-application', () => ({
 
 vi.mock('@mindwtr/core', () => ({
   generateUUID: () => 'generated-id',
+  resetHeartbeatOptOutMarker: vi.fn(async () => undefined),
   sendDailyHeartbeat: vi.fn(async () => undefined),
+  sendHeartbeatOptOut: vi.fn(async () => undefined),
   selectVisibleTasks: (tasks: Array<{ deletedAt?: string | null; status?: string }>) => (
     tasks.filter((task) => !task.deletedAt && task.status !== 'archived')
   ),

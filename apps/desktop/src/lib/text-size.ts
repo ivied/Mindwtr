@@ -1,6 +1,6 @@
-import type { AppData } from '@mindwtr/core';
+import type { AppearanceSettings } from '@mindwtr/core';
 
-export type DesktopTextSizeMode = NonNullable<NonNullable<AppData['settings']['appearance']>['textSize']>;
+export type DesktopTextSizeMode = NonNullable<AppearanceSettings['textSize']>;
 
 export const TEXT_SIZE_STORAGE_KEY = 'mindwtr-text-size';
 export const DEFAULT_DESKTOP_TEXT_SIZE_MODE: DesktopTextSizeMode = 'default';

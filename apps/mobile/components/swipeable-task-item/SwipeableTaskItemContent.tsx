@@ -27,6 +27,7 @@ interface SwipeableTaskItemContentProps {
     isMultiSelected: boolean;
     language: string;
     localChecklist: Task['checklist'];
+    interactionDisabled?: boolean;
     onAccessibilityAction: (event: { nativeEvent: { actionName: string } }) => void;
     onContextPress?: (context: string) => void;
     onLongPress: () => void;
@@ -41,6 +42,7 @@ interface SwipeableTaskItemContentProps {
     areas: Area[];
     selectionMode: boolean;
     showChecklist: boolean;
+    showTaskAge: boolean;
     t: (key: string) => string;
     task: Task;
     tc: ThemeColors;
@@ -59,6 +61,7 @@ export function SwipeableTaskItemContent({
     isDark,
     isHighlighted,
     isMultiSelected,
+    interactionDisabled = false,
     language,
     localChecklist,
     onAccessibilityAction,
@@ -74,6 +77,7 @@ export function SwipeableTaskItemContent({
     projects,
     selectionMode,
     showChecklist,
+    showTaskAge,
     t,
     task,
     tc,
@@ -110,9 +114,16 @@ export function SwipeableTaskItemContent({
         const hasTime = hasTimeComponent(task.dueDate);
         return safeFormatDate(due, hasTime ? 'Pp' : 'P');
     })();
+    const completionLabel = (() => {
+        if (task.status !== 'done' && task.status !== 'archived') return null;
+        const completionTimestamp = task.completedAt || task.updatedAt;
+        if (!completionTimestamp) return null;
+        return safeFormatDate(completionTimestamp, 'Pp', completionTimestamp);
+    })();
     const staleness = getTaskStaleness(task.createdAt);
     const ageLabel = getTaskAgeLabel(task.createdAt, language as Language);
-    const showAge = task.status !== 'done'
+    const showAge = showTaskAge
+        && task.status !== 'done'
         && task.status !== 'reference'
         && (staleness === 'stale' || staleness === 'very-stale')
         && !!ageLabel;
@@ -233,6 +244,15 @@ export function SwipeableTaskItemContent({
         );
     }
 
+    if (completionLabel) {
+        addMetaPart(
+            <Text key="completed" style={[styles.metaText, { color: tc.secondaryText }]}>
+                {`${t('list.done') || 'Completed'}: ${completionLabel}`}
+            </Text>,
+            'completed'
+        );
+    }
+
     if (dueLabel) {
         addMetaPart(
             <Text key="due" style={[styles.metaText, styles.dueText]}>
@@ -271,9 +291,11 @@ export function SwipeableTaskItemContent({
             onPress={onPress}
             onLongPress={onLongPress}
             delayLongPress={300}
+            disabled={interactionDisabled}
             accessibilityLabel={accessibilityLabel}
             accessibilityHint={accessibilityHint}
             accessibilityRole="button"
+            accessibilityState={interactionDisabled ? { disabled: true } : undefined}
             accessibilityActions={accessibilityActions}
             onAccessibilityAction={onAccessibilityAction}
         >

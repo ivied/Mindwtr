@@ -31,7 +31,7 @@ jobs:
         uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lockb') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: |
             ${{ runner.os }}-bun-
 
@@ -43,33 +43,30 @@ jobs:
       - name: TypeScript check
         run: cd packages/core && bun run tsc --noEmit
 
+      - name: Locale parity check
+        run: bun run i18n:check
+
+      - name: Store image asset check
+        run: bash scripts/ci/validate-store-image-assets.sh
+
+      - name: Google Play listing metadata check
+        run: |
+          python3 scripts/ci/prepare-google-play-listing-metadata.test.py
+          python3 scripts/ci/prepare-google-play-listing-metadata.py \
+            metadata \
+            /tmp/mindwtr-play-listing-metadata.json
+
+      - name: App Store listing metadata check
+        run: |
+          python3 scripts/ci/validate-fastlane-metadata.test.py
+          FASTLANE_METADATA_DIR=/tmp/mindwtr-fastlane-metadata scripts/ci/prepare-fastlane-metadata.sh
+
       - name: Run unit tests
-        run: bun run --filter @mindwtr/core test -- --coverage
+        run: bun run --filter @mindwtr/core test -- --coverage --coverage.thresholds.lines=70 --coverage.thresholds.statements=70 --coverage.thresholds.functions=50 --coverage.thresholds.branches=50
 
       - name: Core coverage summary
         if: always()
-        run: |
-          node <<'NODE'
-          const fs = require('fs');
-          const path = 'packages/core/coverage/coverage-summary.json';
-          if (!fs.existsSync(path)) {
-            console.log(`No coverage summary found at ${path}`);
-            process.exit(0);
-          }
-          const total = JSON.parse(fs.readFileSync(path, 'utf8')).total;
-          const lines = [
-            '### Core Coverage',
-            '',
-            '| Metric | Percent | Covered / Total |',
-            '| --- | ---: | ---: |',
-            `| Lines | ${total.lines.pct}% | ${total.lines.covered} / ${total.lines.total} |`,
-            `| Statements | ${total.statements.pct}% | ${total.statements.covered} / ${total.statements.total} |`,
-            `| Functions | ${total.functions.pct}% | ${total.functions.covered} / ${total.functions.total} |`,
-            `| Branches | ${total.branches.pct}% | ${total.branches.covered} / ${total.branches.total} |`,
-            '',
-          ];
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join('\n')}\n`);
-          NODE
+        run: node scripts/ci/write-coverage-summary.js "Core Coverage" packages/core/coverage/coverage-summary.json --min-lines=70 --min-statements=70 --min-functions=50 --min-branches=50
 
       - name: Upload core coverage artifact
         if: always()
@@ -78,12 +75,6 @@ jobs:
           name: core-coverage
           path: packages/core/coverage
           if-no-files-found: ignore
-
-      - name: Cloud app tests
-        run: bun run --filter mindwtr-cloud test
-
-      - name: MCP server tests
-        run: bun run --filter mindwtr-mcp-server test
 
   # Desktop app build and tests (Tauri)
   desktop:
@@ -96,8 +87,32 @@ jobs:
 
       - name: Install system dependencies (Tauri)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev
+          set -euo pipefail
+
+          # GitHub-hosted Ubuntu runners sometimes point apt at a flaky Azure
+          # mirror. Prefer the canonical Ubuntu archive when that mirror list
+          # is present, then retry the whole apt transaction for transient
+          # DNS/connection failures.
+          if [ -f /etc/apt/apt-mirrors.txt ]; then
+            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+          fi
+
+          for attempt in 1 2 3; do
+            if sudo apt-get -o Acquire::Retries=3 update && \
+              sudo apt-get -o Acquire::Retries=3 install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev; then
+              exit 0
+            fi
+
+            if [ "$attempt" -eq 3 ]; then
+              echo "Tauri system dependency install failed after $attempt attempts" >&2
+              exit 1
+            fi
+
+            echo "Tauri system dependency install failed on attempt $attempt, retrying..." >&2
+            sudo apt-get clean
+            sudo rm -rf /var/lib/apt/lists/*
+            sleep 10
+          done
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
@@ -134,7 +149,7 @@ jobs:
         uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lockb') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: |
             ${{ runner.os }}-bun-
 
@@ -145,32 +160,11 @@ jobs:
         run: cd apps/desktop && bun run tsc --noEmit
 
       - name: Run tests
-        run: bun run --filter mindwtr test -- --coverage
+        run: bun run --filter mindwtr test -- --coverage --coverage.thresholds.lines=50 --coverage.thresholds.statements=50 --coverage.thresholds.functions=45 --coverage.thresholds.branches=50
 
       - name: Desktop coverage summary
         if: always()
-        run: |
-          node <<'NODE'
-          const fs = require('fs');
-          const path = 'apps/desktop/coverage/coverage-summary.json';
-          if (!fs.existsSync(path)) {
-            console.log(`No coverage summary found at ${path}`);
-            process.exit(0);
-          }
-          const total = JSON.parse(fs.readFileSync(path, 'utf8')).total;
-          const lines = [
-            '### Desktop Coverage',
-            '',
-            '| Metric | Percent | Covered / Total |',
-            '| --- | ---: | ---: |',
-            `| Lines | ${total.lines.pct}% | ${total.lines.covered} / ${total.lines.total} |`,
-            `| Statements | ${total.statements.pct}% | ${total.statements.covered} / ${total.statements.total} |`,
-            `| Functions | ${total.functions.pct}% | ${total.functions.covered} / ${total.functions.total} |`,
-            `| Branches | ${total.branches.pct}% | ${total.branches.covered} / ${total.branches.total} |`,
-            '',
-          ];
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join('\n')}\n`);
-          NODE
+        run: node scripts/ci/write-coverage-summary.js "Desktop Coverage" apps/desktop/coverage/coverage-summary.json --min-lines=50 --min-statements=50 --min-functions=45 --min-branches=50
 
       - name: Upload desktop coverage artifact
         if: always()
@@ -205,7 +199,7 @@ jobs:
         uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lockb') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: |
             ${{ runner.os }}-bun-
 
@@ -226,6 +220,78 @@ jobs:
           path: apps/ai-service/coverage
           if-no-files-found: ignore
 
+  cloud-mcp:
+    runs-on: ubuntu-latest
+    name: Cloud and MCP Servers
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Cloud TypeScript check
+        run: bun run --filter mindwtr-cloud typecheck
+
+      - name: MCP TypeScript check
+        run: bun run --filter mindwtr-mcp-server typecheck
+
+      - name: Cloud tests
+        run: bun run --filter mindwtr-cloud test:coverage
+
+      - name: Cloud coverage summary
+        if: always()
+        # Bun's LCOV reporter for cloud/mcp currently emits line/function data but no BRF/BRH branch records.
+        # Keep statement gates as an explicit LCOV line proxy and add a real branch gate when the reporter exposes it.
+        run: node scripts/ci/write-lcov-summary.js "Cloud Coverage" apps/cloud/coverage/lcov.info --include-prefix=src/ --min-lines=70 --min-statements=70 --min-functions=50
+
+      - name: Upload cloud coverage artifact
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: cloud-coverage
+          path: apps/cloud/coverage
+          if-no-files-found: ignore
+
+      - name: MCP tests
+        run: bun run --filter mindwtr-mcp-server test:coverage
+
+      - name: MCP coverage summary
+        if: always()
+        # Bun's LCOV reporter for cloud/mcp currently emits line/function data but no BRF/BRH branch records.
+        # Keep statement gates as an explicit LCOV line proxy and add a real branch gate when the reporter exposes it.
+        run: node scripts/ci/write-lcov-summary.js "MCP Coverage" apps/mcp-server/coverage/lcov.info --include-prefix=src/ --min-lines=70 --min-statements=70 --min-functions=50
+
+      - name: MCP core adapter coverage floor
+        if: always()
+        run: node scripts/ci/write-lcov-summary.js "MCP core-adapter.ts Coverage" apps/mcp-server/coverage/lcov.info --include-prefix=src/core-adapter.ts --min-lines=53 --min-statements=53 --min-functions=60
+
+      - name: MCP paths coverage floor
+        if: always()
+        run: node scripts/ci/write-lcov-summary.js "MCP paths.ts Coverage" apps/mcp-server/coverage/lcov.info --include-prefix=src/paths.ts --min-lines=29 --min-statements=29 --min-functions=17
+
+      - name: Upload MCP coverage artifact
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: mcp-coverage
+          path: apps/mcp-server/coverage
+          if-no-files-found: ignore
+
   e2e:
     runs-on: ubuntu-latest
     name: E2E (Web)
@@ -243,7 +309,7 @@ jobs:
         uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lockb') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: |
             ${{ runner.os }}-bun-
 
@@ -290,7 +356,7 @@ jobs:
         uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
         with:
           path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lockb') }}
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
           restore-keys: |
             ${{ runner.os }}-bun-
 
@@ -308,3 +374,9 @@ jobs:
 
       - name: Check for lint errors (ai-service)
         run: cd apps/ai-service && bun run lint
+
+      - name: Check for lint errors (cloud)
+        run: bun run --filter mindwtr-cloud lint
+
+      - name: Check for lint errors (mcp)
+        run: bun run --filter mindwtr-mcp-server lint

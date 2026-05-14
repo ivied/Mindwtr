@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { generateUUID, type AppData, type ExternalCalendarSubscription } from '@mindwtr/core';
 import { ExternalCalendarService } from '../../../lib/external-calendar-service';
+import {
+    getCalendarSourceFileName,
+    isSupportedCalendarSourceUrl,
+    localPathToCalendarFileUrl,
+} from '../../../lib/external-calendar-source';
 import { reportError } from '../../../lib/report-error';
+import { isTauriRuntime } from '../../../lib/runtime';
 import {
     getSystemCalendarPermissionStatus,
     requestSystemCalendarPermission,
@@ -80,6 +86,10 @@ export function useCalendarSettings({ showSaved, settings, updateSettings, isMac
     const handleAddCalendar = useCallback(() => {
         const url = newCalendarUrl.trim();
         if (!url) return;
+        if (!isSupportedCalendarSourceUrl(url)) {
+            setCalendarError('Use an http(s), webcal, or absolute file:///path.ics source.');
+            return;
+        }
         const name = (newCalendarName.trim() || 'Calendar').trim();
         const next = [
             ...externalCalendars,
@@ -89,6 +99,31 @@ export function useCalendarSettings({ showSaved, settings, updateSettings, isMac
         setNewCalendarUrl('');
         persistCalendars(next);
     }, [externalCalendars, newCalendarName, newCalendarUrl, persistCalendars]);
+
+    const handleChooseLocalCalendarFile = useCallback(async () => {
+        if (!isTauriRuntime()) {
+            setCalendarError('Local ICS files require the desktop app.');
+            return;
+        }
+        setCalendarError(null);
+        try {
+            const { open } = await import('@tauri-apps/plugin-dialog');
+            const selected = await open({
+                multiple: false,
+                directory: false,
+                filters: [{ name: 'ICS calendar', extensions: ['ics'] }],
+            });
+            if (!selected || Array.isArray(selected)) return;
+            const url = localPathToCalendarFileUrl(String(selected));
+            setNewCalendarUrl(url);
+            if (!newCalendarName.trim()) {
+                setNewCalendarName(getCalendarSourceFileName(url).replace(/\.ics$/i, '') || 'Calendar');
+            }
+        } catch (error) {
+            reportError('Failed to choose local ICS calendar', error);
+            setCalendarError(String(error));
+        }
+    }, [newCalendarName]);
 
     const handleToggleCalendar = useCallback((id: string, enabled: boolean) => {
         const next = externalCalendars.map((calendar) => (calendar.id === id ? { ...calendar, enabled } : calendar));
@@ -118,6 +153,7 @@ export function useCalendarSettings({ showSaved, settings, updateSettings, isMac
         setNewCalendarName,
         setNewCalendarUrl,
         handleAddCalendar,
+        handleChooseLocalCalendarFile,
         handleToggleCalendar,
         handleRemoveCalendar,
         handleRequestSystemCalendarPermission,

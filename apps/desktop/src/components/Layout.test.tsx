@@ -6,6 +6,7 @@ import { LanguageProvider } from '../contexts/language-context';
 import { KeybindingProvider } from '../contexts/keybinding-context';
 import { useUiStore } from '../store/ui-store';
 import { useObsidianStore } from '../store/obsidian-store';
+import { SyncService } from '../lib/sync-service';
 import { Layout } from './Layout';
 
 const initialTaskState = useTaskStore.getState();
@@ -67,6 +68,7 @@ beforeEach(() => {
 afterEach(() => {
     cleanup();
     resetStores();
+    vi.useRealTimers();
     vi.clearAllMocks();
 });
 
@@ -95,6 +97,25 @@ describe('Layout Obsidian nav visibility', () => {
 });
 
 describe('Layout sync conflict surface', () => {
+    it('shows sync freshness as visible text', () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-04-22T12:10:00.000Z'));
+        act(() => {
+            useTaskStore.setState((state) => ({
+                ...state,
+                settings: {
+                    ...state.settings,
+                    lastSyncAt: '2026-04-22T12:05:00.000Z',
+                    lastSyncStatus: 'success',
+                },
+            }));
+        });
+
+        const { getByText } = renderLayout();
+
+        expect(getByText('Synced')).toBeInTheDocument();
+    });
+
     it('shows a toast when a new sync conflict status is present', () => {
         const showToast = vi.fn();
         act(() => {
@@ -119,5 +140,52 @@ describe('Layout sync conflict surface', () => {
             'info',
             6000,
         );
+    });
+});
+
+describe('Layout sync security warning', () => {
+    it('shows a cleartext HTTP banner for WebDAV sync', async () => {
+        const webdavSpy = vi.spyOn(SyncService, 'getWebDavConfig').mockResolvedValue({
+            url: 'http://192.168.1.50/dav',
+            username: '',
+            hasPassword: false,
+            allowInsecureHttp: true,
+        });
+        const providerSpy = vi.spyOn(SyncService, 'getCloudProvider').mockResolvedValue('dropbox');
+
+        try {
+            const { findByText } = renderLayout();
+
+            expect(await findByText(/WebDAV sync is using HTTP/)).toBeInTheDocument();
+        } finally {
+            webdavSpy.mockRestore();
+            providerSpy.mockRestore();
+        }
+    });
+
+    it('aggregates cleartext warnings into one banner', async () => {
+        const webdavSpy = vi.spyOn(SyncService, 'getWebDavConfig').mockResolvedValue({
+            url: 'http://192.168.1.50/dav',
+            username: '',
+            hasPassword: false,
+            allowInsecureHttp: true,
+        });
+        const providerSpy = vi.spyOn(SyncService, 'getCloudProvider').mockResolvedValue('selfhosted');
+        const cloudSpy = vi.spyOn(SyncService, 'getCloudConfig').mockResolvedValue({
+            url: 'http://192.168.1.50:3000',
+            token: '',
+            allowInsecureHttp: true,
+        });
+
+        try {
+            const { findByText, queryAllByText } = renderLayout();
+
+            expect(await findByText(/WebDAV sync is using HTTP.*Self-hosted sync is using HTTP/)).toBeInTheDocument();
+            expect(queryAllByText(/WebDAV sync is using HTTP/)).toHaveLength(1);
+        } finally {
+            webdavSpy.mockRestore();
+            providerSpy.mockRestore();
+            cloudSpy.mockRestore();
+        }
     });
 });

@@ -1,6 +1,15 @@
 import type { AppData, Attachment } from './types';
+import { normalizeSavedFilters } from './saved-filters';
 
 const SYNC_FILE_NAME = 'data.json';
+
+export type SoftDeletable = {
+    deletedAt?: string | null;
+};
+
+export function filterNotDeleted<T extends SoftDeletable>(items: readonly T[]): T[] {
+    return items.filter((item) => !item.deletedAt);
+}
 
 export type PendingAttachmentUpload = {
     ownerType: 'task' | 'project';
@@ -36,6 +45,8 @@ const isLocalAttachmentUri = (uri: string): boolean => {
     if (!trimmed) return false;
     return !/^https?:\/\//i.test(trimmed);
 };
+
+const isLocalCalendarSourceUrl = (url: string): boolean => url.trim().toLowerCase().startsWith('file://');
 
 const collectPendingUploads = (
     ownerType: PendingAttachmentUpload['ownerType'],
@@ -99,10 +110,9 @@ export const sanitizeAppDataForRemote = (data: AppData): AppData => {
         if (!attachments) return attachments;
         return attachments.map((attachment) => {
             if (attachment.kind !== 'file') return attachment;
-            const hasUri = hasNonEmptyValue(attachment.uri);
             const hasCloudKey = hasNonEmptyValue(attachment.cloudKey);
             if (!attachment.deletedAt) {
-                if ((ownerDeleted && !hasCloudKey) || (!hasUri && !hasCloudKey)) {
+                if ((ownerDeleted && !hasCloudKey) || (attachment.localStatus === 'missing' && !hasCloudKey)) {
                     const nowIso = new Date().toISOString();
                     const fallbackUpdatedAt = hasNonEmptyValue(attachment.updatedAt)
                         ? attachment.updatedAt
@@ -148,9 +158,24 @@ export const sanitizeAppDataForRemote = (data: AppData): AppData => {
             next.timeFormat = settings.timeFormat;
         }
 
+        if (prefs.gtd === true) {
+            if (settings.gtd?.defaultScheduleTime !== undefined || settings.gtd?.focusTaskLimit !== undefined) {
+                next.gtd = {
+                    ...(settings.gtd.defaultScheduleTime !== undefined ? { defaultScheduleTime: settings.gtd.defaultScheduleTime } : {}),
+                    ...(settings.gtd.focusTaskLimit !== undefined ? { focusTaskLimit: settings.gtd.focusTaskLimit } : {}),
+                };
+            }
+        }
+
+        if (prefs.savedFilters === true) {
+            next.savedFilters = normalizeSavedFilters(settings.savedFilters);
+        }
+
         if (prefs.externalCalendars === true) {
             next.externalCalendars = settings.externalCalendars
-                ? settings.externalCalendars.map((item) => ({ ...item }))
+                ? settings.externalCalendars
+                    .filter((item) => !isLocalCalendarSourceUrl(item.url))
+                    .map((item) => ({ ...item }))
                 : settings.externalCalendars;
         }
 
@@ -201,6 +226,31 @@ const normalizeForSyncComparison = (value: unknown): unknown => {
 
 export const areSyncPayloadsEqual = (left: AppData, right: AppData): boolean =>
     JSON.stringify(normalizeForSyncComparison(left)) === JSON.stringify(normalizeForSyncComparison(right));
+
+export const toStableSyncJson = (value: unknown): string =>
+    JSON.stringify(normalizeForSyncComparison(value));
+
+const hashStableSyncJson = (value: string): string => {
+    let left = 0x811c9dc5;
+    let right = 0x9e3779b9;
+    for (let index = 0; index < value.length; index += 1) {
+        const code = value.charCodeAt(index);
+        left ^= code;
+        left = Math.imul(left, 0x01000193);
+        right ^= code + index;
+        right = Math.imul(right, 0x85ebca6b);
+        right ^= right >>> 13;
+    }
+    return `${(left >>> 0).toString(16).padStart(8, '0')}${(right >>> 0).toString(16).padStart(8, '0')}`;
+};
+
+export const computeStableValueFingerprint = (value: unknown): string => {
+    const json = toStableSyncJson(value);
+    return `stable-v1:${json.length}:${hashStableSyncJson(json)}`;
+};
+
+export const computeSyncPayloadFingerprint = (data: AppData): string =>
+    computeStableValueFingerprint(sanitizeAppDataForRemote(data));
 
 type ExternalCalendarProvider = {
     load: () => Promise<AppData['settings']['externalCalendars'] | undefined>;

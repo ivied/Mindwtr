@@ -4,7 +4,7 @@ The Mindwtr mobile app is built with React Native and Expo. Android is fully sup
 
 ## Overview
 
-The mobile app uses tab navigation for main views and a drawer for additional views.
+The mobile app uses bottom tabs for core flows and a Menu page for additional views.
 
 ---
 
@@ -22,8 +22,9 @@ The mobile app uses tab navigation for main views and a drawer for additional vi
 | -------------- | ------------------------------------ |
 | 📥 **Inbox**    | Capture and process incoming items   |
 | 🎯 **Focus**    | Daily dashboard and next actions     |
-| 📁 **Projects** | Multi-step outcomes                  |
-| ☰ **Menu**     | Access Board, Review, Calendar, etc. |
+| ➕ **Quick Capture** | Add a task or audio note quickly |
+| 📝 **Review**  | Daily + weekly review                |
+| ☰ **Menu**     | Access Projects, Board, Calendar, etc. |
 
 ### Menu Tab
  
@@ -31,11 +32,14 @@ Tap the **Menu** tab to access additional views:
  
  - 📋 **Board** — Kanban board view
  - 🗓️ **Calendar** — Time-based view
- - 📝 **Review** — Daily + weekly review
+ - 📁 **Projects** — Multi-step outcomes
  - 🏷️ **Contexts** — Filter by context
  - ⏳ **Waiting For** — Delegated items
  - 💭 **Someday/Maybe** — Future ideas
+ - 📚 **Reference** — Reference material
+ - ✅ **Done** — Completed tasks
  - 📦 **Archived** — Archived tasks
+ - 🗑️ **Trash** — Deleted tasks
  - ⚙️ **Settings** — App preferences
 
 ---
@@ -48,27 +52,30 @@ Tap the **search icon** in the header to open Global Search.
 
 Use operators for powerful filtering:
 
-| Operator   | Example            | Description             |
-| ---------- | ------------------ | ----------------------- |
-| `status:`  | `status:next`      | Filter by task status   |
-| `-status:` | `-status:done`     | Exclude a status        |
-| `context:` | `context:@home`    | Filter by context       |
-| `tag:`     | `tag:#focused`     | Filter by tag           |
-| `project:` | `project:HomeReno` | Filter by project       |
-| `due:`     | `due:today`        | Tasks due on date       |
-| `due:<=`   | `due:<=7d`         | Tasks due within 7 days |
-| `OR`       | `@home OR @work`   | Match either condition  |
+| Operator    | Example            | Description             |
+| ----------- | ------------------ | ----------------------- |
+| `status:`   | `status:next`      | Filter by task status   |
+| `-status:`  | `-status:done`     | Exclude a status        |
+| `context:`  | `context:@home`    | Filter by context       |
+| `tag:`      | `tag:#focused`     | Filter by tag           |
+| `assigned:` | `assigned:Tom`     | Filter by assignee      |
+| `project:`  | `project:HomeReno` | Filter by project       |
+| `due:`      | `due:today`        | Tasks due on date       |
+| `due:<=`    | `due:<=7d`         | Tasks due within 7 days |
+| `OR`        | `@home OR @work`   | Match either condition  |
 
 ### Saved Searches
 
-Save frequently used searches:
+Saved Searches are shortcuts for reusable search queries.
 
 1. Enter your search query
 2. Tap **"Save Search"**
 3. Name your search
-4. Access from the drawer under **Saved Searches**
+4. Access from **Menu → Saved Searches**
 
 **To delete:** Open the saved search, tap the trash icon in the header.
+
+Saved Searches are separate from **Saved Filters** in Focus. Focus filters save criteria such as projects, contexts, tags, priority, energy, and time estimates for the Focus view.
 
 ---
 
@@ -101,6 +108,18 @@ Add the Mindwtr widget to your home screen for quick access:
 2. Select **Widgets**
 3. Find and add the **Mindwtr** widget
 4. Tap the widget to open quick capture or view focus items
+
+### Android Quick Settings Tile
+
+On Android, add the Mindwtr capture tile to Quick Settings for one-swipe Inbox capture:
+
+1. Open Android Quick Settings edit mode.
+2. Add the **Mindwtr** tile.
+3. Tap the tile to open Quick Capture.
+
+### Android Voice App Actions
+
+Android builds expose a capture action to supported assistants, including Gemini/Assistant surfaces that route through Android App Actions. Voice-created captures open Mindwtr's confirmation flow so you can review the title and note before saving.
 
 ### URL Scheme Quick Capture (iOS Shortcuts / Android Automations)
 
@@ -152,7 +171,7 @@ Capture tasks using your voice with AI-powered transcription.
 
 ### Setup
 
-1. Go to **Settings → AI Assistant** (in the Settings tab).
+1. Go to **Menu → Settings → AI Assistant**.
 2. Enable **Speech to Text**.
 3. Choose a **Provider**:
    - **OpenAI / Gemini**: Cloud-based (requires API key).
@@ -207,21 +226,24 @@ Tap **Process Inbox** to start the clarify workflow:
 
 ## Focus
 
-Your primary dashboard for doing.
+Your primary dashboard for doing. Focus is an Engage dashboard, not a full inventory of every task with status `next`.
 
 ### Sections
 
 | Section      | Content                                                                 |
 | ------------ | ----------------------------------------------------------------------- |
 | **Today**    | Tasks focused for today, due today/overdue, or starting today           |
-| **Next**     | Context-filtered actionable tasks ready to be picked up                 |
+| **Next**     | Available next actions that are not blocked or deferred                 |
+
+Focus hides future-start tasks and later tasks in sequential projects so the list stays limited to what you can act on now. Use **Contexts**, **Projects**, or **Search** when you want to inspect the broader task inventory.
 
 ### Features
 
 - **Context filter** — Tap a context chip to filter the Next list.
+- **Saved Filters** — Save reusable Focus criteria such as projects, contexts, tags, priority, energy level, and time estimates.
 - **Swipe to Focus** — Swipe a task right to toggle "Focus" status (moves it to Today).
 - **Quick Status** — Tap the status badge to change status.
-- **Pomodoro (Optional)** — Enable in **Settings → GTD → Features → Pomodoro timer** to show a focus/break timer panel linked to your current task. You can also add one optional custom preset there.
+- **Pomodoro (Optional)** — Enable in **Settings → GTD → Features → Pomodoro timer** to show a compact focus/break timer. Leave it as **Timer only**, or turn on **Link timer to task** to show the Timer task picker and **Mark task done** action.
 
 ---
 
@@ -341,6 +363,8 @@ Subscribe to external calendars to see events alongside your tasks:
 
 Manage multi-step outcomes.
 
+Open Projects from **Menu → Projects**.
+
 ### Project List
 
 - View all active projects
@@ -358,14 +382,15 @@ Manage multi-step outcomes.
 - Add **Project tags** for filtering
 - Set sequential or parallel mode
 - Set review date
+- Reorder project tasks with the drag handle when custom ordering is enabled
 - Complete or archive the project
 
 ### Sequential vs Parallel
 
 | Mode           | Behavior                                             |
 | -------------- | ---------------------------------------------------- |
-| **Sequential** | Only the first incomplete task shows in the Next Actions list |
-| **Parallel**   | All project tasks show in the Next Actions list               |
+| **Sequential** | Only the first available project task appears in Focus |
+| **Parallel**   | All available project tasks can appear in Focus        |
 
 ---
 
@@ -513,7 +538,11 @@ See [[Data and Sync]] for sync setup.
 - **Last sync status** — View when data was last synced
 - **Sync history** — Collapsed by default; tap to expand recent entries
 - **Export Backup** — Save data to a file
-- **Settings sync options** — Choose which preferences sync across devices (theme, language/date format, external calendar URLs, AI settings). API keys and local model paths are never synced.
+- **Apple Reminders import** — Choose a Reminders list and import incomplete reminders into Inbox. Imported reminders remain in Apple Reminders, and already imported, completed, or untitled reminders are skipped.
+- **Settings sync options** — Choose which preferences sync across devices (theme, language/date format, GTD defaults, external calendar URLs, AI settings, and Saved Filters). API keys and local model paths are never synced.
+
+**GTD Options:**
+- **Focus task limit** — Choose how many tasks can be marked for Today's Focus.
 
 ### Advanced
 

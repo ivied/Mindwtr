@@ -31,7 +31,6 @@ import {
   readAttachmentBytesForUpload,
   reportProgress,
   setWebdavDownloadBackoff,
-  sleep,
   toArrayBuffer,
   type WebDavConfig,
   validateAttachmentHash,
@@ -42,25 +41,34 @@ import {
   WEBDAV_ATTACHMENT_RETRY_OPTIONS,
   writeBytesSafely,
 } from '../attachment-sync-utils';
-import { MOBILE_WEBDAV_REQUEST_OPTIONS } from '../webdav-request-options';
-import { uploadWebdavFileWithFileSystem } from './common';
+import { getMobileWebDavRequestOptions } from '../webdav-request-options';
+import {
+  assertAttachmentSyncNotAborted,
+  isAttachmentSyncAbortError,
+  uploadWebdavFileWithFileSystem,
+  waitForAttachmentSyncDelay,
+} from './common';
 
 export const syncWebdavAttachments = async (
   appData: AppData,
   webDavConfig: WebDavConfig,
-  baseSyncUrl: string
+  baseSyncUrl: string,
+  signal?: AbortSignal
 ): Promise<boolean> => {
+  assertAttachmentSyncNotAborted(signal);
   let lastRequestAt = 0;
   let blockedUntil = 0;
   const waitForSlot = async (): Promise<void> => {
+    assertAttachmentSyncNotAborted(signal);
     const now = Date.now();
     if (blockedUntil && now < blockedUntil) {
       throw new Error(`WebDAV rate limited for ${blockedUntil - now}ms`);
     }
     const elapsed = now - lastRequestAt;
     if (elapsed < WEBDAV_ATTACHMENT_MIN_INTERVAL_MS) {
-      await sleep(WEBDAV_ATTACHMENT_MIN_INTERVAL_MS - elapsed);
+      await waitForAttachmentSyncDelay(WEBDAV_ATTACHMENT_MIN_INTERVAL_MS - elapsed, signal);
     }
+    assertAttachmentSyncNotAborted(signal);
     lastRequestAt = Date.now();
   };
   const handleRateLimit = (error: unknown): boolean => {
@@ -73,11 +81,13 @@ export const syncWebdavAttachments = async (
   const attachmentsDirUrl = `${baseSyncUrl}/${ATTACHMENTS_DIR_NAME}`;
   try {
     await webdavMakeDirectory(attachmentsDirUrl, {
-      ...MOBILE_WEBDAV_REQUEST_OPTIONS,
+      ...getMobileWebDavRequestOptions(webDavConfig.allowInsecureHttp),
       username: webDavConfig.username,
       password: webDavConfig.password,
+      signal,
     });
   } catch (error) {
+    if (isAttachmentSyncAbortError(error, signal)) throw error;
     logAttachmentWarn('Failed to ensure WebDAV attachments directory', error);
   }
 
@@ -99,6 +109,7 @@ export const syncWebdavAttachments = async (
     if (attachment.kind !== 'file') continue;
     if (attachment.deletedAt) continue;
     if (abortedByRateLimit) break;
+    assertAttachmentSyncNotAborted(signal);
 
     const uri = attachment.uri || '';
     const isHttp = isHttpAttachmentUri(uri);
@@ -134,9 +145,10 @@ export const syncWebdavAttachments = async (
           async () => {
             await waitForSlot();
             return await webdavFileExists(`${baseSyncUrl}/${attachment.cloudKey}`, {
-              ...MOBILE_WEBDAV_REQUEST_OPTIONS,
+              ...getMobileWebDavRequestOptions(webDavConfig.allowInsecureHttp),
               username: webDavConfig.username,
               password: webDavConfig.password,
+              signal,
             });
           },
           WEBDAV_ATTACHMENT_RETRY_OPTIONS
@@ -151,6 +163,7 @@ export const syncWebdavAttachments = async (
           didMutate = true;
         }
       } catch (error) {
+        if (isAttachmentSyncAbortError(error, signal)) throw error;
         if (handleRateLimit(error)) {
           abortedByRateLimit = true;
           break;
@@ -186,6 +199,7 @@ export const syncWebdavAttachments = async (
       }
       uploadCount += 1;
       try {
+        assertAttachmentSyncNotAborted(signal);
         let size = await getAttachmentByteSize(attachment, uri);
         let fileData: Uint8Array | null = null;
         if (!Number.isFinite(size ?? NaN)) {
@@ -224,7 +238,8 @@ export const syncWebdavAttachments = async (
                 webDavConfig.username,
                 webDavConfig.password,
                 (loaded, total) => reportProgress(attachment.id, 'upload', loaded, total, 'active'),
-                uploadBytes
+                uploadBytes,
+                signal
               );
             },
             {
@@ -269,9 +284,10 @@ export const syncWebdavAttachments = async (
                 buffer,
                 attachment.mimeType || DEFAULT_CONTENT_TYPE,
                 {
-                  ...MOBILE_WEBDAV_REQUEST_OPTIONS,
+                  ...getMobileWebDavRequestOptions(webDavConfig.allowInsecureHttp),
                   username: webDavConfig.username,
                   password: webDavConfig.password,
+                  signal,
                 }
               );
             },
@@ -301,6 +317,7 @@ export const syncWebdavAttachments = async (
           ms: String(Date.now() - startedAt),
         });
       } catch (error) {
+        if (isAttachmentSyncAbortError(error, signal)) throw error;
         if (handleRateLimit(error)) {
           abortedByRateLimit = true;
           break;
@@ -335,6 +352,7 @@ export const syncWebdavAttachments = async (
       if (attachment.deletedAt) continue;
       if (abortedByRateLimit) break;
       if (!attachment.cloudKey) continue;
+      assertAttachmentSyncNotAborted(signal);
       if (getWebdavDownloadBackoff(attachment.id)) continue;
       if (downloadCount >= WEBDAV_ATTACHMENT_MAX_DOWNLOADS_PER_SYNC) {
         logAttachmentInfo('WebDAV attachment download limit reached', {
@@ -351,9 +369,10 @@ export const syncWebdavAttachments = async (
           async () => {
             await waitForSlot();
             return await webdavGetFile(downloadUrl, {
-              ...MOBILE_WEBDAV_REQUEST_OPTIONS,
+              ...getMobileWebDavRequestOptions(webDavConfig.allowInsecureHttp),
               username: webDavConfig.username,
               password: webDavConfig.password,
+              signal,
               onProgress: (loaded, total) => reportProgress(attachment.id, 'download', loaded, total, 'active'),
             });
           },

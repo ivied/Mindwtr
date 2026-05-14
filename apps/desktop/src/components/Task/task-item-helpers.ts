@@ -1,7 +1,7 @@
 import {
-    type AppData,
     Task,
     TaskEditorFieldId,
+    type TaskEditorSettings,
     type TaskEditorSectionId,
     type Recurrence,
     type RecurrenceRule,
@@ -89,8 +89,6 @@ export const DEFAULT_TASK_EDITOR_SECTION_OPEN: Record<TaskEditorSectionId, boole
     details: true,
 };
 
-type TaskEditorSettings = NonNullable<NonNullable<AppData['settings']['gtd']>['taskEditor']> | undefined;
-
 const isTaskEditorSectionId = (value: unknown): value is TaskEditorSectionId =>
     value === 'basic' || value === 'scheduling' || value === 'organization' || value === 'details';
 
@@ -98,7 +96,7 @@ export const isTaskEditorSectionableField = (fieldId: TaskEditorFieldId): boolea
     TASK_EDITOR_SECTIONABLE_FIELDS.includes(fieldId);
 
 export const getTaskEditorSectionAssignments = (
-    taskEditor: TaskEditorSettings
+    taskEditor: TaskEditorSettings | undefined
 ): Record<TaskEditorFieldId, TaskEditorSectionId> => {
     const savedSections = taskEditor?.sections ?? {};
     const next = { ...DEFAULT_TASK_EDITOR_SECTION_BY_FIELD };
@@ -111,7 +109,7 @@ export const getTaskEditorSectionAssignments = (
 };
 
 export const getTaskEditorSectionOpenDefaults = (
-    taskEditor: TaskEditorSettings
+    taskEditor: TaskEditorSettings | undefined
 ): Record<TaskEditorSectionId, boolean> => {
     const savedSectionOpen = taskEditor?.sectionOpen ?? {};
     return {

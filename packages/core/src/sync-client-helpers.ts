@@ -50,7 +50,9 @@ export const createAbortableFetch = (
     options: { baseSignal: AbortSignal }
 ): typeof fetch => {
     const { baseSignal } = options;
-    return (input, init) => {
+    // Cast: Bun's `typeof fetch` carries a `preconnect` method our wrapper
+    // doesn't proxy. We don't need it; the cast is safe in practice.
+    return ((input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
         const existingSignal = (init?.signal ?? undefined) as AbortSignal | undefined;
         if (!existingSignal) {
             return baseFetch(input, { ...(init || {}), signal: baseSignal });
@@ -71,5 +73,5 @@ export const createAbortableFetch = (
             baseSignal.removeEventListener('abort', abortMerged);
             existingSignal.removeEventListener('abort', abortMerged);
         });
-    };
+    }) as unknown as typeof fetch;
 };

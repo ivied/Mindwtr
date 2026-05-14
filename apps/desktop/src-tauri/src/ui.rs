@@ -1,8 +1,22 @@
 use crate::*;
 
 #[tauri::command]
-pub(crate) fn consume_quick_add_pending(state: tauri::State<'_, QuickAddPending>) -> bool {
-    state.0.swap(false, Ordering::SeqCst)
+pub(crate) fn consume_quick_add_pending(
+    state: tauri::State<'_, QuickAddPending>,
+    target: Option<String>,
+) -> bool {
+    let requested_target = target.as_deref();
+    let Ok(mut pending_target) = state.0.lock() else {
+        return false;
+    };
+    let Some(current_target) = pending_target.as_deref() else {
+        return false;
+    };
+    if requested_target.is_some_and(|target| target != current_target) {
+        return false;
+    }
+    *pending_target = None;
+    true
 }
 
 #[tauri::command]
@@ -57,7 +71,7 @@ pub(crate) fn apply_global_quick_add_shortcut(
     if let Some(next_shortcut) = normalized.as_ref() {
         app.global_shortcut()
             .on_shortcut(next_shortcut.as_str(), move |app, _shortcut, _event| {
-                show_main_and_emit(app);
+                show_quick_add_window(app);
             })
             .map_err(|error| format!("Failed to register global quick add shortcut: {error}"))?;
     }
@@ -72,6 +86,30 @@ pub(crate) fn set_global_quick_add_shortcut(
     state: tauri::State<'_, GlobalQuickAddShortcutState>,
     shortcut: Option<String>,
 ) -> Result<GlobalQuickAddShortcutApplyResult, String> {
+    #[cfg(target_os = "linux")]
+    if is_flatpak() {
+        let disabled = apply_global_quick_add_shortcut(
+            &app,
+            &state,
+            Some(GLOBAL_QUICK_ADD_SHORTCUT_DISABLED),
+        )?;
+        let requested_shortcut = shortcut.as_deref().unwrap_or("");
+        let warning = if requested_shortcut.is_empty()
+            || requested_shortcut.eq_ignore_ascii_case(GLOBAL_QUICK_ADD_SHORTCUT_DISABLED)
+        {
+            None
+        } else {
+            Some(
+                "Flatpak/Wayland requires a desktop custom shortcut. Use: flatpak run tech.dongdongbh.mindwtr --quick-add"
+                    .to_string(),
+            )
+        };
+        return Ok(GlobalQuickAddShortcutApplyResult {
+            shortcut: disabled,
+            warning,
+        });
+    }
+
     match apply_global_quick_add_shortcut(&app, &state, shortcut.as_deref()) {
         Ok(applied) => Ok(GlobalQuickAddShortcutApplyResult {
             shortcut: applied,
@@ -122,12 +160,59 @@ pub(crate) fn show_main(app: &tauri::AppHandle) {
 
 pub(crate) fn show_main_and_emit(app: &tauri::AppHandle) {
     show_main(app);
-    app.state::<QuickAddPending>()
-        .0
-        .store(true, Ordering::SeqCst);
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.emit("quick-add", ());
-    } else {
-        let _ = app.emit("quick-add", ());
+    if let Ok(mut pending_target) = app.state::<QuickAddPending>().0.lock() {
+        *pending_target = Some(QUICK_ADD_TARGET_MAIN.to_string());
     }
+    let payload = QuickAddEventPayload {
+        target: QUICK_ADD_TARGET_MAIN.to_string(),
+    };
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.emit("quick-add", payload);
+    } else {
+        let _ = app.emit("quick-add", payload);
+    }
+}
+
+pub(crate) fn create_quick_add_window(app: &tauri::AppHandle) -> Result<(), String> {
+    if app.get_webview_window(QUICK_ADD_WINDOW_LABEL).is_some() {
+        return Ok(());
+    }
+
+    tauri::WebviewWindowBuilder::new(
+        app,
+        QUICK_ADD_WINDOW_LABEL,
+        tauri::WebviewUrl::App(QUICK_ADD_WINDOW_URL.into()),
+    )
+    .title("Quick Add")
+    .inner_size(620.0, 420.0)
+    .resizable(false)
+    .decorations(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .visible(false)
+    .center()
+    .build()
+    .map(|_| ())
+    .map_err(|error| format!("Failed to create quick add window: {error}"))
+}
+
+pub(crate) fn show_quick_add_window(app: &tauri::AppHandle) {
+    if let Ok(mut pending_target) = app.state::<QuickAddPending>().0.lock() {
+        *pending_target = Some(QUICK_ADD_TARGET_WINDOW.to_string());
+    }
+
+    if let Some(window) = app.get_webview_window(QUICK_ADD_WINDOW_LABEL) {
+        let _ = window.set_skip_taskbar(true);
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        let payload = QuickAddEventPayload {
+            target: QUICK_ADD_TARGET_WINDOW.to_string(),
+        };
+        let _ = window.emit("quick-add", payload);
+        return;
+    }
+
+    log::warn!("Quick add window unavailable; falling back to the main window.");
+    show_main_and_emit(app);
 }

@@ -1,28 +1,34 @@
 import {
     addBreadcrumb,
-    applyDgtImport,
-    applyOmniFocusImport,
-    applyTodoistImport,
     createBackupFileName,
-    parseDgtImportSource,
     flushPendingSave,
-    parseOmniFocusImportSource,
-    parseTodoistImportSource,
     serializeBackupData,
     validateBackupJson,
     type AppData,
     type BackupValidation,
-    type ParsedDgtImportData,
+    useTaskStore,
+} from '@mindwtr/core';
+import {
+    applyDgtImport,
+    parseDgtImportSource,
     type DgtImportExecutionResult,
     type DgtImportParseResult,
+    type ParsedDgtImportData,
+} from '@mindwtr/core/dgt-import';
+import {
+    applyOmniFocusImport,
+    parseOmniFocusImportSource,
     type OmniFocusImportExecutionResult,
     type OmniFocusImportParseResult,
     type ParsedOmniFocusImportData,
+} from '@mindwtr/core/omnifocus-import';
+import {
+    applyTodoistImport,
+    parseTodoistImportSource,
     type ParsedTodoistProject,
     type TodoistImportExecutionResult,
     type TodoistImportParseResult,
-    useTaskStore,
-} from '@mindwtr/core';
+} from '@mindwtr/core/todoist-import';
 
 import { SyncService } from './sync-service';
 import { tauriStorage } from './storage-adapter';

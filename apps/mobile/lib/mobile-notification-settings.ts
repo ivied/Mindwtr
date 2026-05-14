@@ -1,9 +1,17 @@
-import type { AppData } from '@mindwtr/core';
+import type { NotificationSettings } from '@mindwtr/core';
 
-type MobileSettings = AppData['settings'];
+type MobileSettings = NotificationSettings;
 
 export function areTaskRemindersEnabled(settings: MobileSettings): boolean {
   return settings.notificationsEnabled !== false;
+}
+
+export function areStartDateRemindersEnabled(settings: MobileSettings): boolean {
+  return areTaskRemindersEnabled(settings) && settings.startDateNotificationsEnabled !== false;
+}
+
+export function areDueDateRemindersEnabled(settings: MobileSettings): boolean {
+  return areTaskRemindersEnabled(settings) && settings.dueDateNotificationsEnabled !== false;
 }
 
 export function isWeeklyReviewReminderEnabled(settings: MobileSettings): boolean {

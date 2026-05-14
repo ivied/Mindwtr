@@ -43,7 +43,12 @@ const projectTaskDndMeasuring = {
     },
 } as const;
 
-type ShowToast = (message: string, tone?: 'success' | 'error' | 'info') => void;
+type ShowToast = (
+    message: string,
+    tone?: 'success' | 'error' | 'info',
+    durationMs?: number,
+    action?: { label: string; onClick: () => void }
+) => void;
 
 type ProjectWorkspaceProps = {
     addProject: (
@@ -74,6 +79,7 @@ type ProjectWorkspaceProps = {
         sectionId?: string | null,
     ) => Promise<unknown> | unknown;
     requestConfirmation: (options: ConfirmationRequestOptions) => Promise<boolean>;
+    restoreProject: (projectId: string) => Promise<StoreActionResult | void> | StoreActionResult | void;
     sections: Section[];
     selectedProject: Project | undefined;
     selectedProjectId: string | null;
@@ -82,6 +88,7 @@ type ProjectWorkspaceProps = {
     showToast: ShowToast;
     sortedAreas: Area[];
     t: (key: string) => string;
+    undoNotificationsEnabled: boolean;
     updateProject: (
         projectId: string,
         updates: Partial<Project>,
@@ -95,6 +102,14 @@ type ProjectWorkspaceProps = {
         updates: Partial<Task>,
     ) => Promise<StoreActionResult | void> | StoreActionResult | void;
 };
+
+export function shouldShowProjectWorkspaceTask(task: Task, project?: Project): boolean {
+    if (!project) return false;
+    if (task.deletedAt || task.projectId !== project.id) return false;
+    if (task.status === 'reference') return false;
+    if (project.status === 'archived') return task.status === 'done' || task.status === 'archived';
+    return task.status !== 'done' && task.status !== 'archived';
+}
 
 export function ProjectWorkspace({
     addProject,
@@ -117,6 +132,7 @@ export function ProjectWorkspace({
     projects,
     reorderProjectTasks,
     requestConfirmation,
+    restoreProject,
     sections,
     selectedProject,
     selectedProjectId,
@@ -125,6 +141,7 @@ export function ProjectWorkspace({
     showToast,
     sortedAreas,
     t,
+    undoNotificationsEnabled,
     updateProject,
     updateSection,
     updateTask,
@@ -143,6 +160,11 @@ export function ProjectWorkspace({
     const [projectTaskTitle, setProjectTaskTitle] = useState('');
     const [projectDetailsExpanded, setProjectDetailsExpanded] = useState(false);
     const [isProjectDeleting, setIsProjectDeleting] = useState(false);
+    const isArchivedProject = selectedProject?.status === 'archived';
+    const resolveText = useCallback((key: string, fallback: string) => {
+        const value = t(key);
+        return value && value !== key ? value : fallback;
+    }, [t]);
 
     const {
         handleAddSection,
@@ -210,8 +232,8 @@ export function ProjectWorkspace({
     }, [allTasks, normalizedSearchQuery, selectedProjectId]);
 
     const projectTasks = useMemo(
-        () => projectAllTasks.filter((task) => task.status !== 'done' && task.status !== 'reference' && task.status !== 'archived'),
-        [projectAllTasks],
+        () => projectAllTasks.filter((task) => shouldShowProjectWorkspaceTask(task, selectedProject)),
+        [projectAllTasks, selectedProject],
     );
 
     const sortProjectTasks = useCallback((items: Task[]) => {
@@ -573,6 +595,15 @@ export function ProjectWorkspace({
     const visibleAttachments = (selectedProject?.attachments || []).filter((attachment) => !attachment.deletedAt);
     const projectProgress = useMemo(() => {
         if (!selectedProjectId) return null;
+        if (isArchivedProject) {
+            const completedCount = projectAllTasks.filter((task) => task.status === 'done' || task.status === 'archived').length;
+            return {
+                doneCount: completedCount,
+                remainingCount: 0,
+                total: completedCount,
+                isArchived: true,
+            };
+        }
         const doneCount = projectAllTasks.filter((task) => task.status === 'done').length;
         const remainingCount = projectTasks.length;
         return {
@@ -580,7 +611,7 @@ export function ProjectWorkspace({
             remainingCount,
             total: doneCount + remainingCount,
         };
-    }, [projectAllTasks, projectTasks, selectedProjectId]);
+    }, [isArchivedProject, projectAllTasks, projectTasks, selectedProjectId]);
 
     const handleCommitProjectTitle = () => {
         if (!selectedProject) return;
@@ -619,6 +650,8 @@ export function ProjectWorkspace({
 
     const handleDeleteProject = async () => {
         if (!selectedProject) return;
+        const projectId = selectedProject.id;
+        const projectTitle = selectedProject.title;
         try {
             const confirmed = await requestConfirmation({
                 title: t('common.delete') || 'Delete',
@@ -629,15 +662,33 @@ export function ProjectWorkspace({
             if (confirmed) {
                 setIsProjectDeleting(true);
                 try {
-                    await Promise.resolve(deleteProject(selectedProject.id));
+                    await Promise.resolve(deleteProject(projectId));
                     setSelectedProjectId(null);
+                    if (undoNotificationsEnabled) {
+                        showToast(
+                            resolveText('projects.deleted', 'Project moved to Trash'),
+                            'info',
+                            6000,
+                            {
+                                label: resolveText('common.undo', 'Undo'),
+                                onClick: () => {
+                                    void Promise.resolve(restoreProject(projectId))
+                                        .then(() => setSelectedProjectId(projectId))
+                                        .catch((error) => {
+                                            reportError('Failed to restore project', error);
+                                            showToast(resolveText('projects.restoreFailed', 'Failed to restore project'), 'error');
+                                        });
+                                },
+                            },
+                        );
+                    }
                 } finally {
                     setIsProjectDeleting(false);
                 }
             }
         } catch (error) {
             reportError('Failed to delete project', error);
-            showToast(t('projects.deleteFailed') || 'Failed to delete project', 'error');
+            showToast(resolveText('projects.deleteFailed', `Failed to delete ${projectTitle || 'project'}`), 'error');
             setIsProjectDeleting(false);
         }
     };
@@ -721,14 +772,16 @@ export function ProjectWorkspace({
             <div className="flex-1 min-w-0 h-full flex">
                 <div className="flex h-full min-h-0 w-full max-w-none flex-col">
                     <div className="mb-4">
-                        <input
-                            type="text"
-                            data-view-filter-input
-                            placeholder={t('common.search')}
-                            value={searchQuery}
-                            onChange={(event) => setSearchQuery(event.target.value)}
-                            className="w-full rounded border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                        />
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                            <input
+                                type="text"
+                                data-view-filter-input
+                                placeholder={t('common.search')}
+                                value={searchQuery}
+                                onChange={(event) => setSearchQuery(event.target.value)}
+                                className="min-w-0 flex-1 rounded border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                            />
+                        </div>
                     </div>
                     {selectedProject ? (
                         <div className="flex-1 min-h-0 overflow-y-auto pr-2">
@@ -815,49 +868,53 @@ export function ProjectWorkspace({
                             )}
 
                             <section className="border-t border-border/50 py-5">
-                                <form
-                                    onSubmit={async (event) => {
-                                        event.preventDefault();
-                                        if (!projectTaskTitle.trim()) return;
-                                        await handleAddTaskForProject(projectTaskTitle);
-                                        setProjectTaskTitle('');
-                                    }}
-                                    className="mb-4 flex gap-2"
-                                >
-                                    <TaskInput
-                                        value={projectTaskTitle}
-                                        projects={projects}
-                                        contexts={allTokens}
-                                        areas={areas}
-                                        onCreateProject={async (title) => {
-                                            const created = await addProject(title, DEFAULT_AREA_COLOR);
-                                            return created?.id ?? null;
+                                {!isArchivedProject && (
+                                    <form
+                                        onSubmit={async (event) => {
+                                            event.preventDefault();
+                                            if (!projectTaskTitle.trim()) return;
+                                            await handleAddTaskForProject(projectTaskTitle);
+                                            setProjectTaskTitle('');
                                         }}
-                                        onChange={(next) => setProjectTaskTitle(next)}
-                                        placeholder={t('projects.addTaskPlaceholder')}
-                                        containerClassName="flex-1"
-                                        className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-                                    />
-                                    <button
-                                        type="submit"
-                                        className="h-9 whitespace-nowrap rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                                        className="mb-4 flex gap-2"
                                     >
-                                        {t('projects.addTask')}
-                                    </button>
-                                </form>
+                                        <TaskInput
+                                            value={projectTaskTitle}
+                                            projects={projects}
+                                            contexts={allTokens}
+                                            areas={areas}
+                                            onCreateProject={async (title) => {
+                                                const created = await addProject(title, DEFAULT_AREA_COLOR);
+                                                return created?.id ?? null;
+                                            }}
+                                            onChange={(next) => setProjectTaskTitle(next)}
+                                            placeholder={t('projects.addTaskPlaceholder')}
+                                            containerClassName="flex-1"
+                                            className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+                                        />
+                                        <button
+                                            type="submit"
+                                            className="h-9 whitespace-nowrap rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                                        >
+                                            {t('projects.addTask')}
+                                        </button>
+                                    </form>
+                                )}
                                 <div className="mb-3 flex items-center justify-between">
                                     <div className="text-xs uppercase tracking-wider text-muted-foreground">
                                         {t('projects.sectionsLabel')}
                                     </div>
-                                    <button
-                                        type="button"
-                                        onClick={handleAddSection}
-                                        aria-label={t('projects.addSection')}
-                                        className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs transition-colors hover:bg-muted/40"
-                                    >
-                                        <Plus className="h-3.5 w-3.5" />
-                                        {t('projects.addSection')}
-                                    </button>
+                                    {!isArchivedProject && (
+                                        <button
+                                            type="button"
+                                            onClick={handleAddSection}
+                                            aria-label={t('projects.addSection')}
+                                            className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs transition-colors hover:bg-muted/40"
+                                        >
+                                            <Plus className="h-3.5 w-3.5" />
+                                            {t('projects.addSection')}
+                                        </button>
+                                    )}
                                 </div>
                                 {tasksContent}
                             </section>

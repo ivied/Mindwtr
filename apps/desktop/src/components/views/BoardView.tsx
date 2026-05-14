@@ -22,6 +22,26 @@ import { useUiStore } from '../../store/ui-store';
 import { usePerformanceMonitor } from '../../hooks/usePerformanceMonitor';
 import { checkBudget } from '../../config/performanceBudgets';
 import { projectMatchesAreaFilter, resolveAreaFilter, taskMatchesAreaFilter } from '../../lib/area-filter';
+import { usePersistedViewState } from '../../hooks/usePersistedViewState';
+
+const BOARD_VIEW_STATE_STORAGE_KEY = 'mindwtr:view:board:v1';
+
+type BoardPersistedViewState = {
+    filtersOpen: boolean;
+};
+
+const DEFAULT_BOARD_VIEW_STATE: BoardPersistedViewState = {
+    filtersOpen: false,
+};
+
+function sanitizeBoardViewState(value: unknown, fallback: BoardPersistedViewState): BoardPersistedViewState {
+    const parsed = value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Partial<BoardPersistedViewState>
+        : {};
+    return {
+        filtersOpen: typeof parsed.filtersOpen === 'boolean' ? parsed.filtersOpen : fallback.filtersOpen,
+    };
+}
 
 const getColumns = (t: (key: string) => string): { id: TaskStatus; label: string }[] => [
     { id: 'inbox', label: t('list.inbox') || 'Inbox' },
@@ -178,11 +198,16 @@ export function BoardView() {
     const [searchQuery, setSearchQuery] = React.useState('');
     const boardFilters = useUiStore((state) => state.boardFilters);
     const setBoardFilters = useUiStore((state) => state.setBoardFilters);
+    const [persistedViewState, setPersistedViewState] = usePersistedViewState(
+        BOARD_VIEW_STATE_STORAGE_KEY,
+        DEFAULT_BOARD_VIEW_STATE,
+        sanitizeBoardViewState
+    );
     const selectedProjectIds = boardFilters.selectedProjectIds;
     const COLUMNS = getColumns(t);
     const NO_PROJECT_FILTER = '__no_project__';
     const hasProjectFilters = boardFilters.selectedProjectIds.length > 0;
-    const showFiltersPanel = boardFilters.open;
+    const showFiltersPanel = persistedViewState.filtersOpen;
     const areaById = React.useMemo(() => new Map(areas.map((area) => [area.id, area])), [areas]);
     const projectMap = React.useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
     const resolvedAreaFilter = React.useMemo(
@@ -444,7 +469,7 @@ export function BoardView() {
                             )}
                             <button
                                 type="button"
-                                onClick={() => setBoardFilters({ open: !boardFilters.open })}
+                                onClick={() => setPersistedViewState((current) => ({ filtersOpen: !current.filtersOpen }))}
                                 aria-expanded={showFiltersPanel}
                                 className="text-xs text-muted-foreground hover:text-foreground transition-colors"
                             >

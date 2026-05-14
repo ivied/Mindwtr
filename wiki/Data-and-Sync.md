@@ -8,6 +8,8 @@ Current desktop and mobile builds split settings into two pages:
 - **Settings → Sync** for backend setup, sync options, history, and recovery snapshots
 - **Settings → Data** for backup/restore/import, attachment cleanup, and diagnostics
 
+This page is the user-facing setup and recovery guide. For maintainer-level merge rules and diagnostics fields, see [[Sync Algorithm]].
+
 For desktop vault import and note deep links, see [[Obsidian Integration]].
 
 ---
@@ -71,6 +73,16 @@ Mindwtr directly supports five sync backends:
 - **Best for multi-device:** WebDAV or Mindwtr Cloud (self-hosted). The app controls the sync cycle and merges per item.
 - **File Sync (Syncthing/Dropbox/etc.):** works, but **conflicts are file-level** because `data.json` is a single file.
 - **Best practices for File Sync:** avoid editing on two devices at the same time, and wait for sync to finish before opening the app on another device. If conflicts appear, keep the newest `data.json` and delete the `data.json.sync-conflict-*` copies.
+
+## Conflict Recovery
+
+Mindwtr normally resolves item conflicts automatically. If a task you deleted comes back after syncing, the most common cause is a concurrent edit on another device inside the delete-vs-live ambiguity window. When revision numbers tie and operation times are within 30 seconds, Mindwtr preserves the live edit so it does not silently discard work.
+
+What to do:
+1. Open **Settings → Sync** and check the latest sync status/history for conflicts.
+2. If the returned task is still unwanted, delete it again after all devices have finished syncing.
+3. If both devices still disagree, sync each device manually one at a time, then keep the version you want and delete/restore once more.
+4. If you need to recover older data, use **Settings → Data** or **Settings → Sync → Recovery snapshots** before making more edits.
 
 ### 1. Native iCloud / CloudKit Sync (Apple-only)
 
@@ -170,6 +182,8 @@ Sync directly to a WebDAV server:
 
 Mindwtr now creates missing parent folders automatically before the first `PUT`, so you can point it at a new empty folder without manually pre-creating every level.
 
+WebDAV uses HTTPS for public URLs. Plain HTTP is allowed only for recognized local/private targets such as `localhost`, `127.0.0.1`, `10.x.x.x`, `172.16.x.x` through `172.31.x.x`, `192.168.x.x`, loopback/private IPv6 addresses, `*.local`, and `*.home.arpa`. Use HTTPS for custom DNS, VPN hostnames, Tailscale, ZeroTier, and any name that is not recognized as local/private.
+
 ### 4. Mindwtr Cloud (Self-Hosted)
 
 For advanced users, Mindwtr includes a simple sync server (`apps/cloud`) that can be self-hosted.
@@ -182,9 +196,9 @@ For advanced users, Mindwtr includes a simple sync server (`apps/cloud`) that ca
 
 Important client note:
 
-- **HTTPS is required for Mindwtr Cloud on normal device URLs.** `http://localhost` is allowed for local development, but a LAN URL such as `http://192.168.x.x` is not supported for Cloud sync clients.
-- If you are self-hosting on your local network, put the cloud server behind HTTPS with a reverse proxy such as `caddy`, `nginx`, or `traefik`.
-- If you specifically need plain HTTP on a private LAN, use **WebDAV** instead. Mindwtr allows HTTP for WebDAV on localhost/private IP ranges.
+- **HTTPS is required for public Mindwtr Cloud URLs.** Plain HTTP is allowed automatically for local/private targets such as `localhost`, `127.0.0.1`, `10.x.x.x`, `172.16.x.x` through `172.31.x.x`, `192.168.x.x`, loopback/private IPv6 addresses, `*.local`, and `*.home.arpa`.
+- If you are exposing Cloud outside a trusted LAN, put the server behind HTTPS with a reverse proxy such as `caddy`, `nginx`, or `traefik`.
+- Use HTTPS for custom DNS, VPN hostnames, Tailscale, ZeroTier, and any name that is not recognized as local/private. The **Allow insecure connections (HTTP)** setting is a compatibility setting for trusted local/private endpoints; it is not a public HTTP override.
 
 ### 5. Dropbox OAuth Sync
 
@@ -215,8 +229,10 @@ Mindwtr can sync select preferences across devices. Configure in **Settings → 
 Available options include:
 - **Appearance** (theme)
 - **Language & date format**
+- **GTD preferences** (default schedule time and Focus task limit)
 - **External calendar URLs** (ICS subscriptions)
 - **AI settings** (models/providers)
+- **Saved Filters** (Focus filter presets)
 
 > API keys and local model paths are never synced.
 > Settings conflict resolution is group-based. If two devices edit different fields in the same settings group at nearly the same time, the newer group update can overwrite the older one.
@@ -422,16 +438,19 @@ Standalone DGT tasks stay in Mindwtr without forcing them into new projects, so 
 
 See [[DGT GTD Import]] for details and supported mappings.
 
-### OmniFocus CSV Import
+### OmniFocus CSV / JSON / ZIP Import
 
-Mindwtr can import OmniFocus CSV exports from **Settings → Data → Import from OmniFocus**.
+Mindwtr can import OmniFocus exports from **Settings → Data → Import from OmniFocus**.
 
 - Supports OmniFocus **CSV** exports, including UTF-8 and UTF-16 CSV files
-- Creates Mindwtr projects from OmniFocus project rows or referenced project names
+- Supports Omni Automation / Shortcuts **JSON** exports and **ZIP** archives
+- Creates Mindwtr areas from OmniFocus folders when metadata is available
+- Creates Mindwtr projects from OmniFocus projects or referenced project names
 - Keeps standalone OmniFocus actions outside projects so you can organize them later
-- Preserves supported OmniFocus notes, tags, contexts, start dates, due dates, and completion state
+- Preserves supported OmniFocus notes, tags, defer dates, due dates, completion state, and recurrence from the JSON path
+- Converts simple nested tasks into checklist items when possible and flattens deeper hierarchy with the original path preserved
 
-OmniFocus planned dates and duration text are preserved in the imported task description when Mindwtr does not have a direct field for them.
+If recurrence or hierarchy fidelity matters, prefer the Omni Automation JSON / ZIP path over CSV. Planned dates and duration text are preserved in the imported description when Mindwtr does not have a direct field for them.
 
 See [[OmniFocus Import]] for details and supported mappings.
 
