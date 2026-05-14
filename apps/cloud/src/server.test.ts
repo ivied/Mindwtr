@@ -1312,6 +1312,10 @@ describe('cloud server task-change webhook', () => {
             body: JSON.stringify({ title: 'WebhookTask' }),
         });
         const json = await res.json();
+        // POST /v1/tasks fires its own 'create' webhook. Let it land and drain
+        // so the per-test assertions only see the PATCH/DELETE/PUT we're testing.
+        await new Promise((r) => setTimeout(r, 50));
+        webhookServer!.calls.length = 0;
         return json.task.id as string;
     }
 
