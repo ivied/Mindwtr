@@ -1,0 +1,9 @@
+{
+  "platforms": ["ios"],
+  "ios": {
+    "podspecPath": "ios/CloudKitSync.podspec",
+    "swiftModuleName": "CloudKitSync",
+    "modules": ["CloudKitSyncModule"],
+    "appDelegateSubscribers": ["CloudKitSyncAppDelegateSubscriber"]
+  }
+}
