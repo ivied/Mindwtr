@@ -334,6 +334,24 @@ NOT a match (DON'T suppress):
 - Different timeframe (this Friday vs next Friday)
 - Different scope (one-off task vs an open recurring project)
 
+KNOWN_PLAYBOOK (long-term operational rules from the user's procedural memory):
+The user message MAY include a KNOWN_PLAYBOOK block — sectioned excerpts from
+the user's own playbook covering channel rules, communication preferences,
+ownership conventions, and DO-NOT rules. Each entry is prefixed with its
+source path and section (e.g. \`[openclaw:MEMORY.md ## Slack]\`).
+
+Use the playbook to:
+- Apply hard constraints. Lines starting with ⚠️ or НЕ / DO NOT are RULES, not
+  hints — respect them even when the capture seems to suggest otherwise.
+- Disambiguate channels and addressees (which Slack channel is private, which
+  Telegram thread is owned by another person, which DMs you should not
+  reply on behalf of the user).
+- Inform suggested_category — playbook may say "always Notion for new tasks"
+  or "waiting for X is tracked in Y".
+
+The playbook is NOT a duplicate-suppression signal — use RECENT_USER_ITEMS for
+that. The playbook is RULES the user has explicitly chosen for themselves.
+
 Always call propose_inbox_item with all fields filled (use empty string / empty array when N/A).`
 
 export class Proposer {
@@ -359,7 +377,12 @@ export class Proposer {
      *  factor open threads / waiting-fors / prior decisions into its
      *  is_actionable / suggested_category / duplicate_of_title verdict.
      *  Plain text, ≤ ~400 chars expected. */
-    recentContext?: string | null
+    recentContext?: string | null,
+    /** Optional pre-assembled playbook excerpt. Rules and channel
+     *  conventions from the user's long-term procedural memory (e.g.
+     *  OpenClaw MEMORY.md). Rendered as a KNOWN_PLAYBOOK block. Plain
+     *  text, ≤ ~1200 chars expected. */
+    playbookContext?: string | null
   ): Promise<Proposal> {
     const systemPrompt = buildSystemPrompt(userIdentity)
     const parts: string[] = []
@@ -390,6 +413,11 @@ export class Proposer {
     if (recentContext && recentContext.trim().length > 0) {
       parts.push(
         `RECENT_CONTEXT (relevant facts and recent events from the user's history — use to spot duplicates, recognize ongoing threads, attribute roles correctly):\n${recentContext.trim()}`
+      )
+    }
+    if (playbookContext && playbookContext.trim().length > 0) {
+      parts.push(
+        `KNOWN_PLAYBOOK (operational rules from the user's procedural memory — channels, conventions, do-not rules; respect ⚠️ / НЕ entries as hard constraints):\n${playbookContext.trim()}`
       )
     }
     parts.push(`Text:\n${text}`)

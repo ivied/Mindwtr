@@ -37,6 +37,12 @@ import {
   ProactiveRunner,
 } from './memory'
 import { SlugCanonicalizer } from './memory/slug-canonicalizer'
+import {
+  ProceduralStore,
+  ProceduralReader,
+  ProceduralRetriever,
+  ProceduralProposerBlock,
+} from './memory/procedural'
 
 const MINDWTR_CLOUD_URL = process.env.MINDWTR_CLOUD_URL ?? 'http://localhost:8787'
 const MINDWTR_AUTH_TOKEN = process.env.MINDWTR_AUTH_TOKEN ?? ''
@@ -86,6 +92,15 @@ const EMBEDDINGS_MODEL = process.env.EMBEDDINGS_MODEL ?? 'text-embedding-3-small
 
 const DATA_DIR = process.env.DATA_DIR ?? '/app/data'
 const CONTEXT_STORE_TTL_DAYS = Number(process.env.CONTEXT_STORE_TTL_DAYS ?? 7)
+
+// Procedural memory root (FR85). Read-only mirror of long-form playbook
+// + journal markdown — initially OpenClaw's MEMORY.md rsync'd by a host
+// cron. Empty disables the feature (Proposer skips the KNOWN_PLAYBOOK
+// block). Sub-dirs map to logical sources (`openclaw/`, future `notion/`).
+const SHARED_MEMORY_DIR = process.env.SHARED_MEMORY_DIR ?? ''
+const SHARED_MEMORY_REINDEX_INTERVAL_MS = Number(
+  process.env.SHARED_MEMORY_REINDEX_INTERVAL_MS ?? 60_000
+)
 
 if (!TELEGRAM_BOT_TOKEN) {
   console.error('TELEGRAM_BOT_TOKEN is required')
@@ -218,6 +233,31 @@ if (LLM_BASE_URL && LLM_API_KEY) {
   if (embeddings) {
     commitmentPipeline.setMemoryContextProvider(
       new MemoryProposerContext({ store: memoryStore, retriever: memoryRetriever })
+    )
+  }
+  // Procedural memory (FR85) — top-K relevant playbook chunks from the
+  // shared-memory mirror surfaced as KNOWN_PLAYBOOK. Disabled when
+  // SHARED_MEMORY_DIR is unset (legacy/dev environments without the rsync
+  // job set up). One additional embedding call per capture when enabled.
+  if (SHARED_MEMORY_DIR) {
+    const proceduralStore = new ProceduralStore({
+      db: contextStore.rawDb,
+      vecAvailable: contextStore.hasVectorSearch,
+    })
+    const proceduralReader = new ProceduralReader({
+      store: proceduralStore,
+      rootDir: SHARED_MEMORY_DIR,
+      sources: [{ subdir: 'openclaw', source: 'openclaw' }],
+      embeddings,
+      intervalMs: SHARED_MEMORY_REINDEX_INTERVAL_MS,
+    })
+    proceduralReader.start()
+    const proceduralRetriever = new ProceduralRetriever(proceduralStore, embeddings)
+    commitmentPipeline.setProceduralContextProvider(
+      new ProceduralProposerBlock({ retriever: proceduralRetriever })
+    )
+    console.log(
+      `📖 Procedural memory enabled (root=${SHARED_MEMORY_DIR}, reindex=${SHARED_MEMORY_REINDEX_INTERVAL_MS}ms, chunks=${proceduralStore.countChunks()})`
     )
   }
   console.log(

@@ -10,7 +10,7 @@ import { dirname } from 'node:path'
 
 export type DB = Database
 
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS captures (
@@ -183,6 +183,53 @@ CREATE TABLE IF NOT EXISTS daily_summary (
   facts_added INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
 );
+
+-- ---------------- Procedural memory (v4) ----------------
+-- Markdown chunks from \`shared-memory/\` (initially OpenClaw's MEMORY.md
+-- mirrored via rsync). Each chunk = one section of a source file, indexed
+-- for hybrid retrieval and surfaced to the Proposer as KNOWN_PLAYBOOK.
+--
+-- Idempotent: \`id\` is sha256(source||path||section_index||content), so
+-- re-importing an unchanged file is a no-op; replacing content yields a
+-- new \`id\` and the stale one is deleted by the reader.
+CREATE TABLE IF NOT EXISTS procedural_chunks (
+  id TEXT PRIMARY KEY,
+  source TEXT NOT NULL,                 -- 'openclaw' | 'notion' | 'mindwtr-derived' | ...
+  path TEXT NOT NULL,                   -- relative path within source root ('MEMORY.md', 'journals/2026-05-14.md')
+  section_index INTEGER NOT NULL,       -- 0..N within the file
+  section_title TEXT,                   -- '## Slack' / heading text for prompt rendering
+  text TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  file_mtime INTEGER NOT NULL,
+  indexed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_proc_source ON procedural_chunks(source);
+CREATE INDEX IF NOT EXISTS idx_proc_path ON procedural_chunks(source, path);
+
+-- FTS5 over section_title + text (lexical channel).
+CREATE VIRTUAL TABLE IF NOT EXISTS procedural_chunks_fts USING fts5(
+  section_title,
+  text,
+  content='procedural_chunks',
+  content_rowid='rowid'
+);
+
+CREATE TRIGGER IF NOT EXISTS procedural_chunks_fts_ai AFTER INSERT ON procedural_chunks BEGIN
+  INSERT INTO procedural_chunks_fts(rowid, section_title, text)
+  VALUES (new.rowid, COALESCE(new.section_title, ''), new.text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS procedural_chunks_fts_ad AFTER DELETE ON procedural_chunks BEGIN
+  INSERT INTO procedural_chunks_fts(procedural_chunks_fts, rowid, section_title, text)
+  VALUES ('delete', old.rowid, COALESCE(old.section_title, ''), old.text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS procedural_chunks_fts_au AFTER UPDATE ON procedural_chunks BEGIN
+  INSERT INTO procedural_chunks_fts(procedural_chunks_fts, rowid, section_title, text)
+  VALUES ('delete', old.rowid, COALESCE(old.section_title, ''), old.text);
+  INSERT INTO procedural_chunks_fts(rowid, section_title, text)
+  VALUES (new.rowid, COALESCE(new.section_title, ''), new.text);
+END;
 `
 
 const VEC_SCHEMA_SQL = `
@@ -203,6 +250,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS events_vec USING vec0(
 -- can pull summary rows by semantic similarity.
 CREATE VIRTUAL TABLE IF NOT EXISTS daily_summary_vec USING vec0(
   date TEXT PRIMARY KEY,
+  embedding FLOAT[1536]
+);
+
+-- Procedural memory vector channel. Keyed by procedural_chunks.id so
+-- joins are direct. App-level cleanup keeps it consistent (DELETE on
+-- procedural_chunks → also DELETE the vec row).
+CREATE VIRTUAL TABLE IF NOT EXISTS procedural_chunks_vec USING vec0(
+  chunk_id TEXT PRIMARY KEY,
   embedding FLOAT[1536]
 );
 `
