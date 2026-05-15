@@ -30,6 +30,11 @@ function seed(rows: Array<{ path: string; index: number; section: string; text: 
       sectionTitle: r.section,
       text: r.text,
       fileMtime: Date.now(),
+      // Test seeds default to 'universal' so the retriever's visibility
+      // filter (DEFAULT_APPLIES_FILTER) lets them through; the actual
+      // applies_to-aware retrieval is exercised in classifier.test.ts.
+      appliesTo: 'universal',
+      classifiedBy: 'heuristic',
     })
   }
 }
@@ -55,6 +60,8 @@ describe('ProceduralRetriever (FTS-only fallback)', () => {
       sectionTitle: '## Slack',
       text: 'reply_to_current для тред answer',
       fileMtime: Date.now(),
+      appliesTo: 'universal',
+      classifiedBy: 'heuristic',
     })
     store.upsert({
       source: 'notion',
@@ -63,6 +70,8 @@ describe('ProceduralRetriever (FTS-only fallback)', () => {
       sectionTitle: '## Done Criteria',
       text: 'reply_to_current для тред answer',
       fileMtime: Date.now(),
+      appliesTo: 'universal',
+      classifiedBy: 'heuristic',
     })
     const retriever = new ProceduralRetriever(store, null)
     const out = await retriever.retrieve({ query: 'reply_to_current', source: 'notion' })
@@ -75,6 +84,64 @@ describe('ProceduralRetriever (FTS-only fallback)', () => {
     const retriever = new ProceduralRetriever(store, null)
     const out = await retriever.retrieve({ query: '   ' })
     expect(out).toEqual([])
+  })
+
+  it('hides chunks classified openclaw-only by default', async () => {
+    store.upsert({
+      source: 'openclaw',
+      path: 'MEMORY.md',
+      sectionIndex: 0,
+      sectionTitle: '## Slack',
+      text: 'reply_to_current secret token rule',
+      fileMtime: Date.now(),
+      appliesTo: 'openclaw-only',
+      classifiedBy: 'heuristic',
+    })
+    store.upsert({
+      source: 'openclaw',
+      path: 'MEMORY.md',
+      sectionIndex: 1,
+      sectionTitle: '## Notion',
+      text: 'каждую задачу — сразу в Notion правило',
+      fileMtime: Date.now(),
+      appliesTo: 'universal',
+      classifiedBy: 'heuristic',
+    })
+    const retriever = new ProceduralRetriever(store, null)
+    const out = await retriever.retrieve({ query: 'правило' })
+    expect(out.length).toBe(1)
+    expect(out[0]!.appliesTo).toBe('universal')
+  })
+
+  it('hides chunks marked needs-review by default', async () => {
+    store.upsert({
+      source: 'openclaw',
+      path: 'MEMORY.md',
+      sectionIndex: 0,
+      sectionTitle: '## Notion',
+      text: 'каждую задачу — сразу в Notion правило',
+      fileMtime: Date.now(),
+      // No appliesTo specified → defaults to 'needs-review'.
+    })
+    const retriever = new ProceduralRetriever(store, null)
+    const out = await retriever.retrieve({ query: 'правило' })
+    expect(out.length).toBe(0)
+  })
+
+  it('explicit applies override surfaces hidden chunks', async () => {
+    store.upsert({
+      source: 'openclaw',
+      path: 'MEMORY.md',
+      sectionIndex: 0,
+      sectionTitle: '## Slack',
+      text: 'openclaw-runtime rule about reply_to_current',
+      fileMtime: Date.now(),
+      appliesTo: 'openclaw-only',
+      classifiedBy: 'heuristic',
+    })
+    const retriever = new ProceduralRetriever(store, null)
+    const out = await retriever.retrieve({ query: 'openclaw runtime', applies: ['openclaw-only'] })
+    expect(out.length).toBe(1)
   })
 
   it('respects the limit option', async () => {
