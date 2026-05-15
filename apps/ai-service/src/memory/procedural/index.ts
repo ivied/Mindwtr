@@ -12,13 +12,21 @@
 
 export { chunkMarkdown, type RawChunk } from './chunker'
 export { ProceduralStore } from './store'
-export type { ProceduralChunkRow, ProceduralStoreOptions, UpsertInput } from './store'
+export type {
+  AppliesTo,
+  ClassifiedBy,
+  ProceduralChunkRow,
+  ProceduralStoreOptions,
+  UpsertInput,
+} from './store'
 export { ProceduralReader } from './reader'
 export type { ProceduralReaderOptions, ScanStats } from './reader'
-export { ProceduralRetriever } from './retriever'
+export { ProceduralRetriever, DEFAULT_APPLIES_FILTER } from './retriever'
 export type { RetrieveOptions, RetrievedChunk } from './retriever'
 export { ProceduralProposerBlock } from './proposer-block'
 export type {
   ProceduralProposerBlockOptions,
   ProceduralContextProvider,
 } from './proposer-block'
+export { classifyByHeuristic, LlmChunkClassifier } from './classifier'
+export type { ClassificationVerdict, LlmClassifierOptions } from './classifier'

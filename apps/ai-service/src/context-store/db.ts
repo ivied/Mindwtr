@@ -10,7 +10,7 @@ import { dirname } from 'node:path'
 
 export type DB = Database
 
-const SCHEMA_VERSION = 4
+const SCHEMA_VERSION = 5
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS captures (
@@ -201,10 +201,26 @@ CREATE TABLE IF NOT EXISTS procedural_chunks (
   text TEXT NOT NULL,
   content_hash TEXT NOT NULL,
   file_mtime INTEGER NOT NULL,
-  indexed_at TEXT NOT NULL
+  indexed_at TEXT NOT NULL,
+  -- Phase 0.5 (schema v5): visibility classification.
+  -- 'needs-review' — default for new chunks; NOT surfaced to Mindwtr Proposer
+  --                  until classifier (heuristic / LLM / user) categorises.
+  -- 'universal'    — applies to any assistant acting on Sergey's behalf.
+  -- 'openclaw-only'— specific to OpenClaw runtime ([[skill_call]]s, its own
+  --                  algorithm, cron job IDs it controls). Hidden from us.
+  -- 'mindwtr-only' — added later by Mindwtr-side curation.
+  -- 'archived'     — superseded / out-of-date; preserved for audit.
+  applies_to TEXT NOT NULL DEFAULT 'needs-review',
+  -- 0..1 score updated by usage feedback (Proposer used this rule → user
+  -- confirmed/denied). NULL == no signal yet.
+  reliability_score REAL,
+  -- Provenance of the current classification: 'heuristic' | 'llm' | 'user' | null.
+  classified_by TEXT,
+  classified_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_proc_source ON procedural_chunks(source);
 CREATE INDEX IF NOT EXISTS idx_proc_path ON procedural_chunks(source, path);
+CREATE INDEX IF NOT EXISTS idx_proc_applies_to ON procedural_chunks(applies_to);
 
 -- FTS5 over section_title + text (lexical channel).
 CREATE VIRTUAL TABLE IF NOT EXISTS procedural_chunks_fts USING fts5(
@@ -294,6 +310,7 @@ export function openDb(dbPath: string): OpenDbResult {
   if (vecAvailable) {
     db.exec(VEC_SCHEMA_SQL)
   }
+  applyAdditiveMigrations(db)
 
   recordMigration(db, SCHEMA_VERSION)
   return { db, vecAvailable }
@@ -303,5 +320,36 @@ function recordMigration(db: DB, version: number): void {
   db.run(
     'INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)',
     [version, new Date().toISOString()]
+  )
+}
+
+/**
+ * Apply idempotent ALTER TABLE migrations for already-existing databases.
+ * `CREATE TABLE IF NOT EXISTS` in SCHEMA_SQL only fires on fresh DBs — when
+ * we add columns to an existing table, we need explicit ALTERs guarded by
+ * PRAGMA table_info checks.
+ */
+function applyAdditiveMigrations(db: DB): void {
+  // v5: procedural_chunks gains applies_to + reliability_score + classified_by + classified_at.
+  const cols = db
+    .query<{ name: string }, []>("PRAGMA table_info(procedural_chunks)")
+    .all()
+    .map((r) => r.name)
+  if (!cols.includes('applies_to')) {
+    db.run(
+      "ALTER TABLE procedural_chunks ADD COLUMN applies_to TEXT NOT NULL DEFAULT 'needs-review'"
+    )
+  }
+  if (!cols.includes('reliability_score')) {
+    db.run('ALTER TABLE procedural_chunks ADD COLUMN reliability_score REAL')
+  }
+  if (!cols.includes('classified_by')) {
+    db.run('ALTER TABLE procedural_chunks ADD COLUMN classified_by TEXT')
+  }
+  if (!cols.includes('classified_at')) {
+    db.run('ALTER TABLE procedural_chunks ADD COLUMN classified_at TEXT')
+  }
+  db.run(
+    'CREATE INDEX IF NOT EXISTS idx_proc_applies_to ON procedural_chunks(applies_to)'
   )
 }
