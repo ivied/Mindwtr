@@ -22,6 +22,7 @@ import type {
 } from './inbox-titles'
 import type { PersonsProvider } from '../wiki/persons-reader'
 import type { ProposerContextProvider } from '../memory/proposer-context'
+import type { ProceduralContextProvider } from '../memory/procedural/proposer-block'
 import { l0Filter } from './l0-filter'
 import {
   evaluateSourceDeny,
@@ -70,6 +71,7 @@ export class CommitmentPipeline {
   private userIdentity: UserIdentity | null = null
   private personsProvider: PersonsProvider | null = null
   private memoryContextProvider: ProposerContextProvider | null = null
+  private proceduralContextProvider: ProceduralContextProvider | null = null
 
   constructor(
     private proposer: Proposer,
@@ -119,6 +121,14 @@ export class CommitmentPipeline {
    *  proposed without the extra context. */
   setMemoryContextProvider(provider: ProposerContextProvider | null): void {
     this.memoryContextProvider = provider
+  }
+
+  /** Optional: when set, top-K relevant playbook chunks from procedural
+   *  memory (FR85) are rendered as a KNOWN_PLAYBOOK block in the
+   *  Proposer user-message. Fail-open: errors logged, capture still
+   *  flows. */
+  setProceduralContextProvider(provider: ProceduralContextProvider | null): void {
+    this.proceduralContextProvider = provider
   }
 
   async run(capture: CaptureRecord): Promise<PipelineOutcome> {
@@ -194,6 +204,22 @@ export class CommitmentPipeline {
       }
     }
 
+    // Optional procedural playbook (FR85) — top-K relevant rules from
+    // shared procedural memory (OpenClaw MEMORY.md, etc.). Same fail-open
+    // pattern.
+    let playbookContext: string | null = null
+    if (this.proceduralContextProvider) {
+      try {
+        playbookContext = await this.proceduralContextProvider.getPlaybookContext(
+          capture.text
+        )
+      } catch (err) {
+        this.log(
+          `[commitment] playbook context fetch failed (${capture.id}): ${(err as Error).message}`
+        )
+      }
+    }
+
     let proposal
     try {
       proposal = await this.proposer.propose(
@@ -202,7 +228,8 @@ export class CommitmentPipeline {
         recentItems,
         this.userIdentity,
         knownPersons,
-        recentContext
+        recentContext,
+        playbookContext
       )
     } catch (err) {
       this.log(`[commitment] proposer failed (${capture.id}): ${(err as Error).message}`)

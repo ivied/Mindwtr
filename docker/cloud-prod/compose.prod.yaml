@@ -98,6 +98,11 @@ services:
       - CONTEXT_STORE_TTL_DAYS=${CONTEXT_STORE_TTL_DAYS:-7}
       - DATA_DIR=/app/data
       - PROACTIVE_INTERVAL_MS=${PROACTIVE_INTERVAL_MS:-21600000}
+      # Procedural memory (FR85). Empty disables. Production mirror
+      # lives under /opt/gtd/shared-memory, populated by the host's
+      # sync-shared-memory.sh cron pulling from OpenClaw via Tailscale.
+      - SHARED_MEMORY_DIR=${SHARED_MEMORY_DIR:-/app/shared-memory}
+      - SHARED_MEMORY_REINDEX_INTERVAL_MS=${SHARED_MEMORY_REINDEX_INTERVAL_MS:-300000}
     volumes:
       - ${GTD_DATA_ROOT:-/opt/gtd}/ai-service-data:/app/data
       # wiki/entities/*.md mounted read-only — rsync'd from the Mac via
@@ -105,6 +110,11 @@ services:
       # persons-registry + slug canonicalizer just stay empty until first
       # sync arrives.
       - ${GTD_DATA_ROOT:-/opt/gtd}/wiki:/app/wiki:ro
+      # Procedural memory mirror (FR85). rsync'd from OpenClaw via
+      # Tailscale by docker/cloud-prod/sync-shared-memory.sh on the host
+      # crontab. ai-service reindexes every
+      # SHARED_MEMORY_REINDEX_INTERVAL_MS. Empty dir is fine.
+      - ${GTD_DATA_ROOT:-/opt/gtd}/shared-memory:/app/shared-memory:ro
 
   cloudflared:
     image: cloudflare/cloudflared:latest
