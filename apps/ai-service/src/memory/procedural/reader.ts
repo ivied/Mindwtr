@@ -91,6 +91,11 @@ export class ProceduralReader {
         const stats = await this.scanSource(src.subdir, src.source)
         accumulate(total, stats)
       }
+      // Heuristic back-pass over already-indexed chunks that are still
+      // 'needs-review'. The upsert path only runs the heuristic on
+      // new/changed content; chunks that existed before the classifier
+      // was wired never get touched without this back-pass.
+      total.classifiedHeuristic += this.runHeuristicBackPass()
       if (this.opts.llmClassifier) {
         const classified = await this.runLlmClassifyBatch(
           this.opts.llmClassifyBatchSize ?? 10
@@ -101,6 +106,29 @@ export class ProceduralReader {
       this.running = false
     }
     return total
+  }
+
+  /**
+   * Re-run the heuristic classifier over every chunk currently in
+   * applies_to='needs-review' that hasn't already been LLM-touched. Cheap
+   * (regex, no I/O). Returns count of chunks that got a non-'needs-review'
+   * verdict.
+   */
+  runHeuristicBackPass(): number {
+    const queue = this.opts.store.listByApplies('needs-review', 1000)
+    let decided = 0
+    for (const row of queue) {
+      // Skip chunks that the LLM has already touched — that means the
+      // LLM also said needs-review (or threw). Re-running heuristic on
+      // those is a no-op (the heuristic already left them as
+      // needs-review on prior ticks).
+      if (row.classifiedBy === 'llm') continue
+      const verdict = classifyByHeuristic(row.text, row.sectionTitle)
+      if (verdict.appliesTo === 'needs-review') continue
+      this.opts.store.classify(row.id, verdict.appliesTo, 'heuristic')
+      decided += 1
+    }
+    return decided
   }
 
   /**
