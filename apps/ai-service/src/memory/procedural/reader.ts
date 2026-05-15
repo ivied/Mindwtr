@@ -18,6 +18,7 @@ import { readdir, readFile, stat } from 'fs/promises'
 import { join, relative } from 'path'
 import type { EmbeddingsProvider } from '../../context-store/embeddings'
 import { chunkMarkdown } from './chunker'
+import { classifyByHeuristic, type LlmChunkClassifier } from './classifier'
 import type { ProceduralStore } from './store'
 
 export interface ProceduralReaderOptions {
@@ -42,6 +43,15 @@ export interface ProceduralReaderOptions {
   /** Polling interval in ms. Default 60_000 (60s). */
   intervalMs?: number
   log?: (msg: string) => void
+  /**
+   * Optional LLM classifier (Phase 0.5). When present, after every scan
+   * tick the reader picks up to `llmClassifyBatchSize` chunks that the
+   * heuristic left as `needs-review` and classifies them. Fail-open: a
+   * classifier error keeps the chunk hidden (still `needs-review`).
+   */
+  llmClassifier?: LlmChunkClassifier | null
+  /** Per-tick cap on LLM classifier calls. Default 10. */
+  llmClassifyBatchSize?: number
 }
 
 export interface ScanStats {
@@ -50,6 +60,10 @@ export interface ScanStats {
   unchanged: number
   removed: number
   errors: number
+  /** Phase 0.5: chunks classified during this tick (by heuristic). */
+  classifiedHeuristic: number
+  /** Phase 0.5: chunks the LLM classifier handled this tick. */
+  classifiedLlm: number
 }
 
 export class ProceduralReader {
@@ -68,23 +82,60 @@ export class ProceduralReader {
   /** Run one full scan immediately and return per-source stats. */
   async scanOnce(): Promise<ScanStats> {
     if (this.running) {
-      return { scanned: 0, upserted: 0, unchanged: 0, removed: 0, errors: 0 }
+      return zeroStats()
     }
     this.running = true
-    const total: ScanStats = { scanned: 0, upserted: 0, unchanged: 0, removed: 0, errors: 0 }
+    const total = zeroStats()
     try {
       for (const src of this.opts.sources) {
         const stats = await this.scanSource(src.subdir, src.source)
-        total.scanned += stats.scanned
-        total.upserted += stats.upserted
-        total.unchanged += stats.unchanged
-        total.removed += stats.removed
-        total.errors += stats.errors
+        accumulate(total, stats)
+      }
+      if (this.opts.llmClassifier) {
+        const classified = await this.runLlmClassifyBatch(
+          this.opts.llmClassifyBatchSize ?? 10
+        )
+        total.classifiedLlm += classified
       }
     } finally {
       this.running = false
     }
     return total
+  }
+
+  /**
+   * Pick up to `limit` chunks that the heuristic left as 'needs-review'
+   * and run the LLM classifier over them. Returns the number of chunks
+   * for which the classifier produced a non-'needs-review' verdict
+   * (so we have a sense of throughput). Each chunk that comes back
+   * 'needs-review' from the LLM stays hidden but doesn't block retries
+   * on the next tick.
+   */
+  async runLlmClassifyBatch(limit: number): Promise<number> {
+    const classifier = this.opts.llmClassifier
+    if (!classifier) return 0
+    const queue = this.opts.store.listByApplies('needs-review', limit)
+    let decided = 0
+    for (const row of queue) {
+      try {
+        const verdict = await classifier.classify(row.sectionTitle, row.text)
+        // Even when the verdict is 'needs-review', record classified_by so
+        // the same chunk doesn't get hammered every tick — re-queue only
+        // after content changes (which would reset applies_to via upsert).
+        const finalApplies = verdict.appliesTo
+        const finalBy = verdict.classifiedBy ?? 'llm'
+        this.opts.store.classify(row.id, finalApplies, finalBy)
+        if (finalApplies !== 'needs-review') decided += 1
+        this.log(
+          `classify ${row.source}/${row.path}#${row.sectionIndex} → ${finalApplies} (${verdict.reason.slice(0, 80)})`
+        )
+      } catch (err) {
+        this.log(
+          `classify error ${row.source}/${row.path}#${row.sectionIndex}: ${(err as Error).message}`
+        )
+      }
+    }
+    return decided
   }
 
   /** Start polling. scanOnce() runs immediately, then every `intervalMs`. */
@@ -108,7 +159,7 @@ export class ProceduralReader {
   }
 
   private async scanSource(subdir: string, source: string): Promise<ScanStats> {
-    const stats: ScanStats = { scanned: 0, upserted: 0, unchanged: 0, removed: 0, errors: 0 }
+    const stats = zeroStats()
     const rootForSource = join(this.opts.rootDir, subdir)
     const onDisk = await this.collectFiles(rootForSource).catch(() => null)
     if (!onDisk) {
@@ -146,6 +197,11 @@ export class ProceduralReader {
             }
           }
           const before = countRowAt(this.opts.store, source, relPath, c.index)
+          // Heuristic classification runs on every upsert (cheap regex).
+          // If the chunk already exists and content hasn't changed, the
+          // upsert path is a no-op and the existing classification is
+          // preserved. New / changed content gets a fresh heuristic verdict.
+          const heuristic = classifyByHeuristic(c.text, c.sectionTitle || null)
           this.opts.store.upsert({
             source,
             path: relPath,
@@ -154,13 +210,18 @@ export class ProceduralReader {
             text: c.text,
             fileMtime,
             embedding,
+            appliesTo: heuristic.appliesTo,
+            classifiedBy: heuristic.classifiedBy,
           })
           const after = countRowAt(this.opts.store, source, relPath, c.index)
           // Cheap distinction: row count is always 1 after upsert; we
           // detect "unchanged" by comparing mtime delta. Good enough for
           // logging only.
           if (before && before.mtime === fileMtime) stats.unchanged += 1
-          else stats.upserted += 1
+          else {
+            stats.upserted += 1
+            if (heuristic.classifiedBy === 'heuristic') stats.classifiedHeuristic += 1
+          }
           // after intentionally unused; kept for symmetry with future invariants.
           void after
         }
@@ -219,6 +280,28 @@ function countRowAt(
     )
     .get(source, path, sectionIndex)
   return row ? { mtime: row.file_mtime } : null
+}
+
+function zeroStats(): ScanStats {
+  return {
+    scanned: 0,
+    upserted: 0,
+    unchanged: 0,
+    removed: 0,
+    errors: 0,
+    classifiedHeuristic: 0,
+    classifiedLlm: 0,
+  }
+}
+
+function accumulate(into: ScanStats, from: ScanStats): void {
+  into.scanned += from.scanned
+  into.upserted += from.upserted
+  into.unchanged += from.unchanged
+  into.removed += from.removed
+  into.errors += from.errors
+  into.classifiedHeuristic += from.classifiedHeuristic
+  into.classifiedLlm += from.classifiedLlm
 }
 
 function defaultTopLevelMdFilter(relPath: string): boolean {

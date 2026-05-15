@@ -42,6 +42,7 @@ import {
   ProceduralReader,
   ProceduralRetriever,
   ProceduralProposerBlock,
+  LlmChunkClassifier,
 } from './memory/procedural'
 
 const MINDWTR_CLOUD_URL = process.env.MINDWTR_CLOUD_URL ?? 'http://localhost:8787'
@@ -244,12 +245,19 @@ if (LLM_BASE_URL && LLM_API_KEY) {
       db: contextStore.rawDb,
       vecAvailable: contextStore.hasVectorSearch,
     })
+    // Phase 0.5 (FR86): classify each chunk before it surfaces to the
+    // Proposer. Heuristic runs at upsert (cheap regex); LLM batches what's
+    // left as 'needs-review' each tick — capped at 10 chunks/tick so we
+    // don't blow the budget on a fresh import.
+    const procClassifier = new LlmChunkClassifier({ llm, model: LLM_MODEL })
     const proceduralReader = new ProceduralReader({
       store: proceduralStore,
       rootDir: SHARED_MEMORY_DIR,
       sources: [{ subdir: 'openclaw', source: 'openclaw' }],
       embeddings,
       intervalMs: SHARED_MEMORY_REINDEX_INTERVAL_MS,
+      llmClassifier: procClassifier,
+      llmClassifyBatchSize: 10,
     })
     proceduralReader.start()
     const proceduralRetriever = new ProceduralRetriever(proceduralStore, embeddings)
@@ -257,7 +265,7 @@ if (LLM_BASE_URL && LLM_API_KEY) {
       new ProceduralProposerBlock({ retriever: proceduralRetriever })
     )
     console.log(
-      `📖 Procedural memory enabled (root=${SHARED_MEMORY_DIR}, reindex=${SHARED_MEMORY_REINDEX_INTERVAL_MS}ms, chunks=${proceduralStore.countChunks()})`
+      `📖 Procedural memory enabled (root=${SHARED_MEMORY_DIR}, reindex=${SHARED_MEMORY_REINDEX_INTERVAL_MS}ms, chunks=${proceduralStore.countChunks()}, classifier=llm)`
     )
   }
   console.log(
