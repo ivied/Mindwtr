@@ -147,16 +147,21 @@ export class ProceduralReader {
     for (const row of queue) {
       try {
         const verdict = await classifier.classify(row.sectionTitle, row.text)
-        // Even when the verdict is 'needs-review', record classified_by so
-        // the same chunk doesn't get hammered every tick — re-queue only
-        // after content changes (which would reset applies_to via upsert).
-        const finalApplies = verdict.appliesTo
-        const finalBy = verdict.classifiedBy ?? 'llm'
-        this.opts.store.classify(row.id, finalApplies, finalBy)
-        if (finalApplies !== 'needs-review') decided += 1
-        this.log(
-          `classify ${row.source}/${row.path}#${row.sectionIndex} → ${finalApplies} (${verdict.reason.slice(0, 80)})`
-        )
+        // When the classifier itself errored (verdict.classifiedBy === null),
+        // leave the chunk un-touched so the next tick can retry. Persisting
+        // 'classified_by=llm' on a transient failure would lock the row out
+        // of future re-attempts. Only persist when we have an actual verdict.
+        if (verdict.classifiedBy !== null) {
+          this.opts.store.classify(row.id, verdict.appliesTo, verdict.classifiedBy)
+          if (verdict.appliesTo !== 'needs-review') decided += 1
+          this.log(
+            `classify ${row.source}/${row.path}#${row.sectionIndex} → ${verdict.appliesTo} (${verdict.reason.slice(0, 80)})`
+          )
+        } else {
+          this.log(
+            `classify ${row.source}/${row.path}#${row.sectionIndex} → retry-later (${verdict.reason.slice(0, 80)})`
+          )
+        }
       } catch (err) {
         this.log(
           `classify error ${row.source}/${row.path}#${row.sectionIndex}: ${(err as Error).message}`
