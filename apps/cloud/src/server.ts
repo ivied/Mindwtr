@@ -34,7 +34,8 @@ import {
 import {
     AUTH_FAILURE_RATE_MAX,
     CLOUD_API_REV_BY,
-    corsOrigin,
+    resolveAllowedOrigin,
+    withCorsContext,
     errorResponse,
     jsonResponse,
     logError,
@@ -129,7 +130,7 @@ const createInternalServerErrorResponse = (message: string, requestId: string): 
 
 const emptyCorsResponse = (status: number): Response => {
     const headers = new Headers({
-        'Access-Control-Allow-Origin': corsOrigin,
+        'Access-Control-Allow-Origin': resolveAllowedOrigin(),
         'Access-Control-Allow-Headers': 'Authorization, Content-Type',
         'Access-Control-Allow-Methods': 'GET,HEAD,PUT,POST,PATCH,DELETE,OPTIONS',
     });
@@ -616,6 +617,7 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
         hostname: host,
         port,
         async fetch(req: Request) {
+          return withCorsContext(req, async () => {
             const requestId = generateRequestId();
             const requestAbortController = new AbortController();
             const requestTimeout = setTimeout(() => {
@@ -1538,7 +1540,8 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                             }
                             const file = readFileSync(realFilePath);
                             const headers = new Headers();
-                            headers.set('Access-Control-Allow-Origin', corsOrigin);
+                            headers.set('Access-Control-Allow-Origin', resolveAllowedOrigin());
+                            headers.set('Vary', 'Origin');
                             headers.set('Content-Type', 'application/octet-stream');
                             return new Response(file, { status: 200, headers });
                         } catch {
@@ -1617,6 +1620,7 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
             } finally {
                 clearTimeout(requestTimeout);
             }
+          });
         },
     });
 

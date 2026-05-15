@@ -1,7 +1,7 @@
 import { lstatSync, type Stats } from 'fs';
 import type { AppData } from '@mindwtr/core';
 
-import { corsOrigin, logWarn } from './server-config';
+import { resolveAllowedOrigin, logWarn } from './server-config';
 import {
     loadAppData as loadAppDataFromStorage,
     writeData,
@@ -195,7 +195,8 @@ export const dataMetadataResponse = (filePath: string): Response => {
     const stat = lstatSync(filePath);
     const metadata = getDataMetadata(filePath, stat);
     const headers = new Headers({
-        'Access-Control-Allow-Origin': corsOrigin,
+        'Access-Control-Allow-Origin': resolveAllowedOrigin(),
+        'Vary': 'Origin',
         'Access-Control-Allow-Headers': 'Authorization, Content-Type',
         'Access-Control-Allow-Methods': 'GET,HEAD,PUT,POST,PATCH,DELETE,OPTIONS',
         'Content-Length': String(metadata.size),
@@ -213,7 +214,8 @@ export const jsonFileResponse = (body: string | Uint8Array): Response => {
         ? body
         : body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer;
     const headers = new Headers({
-        'Access-Control-Allow-Origin': corsOrigin,
+        'Access-Control-Allow-Origin': resolveAllowedOrigin(),
+        'Vary': 'Origin',
         'Access-Control-Allow-Headers': 'Authorization, Content-Type',
         'Access-Control-Allow-Methods': 'GET,HEAD,PUT,POST,PATCH,DELETE,OPTIONS',
         'Content-Length': String(contentLength),

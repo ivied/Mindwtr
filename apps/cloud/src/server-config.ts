@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Area, Project, Section, Task } from '@mindwtr/core';
 
 type Flags = Record<string, string | boolean>;
@@ -58,7 +59,25 @@ if (!configuredCorsOrigin && isProductionEnv) {
     throw new Error('MINDWTR_CLOUD_CORS_ORIGIN must be set in production.');
 }
 
-export const corsOrigin = configuredCorsOrigin || 'http://localhost:5173';
+export const corsOrigins: string[] = (configuredCorsOrigin
+    ? configuredCorsOrigin.split(',').map((s) => s.trim()).filter(Boolean)
+    : ['http://localhost:5173']);
+export const corsOrigin = corsOrigins[0];
+
+const corsContext = new AsyncLocalStorage<{ origin: string | null }>();
+
+export function withCorsContext<T>(req: Request, fn: () => T | Promise<T>): Promise<T> | T {
+    const origin = req.headers.get('origin');
+    return corsContext.run({ origin }, fn);
+}
+
+export function resolveAllowedOrigin(): string {
+    const ctx = corsContext.getStore();
+    if (ctx && ctx.origin && corsOrigins.includes(ctx.origin)) {
+        return ctx.origin;
+    }
+    return corsOrigin;
+}
 const maxTaskTitleLengthValue = Number(process.env.MINDWTR_CLOUD_MAX_TASK_TITLE_LENGTH || 500);
 export const MAX_TASK_TITLE_LENGTH = Number.isFinite(maxTaskTitleLengthValue) && maxTaskTitleLengthValue > 0
     ? Math.floor(maxTaskTitleLengthValue)
@@ -197,7 +216,8 @@ export function parsePagination(searchParams: URLSearchParams): { limit: number;
 }
 
 const applyCorsHeaders = (headers: Headers): Headers => {
-    headers.set('Access-Control-Allow-Origin', corsOrigin);
+    headers.set('Access-Control-Allow-Origin', resolveAllowedOrigin());
+    headers.set('Vary', 'Origin');
     headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type');
     headers.set('Access-Control-Allow-Methods', 'GET,HEAD,PUT,POST,PATCH,DELETE,OPTIONS');
     return headers;

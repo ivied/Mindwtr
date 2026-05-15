@@ -35,6 +35,9 @@ services:
     build:
       context: ..
       dockerfile: docker/app/Dockerfile
+      args:
+        VITE_AI_SERVICE_URL: ${VITE_AI_SERVICE_URL:-https://ai.kurdy.uk}
+        VITE_AI_SERVICE_TOKEN: ${HTTP_AUTH_TOKEN:-}
     container_name: mindwtr-app
     hostname: mindwtr-app
     restart: always
@@ -72,6 +75,7 @@ services:
       - NOTION_POLL_INTERVAL_MS=${NOTION_POLL_INTERVAL_MS:-300000}
       - HTTP_PORT=${HTTP_PORT:-3030}
       - HTTP_AUTH_TOKEN=${HTTP_AUTH_TOKEN:-}
+      - HTTP_CORS_ORIGINS=${HTTP_CORS_ORIGINS:-http://localhost:5173}
       # TG chat that receives push notifications about new proposals.
       # Empty disables push (in-app + /proposals command still work).
       - TG_NOTIFY_CHAT_ID=${TG_NOTIFY_CHAT_ID:-}
@@ -107,3 +111,24 @@ services:
       # mirror lives elsewhere. Empty/missing dir is fine — the reader
       # silently no-ops until a source subdir appears.
       - ${SHARED_MEMORY_HOST_DIR:-/Users/sergeykurdyuk/shared-memory}:/app/shared-memory:ro
+
+  # Cloudflare Tunnel — outbound-only connector to CF edge. Routes
+  # configured in CF dashboard at one.dash.cloudflare.com → Zero Trust →
+  # Networks → Tunnels → gtd-prod → Public Hostnames:
+  #   gtd.kurdy.uk      → http://mindwtr-app:5173
+  #   api.gtd.kurdy.uk  → http://mindwtr-cloud:8787
+  #   ai.gtd.kurdy.uk   → http://ai-service:3030
+  # No host ports exposed; cloudflared joins docker_default to resolve the
+  # other services by their compose service names.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-gtd
+    restart: unless-stopped
+    cpus: "0.5"
+    mem_limit: 256m
+    profiles: ["cf"]   # opt-in: start with `docker compose --profile cf up -d`
+    # Token passed as CLI arg (newer cloudflared releases ignore TUNNEL_TOKEN
+    # env in some images). Provide via env at compose time, e.g.
+    #   CLOUDFLARE_TUNNEL_TOKEN=$(op read "op://Private/Cloudflare Tunnel gtd-prod (sergey)/password" --account ivied) \
+    #     docker compose --profile cf up -d cloudflared
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}

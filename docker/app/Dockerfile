@@ -7,6 +7,15 @@ ENV npm_config_cxxstd=gnu++20
 ENV npm_config_target="22.21.1"
 ENV npm_config_disturl="https://nodejs.org/dist"
 
+# Build-time URL + token for the AI Service (Proposals / suggestions endpoint).
+# Both are baked into the Vite bundle. Token is therefore *not secret* — anyone
+# who serves the bundle can read it. For a single-user personal deploy this is
+# acceptable; rotate when you change the public deployment.
+ARG VITE_AI_SERVICE_URL=""
+ARG VITE_AI_SERVICE_TOKEN=""
+ENV VITE_AI_SERVICE_URL=$VITE_AI_SERVICE_URL
+ENV VITE_AI_SERVICE_TOKEN=$VITE_AI_SERVICE_TOKEN
+
 COPY --chown=1000:1000 . .
 RUN chown bun:bun /app
 USER bun
