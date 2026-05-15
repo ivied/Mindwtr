@@ -220,7 +220,8 @@ CREATE TABLE IF NOT EXISTS procedural_chunks (
 );
 CREATE INDEX IF NOT EXISTS idx_proc_source ON procedural_chunks(source);
 CREATE INDEX IF NOT EXISTS idx_proc_path ON procedural_chunks(source, path);
-CREATE INDEX IF NOT EXISTS idx_proc_applies_to ON procedural_chunks(applies_to);
+-- idx_proc_applies_to created via applyAdditiveMigrations() so existing
+-- v4 databases get the column added before the index references it.
 
 -- FTS5 over section_title + text (lexical channel).
 CREATE VIRTUAL TABLE IF NOT EXISTS procedural_chunks_fts USING fts5(
