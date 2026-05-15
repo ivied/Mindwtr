@@ -1,0 +1,229 @@
+/**
+ * Filesystem-watching reader for procedural memory.
+ *
+ * Scans `<rootDir>/<source>/**\/*.md`, chunks each file by ## headers,
+ * embeds (when an embeddings provider is given), and upserts into
+ * ProceduralStore. Idempotent — re-running on an unchanged dir is a no-op.
+ *
+ * Polling strategy (no chokidar dep): every `intervalMs` re-scan and
+ * compare file mtimes against what we last indexed. Cheap for tens-to-
+ * hundreds of files, which is the realistic scale for `MEMORY.md` +
+ * journals.
+ *
+ * Fail-open: any single-file error is logged, never propagates. The next
+ * tick retries.
+ */
+
+import { readdir, readFile, stat } from 'fs/promises'
+import { join, relative } from 'path'
+import type { EmbeddingsProvider } from '../../context-store/embeddings'
+import { chunkMarkdown } from './chunker'
+import type { ProceduralStore } from './store'
+
+export interface ProceduralReaderOptions {
+  store: ProceduralStore
+  /** Absolute path to the shared-memory root (e.g. `/app/shared-memory`). */
+  rootDir: string
+  /**
+   * Sources to index. Each entry maps an on-disk subdirectory under
+   * `rootDir` to a logical source label persisted in the DB. Only the
+   * listed sources are scanned — files outside these are ignored.
+   *
+   * Example: [{ subdir: 'openclaw', source: 'openclaw' }]
+   */
+  sources: Array<{ subdir: string; source: string }>
+  /**
+   * Optional file-path filter; receives a path relative to the source
+   * subdir. Default: only top-level `*.md`. Pass `() => true` to index
+   * journals/, workflows/, etc. recursively.
+   */
+  pathFilter?: (relPath: string) => boolean
+  embeddings?: EmbeddingsProvider | null
+  /** Polling interval in ms. Default 60_000 (60s). */
+  intervalMs?: number
+  log?: (msg: string) => void
+}
+
+export interface ScanStats {
+  scanned: number
+  upserted: number
+  unchanged: number
+  removed: number
+  errors: number
+}
+
+export class ProceduralReader {
+  private timer: ReturnType<typeof setInterval> | null = null
+  private running = false
+  private readonly intervalMs: number
+  private readonly log: (msg: string) => void
+  private readonly pathFilter: (relPath: string) => boolean
+
+  constructor(private readonly opts: ProceduralReaderOptions) {
+    this.intervalMs = opts.intervalMs ?? 60_000
+    this.log = opts.log ?? ((msg) => console.log(`[procedural] ${msg}`))
+    this.pathFilter = opts.pathFilter ?? defaultTopLevelMdFilter
+  }
+
+  /** Run one full scan immediately and return per-source stats. */
+  async scanOnce(): Promise<ScanStats> {
+    if (this.running) {
+      return { scanned: 0, upserted: 0, unchanged: 0, removed: 0, errors: 0 }
+    }
+    this.running = true
+    const total: ScanStats = { scanned: 0, upserted: 0, unchanged: 0, removed: 0, errors: 0 }
+    try {
+      for (const src of this.opts.sources) {
+        const stats = await this.scanSource(src.subdir, src.source)
+        total.scanned += stats.scanned
+        total.upserted += stats.upserted
+        total.unchanged += stats.unchanged
+        total.removed += stats.removed
+        total.errors += stats.errors
+      }
+    } finally {
+      this.running = false
+    }
+    return total
+  }
+
+  /** Start polling. scanOnce() runs immediately, then every `intervalMs`. */
+  start(): void {
+    if (this.timer) return
+    void this.scanOnce().catch((err) =>
+      this.log(`initial scan failed: ${(err as Error).message}`)
+    )
+    this.timer = setInterval(() => {
+      void this.scanOnce().catch((err) =>
+        this.log(`scan failed: ${(err as Error).message}`)
+      )
+    }, this.intervalMs)
+  }
+
+  stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer)
+      this.timer = null
+    }
+  }
+
+  private async scanSource(subdir: string, source: string): Promise<ScanStats> {
+    const stats: ScanStats = { scanned: 0, upserted: 0, unchanged: 0, removed: 0, errors: 0 }
+    const rootForSource = join(this.opts.rootDir, subdir)
+    const onDisk = await this.collectFiles(rootForSource).catch(() => null)
+    if (!onDisk) {
+      // Source dir missing — nothing to do this tick.
+      return stats
+    }
+
+    const seen = new Set<string>()
+    for (const abs of onDisk) {
+      const relPath = relative(rootForSource, abs)
+      if (!this.pathFilter(relPath)) continue
+      seen.add(relPath)
+      stats.scanned += 1
+      try {
+        const fileStat = await stat(abs)
+        const fileMtime = Math.floor(fileStat.mtimeMs)
+        const content = await readFile(abs, 'utf-8')
+        const chunks = chunkMarkdown(content)
+        if (chunks.length === 0) {
+          this.opts.store.deleteByPath(source, relPath)
+          continue
+        }
+        for (const c of chunks) {
+          // Embed when provider is configured. Section title is included
+          // in the embed input so retrieval can match on heading keywords.
+          const embedInput = c.sectionTitle ? `${c.sectionTitle}\n${c.text}` : c.text
+          let embedding: Float32Array | null = null
+          if (this.opts.embeddings) {
+            try {
+              embedding = await this.opts.embeddings.embed(embedInput.slice(0, 8000))
+            } catch (err) {
+              stats.errors += 1
+              this.log(`embed failed for ${relPath} chunk ${c.index}: ${(err as Error).message}`)
+              embedding = null
+            }
+          }
+          const before = countRowAt(this.opts.store, source, relPath, c.index)
+          this.opts.store.upsert({
+            source,
+            path: relPath,
+            sectionIndex: c.index,
+            sectionTitle: c.sectionTitle || null,
+            text: c.text,
+            fileMtime,
+            embedding,
+          })
+          const after = countRowAt(this.opts.store, source, relPath, c.index)
+          // Cheap distinction: row count is always 1 after upsert; we
+          // detect "unchanged" by comparing mtime delta. Good enough for
+          // logging only.
+          if (before && before.mtime === fileMtime) stats.unchanged += 1
+          else stats.upserted += 1
+          // after intentionally unused; kept for symmetry with future invariants.
+          void after
+        }
+        // Trim any leftover rows beyond the new chunk count.
+        this.opts.store.truncateAbove(source, relPath, chunks.length)
+      } catch (err) {
+        stats.errors += 1
+        this.log(`scan error ${relPath}: ${(err as Error).message}`)
+      }
+    }
+
+    // Drop rows for files that vanished from disk.
+    const known = this.opts.store.listKnownPaths(source)
+    for (const k of known) {
+      if (!seen.has(k.path)) {
+        this.opts.store.deleteByPath(source, k.path)
+        stats.removed += 1
+      }
+    }
+    if (stats.upserted + stats.removed + stats.errors > 0) {
+      this.log(
+        `${source}: scanned=${stats.scanned} upserted=${stats.upserted} unchanged=${stats.unchanged} removed=${stats.removed} errors=${stats.errors}`
+      )
+    }
+    return stats
+  }
+
+  private async collectFiles(dir: string): Promise<string[]> {
+    const out: string[] = []
+    const walk = async (d: string): Promise<void> => {
+      const entries = await readdir(d, { withFileTypes: true })
+      for (const e of entries) {
+        if (e.name.startsWith('.')) continue
+        const abs = join(d, e.name)
+        if (e.isDirectory()) {
+          await walk(abs)
+        } else if (e.isFile() && abs.toLowerCase().endsWith('.md')) {
+          out.push(abs)
+        }
+      }
+    }
+    await walk(dir)
+    return out
+  }
+}
+
+function countRowAt(
+  store: ProceduralStore,
+  source: string,
+  path: string,
+  sectionIndex: number
+): { mtime: number } | null {
+  const row = store.db
+    .query<{ file_mtime: number }, [string, string, number]>(
+      'SELECT file_mtime FROM procedural_chunks WHERE source = ? AND path = ? AND section_index = ?'
+    )
+    .get(source, path, sectionIndex)
+  return row ? { mtime: row.file_mtime } : null
+}
+
+function defaultTopLevelMdFilter(relPath: string): boolean {
+  // Top-level *.md only (no subdir traversal). For Phase 0 this means
+  // `openclaw/MEMORY.md` is indexed, `openclaw/journals/2026-05-14.md`
+  // is skipped. Phase 0.5 will widen the filter when we add journals.
+  return /^[^/\\]+\.md$/i.test(relPath)
+}

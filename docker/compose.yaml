@@ -88,6 +88,11 @@ services:
       - EMBEDDINGS_MODEL=${EMBEDDINGS_MODEL:-text-embedding-3-small}
       - CONTEXT_STORE_TTL_DAYS=${CONTEXT_STORE_TTL_DAYS:-7}
       - DATA_DIR=/app/data
+      # Procedural memory (FR85). Path inside the container; empty
+      # disables the KNOWN_PLAYBOOK block. See docker/cloud-prod/
+      # sync-shared-memory.sh for the rsync that populates the host dir.
+      - SHARED_MEMORY_DIR=${SHARED_MEMORY_DIR:-/app/shared-memory}
+      - SHARED_MEMORY_REINDEX_INTERVAL_MS=${SHARED_MEMORY_REINDEX_INTERVAL_MS:-60000}
     ports:
       - "${HTTP_PORT:-3030}:3030"
     volumes:
@@ -96,3 +101,9 @@ services:
       # wiki/entities/*.md for the KNOWN_PERSONS registry. Path is the user's
       # local wiki dir; override WIKI_HOST_DIR when the wiki lives elsewhere.
       - ${WIKI_HOST_DIR:-/Users/sergeykurdyuk/Projects/GTD_automation/wiki}:/app/wiki:ro
+      # Read-only mount of the shared procedural memory mirror (FR85).
+      # Initially populated by docker/cloud-prod/sync-shared-memory.sh from
+      # OpenClaw via Tailscale. Override SHARED_MEMORY_HOST_DIR if the
+      # mirror lives elsewhere. Empty/missing dir is fine — the reader
+      # silently no-ops until a source subdir appears.
+      - ${SHARED_MEMORY_HOST_DIR:-/Users/sergeykurdyuk/shared-memory}:/app/shared-memory:ro
