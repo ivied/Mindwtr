@@ -142,7 +142,11 @@ export class ProceduralReader {
   async runLlmClassifyBatch(limit: number): Promise<number> {
     const classifier = this.opts.llmClassifier
     if (!classifier) return 0
-    const queue = this.opts.store.listByApplies('needs-review', limit)
+    // Only chunks the LLM hasn't already adjudicated. A chunk the LLM
+    // previously called 'needs-review' (e.g. a bare heading) is terminal —
+    // re-asking every tick just burns tokens. See
+    // store.listPendingLlmClassification.
+    const queue = this.opts.store.listPendingLlmClassification(limit)
     let decided = 0
     for (const row of queue) {
       try {
