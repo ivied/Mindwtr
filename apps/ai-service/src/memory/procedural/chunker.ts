@@ -46,7 +46,15 @@ export function chunkMarkdown(content: string): RawChunk[] {
   const out: RawChunk[] = []
   let index = 0
   for (const s of sections) {
-    const text = s.bodyLines.join('\n').trim()
+    // Strip the document H1 line(s) from a preamble section. A file like
+    // MEMORY.md opens with `# MEMORY.md — Долгосрочная память` before the
+    // first `##`; without this, that bare title becomes a junk chunk that
+    // no classifier can ever resolve (it has no substantive content).
+    const bodyLines =
+      s.title === ''
+        ? s.bodyLines.filter((l) => !/^#\s+\S/.test(l))
+        : s.bodyLines
+    const text = bodyLines.join('\n').trim()
     if (text.length < MIN_BODY) continue
     out.push({
       index,

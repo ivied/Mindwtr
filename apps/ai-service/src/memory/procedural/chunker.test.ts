@@ -38,7 +38,23 @@ body of A is long enough as well
     expect(chunks.length).toBe(2)
     expect(chunks[0]!.sectionTitle).toBe('') // preamble has no H2 title
     expect(chunks[0]!.text).toContain('Preamble line one')
+    expect(chunks[0]!.text).not.toContain('# Title') // H1 stripped from preamble
     expect(chunks[1]!.sectionTitle).toBe('## Section A')
+  })
+
+  it('drops a preamble that is ONLY a document H1 (no substantive body)', () => {
+    // Real-world: OpenClaw MEMORY.md opens with
+    // `# MEMORY.md — Долгосрочная память` then jumps to `## Серега`.
+    // That bare H1 must not become a junk chunk.
+    const md = `# MEMORY.md — Долгосрочная память
+
+## Серега
+- Name: Sergey
+- TZ: Buenos Aires GMT-3
+`
+    const chunks = chunkMarkdown(md)
+    expect(chunks.length).toBe(1)
+    expect(chunks[0]!.sectionTitle).toBe('## Серега')
   })
 
   it('drops sections whose body is below the minimum length', () => {
