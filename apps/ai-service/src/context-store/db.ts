@@ -10,7 +10,7 @@ import { dirname } from 'node:path'
 
 export type DB = Database
 
-const SCHEMA_VERSION = 5
+const SCHEMA_VERSION = 6
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS captures (
@@ -223,6 +223,19 @@ CREATE INDEX IF NOT EXISTS idx_proc_path ON procedural_chunks(source, path);
 -- idx_proc_applies_to created via applyAdditiveMigrations() so existing
 -- v4 databases get the column added before the index references it.
 
+-- FR89 (Phase 1b.1): which procedural chunks the Proposer cited when it
+-- produced a given commitment proposal. Loose coupling — proposal_id is
+-- a plain string (proposals live in the same DB but we don't FK so the
+-- two subsystems stay independent). On proposal resolution the
+-- reliability hook reads this to credit/debit the cited chunks.
+CREATE TABLE IF NOT EXISTS procedural_proposal_refs (
+  proposal_id TEXT NOT NULL,
+  chunk_id TEXT NOT NULL,
+  recorded_at TEXT NOT NULL,
+  PRIMARY KEY (proposal_id, chunk_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ppr_chunk ON procedural_proposal_refs(chunk_id);
+
 -- FTS5 over section_title + text (lexical channel).
 CREATE VIRTUAL TABLE IF NOT EXISTS procedural_chunks_fts USING fts5(
   section_title,
@@ -352,5 +365,20 @@ function applyAdditiveMigrations(db: DB): void {
   }
   db.run(
     'CREATE INDEX IF NOT EXISTS idx_proc_applies_to ON procedural_chunks(applies_to)'
+  )
+
+  // v6 (FR89): proposal→chunk citation table. CREATE TABLE IF NOT EXISTS
+  // in SCHEMA_SQL only fires on fresh DBs; run it here too so existing
+  // v5 databases get the table + index.
+  db.run(
+    `CREATE TABLE IF NOT EXISTS procedural_proposal_refs (
+       proposal_id TEXT NOT NULL,
+       chunk_id TEXT NOT NULL,
+       recorded_at TEXT NOT NULL,
+       PRIMARY KEY (proposal_id, chunk_id)
+     )`
+  )
+  db.run(
+    'CREATE INDEX IF NOT EXISTS idx_ppr_chunk ON procedural_proposal_refs(chunk_id)'
   )
 }

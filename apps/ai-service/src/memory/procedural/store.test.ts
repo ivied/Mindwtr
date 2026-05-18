@@ -99,3 +99,56 @@ describe('ProceduralStore.classify', () => {
     expect(row!.classifiedAt).not.toBeNull()
   })
 })
+
+describe('ProceduralStore reliability feedback (FR89)', () => {
+  it('recordProposalRefs is idempotent; applyResolutionFeedback EMAs the score', () => {
+    const id = seed(0, 'universal', 'heuristic')
+    store.recordProposalRefs('prop-1', [id])
+    store.recordProposalRefs('prop-1', [id]) // duplicate — INSERT OR IGNORE
+
+    expect(store.applyResolutionFeedback('prop-1', 'positive')).toBe(1)
+    expect(store.getById(id)!.reliabilityScore).toBeCloseTo(0.6, 5) // seed
+
+    store.applyResolutionFeedback('prop-1', 'positive') // 0.6+0.2*(1-0.6)=0.68
+    expect(store.getById(id)!.reliabilityScore).toBeCloseTo(0.68, 5)
+
+    store.applyResolutionFeedback('prop-1', 'negative') // 0.68+0.2*(0-0.68)=0.544
+    expect(store.getById(id)!.reliabilityScore).toBeCloseTo(0.544, 5)
+  })
+
+  it('first negative signal seeds at 0.4', () => {
+    const id = seed(0, 'universal', 'heuristic')
+    store.recordProposalRefs('prop-x', [id])
+    store.applyResolutionFeedback('prop-x', 'negative')
+    expect(store.getById(id)!.reliabilityScore).toBeCloseTo(0.4, 5)
+  })
+
+  it('updates every cited chunk and returns the count', () => {
+    const a = seed(0, 'universal', 'heuristic')
+    const b = seed(1, 'universal', 'llm')
+    store.recordProposalRefs('multi', [a, b])
+    expect(store.applyResolutionFeedback('multi', 'positive')).toBe(2)
+    expect(store.getById(a)!.reliabilityScore).toBeCloseTo(0.6, 5)
+    expect(store.getById(b)!.reliabilityScore).toBeCloseTo(0.6, 5)
+  })
+
+  it('skips a cited chunk that was re-chunked away', () => {
+    store.recordProposalRefs('ghost', ['nonexistent-chunk-id'])
+    expect(store.applyResolutionFeedback('ghost', 'positive')).toBe(0)
+  })
+
+  it('reliabilitySummary aggregates scored chunks', () => {
+    const a = seed(0, 'universal', 'heuristic')
+    const b = seed(1, 'universal', 'llm')
+    seed(2, 'universal', 'heuristic') // unscored
+    store.recordProposalRefs('p', [a])
+    store.recordProposalRefs('q', [b])
+    store.applyResolutionFeedback('p', 'positive') // a → 0.6
+    store.applyResolutionFeedback('q', 'negative') // b → 0.4
+    const s = store.reliabilitySummary()
+    expect(s.scored).toBe(2)
+    expect(s.avg).toBeCloseTo(0.5, 5)
+    expect(s.min).toBeCloseTo(0.4, 5)
+    expect(s.belowHalf).toBe(1)
+  })
+})

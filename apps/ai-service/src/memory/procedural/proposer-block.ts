@@ -19,8 +19,16 @@ export interface ProceduralProposerBlockOptions {
   perChunkChars?: number
 }
 
+export interface PlaybookContext {
+  /** The KNOWN_PLAYBOOK block text for the Proposer prompt. */
+  text: string
+  /** Chunk ids that actually made it into `text` (after budget trim).
+   *  FR89 uses these to credit/debit the cited chunks on resolution. */
+  refs: string[]
+}
+
 export interface ProceduralContextProvider {
-  getPlaybookContext(captureText: string): Promise<string | null>
+  getPlaybookContext(captureText: string): Promise<PlaybookContext | null>
 }
 
 export class ProceduralProposerBlock implements ProceduralContextProvider {
@@ -36,7 +44,7 @@ export class ProceduralProposerBlock implements ProceduralContextProvider {
     this.perChunkChars = opts.perChunkChars ?? 400
   }
 
-  async getPlaybookContext(captureText: string): Promise<string | null> {
+  async getPlaybookContext(captureText: string): Promise<PlaybookContext | null> {
     const q = captureText.slice(0, 1500)
     let chunks
     try {
@@ -56,6 +64,7 @@ export class ProceduralProposerBlock implements ProceduralContextProvider {
     // tag once and list the excerpts under it, instead of repeating the
     // tag per fragment.
     const lines: string[] = []
+    const refs: string[] = []
     let budget = this.maxChars
     let lastTag: string | null = null
     for (const c of chunks) {
@@ -64,10 +73,11 @@ export class ProceduralProposerBlock implements ProceduralContextProvider {
       const piece = tag === lastTag ? excerpt : `${tag}\n${excerpt}`
       if (piece.length > budget) break
       lines.push(piece)
+      refs.push(c.id) // only chunks that actually made the budget
       budget -= piece.length + 1
       lastTag = tag
     }
     if (lines.length === 0) return null
-    return lines.join('\n')
+    return { text: lines.join('\n'), refs }
   }
 }

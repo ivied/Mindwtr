@@ -30,8 +30,9 @@ describe('ProceduralProposerBlock', () => {
       ]),
     })
     const out = await block.getPlaybookContext('какая-то capture про slack thread')
-    expect(out).toContain('[openclaw:MEMORY.md ## Slack]')
-    expect(out).toContain('reply_to_current')
+    expect(out!.text).toContain('[openclaw:MEMORY.md ## Slack]')
+    expect(out!.text).toContain('reply_to_current')
+    expect(out!.refs.length).toBe(1)
   })
 
   it('returns null when retriever yields nothing', async () => {
@@ -50,11 +51,12 @@ describe('ProceduralProposerBlock', () => {
     })
     const out = await block.getPlaybookContext('q')
     // Tag appears once for the two Notion sub-chunks, once for Slack.
-    const notionTags = (out!.match(/\[openclaw:MEMORY\.md ## Notion\]/g) || []).length
+    const notionTags = (out!.text.match(/\[openclaw:MEMORY\.md ## Notion\]/g) || []).length
     expect(notionTags).toBe(1)
-    expect(out).toContain('universal sub-chunk one')
-    expect(out).toContain('universal sub-chunk two')
-    expect(out).toContain('[openclaw:MEMORY.md ## Slack]')
+    expect(out!.text).toContain('universal sub-chunk one')
+    expect(out!.text).toContain('universal sub-chunk two')
+    expect(out!.text).toContain('[openclaw:MEMORY.md ## Slack]')
+    expect(out!.refs.length).toBe(3)
   })
 
   it('truncates per-chunk excerpt to perChunkChars', async () => {
@@ -66,8 +68,8 @@ describe('ProceduralProposerBlock', () => {
       perChunkChars: 50,
     })
     const out = await block.getPlaybookContext('q')
-    // tag + newline + 50-char excerpt = under 80 chars
-    expect(out!.length).toBeLessThan(100)
+    // tag + newline + 50-char excerpt = under 100 chars
+    expect(out!.text.length).toBeLessThan(100)
   })
 
   it('stops when budget would be exceeded by next chunk', async () => {
@@ -82,8 +84,10 @@ describe('ProceduralProposerBlock', () => {
     })
     const out = await block.getPlaybookContext('q')
     // Each block is ~tag + 1 newline + 250 chars. ~265 each. budget 350 → 1 block fits.
-    expect(out!.includes('## A')).toBe(true)
-    expect(out!.includes('## C')).toBe(false)
+    expect(out!.text.includes('## A')).toBe(true)
+    expect(out!.text.includes('## C')).toBe(false)
+    // refs only count chunks that made the budget.
+    expect(out!.refs.length).toBe(1)
   })
 
   it('passes source option through to retriever', async () => {
