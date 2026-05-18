@@ -171,6 +171,63 @@ export class ProceduralStore {
     )
   }
 
+  /** Fetch a single chunk by id, or null. */
+  getById(id: string): ProceduralChunkRow | null {
+    const r = this.db
+      .query<ProceduralChunkDbRow, [string]>(
+        `SELECT id, source, path, section_index, section_title, text,
+                content_hash, file_mtime, indexed_at,
+                applies_to, reliability_score, classified_by, classified_at
+         FROM procedural_chunks WHERE id = ?`
+      )
+      .get(id)
+    return r ? rowToRecord(r) : null
+  }
+
+  /**
+   * Paged listing for the review API (FR88). Optional filters by
+   * visibility class and source. Ordered by section then sub-index so
+   * sub-chunks of the same `##` appear together.
+   */
+  listChunks(opts: {
+    applies?: AppliesTo[]
+    source?: string
+    limit?: number
+    offset?: number
+  } = {}): { total: number; items: ProceduralChunkRow[] } {
+    const where: string[] = []
+    const params: Array<string | number> = []
+    if (opts.applies && opts.applies.length > 0) {
+      where.push(`applies_to IN (${opts.applies.map(() => '?').join(',')})`)
+      params.push(...opts.applies)
+    }
+    if (opts.source) {
+      where.push('source = ?')
+      params.push(opts.source)
+    }
+    const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''
+    const total =
+      this.db
+        .query<{ n: number }, Array<string | number>>(
+          `SELECT count(*) AS n FROM procedural_chunks ${whereSql}`
+        )
+        .get(...params)?.n ?? 0
+    const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500)
+    const offset = Math.max(opts.offset ?? 0, 0)
+    const items = this.db
+      .query<ProceduralChunkDbRow, Array<string | number>>(
+        `SELECT id, source, path, section_index, section_title, text,
+                content_hash, file_mtime, indexed_at,
+                applies_to, reliability_score, classified_by, classified_at
+         FROM procedural_chunks ${whereSql}
+         ORDER BY source, path, section_index
+         LIMIT ? OFFSET ?`
+      )
+      .all(...params, limit, offset)
+      .map(rowToRecord)
+    return { total, items }
+  }
+
   /**
    * List chunks in a given visibility class. Used by the heuristic
    * back-pass (which is idempotent so re-seeing a row is harmless).
