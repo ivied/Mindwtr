@@ -40,6 +40,23 @@ describe('ProceduralProposerBlock', () => {
     expect(out).toBeNull()
   })
 
+  it('FR87: renders the section tag once for consecutive same-section sub-chunks', async () => {
+    const block = new ProceduralProposerBlock({
+      retriever: mkRetriever([
+        { source: 'openclaw', path: 'MEMORY.md', sectionTitle: '## Notion', text: 'universal sub-chunk one' },
+        { source: 'openclaw', path: 'MEMORY.md', sectionTitle: '## Notion', text: 'universal sub-chunk two' },
+        { source: 'openclaw', path: 'MEMORY.md', sectionTitle: '## Slack', text: 'different section' },
+      ]),
+    })
+    const out = await block.getPlaybookContext('q')
+    // Tag appears once for the two Notion sub-chunks, once for Slack.
+    const notionTags = (out!.match(/\[openclaw:MEMORY\.md ## Notion\]/g) || []).length
+    expect(notionTags).toBe(1)
+    expect(out).toContain('universal sub-chunk one')
+    expect(out).toContain('universal sub-chunk two')
+    expect(out).toContain('[openclaw:MEMORY.md ## Slack]')
+  })
+
   it('truncates per-chunk excerpt to perChunkChars', async () => {
     const long = 'word '.repeat(500).trim()
     const block = new ProceduralProposerBlock({

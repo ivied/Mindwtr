@@ -50,15 +50,22 @@ export class ProceduralProposerBlock implements ProceduralContextProvider {
     }
     if (chunks.length === 0) return null
 
+    // FR87: retrieval can return several sub-chunks of the same `##`
+    // section (e.g. two surviving universal bullet-groups from an
+    // otherwise-OpenClaw section). Render the `[source:path ## heading]`
+    // tag once and list the excerpts under it, instead of repeating the
+    // tag per fragment.
     const lines: string[] = []
     let budget = this.maxChars
+    let lastTag: string | null = null
     for (const c of chunks) {
       const tag = `[${c.source}:${c.path}${c.sectionTitle ? ` ${c.sectionTitle}` : ''}]`
       const excerpt = c.text.replace(/\s+/g, ' ').trim().slice(0, this.perChunkChars)
-      const block = `${tag}\n${excerpt}`
-      if (block.length > budget) break
-      lines.push(block)
-      budget -= block.length + 1
+      const piece = tag === lastTag ? excerpt : `${tag}\n${excerpt}`
+      if (piece.length > budget) break
+      lines.push(piece)
+      budget -= piece.length + 1
+      lastTag = tag
     }
     if (lines.length === 0) return null
     return lines.join('\n')
