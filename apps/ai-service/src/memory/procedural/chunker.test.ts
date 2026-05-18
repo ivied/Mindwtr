@@ -169,5 +169,39 @@ ${bigBlock}
       expect(tinyOwn).toBeUndefined()
       expect(chunks[chunks.length - 1]!.text).toContain('- tiny')
     })
+
+    it('splits a flat bullet list with NO blank lines (OpenClaw MEMORY.md shape)', () => {
+      // Real failure mode: `## Как работать с Notion` is ~2000 chars of
+      // `- bullet\n- bullet\n...` with zero blank lines. splitBlocks sees
+      // one block; the bullet-boundary fallback must still split it.
+      const bullets = Array.from(
+        { length: 30 },
+        (_, i) =>
+          `- rule number ${i}: a reasonably long instruction line so the list crosses the split threshold quickly`
+      ).join('\n')
+      const md = `## Как работать с Notion\n${bullets}\n`
+      const chunks = chunkMarkdown(md)
+      expect(chunks.length).toBeGreaterThanOrEqual(2)
+      for (const c of chunks) {
+        expect(c.sectionTitle).toBe('## Как работать с Notion')
+        // Never cut mid-bullet: every chunk starts with a bullet.
+        expect(c.text.trimStart().startsWith('-')).toBe(true)
+      }
+    })
+
+    it('keeps an indented continuation line attached to its bullet when splitting', () => {
+      const lines: string[] = []
+      for (let i = 0; i < 20; i++) {
+        lines.push(`- top bullet ${i} with a fair amount of descriptive text to add weight`)
+        lines.push(`    continuation detail for bullet ${i} that must not be severed`)
+      }
+      const md = `## Big\n${lines.join('\n')}\n`
+      const chunks = chunkMarkdown(md)
+      expect(chunks.length).toBeGreaterThanOrEqual(2)
+      // A chunk must never START with an indented continuation line.
+      for (const c of chunks) {
+        expect(/^\s{2,}\S/.test(c.text)).toBe(false)
+      }
+    })
   })
 })
