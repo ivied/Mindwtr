@@ -92,4 +92,82 @@ this is the only real section with enough body content
     expect(chunks.length).toBe(1)
     expect(chunks[0]!.index).toBe(0)
   })
+
+  describe('FR87 sub-section chunking', () => {
+    it('keeps a short section as a single chunk (below split threshold)', () => {
+      const md = `## Slack
+- ⚠️ reply in threads
+- README на русском
+`
+      const chunks = chunkMarkdown(md)
+      expect(chunks.length).toBe(1)
+      expect(chunks[0]!.sectionTitle).toBe('## Slack')
+    })
+
+    it('splits a large mixed section into sub-chunks sharing the parent title', () => {
+      const universalBlock = Array.from(
+        { length: 12 },
+        (_, i) => `- universal rule ${i}: structure the task with a clear Done Criteria block`
+      ).join('\n')
+      const openclawBlock = Array.from(
+        { length: 12 },
+        (_, i) => `- openclaw step ${i}: call the Notion API via [[notion_write]] with database_id`
+      ).join('\n')
+      const md = `## Как работать с Notion
+${universalBlock}
+
+${openclawBlock}
+`
+      const chunks = chunkMarkdown(md)
+      expect(chunks.length).toBeGreaterThanOrEqual(2)
+      // All sub-chunks keep the parent ## heading.
+      for (const c of chunks) {
+        expect(c.sectionTitle).toBe('## Как работать с Notion')
+      }
+      // The two concern-groups land in different sub-chunks.
+      const joinedFirst = chunks[0]!.text
+      const joinedLast = chunks[chunks.length - 1]!.text
+      expect(joinedFirst).toContain('universal rule 0')
+      expect(joinedLast).toContain('[[notion_write]]')
+      // Flat index is contiguous.
+      expect(chunks.map((c) => c.index)).toEqual(
+        chunks.map((_, i) => i)
+      )
+    })
+
+    it('forces a sub-chunk boundary at ### sub-headers in a large section', () => {
+      const pad = (s: string) =>
+        Array.from({ length: 8 }, (_, i) => `${s} line ${i} with enough text`).join('\n')
+      const md = `## Big Topic
+### Universal part
+${pad('universal')}
+
+### OpenClaw part
+${pad('openclaw [[skill]]')}
+`
+      const chunks = chunkMarkdown(md)
+      expect(chunks.length).toBeGreaterThanOrEqual(2)
+      const hasUniversalHeader = chunks.some((c) => c.text.includes('### Universal part'))
+      const hasOpenclawHeader = chunks.some((c) => c.text.includes('### OpenClaw part'))
+      expect(hasUniversalHeader).toBe(true)
+      expect(hasOpenclawHeader).toBe(true)
+    })
+
+    it('merges a tiny trailing remainder into the previous sub-chunk', () => {
+      const bigBlock = Array.from(
+        { length: 20 },
+        (_, i) => `- substantial rule number ${i} that carries real content for packing`
+      ).join('\n')
+      const md = `## Topic
+${bigBlock}
+
+- tiny
+`
+      const chunks = chunkMarkdown(md)
+      // The lone "- tiny" must not be its own chunk.
+      const tinyOwn = chunks.find((c) => c.text.trim() === '- tiny')
+      expect(tinyOwn).toBeUndefined()
+      expect(chunks[chunks.length - 1]!.text).toContain('- tiny')
+    })
+  })
 })
