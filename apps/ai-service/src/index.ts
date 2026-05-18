@@ -267,6 +267,9 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     commitmentPipeline.setProceduralContextProvider(
       new ProceduralProposerBlock({ retriever: proceduralRetriever })
     )
+    // FR89: record which playbook chunks fed each written proposal so
+    // approve/reject can adjust their reliability_score.
+    commitmentPipeline.setProceduralFeedback(proceduralStore)
     console.log(
       `📖 Procedural memory enabled (root=${SHARED_MEMORY_DIR}, reindex=${SHARED_MEMORY_REINDEX_INTERVAL_MS}ms, chunks=${proceduralStore.countChunks()}, classifier=llm)`
     )
@@ -500,6 +503,9 @@ async function main() {
                     )
                 }
               : undefined,
+            // FR89: approve/reject routes push reliability signal to the
+            // cited playbook chunks. null when procedural memory is off.
+            proceduralFeedback: proceduralStore ?? undefined,
           }
         : null,
       persons: personsProvider,

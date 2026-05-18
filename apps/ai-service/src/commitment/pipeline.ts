@@ -23,6 +23,13 @@ import type {
 import type { PersonsProvider } from '../wiki/persons-reader'
 import type { ProposerContextProvider } from '../memory/proposer-context'
 import type { ProceduralContextProvider } from '../memory/procedural/proposer-block'
+
+/** Minimal sink for FR89 — pipeline records which playbook chunks the
+ *  Proposer cited so resolution feedback can credit/debit them later.
+ *  Kept structural so the pipeline doesn't depend on the full store. */
+export interface ProceduralFeedbackSink {
+  recordProposalRefs(proposalId: string, chunkIds: string[]): void
+}
 import { l0Filter } from './l0-filter'
 import {
   evaluateSourceDeny,
@@ -72,6 +79,7 @@ export class CommitmentPipeline {
   private personsProvider: PersonsProvider | null = null
   private memoryContextProvider: ProposerContextProvider | null = null
   private proceduralContextProvider: ProceduralContextProvider | null = null
+  private proceduralFeedback: ProceduralFeedbackSink | null = null
 
   constructor(
     private proposer: Proposer,
@@ -129,6 +137,13 @@ export class CommitmentPipeline {
    *  flows. */
   setProceduralContextProvider(provider: ProceduralContextProvider | null): void {
     this.proceduralContextProvider = provider
+  }
+
+  /** Optional (FR89): when set, the chunk ids that fed the
+   *  KNOWN_PLAYBOOK block of a written proposal are recorded so
+   *  resolution feedback can adjust their reliability_score. */
+  setProceduralFeedback(sink: ProceduralFeedbackSink | null): void {
+    this.proceduralFeedback = sink
   }
 
   async run(capture: CaptureRecord): Promise<PipelineOutcome> {
@@ -207,12 +222,17 @@ export class CommitmentPipeline {
     // Optional procedural playbook (FR85) — top-K relevant rules from
     // shared procedural memory (OpenClaw MEMORY.md, etc.). Same fail-open
     // pattern.
-    let playbookContext: string | null = null
+    let playbookText: string | null = null
+    let playbookRefs: string[] = []
     if (this.proceduralContextProvider) {
       try {
-        playbookContext = await this.proceduralContextProvider.getPlaybookContext(
+        const pb = await this.proceduralContextProvider.getPlaybookContext(
           capture.text
         )
+        if (pb) {
+          playbookText = pb.text
+          playbookRefs = pb.refs
+        }
       } catch (err) {
         this.log(
           `[commitment] playbook context fetch failed (${capture.id}): ${(err as Error).message}`
@@ -229,7 +249,7 @@ export class CommitmentPipeline {
         this.userIdentity,
         knownPersons,
         recentContext,
-        playbookContext
+        playbookText
       )
     } catch (err) {
       this.log(`[commitment] proposer failed (${capture.id}): ${(err as Error).message}`)
@@ -290,6 +310,20 @@ export class CommitmentPipeline {
       this.log(
         `[commitment] proposed (${capture.id} → proposal ${written.proposalId}): "${written.title}" conf=${proposal.confidence.toFixed(2)}`
       )
+      // FR89: remember which playbook chunks informed this proposal so
+      // resolution feedback can credit/debit them. Best-effort.
+      if (this.proceduralFeedback && playbookRefs.length > 0) {
+        try {
+          this.proceduralFeedback.recordProposalRefs(
+            written.proposalId,
+            playbookRefs
+          )
+        } catch (err) {
+          this.log(
+            `[commitment] playbook-refs record failed (${written.proposalId}): ${(err as Error).message}`
+          )
+        }
+      }
       // Fire-and-forget TG notification. Errors logged inside notifier; never propagate.
       if (this.notifier?.enabled) {
         void this.notifier.notifyCreated(written.proposal)

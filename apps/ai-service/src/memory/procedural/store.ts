@@ -171,6 +171,99 @@ export class ProceduralStore {
     )
   }
 
+  // ---------------- FR89: reliability feedback ----------------
+
+  /**
+   * Record which chunks the Proposer cited when it produced `proposalId`.
+   * Idempotent (PRIMARY KEY (proposal_id, chunk_id)). No-op on empty list.
+   */
+  recordProposalRefs(proposalId: string, chunkIds: string[]): void {
+    if (chunkIds.length === 0) return
+    const now = new Date().toISOString()
+    const stmt = this.db.query(
+      `INSERT OR IGNORE INTO procedural_proposal_refs
+         (proposal_id, chunk_id, recorded_at) VALUES (?, ?, ?)`
+    )
+    for (const cid of chunkIds) stmt.run(proposalId, cid, now)
+  }
+
+  /**
+   * Apply a resolution signal to every chunk the proposal cited. EMA so
+   * one noisy data point can't bury a good rule:
+   *
+   *   score' = score == null ? SEED[signal]
+   *                          : score + ALPHA * (TARGET[signal] - score)
+   *
+   * `positive` (proposal approved / already-done — AI was useful) pulls
+   * toward 1.0; `negative` (plain reject — AI was wrong) toward 0.0.
+   * `not-applicable` is intentionally NOT fed here (neither chunk's
+   * fault). Returns the number of chunks updated (for logging).
+   *
+   * NOTE: this is an *implicit, weak* signal — a proposal can be rejected
+   * for reasons unrelated to the cited rule. ALPHA is deliberately small
+   * and Phase 1b.1 does NOT let the score affect retrieval yet; we only
+   * accumulate so the signal can be eyeballed before acting on it
+   * (Phase 1b.2).
+   */
+  applyResolutionFeedback(
+    proposalId: string,
+    signal: 'positive' | 'negative'
+  ): number {
+    const ALPHA = 0.2
+    const SEED = signal === 'positive' ? 0.6 : 0.4
+    const TARGET = signal === 'positive' ? 1.0 : 0.0
+    const refs = this.db
+      .query<{ chunk_id: string }, [string]>(
+        'SELECT chunk_id FROM procedural_proposal_refs WHERE proposal_id = ?'
+      )
+      .all(proposalId)
+    let updated = 0
+    for (const { chunk_id } of refs) {
+      const row = this.db
+        .query<{ reliability_score: number | null }, [string]>(
+          'SELECT reliability_score FROM procedural_chunks WHERE id = ?'
+        )
+        .get(chunk_id)
+      if (!row) continue // chunk re-chunked away since citation; skip
+      const cur = row.reliability_score
+      const next =
+        cur == null ? SEED : cur + ALPHA * (TARGET - cur)
+      this.db.run(
+        'UPDATE procedural_chunks SET reliability_score = ? WHERE id = ?',
+        [next, chunk_id]
+      )
+      updated += 1
+    }
+    return updated
+  }
+
+  /** Aggregate reliability stats for the review dashboard / telemetry. */
+  reliabilitySummary(): {
+    scored: number
+    avg: number | null
+    min: number | null
+    belowHalf: number
+  } {
+    const r = this.db
+      .query<
+        { n: number; avg: number | null; mn: number | null; lo: number },
+        []
+      >(
+        `SELECT count(reliability_score) AS n,
+                avg(reliability_score) AS avg,
+                min(reliability_score) AS mn,
+                sum(CASE WHEN reliability_score < 0.5 THEN 1 ELSE 0 END) AS lo
+         FROM procedural_chunks`
+      )
+      .get()
+    return {
+      scored: r?.n ?? 0,
+      avg: r?.avg ?? null,
+      min: r?.mn ?? null,
+      belowHalf: r?.lo ?? 0,
+    }
+  }
+
   /** Fetch a single chunk by id, or null. */
   getById(id: string): ProceduralChunkRow | null {
     const r = this.db

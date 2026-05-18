@@ -27,6 +27,7 @@ export { ProceduralProposerBlock } from './proposer-block'
 export type {
   ProceduralProposerBlockOptions,
   ProceduralContextProvider,
+  PlaybookContext,
 } from './proposer-block'
 export { classifyByHeuristic, LlmChunkClassifier } from './classifier'
 export type { ClassificationVerdict, LlmClassifierOptions } from './classifier'

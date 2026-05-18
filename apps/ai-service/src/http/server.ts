@@ -55,6 +55,19 @@ export interface ProposalsHttpDeps {
    * handler returns immediately.
    */
   onTaskCreated?: (taskId: string, fields: TaskFieldsSnapshot) => void
+  /**
+   * Optional (FR89): on approve/reject, push a reliability signal to the
+   * procedural memory for whatever playbook chunks the Proposer cited.
+   * positive = AI was useful (approved / already-done), negative = AI was
+   * wrong (plain reject). not-applicable is skipped (neither chunk's
+   * fault). Phase 1b.1 only accumulates the score; retrieval is unchanged.
+   */
+  proceduralFeedback?: {
+    applyResolutionFeedback(
+      proposalId: string,
+      signal: 'positive' | 'negative'
+    ): number
+  }
 }
 
 export interface MemoryHttpDeps {
@@ -258,6 +271,13 @@ function mountProposalRoutes(app: Hono, deps: ProposalsHttpDeps): void {
 
     // Apply succeeded → flip to approved with the applied task ids in audit meta.
     deps.store.transition(id, 'approved', 'user', { appliedTaskIds: result.appliedTaskIds })
+    // FR89: approval = the playbook chunks that informed this proposal
+    // were useful. Best-effort, never blocks the response.
+    try {
+      deps.proceduralFeedback?.applyResolutionFeedback(id, 'positive')
+    } catch (err) {
+      console.warn('[http] procedural feedback (approve) failed:', (err as Error).message)
+    }
     return c.json({
       ok: true,
       appliedTaskIds: result.appliedTaskIds,
@@ -303,6 +323,18 @@ function mountProposalRoutes(app: Hono, deps: ProposalsHttpDeps): void {
     const meta: Record<string, unknown> = { kind }
     if (reason) meta.reason = reason
     deps.store.transition(id, 'rejected', 'user', meta)
+    // FR89: 'rejected' = AI was wrong → negative for cited chunks.
+    // 'already-done' = AI was right (true positive) → positive.
+    // 'not-applicable' = situation changed, neither chunk's fault → skip.
+    try {
+      if (kind === 'rejected') {
+        deps.proceduralFeedback?.applyResolutionFeedback(id, 'negative')
+      } else if (kind === 'already-done') {
+        deps.proceduralFeedback?.applyResolutionFeedback(id, 'positive')
+      }
+    } catch (err) {
+      console.warn('[http] procedural feedback (reject) failed:', (err as Error).message)
+    }
     return c.json({ ok: true, proposal: deps.store.get(id) })
   })
 
@@ -594,7 +626,12 @@ function mountProceduralRoutes(app: Hono, deps: ProceduralHttpDeps): void {
       const cb = r.classifiedBy ?? 'null'
       byClassifier[cb] = (byClassifier[cb] ?? 0) + 1
     }
-    return c.json({ total: all.total, byApplies, byClassifier })
+    return c.json({
+      total: all.total,
+      byApplies,
+      byClassifier,
+      reliability: deps.store.reliabilitySummary(),
+    })
   })
 
   // Paged review listing. ?applies=universal,openclaw-only &source= &limit= &offset=
