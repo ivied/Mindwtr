@@ -13,7 +13,17 @@ export interface ActiveWindowProvider {
 export const defaultActiveWindowProvider: ActiveWindowProvider = {
   async current() {
     try {
-      const win = await activeWin()
+      // active-win ships an ad-hoc-signed Swift helper in node_modules.
+      // macOS TCC can't durably grant Accessibility/Screen-Recording to an
+      // unsigned CLI binary, so the prompt re-fires on every call forever
+      // (sindresorhus/get-windows#135). We only need the app name + bundle
+      // id for capture tagging — `title`/`url` are already visible in the
+      // screenshot+OCR — so disable both permission checks: no prompt,
+      // `title` comes back '' and `url` undefined, everything else stays.
+      const win = await activeWin({
+        accessibilityPermission: false,
+        screenRecordingPermission: false,
+      })
       if (!win) return null
       return {
         app: win.owner.name,
