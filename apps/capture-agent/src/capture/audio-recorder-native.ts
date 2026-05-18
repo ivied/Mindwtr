@@ -36,6 +36,14 @@ export interface NativeAudioRecorderConfig {
   noVoiceProcessing: boolean
   /** Always 16000 here — Whisper-friendly. Exposed for future flex. */
   sampleRate: number
+  /**
+   * Watchdog: hard ceiling (ms) on a single record() before we SIGKILL the
+   * helper and reject. macOS sleep/wake or a dead Continuity mic can leave
+   * the helper hung forever waiting on samples; this lets the audio loop
+   * fail fast and retry instead of silently stalling for hours.
+   * 0 = derive as 2× the requested duration + 15 s slack.
+   */
+  watchdogMs: number
 }
 
 export const DEFAULT_NATIVE_RECORDER_CONFIG: NativeAudioRecorderConfig = {
@@ -43,6 +51,7 @@ export const DEFAULT_NATIVE_RECORDER_CONFIG: NativeAudioRecorderConfig = {
   tmpDir: tmpdir(),
   noVoiceProcessing: false,
   sampleRate: 16_000,
+  watchdogMs: 0,
 }
 
 export class NativeAudioRecorder implements AudioRecorder {
@@ -72,8 +81,11 @@ export class NativeAudioRecorder implements AudioRecorder {
     const args = ['--duration', seconds]
     if (this.config.noVoiceProcessing) args.push('--no-vp')
 
+    const watchdogMs =
+      this.config.watchdogMs > 0 ? this.config.watchdogMs : durationMs * 2 + 15_000
+
     const start = Date.now()
-    const pcm = await this.runHelper(args)
+    const pcm = await this.runHelper(args, watchdogMs)
     const elapsed = Date.now() - start
 
     const wav = wrapPcmAsWav(pcm, {
@@ -101,21 +113,46 @@ export class NativeAudioRecorder implements AudioRecorder {
     }
   }
 
-  private runHelper(args: string[]): Promise<Buffer> {
+  private runHelper(args: string[], watchdogMs: number): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       const child = spawn(this.config.binaryPath, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
       })
       const chunks: Buffer[] = []
       let stderr = ''
+      let settled = false
+
+      const watchdog = setTimeout(() => {
+        if (settled) return
+        settled = true
+        // Helper is hung (mic gone after sleep/wake, Continuity dropped,
+        // etc.). Hard-kill so the audio loop's retry/backoff kicks in.
+        try {
+          child.kill('SIGKILL')
+        } catch {
+          // already gone
+        }
+        reject(
+          new Error(
+            `native helper watchdog: no exit within ${watchdogMs}ms — killed (likely stuck mic)`
+          )
+        )
+      }, watchdogMs)
+
       child.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk))
       child.stderr?.on('data', (chunk) => {
         stderr += chunk.toString()
       })
       child.on('error', (err) => {
+        if (settled) return
+        settled = true
+        clearTimeout(watchdog)
         reject(new Error(`native helper spawn failed: ${err.message}`))
       })
       child.on('close', (code) => {
+        if (settled) return
+        settled = true
+        clearTimeout(watchdog)
         if (code === 0) {
           resolve(Buffer.concat(chunks))
         } else {
