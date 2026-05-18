@@ -118,11 +118,11 @@ export class ProceduralReader {
     const queue = this.opts.store.listByApplies('needs-review', 1000)
     let decided = 0
     for (const row of queue) {
-      // Skip chunks that the LLM has already touched — that means the
-      // LLM also said needs-review (or threw). Re-running heuristic on
-      // those is a no-op (the heuristic already left them as
-      // needs-review on prior ticks).
-      if (row.classifiedBy === 'llm') continue
+      // Skip chunks the LLM or the user has already adjudicated. LLM:
+      // re-running heuristic is a no-op. User (FR88 review override):
+      // a manual verdict is terminal and must never be overwritten by
+      // an automated pass.
+      if (row.classifiedBy === 'llm' || row.classifiedBy === 'user') continue
       const verdict = classifyByHeuristic(row.text, row.sectionTitle)
       if (verdict.appliesTo === 'needs-review') continue
       this.opts.store.classify(row.id, verdict.appliesTo, 'heuristic')

@@ -186,6 +186,9 @@ let memoryIngest: IngestService | null = new IngestService({
 let memoryFocusContext: FocusContextAssembler | null = null
 let dailySummaryJob: DailySummaryJob | null = null
 let proactiveRunner: ProactiveRunner | null = null
+// Hoisted so the HTTP server (FR88 review API) can reference it; assigned
+// inside the SHARED_MEMORY_DIR block below when procedural memory is on.
+let proceduralStore: ProceduralStore | null = null
 
 // --- AI Enricher (push) + Commitment Detector (pull) + Reviser ---
 let enricherPipeline: EnricherPipeline | null = null
@@ -241,7 +244,7 @@ if (LLM_BASE_URL && LLM_API_KEY) {
   // SHARED_MEMORY_DIR is unset (legacy/dev environments without the rsync
   // job set up). One additional embedding call per capture when enabled.
   if (SHARED_MEMORY_DIR) {
-    const proceduralStore = new ProceduralStore({
+    proceduralStore = new ProceduralStore({
       db: contextStore.rawDb,
       vecAvailable: contextStore.hasVectorSearch,
     })
@@ -508,12 +511,15 @@ async function main() {
             ingest: memoryIngest,
           }
         : null,
+      procedural: proceduralStore ? { store: proceduralStore } : null,
     })
     http = server.serve()
     console.log(
       `📡 HTTP endpoint listening on :${HTTP_PORT} (capture, context search${
         commentHandler ? ', proposals' : ''
-      }${personsProvider ? ', persons' : ''}${memoryFocusContext ? ', memory' : ''})`
+      }${personsProvider ? ', persons' : ''}${memoryFocusContext ? ', memory' : ''}${
+        proceduralStore ? ', procedural' : ''
+      })`
     )
   } else {
     console.warn('⚠️ HTTP_AUTH_TOKEN not set — HTTP endpoint disabled')

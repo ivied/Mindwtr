@@ -29,6 +29,7 @@ import type { ProposalRecord, ProposalType } from '../proposal-store/types'
 import type { FieldDiff, ModifyPayload } from '../proposal-store/payloads'
 import type { PersonsProvider } from '../wiki/persons-reader'
 import type { FocusContextAssembler, MemoryStore, HybridRetriever, IngestService } from '../memory'
+import type { ProceduralStore, AppliesTo } from '../memory/procedural'
 
 const MAX_TEXT_LENGTH = 10_000
 
@@ -64,6 +65,10 @@ export interface MemoryHttpDeps {
   ingest: IngestService | null
 }
 
+export interface ProceduralHttpDeps {
+  store: ProceduralStore
+}
+
 export interface HttpServerConfig {
   port: number
   authToken: string
@@ -74,6 +79,8 @@ export interface HttpServerConfig {
   persons: PersonsProvider | null
   /** Optional memory module deps — when set, exposes GET /v1/memory/* routes. */
   memory?: MemoryHttpDeps | null
+  /** Optional procedural memory — when set, exposes GET/POST /v1/procedural/* (FR88 review API). */
+  procedural?: ProceduralHttpDeps | null
   /** Allowed origins for CORS. Default ['http://localhost:5173']. */
   corsOrigins?: string[]
 }
@@ -171,6 +178,10 @@ export function createHttpServer(config: HttpServerConfig) {
 
   if (config.memory) {
     mountMemoryRoutes(app, config.memory)
+  }
+
+  if (config.procedural) {
+    mountProceduralRoutes(app, config.procedural)
   }
 
   return {
@@ -552,6 +563,109 @@ function mountMemoryRoutes(app: Hono, deps: MemoryHttpDeps): void {
       console.error('[http] memory ingest failed:', err)
       return c.json({ error: 'ingest failed' }, 500)
     }
+  })
+}
+
+const VALID_APPLIES: AppliesTo[] = [
+  'universal',
+  'openclaw-only',
+  'mindwtr-only',
+  'archived',
+  'needs-review',
+]
+// What a human reviewer is allowed to set. 'needs-review' is excluded —
+// a reviewer either decides or leaves the row untouched; sending it back
+// to needs-review would just re-trigger automated classification.
+const USER_SETTABLE_APPLIES: AppliesTo[] = [
+  'universal',
+  'openclaw-only',
+  'mindwtr-only',
+  'archived',
+]
+
+function mountProceduralRoutes(app: Hono, deps: ProceduralHttpDeps): void {
+  // Distribution snapshot — drives the review dashboard + telemetry.
+  app.get('/v1/procedural/stats', (c) => {
+    const all = deps.store.listChunks({ limit: 500 })
+    const byApplies: Record<string, number> = {}
+    const byClassifier: Record<string, number> = {}
+    for (const r of all.items) {
+      byApplies[r.appliesTo] = (byApplies[r.appliesTo] ?? 0) + 1
+      const cb = r.classifiedBy ?? 'null'
+      byClassifier[cb] = (byClassifier[cb] ?? 0) + 1
+    }
+    return c.json({ total: all.total, byApplies, byClassifier })
+  })
+
+  // Paged review listing. ?applies=universal,openclaw-only &source= &limit= &offset=
+  app.get('/v1/procedural/chunks', (c) => {
+    const appliesParam = c.req.query('applies')
+    const applies = appliesParam
+      ? (appliesParam
+          .split(',')
+          .map((s) => s.trim())
+          .filter((s): s is AppliesTo =>
+            (VALID_APPLIES as string[]).includes(s)
+          ))
+      : undefined
+    const source = c.req.query('source') || undefined
+    const limit = c.req.query('limit') ? Number(c.req.query('limit')) : undefined
+    const offset = c.req.query('offset') ? Number(c.req.query('offset')) : undefined
+
+    const { total, items } = deps.store.listChunks({ applies, source, limit, offset })
+    return c.json({
+      total,
+      items: items.map((r) => ({
+        id: r.id,
+        source: r.source,
+        path: r.path,
+        sectionIndex: r.sectionIndex,
+        sectionTitle: r.sectionTitle,
+        excerpt: r.text.replace(/\s+/g, ' ').trim().slice(0, 280),
+        appliesTo: r.appliesTo,
+        classifiedBy: r.classifiedBy,
+        classifiedAt: r.classifiedAt,
+        reliabilityScore: r.reliabilityScore,
+      })),
+    })
+  })
+
+  // Human override. Body: { appliesTo }. Sets classified_by='user' which
+  // is terminal — heuristic back-pass + LLM batch both skip user verdicts.
+  app.post('/v1/procedural/chunks/:id/classify', async (c) => {
+    const id = c.req.param('id')
+    let body: { appliesTo?: unknown }
+    try {
+      body = (await c.req.json()) as { appliesTo?: unknown }
+    } catch {
+      return c.json({ error: 'invalid JSON' }, 400)
+    }
+    const appliesTo = body.appliesTo
+    if (
+      typeof appliesTo !== 'string' ||
+      !(USER_SETTABLE_APPLIES as string[]).includes(appliesTo)
+    ) {
+      return c.json(
+        { error: `appliesTo must be one of ${USER_SETTABLE_APPLIES.join(', ')}` },
+        400
+      )
+    }
+    const existing = deps.store.getById(id)
+    if (!existing) return c.json({ error: 'chunk not found' }, 404)
+    deps.store.classify(id, appliesTo as AppliesTo, 'user')
+    const updated = deps.store.getById(id)
+    return c.json({
+      ok: true,
+      chunk: updated
+        ? {
+            id: updated.id,
+            sectionTitle: updated.sectionTitle,
+            appliesTo: updated.appliesTo,
+            classifiedBy: updated.classifiedBy,
+            classifiedAt: updated.classifiedAt,
+          }
+        : null,
+    })
   })
 }
 
