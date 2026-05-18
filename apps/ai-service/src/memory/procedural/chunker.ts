@@ -21,14 +21,16 @@
  *    short sections rarely mix concerns and over-fragmenting hurts
  *    retrieval context.
  *  - Larger sections are tokenised into blocks at blank-line runs and
- *    forced breaks before `###` sub-headers. We flush a sub-chunk at
- *    every natural block boundary *once it has accumulated at least
- *    MIN_SUBCHUNK chars* — so a section that mixes a universal
- *    bullet-group and an OpenClaw bullet-group (separated by a blank
- *    line or a `###`) splits along that seam instead of being packed
- *    together. Tiny fragments below MIN_SUBCHUNK are merged forward so
- *    we never emit a lone bullet stripped of context. SUBCHUNK_TARGET
- *    only bounds a single oversized block.
+ *    forced breaks before `###` sub-headers. OpenClaw's MEMORY.md bullet
+ *    lists often have NO blank lines, so any block still over
+ *    SUBCHUNK_TARGET is additionally exploded on bullet-item boundaries
+ *    (never mid-bullet — indented continuation lines stay with their
+ *    bullet). We flush a sub-chunk at every natural boundary *once it
+ *    has accumulated at least MIN_SUBCHUNK chars* — so a section that
+ *    mixes a universal bullet-group and an OpenClaw bullet-group splits
+ *    along that seam instead of being packed together. Tiny fragments
+ *    below MIN_SUBCHUNK are merged forward so we never emit a lone
+ *    bullet stripped of context.
  *
  * `index` is a flat running counter over ALL emitted sub-chunks (not the
  * `##` ordinal) so ProceduralStore keying on (source, path, index)
@@ -104,7 +106,13 @@ function splitSections(content: string): Section[] {
  * block runs until the next blank line or `###`).
  */
 function splitIntoSubChunks(body: string): string[] {
-  const blocks = splitBlocks(body)
+  // splitBlocks separates on blank lines / ### headers. OpenClaw's
+  // MEMORY.md bullet lists frequently have NO blank lines between
+  // bullets, so a 2000-char section can be a single block that
+  // splitBlocks never cuts. explodeOversizedBlocks falls back to
+  // bullet-item boundaries for any block over the target, so a flat
+  // wall of bullets still splits along rule seams.
+  const blocks = explodeOversizedBlocks(splitBlocks(body))
   const subs: string[] = []
   let buf: string[] = []
   let bufLen = 0
@@ -141,6 +149,47 @@ function splitIntoSubChunks(body: string): string[] {
     }
   }
   return subs.length > 0 ? subs : [body]
+}
+
+/** A line that starts a new top-level list item (`-`, `*`, `+`, `1.`). */
+function isBulletStart(line: string): boolean {
+  return /^\s{0,3}(?:[-*+]\s+|\d{1,3}[.)]\s+)\S/.test(line)
+}
+
+/**
+ * Any block longer than SUBCHUNK_TARGET that has no internal blank-line
+ * structure (a flat bullet list) is re-split on bullet-item boundaries.
+ * We accumulate lines and only cut *before* a line that begins a new
+ * top-level bullet once the run has reached the target — so a bullet and
+ * its indented continuation lines never get severed mid-rule.
+ */
+function explodeOversizedBlocks(blocks: string[]): string[] {
+  const out: string[] = []
+  for (const block of blocks) {
+    if (block.length <= SUBCHUNK_TARGET) {
+      out.push(block)
+      continue
+    }
+    const lines = block.split('\n')
+    let run: string[] = []
+    let runLen = 0
+    const flushRun = () => {
+      if (run.length === 0) return
+      const joined = run.join('\n').trim()
+      if (joined.length > 0) out.push(joined)
+      run = []
+      runLen = 0
+    }
+    for (const line of lines) {
+      if (runLen >= SUBCHUNK_TARGET && isBulletStart(line)) {
+        flushRun()
+      }
+      run.push(line)
+      runLen += line.length + 1
+    }
+    flushRun()
+  }
+  return out
 }
 
 function splitBlocks(body: string): string[] {
