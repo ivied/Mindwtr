@@ -24,9 +24,8 @@
 
 import { flushPendingSave, type AppData, type Task } from '@mindwtr/core';
 import { SyncService } from './sync-service';
+import { cloudDataUrl, cloudToken } from './cloud-target';
 
-const PULL_URL = 'http://localhost:8787/v1/data';
-const PULL_TOKEN = 'dev-token-gtd-automation-2026';
 const IDB_NAME = 'mindwtr';
 const IDB_STORE = 'app-data';
 const IDB_KEY = 'main';
@@ -101,8 +100,8 @@ export async function safeReload(opts: SafeReloadOptions = {}): Promise<void> {
 async function mergeCloudIntoIndexedDb(): Promise<void> {
     if (typeof indexedDB === 'undefined' || typeof fetch === 'undefined') return;
 
-    const response = await fetch(PULL_URL, {
-        headers: { Authorization: `Bearer ${PULL_TOKEN}` },
+    const response = await fetch(cloudDataUrl(), {
+        headers: { Authorization: `Bearer ${cloudToken()}` },
     });
     if (!response.ok) {
         throw new Error(`cloud /v1/data returned ${response.status}`);

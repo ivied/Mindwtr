@@ -38,6 +38,8 @@ services:
       args:
         VITE_AI_SERVICE_URL: ${VITE_AI_SERVICE_URL:-https://ai.kurdy.uk}
         VITE_AI_SERVICE_TOKEN: ${HTTP_AUTH_TOKEN:-}
+        VITE_CLOUD_URL: ${VITE_CLOUD_URL:-https://api.kurdy.uk}
+        VITE_CLOUD_TOKEN: ${MINDWTR_CLOUD_AUTH_TOKENS:-}
     container_name: mindwtr-app
     hostname: mindwtr-app
     restart: always

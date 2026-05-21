@@ -6,6 +6,8 @@ interface ImportMetaEnv {
     readonly VITE_DROPBOX_APP_KEY?: string;
     readonly VITE_AI_SERVICE_URL?: string;
     readonly VITE_AI_SERVICE_TOKEN?: string;
+    readonly VITE_CLOUD_URL?: string;
+    readonly VITE_CLOUD_TOKEN?: string;
 }
 
 interface ImportMeta {

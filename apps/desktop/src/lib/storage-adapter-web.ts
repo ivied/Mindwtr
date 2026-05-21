@@ -1,15 +1,12 @@
 import { AppData, StorageAdapter } from '@mindwtr/core';
 import { reportError } from './report-error';
+import { cloudDataUrl, cloudToken, isOriginMismatchedUrl } from './cloud-target';
 
 const DB_NAME = 'mindwtr';
 const STORE_NAME = 'app-data';
 const RECORD_KEY = 'main';
 const LEGACY_LOCAL_STORAGE_KEY = 'mindwtr-data';
 const DB_VERSION = 1;
-
-// Auto-bootstrap config (dev: hardcoded; prod would use VITE_* env vars at build time).
-const BOOTSTRAP_CLOUD_URL = 'http://localhost:8787/v1/data';
-const BOOTSTRAP_CLOUD_TOKEN = 'dev-token-gtd-automation-2026';
 
 // LocalStorage keys read by sync-service-config.ts
 const SYNC_BACKEND_KEY = 'mindwtr-sync-backend';
@@ -61,25 +58,58 @@ const idbPut = async (data: AppData): Promise<void> => {
     });
 };
 
-const ensureSyncSettingsConfigured = (): void => {
-    if (typeof localStorage === 'undefined') return;
-    const currentBackend = localStorage.getItem(SYNC_BACKEND_KEY);
-    if (currentBackend && currentBackend !== 'off') return;
-    localStorage.setItem(SYNC_BACKEND_KEY, 'cloud');
-    localStorage.setItem(CLOUD_PROVIDER_KEY, 'selfhosted');
-    localStorage.setItem(CLOUD_URL_KEY, BOOTSTRAP_CLOUD_URL);
+const setCloudToken = (token: string): void => {
     if (typeof sessionStorage !== 'undefined') {
-        sessionStorage.setItem(CLOUD_TOKEN_KEY, BOOTSTRAP_CLOUD_TOKEN);
-    } else {
-        localStorage.setItem(CLOUD_TOKEN_KEY, BOOTSTRAP_CLOUD_TOKEN);
+        sessionStorage.setItem(CLOUD_TOKEN_KEY, token);
+    } else if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(CLOUD_TOKEN_KEY, token);
     }
 };
 
+const hasCloudToken = (): boolean => {
+    const fromSession = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem(CLOUD_TOKEN_KEY) : null;
+    const fromLocal = typeof localStorage !== 'undefined' ? localStorage.getItem(CLOUD_TOKEN_KEY) : null;
+    return Boolean(fromSession || fromLocal);
+};
+
+// Auto-configure self-hosted cloud sync so a fresh browser (or one carrying a
+// stale config from another origin) syncs without any manual Settings step.
+// Origin-aware: localhost → localhost:8787, gtd.kurdy.uk → api.kurdy.uk.
+const ensureSyncSettingsConfigured = (): void => {
+    if (typeof localStorage === 'undefined') return;
+    const desiredUrl = cloudDataUrl();
+    const currentBackend = localStorage.getItem(SYNC_BACKEND_KEY);
+    const currentUrl = localStorage.getItem(CLOUD_URL_KEY);
+
+    // First-time seed: nothing configured yet.
+    if (!currentBackend || currentBackend === 'off') {
+        localStorage.setItem(SYNC_BACKEND_KEY, 'cloud');
+        localStorage.setItem(CLOUD_PROVIDER_KEY, 'selfhosted');
+        localStorage.setItem(CLOUD_URL_KEY, desiredUrl);
+        setCloudToken(cloudToken());
+        return;
+    }
+
+    // Self-heal: a config left over from a different origin (e.g. a
+    // localhost URL while now served from gtd.kurdy.uk) would fail with
+    // mixed-content / unreachable. Rewrite it to this origin's target.
+    if (isOriginMismatchedUrl(currentUrl)) {
+        localStorage.setItem(CLOUD_URL_KEY, desiredUrl);
+        localStorage.setItem(CLOUD_PROVIDER_KEY, 'selfhosted');
+    }
+
+    // The token lives in sessionStorage (cleared on tab close), so re-seed it
+    // whenever it's missing — otherwise sync silently 401s after a restart.
+    if (!hasCloudToken()) setCloudToken(cloudToken());
+};
+
 const tryBootstrapFromCloud = async (): Promise<AppData | null> => {
-    if (!BOOTSTRAP_CLOUD_URL || !BOOTSTRAP_CLOUD_TOKEN) return null;
+    const bootstrapUrl = cloudDataUrl();
+    const bootstrapToken = cloudToken();
+    if (!bootstrapUrl || !bootstrapToken) return null;
     try {
-        const response = await fetch(BOOTSTRAP_CLOUD_URL, {
-            headers: { Authorization: `Bearer ${BOOTSTRAP_CLOUD_TOKEN}` },
+        const response = await fetch(bootstrapUrl, {
+            headers: { Authorization: `Bearer ${bootstrapToken}` },
         });
         if (!response.ok) return null;
         const data = await response.json();

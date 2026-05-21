@@ -16,6 +16,15 @@ ARG VITE_AI_SERVICE_TOKEN=""
 ENV VITE_AI_SERVICE_URL=$VITE_AI_SERVICE_URL
 ENV VITE_AI_SERVICE_TOKEN=$VITE_AI_SERVICE_TOKEN
 
+# Cloud sync target + token baked for prod origin (gtd.kurdy.uk → api.kurdy.uk).
+# The web app picks localhost:8787 automatically when served from localhost,
+# so only the non-localhost (prod) URL needs baking. Token is not a real
+# secret here — see apps/desktop/src/lib/cloud-target.ts.
+ARG VITE_CLOUD_URL=""
+ARG VITE_CLOUD_TOKEN=""
+ENV VITE_CLOUD_URL=$VITE_CLOUD_URL
+ENV VITE_CLOUD_TOKEN=$VITE_CLOUD_TOKEN
+
 COPY --chown=1000:1000 . .
 RUN chown bun:bun /app
 USER bun
