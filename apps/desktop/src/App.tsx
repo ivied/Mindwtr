@@ -7,6 +7,9 @@ const ObsidianView = lazy(() => import('./components/views/ObsidianView').then((
 import { ContextsView } from './components/views/ContextsView';
 import { ProjectsView as ProjectsViewEager } from './components/views/ProjectsView';
 const ReviewView = lazy(() => import('./components/views/ReviewView').then((m) => ({ default: m.ReviewView })));
+const ProceduralPlaybookView = lazy(() =>
+    import('./components/views/ProceduralPlaybookView').then((m) => ({ default: m.ProceduralPlaybookView }))
+);
 import { ArchiveView } from './components/views/ArchiveView';
 import { TrashView } from './components/views/TrashView';
 import { AgendaView } from './components/views/AgendaView';
@@ -563,6 +566,8 @@ function App() {
                 return <ContextsView />;
             case 'review':
                 return <ReviewView />;
+            case 'ai-playbook':
+                return <ProceduralPlaybookView />;
             case 'settings':
                 return <SettingsView />;
             case 'archived':

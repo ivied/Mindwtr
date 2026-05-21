@@ -20,8 +20,10 @@ import {
     Clock3,
     BookOpen,
     AlertTriangle,
+    Sparkles,
     type LucideIcon,
 } from 'lucide-react';
+import { isProceduralAvailable } from '../lib/procedural-client';
 import { SafeReloadButton } from './SafeReloadButton';
 import { cn } from '../lib/utils';
 import { shallow, useTaskStore, safeFormatDate, tFallback } from '@mindwtr/core';
@@ -279,6 +281,9 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
                 { id: 'contexts', labelKey: 'nav.contexts', icon: Tag },
                 ...(isObsidianEnabled
                     ? [{ id: 'obsidian', labelKey: 'nav.obsidian', fallbackLabel: 'Obsidian', icon: BookOpen }]
+                    : []),
+                ...(isProceduralAvailable()
+                    ? [{ id: 'ai-playbook', labelKey: 'nav.aiPlaybook', fallbackLabel: 'AI Playbook', icon: Sparkles }]
                     : []),
                 { id: 'board', labelKey: 'nav.board', icon: Layers },
             ],
