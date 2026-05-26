@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Info.plist for GTDAudioCapture.app — the .app bundle wrapper around the
+  gtd-audio-capture CLI binary. macOS attributes TCC (mic) permission to
+  the bundle's CFBundleIdentifier, NOT to the parent process. This is what
+  lets the helper get the mic when invoked under launchd (or any other
+  parent), instead of inheriting Terminal's grant.
+
+  LSUIElement = true → no Dock icon / menu bar; behaves like a background
+  agent. The binary itself is a CLI that exits after recording one chunk.
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>gtd-audio-capture</string>
+    <key>CFBundleIdentifier</key>
+    <string>uk.kurdy.gtd.audio-capture</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>GTDAudioCapture</string>
+    <key>CFBundleDisplayName</key>
+    <string>GTD Audio Capture</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>GTD Capture Agent records short audio chunks to transcribe locally for your personal GTD inbox.</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>

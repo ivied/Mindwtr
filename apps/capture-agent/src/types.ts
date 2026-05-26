@@ -115,6 +115,10 @@ export interface AudioConfig {
   nativeBinaryPath: string
   /** Disable VoiceProcessingIO setup in the native helper (debug fallback). */
   nativeNoVoiceProcessing: boolean
+  /** Path to GTDAudioCapture.app — invoking via `open -W -a` makes macOS
+   *  attribute TCC mic permission to the bundle ID (required under launchd).
+   *  Empty string forces direct-exec fallback (Terminal-only use). */
+  nativeBundlePath: string
   /** Path to gtd-audio-diarize binary. Empty = diarization disabled. */
   diarizeBinaryPath: string
   /** Path to enrolled voice profile JSON. Empty = anonymous diarization. */

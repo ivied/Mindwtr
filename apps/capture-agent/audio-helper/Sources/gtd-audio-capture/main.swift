@@ -22,6 +22,12 @@ import Darwin
 // ---------- args ----------
 var duration: Double = 30.0
 var requestVoiceIsolation = true
+// When set, write a self-contained WAV file at this path instead of streaming
+// raw PCM to stdout. Needed when invoked via `open -W -a` (LaunchServices
+// route): `open` does not pipe stdout, so the bun-side recorder reads back
+// the WAV from disk after `open` returns. Stdout PCM is kept as fallback
+// for direct-exec contexts (Terminal smoke tests).
+var outputPath: String? = nil
 let args = CommandLine.arguments
 var argIdx = 1
 while argIdx < args.count {
@@ -32,8 +38,13 @@ while argIdx < args.count {
     case "--no-voice-isolation", "--no-vp":
         requestVoiceIsolation = false
         argIdx += 1
+    case "--output":
+        if argIdx + 1 < args.count { outputPath = args[argIdx + 1] }
+        argIdx += 2
     case "--help", "-h":
-        print("Usage: gtd-audio-capture --duration <seconds> [--no-voice-isolation]")
+        print(
+            "Usage: gtd-audio-capture --duration <seconds> [--no-voice-isolation] [--output <path.wav>]"
+        )
         exit(0)
     default:
         argIdx += 1
@@ -77,9 +88,60 @@ final class StdoutCaptureDelegate: NSObject, AVCaptureAudioDataOutputSampleBuffe
     private var sourceFormat: AVAudioFormat?
     let stdoutHandle = FileHandle.standardOutput
     let writeQueue = DispatchQueue(label: "stdout-writer")
+    // File sink (set when --output is passed). Writes a real WAV file
+    // with a 44-byte header so consumers don't need to wrap it. The
+    // header's data-size field is patched on close.
+    var fileHandle: FileHandle? = nil
+    var fileDataBytes: UInt32 = 0
 
     init(targetFormat: AVAudioFormat) {
         self.targetFormat = targetFormat
+    }
+
+    func openFileSink(at path: String) throws {
+        FileManager.default.createFile(atPath: path, contents: nil)
+        let h = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
+        // 44-byte placeholder header — patched in finishFileSink.
+        h.write(Data(count: 44))
+        fileHandle = h
+        fileDataBytes = 0
+    }
+
+    func finishFileSink() {
+        guard let h = fileHandle else { return }
+        // Build a canonical WAV header for 16 kHz mono Int16.
+        let sampleRate: UInt32 = 16_000
+        let channels: UInt16 = 1
+        let bits: UInt16 = 16
+        let byteRate: UInt32 = sampleRate * UInt32(channels) * UInt32(bits) / 8
+        let blockAlign: UInt16 = channels * bits / 8
+        var header = Data()
+        header.append("RIFF".data(using: .ascii)!)
+        var fileSize: UInt32 = 36 + fileDataBytes
+        withUnsafeBytes(of: &fileSize) { header.append(contentsOf: $0) }
+        header.append("WAVE".data(using: .ascii)!)
+        header.append("fmt ".data(using: .ascii)!)
+        var fmtChunk: UInt32 = 16
+        withUnsafeBytes(of: &fmtChunk) { header.append(contentsOf: $0) }
+        var fmtTag: UInt16 = 1  // PCM
+        withUnsafeBytes(of: &fmtTag) { header.append(contentsOf: $0) }
+        var ch = channels
+        withUnsafeBytes(of: &ch) { header.append(contentsOf: $0) }
+        var sr = sampleRate
+        withUnsafeBytes(of: &sr) { header.append(contentsOf: $0) }
+        var br = byteRate
+        withUnsafeBytes(of: &br) { header.append(contentsOf: $0) }
+        var ba = blockAlign
+        withUnsafeBytes(of: &ba) { header.append(contentsOf: $0) }
+        var bps = bits
+        withUnsafeBytes(of: &bps) { header.append(contentsOf: $0) }
+        header.append("data".data(using: .ascii)!)
+        var dataSize = fileDataBytes
+        withUnsafeBytes(of: &dataSize) { header.append(contentsOf: $0) }
+        try? h.seek(toOffset: 0)
+        h.write(header)
+        try? h.close()
+        fileHandle = nil
     }
 
     func captureOutput(
@@ -161,13 +223,29 @@ final class StdoutCaptureDelegate: NSObject, AVCaptureAudioDataOutputSampleBuffe
         guard let chan = buf.int16ChannelData?[0], buf.frameLength > 0 else { return }
         let byteCount = Int(buf.frameLength) * 2
         let data = Data(bytes: chan, count: byteCount)
-        writeQueue.async { [stdoutHandle] in
-            stdoutHandle.write(data)
+        if let h = fileHandle {
+            writeQueue.async { [weak self] in
+                h.write(data)
+                self?.fileDataBytes &+= UInt32(byteCount)
+            }
+        } else {
+            writeQueue.async { [stdoutHandle] in
+                stdoutHandle.write(data)
+            }
         }
     }
 }
 
 let delegate = StdoutCaptureDelegate(targetFormat: targetFormat)
+if let p = outputPath {
+    do {
+        try delegate.openFileSink(at: p)
+        eprint("output: \(p)")
+    } catch {
+        eprint("error: cannot open --output \(p): \(error.localizedDescription)")
+        exit(1)
+    }
+}
 
 // ---------- session ----------
 let session = AVCaptureSession()
@@ -207,3 +285,4 @@ while Date() < deadline && !stopRequested {
 
 session.stopRunning()
 delegate.writeQueue.sync { }
+delegate.finishFileSink()
