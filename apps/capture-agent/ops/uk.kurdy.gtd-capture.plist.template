@@ -32,8 +32,15 @@
     <key>ThrottleInterval</key>
     <integer>30</integer>
 
-    <key>ProcessType</key>
-    <string>Background</string>
+    <!--
+      NOTE: do NOT set <ProcessType>Background</ProcessType> here.
+      Background classification makes macOS strip LaunchServices / TCC
+      privileges from the agent's children — `open -W -a` then fails to
+      attribute mic permission to the bundle ID, and audio chunks come
+      back as silence. Default ProcessType (Standard/Adaptive) is what
+      lets the bundle helper get the user-granted mic. Learned the hard
+      way on 2026-05-26.
+    -->
 
     <key>StandardOutPath</key>
     <string>@LOGDIR@/@LABEL@.out.log</string>

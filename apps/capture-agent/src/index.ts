@@ -64,10 +64,14 @@ async function main() {
         const native = new NativeAudioRecorder({
           binaryPath: config.audio.nativeBinaryPath,
           noVoiceProcessing: config.audio.nativeNoVoiceProcessing,
+          bundlePath: config.audio.nativeBundlePath,
         })
         await native.ensureAvailable()
         recorder = native
-        console.log(`🎙  audio backend: native (${config.audio.nativeBinaryPath})`)
+        const route = config.audio.nativeBundlePath
+          ? `bundle via open: ${config.audio.nativeBundlePath}`
+          : `direct: ${config.audio.nativeBinaryPath}`
+        console.log(`🎙  audio backend: native (${route})`)
       } else {
         recorder = new FfmpegAudioRecorder({
           ffmpegPath: config.audio.ffmpegPath,

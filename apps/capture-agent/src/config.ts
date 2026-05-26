@@ -19,6 +19,9 @@ function defaultNativeBinaryPath(): string {
 function defaultDiarizeBinaryPath(): string {
   return audioHelperPath('gtd-audio-diarize')
 }
+function defaultBundlePath(): string {
+  return audioHelperPath('GTDAudioCapture.app')
+}
 
 function parseList(value: string | undefined): string[] {
   if (!value) return []
@@ -67,6 +70,10 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): AgentCo
       backend: (env.AGENT_AUDIO_BACKEND ?? 'native') === 'ffmpeg' ? 'ffmpeg' : 'native',
       nativeBinaryPath: env.AGENT_AUDIO_HELPER_PATH ?? defaultNativeBinaryPath(),
       nativeNoVoiceProcessing: env.AGENT_AUDIO_NO_VP === 'true',
+      nativeBundlePath:
+        env.AGENT_AUDIO_BUNDLE_DISABLED === 'true'
+          ? ''
+          : env.AGENT_AUDIO_BUNDLE_PATH ?? defaultBundlePath(),
       diarizeBinaryPath:
         env.AGENT_AUDIO_DIARIZE_DISABLED === 'true'
           ? ''
