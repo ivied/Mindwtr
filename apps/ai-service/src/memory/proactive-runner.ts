@@ -139,6 +139,42 @@ export class ProactiveRunner {
         continue
       }
 
+      if (this.config.requireTaskSignal && this.opts.mindwtrClient) {
+        const signal = await this.findEntityTaskSignal(group)
+        if (signal.kind === 'active') {
+          decisions.push({
+            entitySlug: group.entitySlug,
+            action: 'skipped-task-in-active-bucket',
+            reason: `entity has ${signal.activeCount} active task(s) — user is tracking it (UI annotation TBD)`,
+          })
+          skipped += 1
+          continue
+        }
+        if (signal.kind === 'inactive-only') {
+          const closed = this.opts.memoryStore.expireFactsForEntity(
+            group.entitySlug,
+            this.now().toISOString()
+          )
+          decisions.push({
+            entitySlug: group.entitySlug,
+            action: 'skipped-task-already-resolved',
+            reason: `entity only has ${signal.inactiveCount} done/someday/archived task(s); expired ${closed} fact(s)`,
+          })
+          skipped += 1
+          continue
+        }
+        if (signal.kind === 'none') {
+          decisions.push({
+            entitySlug: group.entitySlug,
+            action: 'skipped-no-task-materialized',
+            reason: 'no Mindwtr task found for this entity — user implicitly chose not to track',
+          })
+          skipped += 1
+          continue
+        }
+        // signal.kind === 'lookup-failed' → fall through to legacy behavior
+      }
+
       try {
         const evaluation = await this.evaluateGroup(group)
 
@@ -260,6 +296,70 @@ export class ProactiveRunner {
       )
       .all(slug, sinceIso, this.config.recentEventsPerEntity)
     return rows
+  }
+
+  // ---------------- task-signal gate (forward pass) ----------------
+
+  /**
+   * Probe Mindwtr for any task that looks related to this entity. The point
+   * is not exact matching — it's "did the user ever surface this as a task?".
+   *   - active: at least one task in inbox/next/waiting
+   *   - inactive-only: matches exist but all in done/someday/archived/deleted
+   *   - none: no match anywhere
+   *   - lookup-failed: search threw; caller falls back to legacy behavior
+   */
+  private async findEntityTaskSignal(
+    group: StaleFactGroup
+  ): Promise<
+    | { kind: 'active'; activeCount: number }
+    | { kind: 'inactive-only'; inactiveCount: number }
+    | { kind: 'none' }
+    | { kind: 'lookup-failed'; error: string }
+  > {
+    if (!this.opts.mindwtrClient) return { kind: 'lookup-failed', error: 'no client' }
+
+    const terms = this.buildEntitySearchTerms(group)
+    const seen = new Map<string, Task>()
+    try {
+      for (const term of terms) {
+        const tasks = await this.opts.mindwtrClient.searchTasks(term, { limit: 25 })
+        for (const t of tasks) {
+          if (!seen.has(t.id)) seen.set(t.id, t)
+        }
+      }
+    } catch (err) {
+      return { kind: 'lookup-failed', error: (err as Error).message }
+    }
+
+    const activeStatuses = new Set(this.config.openTaskStatuses)
+    let active = 0
+    let inactive = 0
+    for (const t of seen.values()) {
+      if (activeStatuses.has(t.status)) active += 1
+      else inactive += 1
+    }
+    if (active > 0) return { kind: 'active', activeCount: active }
+    if (inactive > 0) return { kind: 'inactive-only', inactiveCount: inactive }
+    return { kind: 'none' }
+  }
+
+  /**
+   * Search terms for entity-to-task matching. Slug (canonical) plus
+   * de-dashed slug plus the first 2-3 distinctive words from each fact
+   * statement. Lossy by design — false negatives just degrade noise
+   * suppression; false positives would silence too aggressively.
+   */
+  private buildEntitySearchTerms(group: StaleFactGroup): string[] {
+    const cap = this.config.taskSignalMaxSearchTermsPerGroup
+    const out = new Set<string>()
+    out.add(group.entitySlug)
+    if (group.entitySlug.includes('-')) out.add(group.entitySlug.replace(/-/g, ' '))
+    for (const f of group.facts) {
+      if (out.size >= cap + 2) break // +2 to leave room for slug + de-dashed
+      const phrase = extractEntityPhrase(f.statement)
+      if (phrase) out.add(phrase)
+    }
+    return Array.from(out).slice(0, cap + 2)
   }
 
   // ---------------- proposal writing ----------------
@@ -908,6 +1008,21 @@ function emptyCompletion(): CompletionEvaluation {
     reasoning: 'LLM output unparseable',
     confidence: 0,
   }
+}
+
+/**
+ * Extract a short, distinctive phrase from a fact statement for task search.
+ * Drops the fact-type prefix verbs ("waiting on", "working on") so the
+ * residual is the actual subject ("Joe code review", "Anna invoice").
+ */
+export function extractEntityPhrase(statement: string): string | null {
+  if (!statement) return null
+  const s = statement
+    .replace(/^(waiting on|working on|waiting for|expecting from|следит за|ждёт от)\s+/i, '')
+    .trim()
+  if (!s) return null
+  const words = s.split(/\s+/).slice(0, 3).join(' ')
+  return words.length >= 3 ? words : null
 }
 
 // suppress unused import warning when randomUUID isn't directly used

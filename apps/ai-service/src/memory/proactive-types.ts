@@ -80,6 +80,21 @@ export interface ProactiveConfig {
   recentEventsPerEntity: number
   /** Cap the lookback window for recent events. Default 14 days. */
   recentEventsWithinDays: number
+  /**
+   * When true (default), forward pass requires evidence that the entity has
+   * a Mindwtr task footprint before evaluating. Three skip outcomes:
+   *   - active task exists in inbox/next/waiting → skip (UI annotation TBD)
+   *   - only inactive tasks (done/someday/archived) → expire facts + skip
+   *   - no task anywhere → skip (user implicitly chose not to track)
+   * Set false to restore the legacy fact-stale-only behavior. Requires
+   * mindwtrClient — silently no-op'd otherwise.
+   */
+  requireTaskSignal: boolean
+  /**
+   * Per-statement search-term cap when matching facts → tasks. Keeps the
+   * outbound search request count bounded. Default 3.
+   */
+  taskSignalMaxSearchTermsPerGroup: number
 
   // ---------------- Reverse pass (open tasks → completion verdict) ----------------
 
@@ -114,6 +129,8 @@ export const DEFAULT_PROACTIVE_CONFIG: ProactiveConfig = {
   factTypesToScan: ['waiting_on', 'working_on'],
   recentEventsPerEntity: 5,
   recentEventsWithinDays: 14,
+  requireTaskSignal: true,
+  taskSignalMaxSearchTermsPerGroup: 3,
   // Reverse-pass (open tasks → completion verdict) defaults.
   reverseMinConfidence: 0.85,
   reverseMaxProposalsPerPass: 3,
@@ -127,7 +144,17 @@ export const DEFAULT_PROACTIVE_CONFIG: ProactiveConfig = {
 /** Per-group decision recorded for telemetry — what the runner did and why. */
 export interface ProactiveDecision {
   entitySlug: string
-  action: 'proposed' | 'skipped-recent-proposal' | 'skipped-not-stale' | 'skipped-low-confidence' | 'skipped-llm-no' | 'skipped-budget' | 'error'
+  action:
+    | 'proposed'
+    | 'skipped-recent-proposal'
+    | 'skipped-not-stale'
+    | 'skipped-low-confidence'
+    | 'skipped-llm-no'
+    | 'skipped-budget'
+    | 'skipped-task-in-active-bucket'
+    | 'skipped-task-already-resolved'
+    | 'skipped-no-task-materialized'
+    | 'error'
   proposalId?: string
   reason: string
   evaluation?: ProactiveEvaluation

@@ -219,6 +219,23 @@ export class MemoryStore {
     }
   }
 
+  /**
+   * Mark every currently-active fact for an entity as expired (valid_to=nowIso).
+   * Returns the number of facts closed. Used when an external signal (e.g.
+   * Mindwtr task moved to done/someday) tells us the fact group is resolved.
+   */
+  expireFactsForEntity(entitySlug: string, nowIso: string): number {
+    const res = this.db
+      .query(
+        `UPDATE facts
+           SET valid_to = ?
+         WHERE entity_slug = ?
+           AND valid_to IS NULL`
+      )
+      .run(nowIso, entitySlug)
+    return Number((res as unknown as { changes?: number }).changes ?? 0)
+  }
+
   /** All currently-active facts for a slug. */
   activeFactsFor(entitySlug: string): Fact[] {
     const rows = this.db

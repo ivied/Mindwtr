@@ -35,6 +35,7 @@ export interface Task {
   dueDate?: string
   createdAt: string
   updatedAt: string
+  metadata?: Record<string, unknown>
 }
 
 interface CreateProjectParams {
@@ -113,6 +114,21 @@ export class MindwtrClient {
       headers: this.headers,
     })
     if (!res.ok) throw new Error(`listTasks failed: ${res.status} ${await res.text()}`)
+    const data = await res.json()
+    return data.tasks ?? data
+  }
+
+  /**
+   * Substring search across tasks of every status (including archived/done).
+   * Used by ProactiveRunner to decide if an entity has any task footprint
+   * before proposing a follow-up.
+   */
+  async searchTasks(query: string, opts: { limit?: number } = {}): Promise<Task[]> {
+    const trimmed = query.trim()
+    if (!trimmed) return []
+    const qs = new URLSearchParams({ query: trimmed, all: '1', limit: String(opts.limit ?? 50) })
+    const res = await fetch(`${this.baseUrl}/v1/tasks?${qs}`, { headers: this.headers })
+    if (!res.ok) throw new Error(`searchTasks failed: ${res.status} ${await res.text()}`)
     const data = await res.json()
     return data.tasks ?? data
   }

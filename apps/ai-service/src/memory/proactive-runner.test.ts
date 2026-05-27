@@ -343,6 +343,81 @@ describe('ProactiveRunner.run', () => {
     expect(capturedPrompt).toContain('Stale: 50h')
   })
 
+  describe('task-signal gate (requireTaskSignal=true, default)', () => {
+    const noopLlm = () => mkLlm('SHOULD NOT BE CALLED — gate skipped this')
+
+    it('skips when entity has an active task (UI annotation TBD)', async () => {
+      seedFact({ slug: 'kate-t', type: 'working_on', statement: 'working on Kate Tikhonova', hoursAgo: 80 })
+      const task = mkTask({ id: 'k1', title: 'Pair with Kate Tikhonova', status: 'next' })
+      const runner = new ProactiveRunner({
+        memoryStore,
+        proposalStore,
+        llm: noopLlm(),
+        mindwtrClient: fakeMindwtrClient([task]),
+        now: () => NOW,
+      })
+      const r = await runner.runStaleFactsPass()
+      expect(r.proposed).toBe(0)
+      expect(r.decisions[0]!.action).toBe('skipped-task-in-active-bucket')
+      expect(memoryStore.activeFactsFor('kate-t').length).toBe(1) // not expired
+    })
+
+    it('expires facts + skips when entity only has done/someday tasks', async () => {
+      seedFact({ slug: 'kurt', type: 'working_on', statement: 'working on Kurt onboarding', hoursAgo: 90 })
+      const task = mkTask({ id: 'k2', title: 'Kurt onboarding deck', status: 'archived' })
+      const runner = new ProactiveRunner({
+        memoryStore,
+        proposalStore,
+        llm: noopLlm(),
+        mindwtrClient: fakeMindwtrClient([task]),
+        now: () => NOW,
+      })
+      const r = await runner.runStaleFactsPass()
+      expect(r.proposed).toBe(0)
+      expect(r.decisions[0]!.action).toBe('skipped-task-already-resolved')
+      expect(memoryStore.activeFactsFor('kurt').length).toBe(0) // expired
+    })
+
+    it('skips silently when no task matches anywhere', async () => {
+      seedFact({ slug: 'anna-saraeva', type: 'working_on', statement: 'working on Anna Saraeva visa', hoursAgo: 80 })
+      const runner = new ProactiveRunner({
+        memoryStore,
+        proposalStore,
+        llm: noopLlm(),
+        mindwtrClient: fakeMindwtrClient([]), // no tasks at all
+        now: () => NOW,
+      })
+      const r = await runner.runStaleFactsPass()
+      expect(r.proposed).toBe(0)
+      expect(r.decisions[0]!.action).toBe('skipped-no-task-materialized')
+      expect(memoryStore.activeFactsFor('anna-saraeva').length).toBe(1) // not expired (user might still review)
+    })
+
+    it('falls back to legacy behavior when requireTaskSignal=false', async () => {
+      seedFact({ slug: 'joe', type: 'waiting_on', statement: 'waiting on Joe', hoursAgo: 50 })
+      const llm = mkLlm(
+        JSON.stringify({
+          should_propose: true,
+          action_title: 'Ping Joe',
+          action_description: '',
+          action_kind: 'follow_up',
+          reasoning: 'r',
+          confidence: 0.9,
+        })
+      )
+      const runner = new ProactiveRunner({
+        memoryStore,
+        proposalStore,
+        llm,
+        mindwtrClient: fakeMindwtrClient([]),
+        now: () => NOW,
+        config: { requireTaskSignal: false },
+      })
+      const r = await runner.runStaleFactsPass()
+      expect(r.proposed).toBe(1)
+    })
+  })
+
   it('records error decision on LLM failure', async () => {
     seedFact({ slug: 'joe', type: 'waiting_on', statement: 'a', hoursAgo: 50 })
     const llm = {
@@ -367,6 +442,14 @@ function fakeMindwtrClient(tasks: Task[]): MindwtrClient {
     listTasks: async (params: { status?: string } = {}) => {
       if (!params.status) return tasks
       return tasks.filter((t) => t.status === params.status)
+    },
+    searchTasks: async (query: string) => {
+      const q = query.toLowerCase()
+      return tasks.filter(
+        (t) =>
+          t.title.toLowerCase().includes(q) ||
+          (t.description ?? '').toLowerCase().includes(q)
+      )
     },
   } as unknown as MindwtrClient
 }
