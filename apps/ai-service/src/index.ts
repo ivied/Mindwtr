@@ -37,6 +37,8 @@ import {
   ProactiveRunner,
 } from './memory'
 import { SlugCanonicalizer } from './memory/slug-canonicalizer'
+import { LlmPublisher } from './status/llm-publisher'
+import { startAgentWatchdog, DEFAULT_AGENT_WATCHDOG_CONFIG } from './agent-watchdog'
 import {
   ProceduralStore,
   ProceduralReader,
@@ -256,7 +258,15 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     const proceduralReader = new ProceduralReader({
       store: proceduralStore,
       rootDir: SHARED_MEMORY_DIR,
-      sources: [{ subdir: 'openclaw', source: 'openclaw' }],
+      sources: [
+        { subdir: 'openclaw', source: 'openclaw' },
+        // Mined rules (Slack/Notion/Telegram → topic.md), one subdir per source.
+        // Tolerates the directory being absent until the Playbook Miner runs.
+        { subdir: 'mined', source: 'mined' },
+      ],
+      // Allow top-level *.md (openclaw/MEMORY.md) AND one level of nesting
+      // (mined/<source>/<topic>.md) so the miner's per-source layout indexes.
+      pathFilter: (rel) => /^([^/\\]+\.md|[^/\\]+[\\/][^/\\]+\.md)$/i.test(rel),
       embeddings,
       intervalMs: SHARED_MEMORY_REINDEX_INTERVAL_MS,
       llmClassifier: procClassifier,
@@ -377,6 +387,25 @@ if (proposalNotifier.enabled) {
   enricherPipeline?.setNotifier(proposalNotifier)
 } else if (TG_NOTIFY_CHAT_ID === '') {
   console.log('ℹ️ TG_NOTIFY_CHAT_ID not set — proposal notifications disabled')
+}
+
+// Publish LLM verdicts to the macOS widget. Disabled when LLM_STATUS_FILE
+// is unset (typical for unit tests and non-Mac deploys).
+const llmPublisher = LlmPublisher.fromEnv()
+if (llmPublisher) {
+  console.log(`📊 LLM status → ${process.env.LLM_STATUS_FILE}`)
+  commitmentPipeline?.setLlmPublisher(llmPublisher)
+  enricherPipeline?.setLlmPublisher(llmPublisher)
+}
+
+// AI-agent stale-claim watchdog. Reverts ai-stage:doing tasks abandoned by
+// OpenClaw (crash, host offline) back to queued so the next OpenClaw tick
+// can pick them up. Disabled when AI_AGENT_WATCHDOG=false (tests).
+if (process.env.AI_AGENT_WATCHDOG !== 'false') {
+  startAgentWatchdog(mindwtr, DEFAULT_AGENT_WATCHDOG_CONFIG)
+  console.log(
+    `🛡  ai-agent watchdog: revert doing→queued after ${Math.round(DEFAULT_AGENT_WATCHDOG_CONFIG.staleAfterMs / 60000)}m, max ${DEFAULT_AGENT_WATCHDOG_CONFIG.maxRetries} retries`
+  )
 }
 
 function buildChannels(): Channel[] {
