@@ -13,7 +13,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Sparkles, Eye, EyeOff, Loader2, RefreshCw, Plus, Pencil, Trash2, X } from 'lucide-react';
+import { Sparkles, Eye, EyeOff, Loader2, RefreshCw, Plus, Pencil, Archive, ArchiveRestore, X } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import {
     isProceduralAvailable,
@@ -22,14 +22,13 @@ import {
     classifyProceduralChunk,
     createProceduralChunk,
     updateProceduralChunk,
-    deleteProceduralChunk,
     USER_SETTABLE_APPLIES,
     type ProceduralChunk,
     type ProceduralStats,
     type AppliesTo,
 } from '../../lib/procedural-client';
 
-type Filter = 'all' | 'universal' | 'openclaw-only';
+type Filter = 'all' | 'universal' | 'openclaw-only' | 'archived';
 
 export function ProceduralPlaybookView() {
     const available = isProceduralAvailable();
@@ -64,16 +63,26 @@ export function ProceduralPlaybookView() {
         else setLoading(false);
     }, [available, load]);
 
-    const onDelete = useCallback(
+    const onArchive = useCallback(
         async (chunk: ProceduralChunk) => {
-            if (chunk.source !== 'user') return;
-            if (!window.confirm(`Delete rule "${chunk.sectionTitle ?? 'Untitled'}"?`)) return;
+            const isArchived = chunk.appliesTo === 'archived';
+            // Archive is DB-only (classify → 'archived' | 'universal'). The
+            // file stays on disk so a sync/miner rewrite doesn't clobber the
+            // user's intent. Reclassify works on every source — openclaw and
+            // mined chunks can be archived too without touching their files.
+            const next: AppliesTo = isArchived ? 'universal' : 'archived';
             setBusyId(chunk.id);
+            setChunks((prev) =>
+                prev.map((c) =>
+                    c.id === chunk.id ? { ...c, appliesTo: next, classifiedBy: 'user' } : c
+                )
+            );
             try {
-                await deleteProceduralChunk(chunk.id);
-                await load();
+                await classifyProceduralChunk(chunk.id, next);
+                void getProceduralStats().then(setStats).catch(() => {});
             } catch (err) {
                 setError((err as Error).message);
+                void load();
             } finally {
                 setBusyId(null);
             }
@@ -103,7 +112,12 @@ export function ProceduralPlaybookView() {
     );
 
     const filtered = useMemo(() => {
-        const rows = filter === 'all' ? chunks : chunks.filter((c) => c.appliesTo === filter);
+        // Default "all" hides archived to keep the playbook view focused on
+        // live rules; the dedicated 'archived' tab surfaces them on demand.
+        const rows =
+            filter === 'all'
+                ? chunks.filter((c) => c.appliesTo !== 'archived')
+                : chunks.filter((c) => c.appliesTo === filter);
         // group by section title, preserving order
         const groups: { title: string; items: ProceduralChunk[] }[] = [];
         for (const c of rows) {
@@ -169,7 +183,7 @@ export function ProceduralPlaybookView() {
                     </div>
                 ) : null}
                 <div className="mt-3 flex gap-1">
-                    {(['all', 'universal', 'openclaw-only'] as Filter[]).map((f) => (
+                    {(['all', 'universal', 'openclaw-only', 'archived'] as Filter[]).map((f) => (
                         <button
                             key={f}
                             type="button"
@@ -179,7 +193,13 @@ export function ProceduralPlaybookView() {
                                 filter === f ? 'bg-primary text-primary-foreground' : 'border hover:bg-muted'
                             )}
                         >
-                            {f === 'all' ? 'All' : f === 'universal' ? 'Visible to AI' : 'Hidden'}
+                            {f === 'all'
+                                ? 'All'
+                                : f === 'universal'
+                                  ? 'Visible to AI'
+                                  : f === 'openclaw-only'
+                                    ? 'Hidden'
+                                    : 'Archived'}
                         </button>
                     ))}
                 </div>
@@ -230,7 +250,7 @@ export function ProceduralPlaybookView() {
                                             busy={busyId === c.id}
                                             onReclassify={onReclassify}
                                             onEdit={c.source === 'user' ? () => setEditing(c) : undefined}
-                                            onDelete={c.source === 'user' ? () => void onDelete(c) : undefined}
+                                            onArchive={() => void onArchive(c)}
                                         />
                                     ))}
                                 </div>
@@ -248,21 +268,26 @@ function ChunkRow({
     busy,
     onReclassify,
     onEdit,
-    onDelete,
+    onArchive,
 }: {
     chunk: ProceduralChunk;
     busy: boolean;
     onReclassify: (chunk: ProceduralChunk, applies: AppliesTo) => void;
     onEdit?: () => void;
-    onDelete?: () => void;
+    onArchive?: () => void;
 }) {
+    const isArchived = chunk.appliesTo === 'archived';
     const isUniversal = chunk.appliesTo === 'universal';
     const score = chunk.reliabilityScore;
     return (
         <div
             className={cn(
                 'rounded-md border p-2.5 text-sm',
-                isUniversal ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-border bg-muted/30'
+                isArchived
+                    ? 'border-border bg-muted/10 opacity-60'
+                    : isUniversal
+                      ? 'border-emerald-500/30 bg-emerald-500/5'
+                      : 'border-border bg-muted/30'
             )}
         >
             <div className="flex items-start justify-between gap-3">
@@ -310,15 +335,19 @@ function ChunkRow({
                             <Pencil className="h-3 w-3" />
                         </button>
                     ) : null}
-                    {onDelete ? (
+                    {onArchive ? (
                         <button
                             type="button"
-                            title="Delete rule"
-                            onClick={onDelete}
+                            title={isArchived ? 'Unarchive (back to universal)' : 'Archive rule'}
+                            onClick={onArchive}
                             disabled={busy}
-                            className="inline-flex items-center rounded border px-1.5 py-0.5 text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950 disabled:opacity-50"
+                            className="inline-flex items-center rounded border px-1.5 py-0.5 text-xs hover:bg-muted disabled:opacity-50"
                         >
-                            <Trash2 className="h-3 w-3" />
+                            {isArchived ? (
+                                <ArchiveRestore className="h-3 w-3" />
+                            ) : (
+                                <Archive className="h-3 w-3" />
+                            )}
                         </button>
                     ) : null}
                 </div>
