@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { Calendar, CalendarClock, ChevronRight, Copy, MapPin, Tag, Trash2, X } from 'lucide-react';
+import { Calendar, CalendarClock, ChevronRight, Copy, MapPin, Mic, Tag, Trash2, X } from 'lucide-react';
+import { isRecordingAvailable, startRecording } from '../../lib/recording-client';
 import {
     hasTimeComponent,
     safeFormatDate,
@@ -445,6 +446,24 @@ export function TaskQuickActionMenu({
                     showChevron: true,
                 })}
                 {!readOnly ? <div className="my-1 h-px bg-border/70" role="separator" /> : null}
+                {isRecordingAvailable() && renderMenuAction({
+                    icon: <Mic className="h-4 w-4" />,
+                    label: tFallback(t, 'task.startRecording', 'Start recording'),
+                    onClick: () => {
+                        void startRecording({ taskId: task.id, taskTitle: task.title }).catch(
+                            (err: Error & { status?: number }) => {
+                                if (err.status === 409) {
+                                    window.alert(
+                                        'Another recording session is already active. Stop it first (top banner).'
+                                    );
+                                } else {
+                                    window.alert(`Could not start recording: ${err.message}`);
+                                }
+                            }
+                        );
+                        onClose();
+                    },
+                })}
                 {renderMenuAction({
                     icon: <Copy className="h-4 w-4" />,
                     label: duplicateLabel,

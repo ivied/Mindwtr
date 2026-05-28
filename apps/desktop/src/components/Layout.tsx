@@ -25,6 +25,7 @@ import {
     type LucideIcon,
 } from 'lucide-react';
 import { isProceduralAvailable } from '../lib/procedural-client';
+import { RecordingBanner } from './RecordingBanner';
 import { SafeReloadButton } from './SafeReloadButton';
 import { cn } from '../lib/utils';
 import { shallow, useTaskStore, safeFormatDate, tFallback } from '@mindwtr/core';
@@ -663,12 +664,13 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
             {/* Main Content */}
             <main
                 id="main-content"
-                className="flex-1 overflow-auto"
+                className="flex-1 overflow-auto flex flex-col"
                 data-main-content
                 tabIndex={-1}
                 role="main"
                 aria-label={tFallback(t, 'accessibility.mainContent', 'Main content')}
             >
+                <RecordingBanner />
                 <div className={cn(
                     "mx-auto p-8 h-full",
                     isFocusMode
