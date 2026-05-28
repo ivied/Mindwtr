@@ -47,7 +47,7 @@ import {
   ProceduralProposerBlock,
   LlmChunkClassifier,
 } from './memory/procedural'
-import { RecordingSessionStore } from './recording'
+import { RecordingDistiller, RecordingSessionStore } from './recording'
 
 const MINDWTR_CLOUD_URL = process.env.MINDWTR_CLOUD_URL ?? 'http://localhost:8787'
 const MINDWTR_AUTH_TOKEN = process.env.MINDWTR_AUTH_TOKEN ?? ''
@@ -195,6 +195,7 @@ let proactiveRunner: ProactiveRunner | null = null
 let proceduralStore: ProceduralStore | null = null
 let proceduralReader: ProceduralReader | null = null
 const recordingStore = new RecordingSessionStore(contextStore.rawDb)
+let recordingDistiller: RecordingDistiller | null = null
 
 // --- AI Enricher (push) + Commitment Detector (pull) + Reviser ---
 let enricherPipeline: EnricherPipeline | null = null
@@ -290,6 +291,31 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     console.log(
       `📖 Procedural memory enabled (root=${SHARED_MEMORY_DIR}, reindex=${SHARED_MEMORY_REINDEX_INTERVAL_MS}ms, chunks=${proceduralStore.countChunks()}, classifier=llm)`
     )
+
+    // Phase 2c: distillation worker. Sweeps stopped, undistilled sessions
+    // every 30s; the stop endpoint can also fire it immediately for the
+    // freshly-stopped session via the hook in HttpServerConfig.recordings.
+    recordingDistiller = new RecordingDistiller({
+      llm,
+      model: LLM_MODEL,
+      db: contextStore.rawDb,
+      sessionStore: recordingStore,
+      proceduralStore,
+      proceduralReader: proceduralReader!,
+      sharedMemoryDir: SHARED_MEMORY_DIR,
+      log: (msg) => console.log(msg),
+      onDraftReady: (session, chunkId) => {
+        const label = session.taskTitle ?? session.taskId
+        console.log(
+          `🎙 Recording distilled: "${label}" → chunk ${chunkId?.slice(0, 8) ?? '(unindexed)'}`
+        )
+      },
+    })
+    setInterval(
+      () => void recordingDistiller!.distillPending().catch(() => {}),
+      30_000
+    )
+    console.log('🎙 Recording distiller enabled (30s sweep)')
   }
   console.log(
     `🎯 Commitment Detector enabled (deny apps:${sourceDeny.apps.length}, deny urls:${sourceDeny.urlPatterns.length}, inbox-dedup on, identity:${USER_IDENTITY_NAME || 'unset'}, persons:${personsProvider ? 'wiki' : 'unset'})`
@@ -580,7 +606,19 @@ async function main() {
                 : undefined,
           }
         : null,
-      recordings: recordingStore ? { store: recordingStore } : null,
+      recordings: recordingStore
+        ? {
+            store: recordingStore,
+            onStopped: (_sessionId) => {
+              // Fire-and-forget — distiller picks the session up by status.
+              if (recordingDistiller) {
+                void recordingDistiller.distillPending().catch((err: Error) => {
+                  console.warn(`[distill] sweep after stop failed: ${err.message}`)
+                })
+              }
+            },
+          }
+        : null,
     })
     http = server.serve()
     console.log(

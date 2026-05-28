@@ -112,7 +112,11 @@ export interface HttpServerConfig {
   /** Optional procedural memory — when set, exposes GET/POST /v1/procedural/* (FR88 review API). */
   procedural?: ProceduralHttpDeps | null
   /** Optional recording-session store — exposes /v1/recordings/* (Phase 2). */
-  recordings?: { store: RecordingSessionStore } | null
+  recordings?: {
+    store: RecordingSessionStore
+    /** Optional: fired (fire-and-forget) after stop so distillation begins immediately. */
+    onStopped?: (sessionId: string) => void
+  } | null
   /** Allowed origins for CORS. Default ['http://localhost:5173']. */
   corsOrigins?: string[]
 }
@@ -908,7 +912,10 @@ function mountProceduralRoutes(app: Hono, deps: ProceduralHttpDeps): void {
 
 function mountRecordingRoutes(
   app: Hono,
-  deps: { store: RecordingSessionStore }
+  deps: {
+    store: RecordingSessionStore
+    onStopped?: (sessionId: string) => void
+  }
 ): void {
   // GET /v1/recordings/active — capture-agent polls this every few seconds
   // to decide whether to enter intensified mode. Public-ish: anything that
@@ -958,6 +965,7 @@ function mountRecordingRoutes(
     const id = c.req.param('id')
     const session = deps.store.stop(id)
     if (!session) return c.json({ error: 'session not found' }, 404)
+    deps.onStopped?.(id)
     return c.json({ ok: true, session })
   })
 }
