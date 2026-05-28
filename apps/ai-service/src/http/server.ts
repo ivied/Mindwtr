@@ -11,6 +11,8 @@
  *   POST   /v1/proposals/task-changes     — webhook from Mindwtr cloud (edit/delete events)
  */
 
+import { mkdir, readdir, unlink, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { Hono } from 'hono'
 import { bearerAuth } from 'hono/bearer-auth'
 import { cors } from 'hono/cors'
@@ -56,6 +58,13 @@ export interface ProposalsHttpDeps {
    */
   onTaskCreated?: (taskId: string, fields: TaskFieldsSnapshot) => void
   /**
+   * Optional: notify Telegram when an @ai-agent task transitions into
+   * ai-stage:review (OpenClaw finished) or ai-stage:error (it failed).
+   * Called from the task-changes webhook on every edit; dedup is the
+   * notifier's problem.
+   */
+  onTaskEdited?: (taskId: string, fields: TaskFieldsSnapshot) => void | Promise<void>
+  /**
    * Optional (FR89): on approve/reject, push a reliability signal to the
    * procedural memory for whatever playbook chunks the Proposer cited.
    * positive = AI was useful (approved / already-done), negative = AI was
@@ -80,6 +89,13 @@ export interface MemoryHttpDeps {
 
 export interface ProceduralHttpDeps {
   store: ProceduralStore
+  /** Optional — enables hand-written-rule CRUD under shared-memory/user/. */
+  userCrud?: {
+    /** Absolute path to shared-memory root (the dir that contains user/). */
+    sharedMemoryDir: string
+    /** Force a sync re-scan after a file mutation. */
+    scanNow: () => Promise<void>
+  }
 }
 
 export interface HttpServerConfig {
@@ -111,7 +127,7 @@ export function createHttpServer(config: HttpServerConfig) {
     cors({
       origin: corsOrigins,
       allowHeaders: ['Authorization', 'Content-Type'],
-      allowMethods: ['GET', 'POST', 'OPTIONS'],
+      allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
       maxAge: 86400,
     })
   )
@@ -384,6 +400,12 @@ function mountProposalRoutes(app: Hono, deps: ProposalsHttpDeps): void {
       } catch (err) {
         console.error('[task-changes] onTaskCreated hook threw:', (err as Error).message)
       }
+    }
+    // edit events: notify on @ai-agent stage transitions (review / error).
+    if (event.kind === 'edit' && deps.onTaskEdited) {
+      Promise.resolve(deps.onTaskEdited(event.taskId, event.fields)).catch((err) =>
+        console.error('[task-changes] onTaskEdited hook threw:', (err as Error).message)
+      )
     }
     const outcomes = deps.taskChangeProcessor.process(event)
     return c.json({ ok: true, outcomes })
@@ -659,6 +681,9 @@ function mountProceduralRoutes(app: Hono, deps: ProceduralHttpDeps): void {
         sectionIndex: r.sectionIndex,
         sectionTitle: r.sectionTitle,
         excerpt: r.text.replace(/\s+/g, ' ').trim().slice(0, 280),
+        // Full body — only used by the edit dialog for source='user' rows.
+        // Trade-off: ~30KB extra payload across the whole list, negligible.
+        text: r.text,
         appliesTo: r.appliesTo,
         classifiedBy: r.classifiedBy,
         classifiedAt: r.classifiedAt,
@@ -704,5 +729,169 @@ function mountProceduralRoutes(app: Hono, deps: ProceduralHttpDeps): void {
         : null,
     })
   })
+
+  // ---------------- Hand-written-rule CRUD (source='user') ----------------
+  // File-as-source-of-truth: every mutation writes shared-memory/user/<slug>.md
+  // then forces a re-scan so the returned row reflects what the reader sees.
+  // Only chunks with source='user' are editable — openclaw/mined files are
+  // owned by sync scripts / the miner agent and would be clobbered.
+
+  if (deps.userCrud) {
+    const { sharedMemoryDir, scanNow } = deps.userCrud
+    const userDir = join(sharedMemoryDir, 'user')
+
+    const slugify = (title: string): string =>
+      title
+        .toLowerCase()
+        .normalize('NFKD')
+        .replace(/[̀-ͯ]/g, '')
+        .replace(/[^a-z0-9Ѐ-ӿ]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 80) || 'untitled'
+
+    const renderFile = (title: string, body: string): string => {
+      const cleanBody = body.trim()
+      const titleLine = title.trim()
+      return `## ${titleLine}\n\n${cleanBody}\n`
+    }
+
+    const findFreeSlug = async (base: string): Promise<string> => {
+      await mkdir(userDir, { recursive: true })
+      const existing = new Set(await readdir(userDir).catch(() => [] as string[]))
+      if (!existing.has(`${base}.md`)) return base
+      for (let i = 2; i < 1000; i++) {
+        const cand = `${base}-${i}`
+        if (!existing.has(`${cand}.md`)) return cand
+      }
+      throw new Error('failed to allocate slug')
+    }
+
+    // POST /v1/procedural/chunks  — create a new hand-written rule
+    // Body: { title: string, body: string, appliesTo?: 'universal'|'openclaw-only'|'mindwtr-only' }
+    app.post('/v1/procedural/chunks', async (c) => {
+      let body: { title?: unknown; body?: unknown; appliesTo?: unknown }
+      try {
+        body = (await c.req.json()) as typeof body
+      } catch {
+        return c.json({ error: 'invalid JSON' }, 400)
+      }
+      const title = typeof body.title === 'string' ? body.title.trim() : ''
+      const ruleBody = typeof body.body === 'string' ? body.body.trim() : ''
+      if (!title) return c.json({ error: 'title is required' }, 400)
+      if (!ruleBody) return c.json({ error: 'body is required' }, 400)
+      const appliesTo =
+        typeof body.appliesTo === 'string' &&
+        (USER_SETTABLE_APPLIES as string[]).includes(body.appliesTo)
+          ? (body.appliesTo as AppliesTo)
+          : ('universal' as AppliesTo)
+
+      const baseSlug = slugify(title)
+      const slug = await findFreeSlug(baseSlug)
+      const relPath = `${slug}.md`
+      const absPath = join(userDir, relPath)
+      await writeFile(absPath, renderFile(title, ruleBody), 'utf8')
+      await scanNow()
+
+      // Reader re-scanned — find the new chunk by (source, path).
+      const created = deps.store
+        .listChunks({ source: 'user', limit: 500 })
+        .items.find((r) => r.path === relPath)
+      if (!created) return c.json({ error: 'chunk written but not indexed' }, 500)
+
+      // Stamp the user's intent so the heuristic/LLM passes don't second-guess.
+      deps.store.classify(created.id, appliesTo, 'user')
+      const final = deps.store.getById(created.id)
+      return c.json(
+        {
+          ok: true,
+          chunk: final
+            ? {
+                id: final.id,
+                source: final.source,
+                path: final.path,
+                sectionTitle: final.sectionTitle,
+                excerpt: final.text.replace(/\s+/g, ' ').trim().slice(0, 280),
+                appliesTo: final.appliesTo,
+                classifiedBy: final.classifiedBy,
+              }
+            : null,
+        },
+        201
+      )
+    })
+
+    // PATCH /v1/procedural/chunks/:id  — edit title and/or body
+    // Body: { title?: string, body?: string, appliesTo?: AppliesTo }
+    app.patch('/v1/procedural/chunks/:id', async (c) => {
+      const id = c.req.param('id')
+      const existing = deps.store.getById(id)
+      if (!existing) return c.json({ error: 'chunk not found' }, 404)
+      if (existing.source !== 'user') {
+        return c.json({ error: 'only user-source chunks are editable' }, 403)
+      }
+      let body: { title?: unknown; body?: unknown; appliesTo?: unknown }
+      try {
+        body = (await c.req.json()) as typeof body
+      } catch {
+        return c.json({ error: 'invalid JSON' }, 400)
+      }
+      const newTitle =
+        typeof body.title === 'string' && body.title.trim()
+          ? body.title.trim()
+          : existing.sectionTitle ?? 'Untitled'
+      const newBody =
+        typeof body.body === 'string' && body.body.trim()
+          ? body.body.trim()
+          : // Strip the leading "## title\n\n" preamble to recover the body.
+            existing.text.replace(/^##\s+[^\n]+\n+/, '').trim()
+      const appliesTo =
+        typeof body.appliesTo === 'string' &&
+        (USER_SETTABLE_APPLIES as string[]).includes(body.appliesTo)
+          ? (body.appliesTo as AppliesTo)
+          : existing.appliesTo
+
+      const absPath = join(userDir, existing.path)
+      await writeFile(absPath, renderFile(newTitle, newBody), 'utf8')
+      await scanNow()
+
+      // Content hash changed → new id. Look up the post-edit row.
+      const updated = deps.store
+        .listChunks({ source: 'user', limit: 500 })
+        .items.find((r) => r.path === existing.path)
+      if (!updated) return c.json({ error: 'chunk written but not re-indexed' }, 500)
+      deps.store.classify(updated.id, appliesTo, 'user')
+      const final = deps.store.getById(updated.id)
+      return c.json({
+        ok: true,
+        chunk: final
+          ? {
+              id: final.id,
+              source: final.source,
+              path: final.path,
+              sectionTitle: final.sectionTitle,
+              excerpt: final.text.replace(/\s+/g, ' ').trim().slice(0, 280),
+              appliesTo: final.appliesTo,
+              classifiedBy: final.classifiedBy,
+            }
+          : null,
+      })
+    })
+
+    // DELETE /v1/procedural/chunks/:id  — unlink the file; reader purges row
+    app.delete('/v1/procedural/chunks/:id', async (c) => {
+      const id = c.req.param('id')
+      const existing = deps.store.getById(id)
+      if (!existing) return c.json({ error: 'chunk not found' }, 404)
+      if (existing.source !== 'user') {
+        return c.json({ error: 'only user-source chunks are deletable' }, 403)
+      }
+      const absPath = join(userDir, existing.path)
+      await unlink(absPath).catch((err: NodeJS.ErrnoException) => {
+        if (err.code !== 'ENOENT') throw err
+      })
+      await scanNow()
+      return c.json({ ok: true })
+    })
+  }
 }
 

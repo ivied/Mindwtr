@@ -39,6 +39,7 @@ import {
 import { SlugCanonicalizer } from './memory/slug-canonicalizer'
 import { LlmPublisher } from './status/llm-publisher'
 import { startAgentWatchdog, DEFAULT_AGENT_WATCHDOG_CONFIG } from './agent-watchdog'
+import { ReviewNotifier } from './agent-watchdog/review-notifier'
 import {
   ProceduralStore,
   ProceduralReader,
@@ -191,6 +192,7 @@ let proactiveRunner: ProactiveRunner | null = null
 // Hoisted so the HTTP server (FR88 review API) can reference it; assigned
 // inside the SHARED_MEMORY_DIR block below when procedural memory is on.
 let proceduralStore: ProceduralStore | null = null
+let proceduralReader: ProceduralReader | null = null
 
 // --- AI Enricher (push) + Commitment Detector (pull) + Reviser ---
 let enricherPipeline: EnricherPipeline | null = null
@@ -255,7 +257,7 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     // left as 'needs-review' each tick — capped at 10 chunks/tick so we
     // don't blow the budget on a fresh import.
     const procClassifier = new LlmChunkClassifier({ llm, model: LLM_MODEL })
-    const proceduralReader = new ProceduralReader({
+    proceduralReader = new ProceduralReader({
       store: proceduralStore,
       rootDir: SHARED_MEMORY_DIR,
       sources: [
@@ -263,6 +265,9 @@ if (LLM_BASE_URL && LLM_API_KEY) {
         // Mined rules (Slack/Notion/Telegram → topic.md), one subdir per source.
         // Tolerates the directory being absent until the Playbook Miner runs.
         { subdir: 'mined', source: 'mined' },
+        // Hand-written rules created via the AI Playbook UI. One file per rule
+        // (user/<topic-slug>.md) keeps CRUD simple — delete = unlink.
+        { subdir: 'user', source: 'user' },
       ],
       // Allow top-level *.md (openclaw/MEMORY.md) AND one level of nesting
       // (mined/<source>/<topic>.md) so the miner's per-source layout indexes.
@@ -387,6 +392,16 @@ if (proposalNotifier.enabled) {
   enricherPipeline?.setNotifier(proposalNotifier)
 } else if (TG_NOTIFY_CHAT_ID === '') {
   console.log('ℹ️ TG_NOTIFY_CHAT_ID not set — proposal notifications disabled')
+}
+
+// TG notifier for AI-agent stage transitions (review / error). Shares the
+// same chat as proposal notifications. Wired into the task-changes webhook
+// below so OpenClaw-driven PATCHes surface as live TG pings.
+const reviewNotifier = TG_NOTIFY_CHAT_ID
+  ? new ReviewNotifier({ bot, notifyChatId: TG_NOTIFY_CHAT_ID, webBaseUrl: MINDWTR_WEB_URL })
+  : null
+if (reviewNotifier) {
+  console.log(`📣 TG ai-agent stage notifications → chat ${TG_NOTIFY_CHAT_ID}`)
 }
 
 // Publish LLM verdicts to the macOS widget. Disabled when LLM_STATUS_FILE
@@ -514,6 +529,9 @@ async function main() {
             // tasks) reach us through this webhook. Hand them to the same
             // Enricher pipeline push captures use so the user gets an AI
             // suggestion on the manually-added card within a few seconds.
+            onTaskEdited: reviewNotifier
+              ? (taskId, fields) => void reviewNotifier!.onTaskEdit(taskId, fields)
+              : undefined,
             onTaskCreated: enricherPipeline
               ? (taskId, fields) => {
                   const text = (fields.title ?? '') + (fields.description ? '\n' + fields.description : '')
@@ -546,7 +564,20 @@ async function main() {
             ingest: memoryIngest,
           }
         : null,
-      procedural: proceduralStore ? { store: proceduralStore } : null,
+      procedural: proceduralStore
+        ? {
+            store: proceduralStore,
+            userCrud:
+              proceduralReader && SHARED_MEMORY_DIR
+                ? {
+                    sharedMemoryDir: SHARED_MEMORY_DIR,
+                    scanNow: async () => {
+                      await proceduralReader!.scanOnce()
+                    },
+                  }
+                : undefined,
+          }
+        : null,
     })
     http = server.serve()
     console.log(

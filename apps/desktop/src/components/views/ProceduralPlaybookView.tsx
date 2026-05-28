@@ -13,13 +13,17 @@
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Sparkles, Eye, EyeOff, Loader2, RefreshCw } from 'lucide-react';
+import { Sparkles, Eye, EyeOff, Loader2, RefreshCw, Plus, Pencil, Trash2, X } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import {
     isProceduralAvailable,
     getProceduralStats,
     listProceduralChunks,
     classifyProceduralChunk,
+    createProceduralChunk,
+    updateProceduralChunk,
+    deleteProceduralChunk,
+    USER_SETTABLE_APPLIES,
     type ProceduralChunk,
     type ProceduralStats,
     type AppliesTo,
@@ -35,6 +39,8 @@ export function ProceduralPlaybookView() {
     const [error, setError] = useState<string | null>(null);
     const [filter, setFilter] = useState<Filter>('all');
     const [busyId, setBusyId] = useState<string | null>(null);
+    const [editing, setEditing] = useState<ProceduralChunk | null>(null);
+    const [creating, setCreating] = useState(false);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -57,6 +63,23 @@ export function ProceduralPlaybookView() {
         if (available) void load();
         else setLoading(false);
     }, [available, load]);
+
+    const onDelete = useCallback(
+        async (chunk: ProceduralChunk) => {
+            if (chunk.source !== 'user') return;
+            if (!window.confirm(`Delete rule "${chunk.sectionTitle ?? 'Untitled'}"?`)) return;
+            setBusyId(chunk.id);
+            try {
+                await deleteProceduralChunk(chunk.id);
+                await load();
+            } catch (err) {
+                setError((err as Error).message);
+            } finally {
+                setBusyId(null);
+            }
+        },
+        [load]
+    );
 
     const onReclassify = useCallback(
         async (chunk: ProceduralChunk, appliesTo: AppliesTo) => {
@@ -110,13 +133,22 @@ export function ProceduralPlaybookView() {
                     <h1 className="flex items-center gap-2 text-lg font-semibold">
                         <Sparkles className="h-5 w-5 text-violet-500" /> AI Playbook
                     </h1>
-                    <button
-                        type="button"
-                        onClick={() => void load()}
-                        className="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs hover:bg-muted"
-                    >
-                        <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} /> Refresh
-                    </button>
+                    <div className="flex items-center gap-1">
+                        <button
+                            type="button"
+                            onClick={() => setCreating(true)}
+                            className="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs hover:bg-muted"
+                        >
+                            <Plus className="h-3.5 w-3.5" /> New rule
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => void load()}
+                            className="inline-flex items-center gap-1 rounded border px-2 py-1 text-xs hover:bg-muted"
+                        >
+                            <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} /> Refresh
+                        </button>
+                    </div>
                 </div>
                 {stats ? (
                     <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
@@ -153,6 +185,28 @@ export function ProceduralPlaybookView() {
                 </div>
             </div>
 
+            {creating ? (
+                <RuleDialog
+                    mode="create"
+                    onClose={() => setCreating(false)}
+                    onSaved={() => {
+                        setCreating(false);
+                        void load();
+                    }}
+                />
+            ) : null}
+            {editing ? (
+                <RuleDialog
+                    mode="edit"
+                    chunk={editing}
+                    onClose={() => setEditing(null)}
+                    onSaved={() => {
+                        setEditing(null);
+                        void load();
+                    }}
+                />
+            ) : null}
+
             <div className="flex-1 overflow-y-auto px-6 py-4">
                 {error ? <div className="mb-3 text-sm text-destructive">{error}</div> : null}
                 {loading && chunks.length === 0 ? (
@@ -175,6 +229,8 @@ export function ProceduralPlaybookView() {
                                             chunk={c}
                                             busy={busyId === c.id}
                                             onReclassify={onReclassify}
+                                            onEdit={c.source === 'user' ? () => setEditing(c) : undefined}
+                                            onDelete={c.source === 'user' ? () => void onDelete(c) : undefined}
                                         />
                                     ))}
                                 </div>
@@ -191,10 +247,14 @@ function ChunkRow({
     chunk,
     busy,
     onReclassify,
+    onEdit,
+    onDelete,
 }: {
     chunk: ProceduralChunk;
     busy: boolean;
     onReclassify: (chunk: ProceduralChunk, applies: AppliesTo) => void;
+    onEdit?: () => void;
+    onDelete?: () => void;
 }) {
     const isUniversal = chunk.appliesTo === 'universal';
     const score = chunk.reliabilityScore;
@@ -239,10 +299,33 @@ function ChunkRow({
                     >
                         <EyeOff className="h-3 w-3" />
                     </button>
+                    {onEdit ? (
+                        <button
+                            type="button"
+                            title="Edit rule"
+                            onClick={onEdit}
+                            disabled={busy}
+                            className="inline-flex items-center rounded border px-1.5 py-0.5 text-xs hover:bg-muted disabled:opacity-50"
+                        >
+                            <Pencil className="h-3 w-3" />
+                        </button>
+                    ) : null}
+                    {onDelete ? (
+                        <button
+                            type="button"
+                            title="Delete rule"
+                            onClick={onDelete}
+                            disabled={busy}
+                            className="inline-flex items-center rounded border px-1.5 py-0.5 text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950 disabled:opacity-50"
+                        >
+                            <Trash2 className="h-3 w-3" />
+                        </button>
+                    ) : null}
                 </div>
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-x-2 text-[10px] uppercase tracking-wide text-muted-foreground">
-                <span>{chunk.appliesTo}</span>
+                <span>{chunk.source}</span>
+                <span>· {chunk.appliesTo}</span>
                 {chunk.classifiedBy ? <span>· by {chunk.classifiedBy}</span> : null}
                 {score != null ? (
                     <span
@@ -258,6 +341,144 @@ function ChunkRow({
                         · reliability {score.toFixed(2)}
                     </span>
                 ) : null}
+            </div>
+        </div>
+    );
+}
+
+function RuleDialog({
+    mode,
+    chunk,
+    onClose,
+    onSaved,
+}: {
+    mode: 'create' | 'edit';
+    chunk?: ProceduralChunk;
+    onClose: () => void;
+    onSaved: () => void;
+}) {
+    const initialBody = useMemo(() => {
+        if (!chunk) return '';
+        // Strip the leading "## title" line that lives in r.text — the title
+        // is edited separately. Fall back to excerpt when text isn't sent.
+        const raw = chunk.text ?? chunk.excerpt;
+        return raw.replace(/^##\s+[^\n]+\n+/, '').trim();
+    }, [chunk]);
+    const [title, setTitle] = useState(chunk?.sectionTitle ?? '');
+    const [body, setBody] = useState(initialBody);
+    const [appliesTo, setAppliesTo] = useState<AppliesTo>(
+        chunk?.appliesTo && USER_SETTABLE_APPLIES.includes(chunk.appliesTo)
+            ? chunk.appliesTo
+            : 'universal'
+    );
+    const [saving, setSaving] = useState(false);
+    const [err, setErr] = useState<string | null>(null);
+
+    const submit = useCallback(async () => {
+        if (!title.trim() || !body.trim()) {
+            setErr('Title and body are required');
+            return;
+        }
+        setSaving(true);
+        setErr(null);
+        try {
+            if (mode === 'create') {
+                await createProceduralChunk({ title: title.trim(), body: body.trim(), appliesTo });
+            } else if (chunk) {
+                await updateProceduralChunk(chunk.id, {
+                    title: title.trim(),
+                    body: body.trim(),
+                    appliesTo,
+                });
+            }
+            onSaved();
+        } catch (e) {
+            setErr((e as Error).message);
+        } finally {
+            setSaving(false);
+        }
+    }, [mode, chunk, title, body, appliesTo, onSaved]);
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <div className="w-full max-w-xl rounded-lg border bg-background shadow-lg">
+                <div className="flex items-center justify-between border-b px-4 py-3">
+                    <h2 className="text-sm font-semibold">
+                        {mode === 'create' ? 'New playbook rule' : 'Edit playbook rule'}
+                    </h2>
+                    <button type="button" onClick={onClose} className="rounded p-1 hover:bg-muted">
+                        <X className="h-4 w-4" />
+                    </button>
+                </div>
+                <div className="space-y-3 p-4">
+                    <div>
+                        <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            Title
+                        </label>
+                        <input
+                            type="text"
+                            value={title}
+                            onChange={(e) => setTitle(e.target.value)}
+                            placeholder="e.g. Communicating with clients"
+                            className="w-full rounded border bg-background px-2 py-1.5 text-sm"
+                            autoFocus
+                        />
+                    </div>
+                    <div>
+                        <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            Rule body (markdown)
+                        </label>
+                        <textarea
+                            value={body}
+                            onChange={(e) => setBody(e.target.value)}
+                            placeholder="- I reply to clients on Upwork within ~4h\n- I track finances in Notion, not spreadsheets"
+                            rows={8}
+                            className="w-full resize-y rounded border bg-background px-2 py-1.5 font-mono text-xs"
+                        />
+                    </div>
+                    <div>
+                        <label className="mb-1 block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            Visibility
+                        </label>
+                        <div className="flex gap-1">
+                            {USER_SETTABLE_APPLIES.map((a) => (
+                                <button
+                                    key={a}
+                                    type="button"
+                                    onClick={() => setAppliesTo(a)}
+                                    className={cn(
+                                        'rounded border px-2 py-1 text-xs',
+                                        appliesTo === a
+                                            ? 'bg-primary text-primary-foreground'
+                                            : 'hover:bg-muted'
+                                    )}
+                                >
+                                    {a}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    {err ? <div className="text-xs text-rose-600">{err}</div> : null}
+                </div>
+                <div className="flex justify-end gap-2 border-t px-4 py-3">
+                    <button
+                        type="button"
+                        onClick={onClose}
+                        disabled={saving}
+                        className="rounded border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => void submit()}
+                        disabled={saving}
+                        className="inline-flex items-center gap-1 rounded bg-primary px-3 py-1.5 text-xs text-primary-foreground disabled:opacity-50"
+                    >
+                        {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                        {mode === 'create' ? 'Create' : 'Save'}
+                    </button>
+                </div>
             </div>
         </div>
     );

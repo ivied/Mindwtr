@@ -28,6 +28,8 @@ export interface ProceduralChunk {
     sectionIndex: number;
     sectionTitle: string | null;
     excerpt: string;
+    /** Full body — present in list responses, used by the edit dialog. */
+    text?: string;
     appliesTo: AppliesTo;
     classifiedBy: 'heuristic' | 'llm' | 'user' | null;
     classifiedAt: string | null;
@@ -106,4 +108,31 @@ export async function classifyProceduralChunk(
         `/v1/procedural/chunks/${id}/classify`,
         { method: 'POST', body: JSON.stringify({ appliesTo }) }
     );
+}
+
+// ---------------- Hand-written rule CRUD (source='user') ----------------
+
+export async function createProceduralChunk(input: {
+    title: string;
+    body: string;
+    appliesTo?: AppliesTo;
+}): Promise<{ ok: boolean; chunk: ProceduralChunk | null }> {
+    return apiFetch<{ ok: boolean; chunk: ProceduralChunk | null }>(
+        '/v1/procedural/chunks',
+        { method: 'POST', body: JSON.stringify(input) }
+    );
+}
+
+export async function updateProceduralChunk(
+    id: string,
+    input: { title?: string; body?: string; appliesTo?: AppliesTo }
+): Promise<{ ok: boolean; chunk: ProceduralChunk | null }> {
+    return apiFetch<{ ok: boolean; chunk: ProceduralChunk | null }>(
+        `/v1/procedural/chunks/${id}`,
+        { method: 'PATCH', body: JSON.stringify(input) }
+    );
+}
+
+export async function deleteProceduralChunk(id: string): Promise<{ ok: boolean }> {
+    return apiFetch<{ ok: boolean }>(`/v1/procedural/chunks/${id}`, { method: 'DELETE' });
 }
