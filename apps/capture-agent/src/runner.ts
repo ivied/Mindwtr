@@ -173,9 +173,14 @@ export interface LoopController {
   stop: () => Promise<void>
 }
 
-export function startLoop(deps: RunnerDeps, intervalMs: number): LoopController {
+export function startLoop(
+  deps: RunnerDeps,
+  intervalMs: number | (() => number)
+): LoopController {
   let stopped = false
   let timer: NodeJS.Timeout | null = null
+  const resolveInterval = () =>
+    typeof intervalMs === 'function' ? intervalMs() : intervalMs
 
   const tick = async () => {
     if (stopped) return
@@ -185,11 +190,11 @@ export function startLoop(deps: RunnerDeps, intervalMs: number): LoopController 
     } catch (err) {
       deps.log?.(`error: ${(err as Error).message ?? err}`)
     }
-    if (!stopped) timer = setTimeout(() => void tick(), intervalMs)
+    if (!stopped) timer = setTimeout(() => void tick(), resolveInterval())
   }
 
-  // First tick after intervalMs (so startup is quiet); use 1s for very fast intervals
-  timer = setTimeout(() => void tick(), Math.min(intervalMs, 1000))
+  // First tick is quick but bounded by 1s so startup is quiet for slow intervals.
+  timer = setTimeout(() => void tick(), Math.min(resolveInterval(), 1000))
 
   return {
     async stop() {

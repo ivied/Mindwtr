@@ -22,7 +22,10 @@ export class AiServiceClient {
     }
   }
 
-  async sendCapture(capture: DesktopCapture): Promise<void> {
+  async sendCapture(
+    capture: DesktopCapture,
+    extraMeta?: Record<string, unknown> | null
+  ): Promise<void> {
     const res = await fetch(`${this.base}/v1/capture`, {
       method: 'POST',
       headers: this.headers,
@@ -35,8 +38,11 @@ export class AiServiceClient {
           app: capture.app,
           windowTitle: capture.windowTitle,
           url: capture.url,
+          ...(extraMeta ?? {}),
         },
-        extraTags: ['screen-capture'],
+        extraTags: extraMeta?.recording_session_id
+          ? ['screen-capture', 'recording-session']
+          : ['screen-capture'],
       }),
     })
     if (!res.ok) {
@@ -58,7 +64,9 @@ export class AiServiceClient {
         type: 'audio',
         timestamp: new Date().toISOString(),
         sourceMeta: sourceMeta ?? {},
-        extraTags: ['audio-capture'],
+        extraTags: sourceMeta?.recording_session_id
+          ? ['audio-capture', 'recording-session']
+          : ['audio-capture'],
       }),
     })
     if (!res.ok) {

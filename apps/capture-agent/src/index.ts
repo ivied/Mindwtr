@@ -15,6 +15,7 @@ import { defaultActiveWindowProvider } from './capture/active-window'
 import { startLoop } from './runner'
 import { startAudioLoop } from './audio-runner'
 import { AiServiceClient } from './client/ai-service'
+import { RecordingMonitor } from './recording-monitor'
 import { CaptureDeduper } from './filter/dedup'
 import { FfmpegAudioRecorder, type AudioRecorder } from './capture/audio-recorder'
 import { NativeAudioRecorder } from './capture/audio-recorder-native'
@@ -32,6 +33,15 @@ async function main() {
     endpoint: config.endpoint,
     authToken: config.authToken,
   })
+  // Recording-session monitor — switches the loop to intensified mode (10s)
+  // while a session is active, tags captures with task_id + session_id.
+  const recordingMonitor = new RecordingMonitor({
+    endpoint: config.endpoint,
+    authToken: config.authToken,
+    pollIntervalMs: 5000,
+    log: (msg) => console.log(msg),
+  })
+  recordingMonitor.start()
   const ocr = new TesseractOcrProvider(config.ocrLang)
 
   console.log(`📸 Capture Agent starting`)
@@ -146,10 +156,12 @@ async function main() {
           diarizer,
           send: (text, ctx) => {
             const vc = detectVoiceChat(ctx.window ?? null)
+            const recMeta = recordingMonitor.getCaptureMeta() ?? {}
             return client.sendAudioTranscript(text, {
               source: 'mic',
               device: config.audio.inputDevice,
               likely_mixed_speakers: vc.active,
+              ...recMeta,
               ...(vc.reason ? { voice_chat_reason: vc.reason } : {}),
               ...(ctx.window?.app ? { active_app: ctx.window.app } : {}),
               ...(ctx.window?.title ? { active_title: ctx.window.title } : {}),
@@ -232,7 +244,7 @@ async function main() {
       },
       pauseFlagPath: config.pauseFlagPath,
       minOcrLength: config.minOcrLength,
-      sink: (capture) => client.sendCapture(capture),
+      sink: (capture) => client.sendCapture(capture, recordingMonitor.getCaptureMeta()),
       archive: async (capture, png) => {
             status?.updateScreen({
               lastCaptureAt: capture.capturedAt,
@@ -291,11 +303,14 @@ async function main() {
         }
       },
     },
-    config.intervalMs
+    // Interval is callback-resolved each tick so an active recording session
+    // can switch to intensified mode (10s) without a restart.
+    () => (recordingMonitor.getActive() ? 10_000 : config.intervalMs)
   )
 
   const shutdown = async () => {
     console.log('🛑 Shutting down agent...')
+    recordingMonitor.stop()
     await loop.stop()
     if (audioController) await audioController.stop()
     await ocr.shutdown()
