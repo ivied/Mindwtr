@@ -69,6 +69,7 @@ export interface ScanStats {
 export class ProceduralReader {
   private timer: ReturnType<typeof setInterval> | null = null
   private running = false
+  private activeScan: Promise<ScanStats> | null = null
   private readonly intervalMs: number
   private readonly log: (msg: string) => void
   private readonly pathFilter: (relPath: string) => boolean
@@ -81,9 +82,21 @@ export class ProceduralReader {
 
   /** Run one full scan immediately and return per-source stats. */
   async scanOnce(): Promise<ScanStats> {
-    if (this.running) {
-      return zeroStats()
+    // Wait for any in-flight scan to finish, then run our own. Without this
+    // serialization, CRUD callers that race the polling tick get a stale
+    // no-op back and don't see their just-written file.
+    if (this.running && this.activeScan) {
+      await this.activeScan.catch(() => {})
     }
+    this.activeScan = this.runScanInternal()
+    try {
+      return await this.activeScan
+    } finally {
+      this.activeScan = null
+    }
+  }
+
+  private async runScanInternal(): Promise<ScanStats> {
     this.running = true
     const total = zeroStats()
     try {
