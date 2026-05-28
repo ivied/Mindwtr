@@ -4,6 +4,58 @@ import { getContextColor } from '../../../lib/context-color';
 
 export type NextGroupBy = 'none' | 'context' | 'area' | 'project';
 
+/**
+ * AI Agent lane grouping. Sections render in this exact order so the user's
+ * attention lands on stuff that needs action (Review/Error) before the
+ * passive backlog (Queued).
+ */
+const AI_STAGE_ORDER: ReadonlyArray<{ stage: string; title: string; dotColor: string }> = [
+    { stage: 'review', title: '✅ Review', dotColor: '#10b981' },
+    { stage: 'error', title: '❌ Error', dotColor: '#ef4444' },
+    { stage: 'doing', title: '⏳ Doing', dotColor: '#f59e0b' },
+    { stage: 'queued', title: '📥 Queued', dotColor: '#6b7280' },
+];
+
+function readAiStage(task: Task): string {
+    const tag = (task.tags ?? []).find((t) => t.startsWith('ai-stage:'));
+    return tag ? tag.slice('ai-stage:'.length) : 'queued';
+}
+
+export function groupTasksByAiStage({ tasks }: { tasks: Task[] }): TaskGroup[] {
+    const buckets = new Map<string, Task[]>();
+    for (const task of tasks) {
+        const stage = readAiStage(task);
+        const bucket = buckets.get(stage) ?? [];
+        bucket.push(task);
+        buckets.set(stage, bucket);
+    }
+    const groups: TaskGroup[] = [];
+    const seen = new Set<string>();
+    for (const def of AI_STAGE_ORDER) {
+        const items = buckets.get(def.stage);
+        seen.add(def.stage);
+        if (!items || items.length === 0) continue;
+        groups.push({
+            id: `ai-stage:${def.stage}`,
+            title: `${def.title} (${items.length})`,
+            tasks: items,
+            dotColor: def.dotColor,
+        });
+    }
+    // Anything we don't recognise (e.g. future "paused" stage) ends up in
+    // an "Other" bucket so it's still visible rather than silently dropped.
+    for (const [stage, items] of buckets) {
+        if (seen.has(stage)) continue;
+        groups.push({
+            id: `ai-stage:${stage}`,
+            title: `${stage} (${items.length})`,
+            tasks: items,
+            dotColor: '#9ca3af',
+        });
+    }
+    return groups;
+}
+
 export interface TaskGroup {
     id: string;
     title: string;

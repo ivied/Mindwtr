@@ -552,6 +552,13 @@ function App() {
                 return <ListView title={t('list.reference')} statusFilter="reference" />;
             case 'waiting':
                 return <ListView title={t('list.waiting')} statusFilter="waiting" />;
+            case 'ai-agent':
+                // AI Agent lane: surfaces tasks the Enricher delegated to
+                // the agent (assignedTo='@ai-agent'). Status stays honest
+                // (next/waiting/etc per GTD); this view is just a saved
+                // filter over `assignedTo` so delegated tasks don't pollute
+                // the user's real Next list.
+                return <ListView title="AI Agent" statusFilter="all" assignedToFilter="@ai-agent" />;
             case 'done':
                 return <ListView title={t('list.done')} statusFilter="done" />;
             case 'calendar':

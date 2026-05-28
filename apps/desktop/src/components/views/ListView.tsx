@@ -22,7 +22,7 @@ import { reportError } from '../../lib/report-error';
 import { AREA_FILTER_ALL, AREA_FILTER_NONE, projectMatchesAreaFilter, resolveAreaFilter, taskMatchesAreaFilter } from '../../lib/area-filter';
 import { cn } from '../../lib/utils';
 import { sortDoneTasksForListView } from './list/done-sort';
-import { groupTasksByArea, groupTasksByContext, groupTasksByProject, type NextGroupBy, type TaskGroup } from './list/next-grouping';
+import { groupTasksByArea, groupTasksByContext, groupTasksByProject, groupTasksByAiStage, type NextGroupBy, type TaskGroup } from './list/next-grouping';
 import { useListSelection } from './list/useListSelection';
 import { StoreTaskItem } from './list/StoreTaskItem';
 import { LIST_VIRTUALIZATION_THRESHOLD, LIST_VIRTUAL_ROW_ESTIMATE, LIST_VIRTUAL_OVERSCAN } from './list/useVirtualList';
@@ -31,6 +31,13 @@ import { LIST_VIRTUALIZATION_THRESHOLD, LIST_VIRTUAL_ROW_ESTIMATE, LIST_VIRTUAL_
 interface ListViewProps {
     title: string;
     statusFilter: TaskStatus | 'all';
+    /**
+     * When set, only tasks with this exact `assignedTo` value pass the filter.
+     * Used by the dedicated "AI Agent" lane (`@ai-agent`) so we can surface
+     * delegated tasks without overloading `status` (they stay `next`/`waiting`
+     * per GTD semantics — only the view changes).
+     */
+    assignedToFilter?: string;
 }
 
 const EMPTY_PRIORITIES: TaskPriority[] = [];
@@ -47,7 +54,7 @@ export function reportArchivedTaskQueryFailure(error: unknown, showToast: ShowTo
     showToast('Failed to load archived tasks', 'error');
 }
 
-export const ListView = memo(function ListView({ title, statusFilter }: ListViewProps) {
+export const ListView = memo(function ListView({ title, statusFilter, assignedToFilter }: ListViewProps) {
     const perf = usePerformanceMonitor('ListView');
     const {
         tasks,
@@ -314,6 +321,7 @@ export const ListView = memo(function ListView({ title, statusFilter }: ListView
     const filterInputs = useMemo(() => ({
         baseTasks,
         statusFilter,
+        assignedToFilter,
         selectedTokens,
         activePriorities,
         activeTimeEstimates,
@@ -327,6 +335,7 @@ export const ListView = memo(function ListView({ title, statusFilter }: ListView
     }), [
         baseTasks,
         statusFilter,
+        assignedToFilter,
         selectedTokens,
         activePriorities,
         activeTimeEstimates,
@@ -352,6 +361,7 @@ export const ListView = memo(function ListView({ title, statusFilter }: ListView
                 if (t.deletedAt) return false;
 
                 if (deferredFilterInputs.statusFilter !== 'all' && t.status !== deferredFilterInputs.statusFilter) return false;
+                if (deferredFilterInputs.assignedToFilter && t.assignedTo !== deferredFilterInputs.assignedToFilter) return false;
                 // Respect statusFilter (handled above).
                 if (!allowDeferredProjectTasks && !isTaskInActiveProject(t, deferredFilterInputs.projectMap)) return false;
                 if (!taskMatchesAreaFilter(
@@ -417,6 +427,13 @@ export const ListView = memo(function ListView({ title, statusFilter }: ListView
     const activeNextGroupBy: NextGroupBy = statusFilter === 'next' ? nextGroupBy : 'none';
     const isReferenceAreaGrouping = statusFilter === 'reference';
     const isNextGrouping = statusFilter === 'next' && activeNextGroupBy !== 'none';
+    // AI Agent lane: always group by ai-stage so the user sees Review / Doing
+    // / Queued / Error as separate sections.
+    const isAiAgentGrouping = assignedToFilter === '@ai-agent';
+    const aiStageGroups = useMemo(() => {
+        if (!isAiAgentGrouping) return [] as TaskGroup[];
+        return groupTasksByAiStage({ tasks: filteredTasks });
+    }, [filteredTasks, isAiAgentGrouping]);
     const referenceAreaGroups = useMemo(() => {
         if (!isReferenceAreaGrouping) return [] as TaskGroup[];
         return groupTasksByArea({
@@ -448,7 +465,11 @@ export const ListView = memo(function ListView({ title, statusFilter }: ListView
             noContextLabel: resolveText('contexts.none', 'No context'),
         });
     }, [activeNextGroupBy, areas, filteredTasks, isNextGrouping, projectMap, resolveText]);
-    const groupedTasks = isReferenceAreaGrouping ? referenceAreaGroups : nextGroups;
+    const groupedTasks = isAiAgentGrouping
+        ? aiStageGroups
+        : isReferenceAreaGrouping
+            ? referenceAreaGroups
+            : nextGroups;
     const taskIndexById = useMemo(() => {
         const map = new Map<string, number>();
         filteredTasks.forEach((task, index) => map.set(task.id, index));
@@ -476,7 +497,7 @@ export const ListView = memo(function ListView({ title, statusFilter }: ListView
             });
     }, [showToast, t, updateProject]);
 
-    const shouldVirtualize = !isReferenceAreaGrouping && !isNextGrouping && filteredTasks.length > LIST_VIRTUALIZATION_THRESHOLD;
+    const shouldVirtualize = !isReferenceAreaGrouping && !isNextGrouping && !isAiAgentGrouping && filteredTasks.length > LIST_VIRTUALIZATION_THRESHOLD;
     const rowVirtualizer = useVirtualizer({
         count: shouldVirtualize ? filteredTasks.length : 0,
         getScrollElement: () => listScrollRef.current,
@@ -897,7 +918,7 @@ export const ListView = memo(function ListView({ title, statusFilter }: ListView
                             );
                         })}
                     </div>
-                ) : isReferenceAreaGrouping || isNextGrouping ? (
+                ) : isReferenceAreaGrouping || isNextGrouping || isAiAgentGrouping ? (
                     <div className="space-y-2">
                         {groupedTasks.map((group) => (
                             <div key={group.id} className="rounded-md border border-border/40 bg-card/30">

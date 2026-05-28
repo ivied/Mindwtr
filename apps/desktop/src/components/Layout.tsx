@@ -21,6 +21,7 @@ import {
     BookOpen,
     AlertTriangle,
     Sparkles,
+    Bot,
     type LucideIcon,
 } from 'lucide-react';
 import { isProceduralAvailable } from '../lib/procedural-client';
@@ -223,6 +224,17 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
         }
         return count;
     }, [tasks, resolvedAreaFilter, projectMap, areaById]);
+    const aiAgentCount = useMemo(() => {
+        let count = 0;
+        for (const task of tasks) {
+            if (task.deletedAt) continue;
+            if (task.assignedTo !== '@ai-agent') continue;
+            if (task.status === 'done' || task.status === 'archived') continue;
+            if (!taskMatchesAreaFilter(task, resolvedAreaFilter, projectMap, areaById)) continue;
+            count += 1;
+        }
+        return count;
+    }, [tasks, resolvedAreaFilter, projectMap, areaById]);
     const wideViews = new Set([
         'inbox',
         'next',
@@ -239,6 +251,7 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
         'search',
         'agenda',
         'obsidian',
+        'ai-agent',
     ]);
     const isWideView = wideViews.has(currentView);
     const fullWidthViews = new Set([
@@ -261,6 +274,11 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
                 // here and the user wanted one-click visibility instead of
                 // hunting through Lists.
                 { id: 'waiting', labelKey: 'nav.waiting', icon: PauseCircle, count: waitingCount },
+                // AI Agent lane: tasks the Enricher delegated to @ai-agent.
+                // Their `status` stays accurate per GTD (next/waiting); this
+                // view filters by `assignedTo` so delegated work doesn't
+                // pollute the real Next/Waiting lists.
+                { id: 'ai-agent', labelKey: 'nav.aiAgent', fallbackLabel: 'AI Agent', icon: Bot, count: aiAgentCount },
             ],
         },
         {
@@ -297,7 +315,7 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
                 { id: 'trash', labelKey: 'nav.trash', icon: Trash2 },
             ],
         },
-    ]), [inboxCount, waitingCount, isObsidianEnabled, t]);
+    ]), [inboxCount, waitingCount, aiAgentCount, isObsidianEnabled, t]);
 
     const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => loadCollapsedSections());
 
