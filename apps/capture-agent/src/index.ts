@@ -23,6 +23,7 @@ import { MdWikiWriter, type ImageAttachment } from './wiki/md-writer'
 import { resizeToJpeg } from './wiki/image-processor'
 import { detectVoiceChat } from './filter/voice-chat-detect'
 import { Diarizer } from './capture/diarizer'
+import { StatusPublisher } from './status/publisher'
 import { access, writeFile, copyFile } from 'node:fs/promises'
 
 async function main() {
@@ -52,6 +53,19 @@ async function main() {
   }
 
   const dedup = new CaptureDeduper()
+
+  const status = config.statusFilePath
+    ? new StatusPublisher({
+        filePath: config.statusFilePath,
+        reloadHelperPath: config.widgetReloadHelperPath || undefined,
+      })
+    : null
+  if (status) {
+    console.log(`📊 Pipeline status: ${config.statusFilePath}`)
+    if (config.widgetReloadHelperPath) {
+      console.log(`📊 Widget reload: ${config.widgetReloadHelperPath}`)
+    }
+  }
 
   // --- Audio loop (Phase 4c, opt-in) ---
   let audioController: { stop: () => Promise<void> } | null = null
@@ -149,8 +163,18 @@ async function main() {
                 : {}),
             })
           },
-          archive: wikiWriter
-            ? async (ctx) => {
+          archive: async (ctx) => {
+              status?.updateAudio({
+                lastChunkAt: ctx.ts.toISOString(),
+                rms: ctx.rms ?? 0,
+                transcript: ctx.text.slice(0, 200),
+                durationMs: ctx.durationMs ?? 0,
+                speakerCount: ctx.diarize?.speakerCount,
+                userSeen: ctx.diarize?.userSeen,
+                likelyMixedSpeakers: detectVoiceChat(ctx.window ?? null).active || undefined,
+              })
+              if (!wikiWriter) return
+              {
                 const vc = detectVoiceChat(ctx.window ?? null)
                 const { mdPath } = await wikiWriter.write({
                   source: 'audio',
@@ -182,7 +206,7 @@ async function main() {
                   }
                 }
               }
-            : undefined,
+            },
           log: (msg) => console.log(`[audio] ${msg}`),
         },
         {
@@ -209,8 +233,17 @@ async function main() {
       pauseFlagPath: config.pauseFlagPath,
       minOcrLength: config.minOcrLength,
       sink: (capture) => client.sendCapture(capture),
-      archive: wikiWriter
-        ? async (capture, png) => {
+      archive: async (capture, png) => {
+            status?.updateScreen({
+              lastCaptureAt: capture.capturedAt,
+              app: capture.app,
+              title: capture.windowTitle,
+              sentToInbox: (capture as { sentToInbox?: boolean }).sentToInbox ?? true,
+              ocrLength: capture.ocrText.length,
+              displayIndex: capture.display?.index,
+              isActiveDisplay: capture.isActiveDisplay,
+            })
+            if (!wikiWriter) return
             let image: ImageAttachment | undefined
             if (config.wiki.saveImage) {
               if (config.wiki.imageMaxEdge > 0) {
@@ -245,12 +278,18 @@ async function main() {
               },
               { image }
             )
-          }
-        : undefined,
+          },
       dedup,
       multiDisplay: config.multiDisplay,
       wikiOnlyApps: config.wikiOnlyApps,
-      log: (msg) => console.log(`[agent] ${msg}`),
+      log: (msg) => {
+        console.log(`[agent] ${msg}`)
+        if (status && msg.startsWith('skipped: ')) {
+          status.recordScreenSkip(msg.slice('skipped: '.length))
+        } else {
+          status?.heartbeat()
+        }
+      },
     },
     config.intervalMs
   )
@@ -260,6 +299,7 @@ async function main() {
     await loop.stop()
     if (audioController) await audioController.stop()
     await ocr.shutdown()
+    if (status) await status.shutdown()
     process.exit(0)
   }
   process.on('SIGTERM', shutdown)

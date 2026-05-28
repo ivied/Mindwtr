@@ -95,5 +95,10 @@ export function loadConfigFromEnv(env: NodeJS.ProcessEnv = process.env): AgentCo
         ? parseList(env.AGENT_WIKI_ONLY_APPS)
         : ['Code', 'Cursor', 'Claude', 'Windsurf', 'Zed', 'Xcode'],
     multiDisplay: env.AGENT_MULTI_DISPLAY !== 'false',
+    statusFilePath:
+      env.AGENT_STATUS_FILE !== undefined
+        ? env.AGENT_STATUS_FILE
+        : join(homedir(), '.gtd-pipeline-status.json'),
+    widgetReloadHelperPath: env.AGENT_WIDGET_RELOAD_HELPER ?? '',
   }
 }

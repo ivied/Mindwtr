@@ -1,0 +1,70 @@
+# XcodeGen spec for the GTD pipeline-status widget.
+#
+# Produces two targets:
+#   - GTDPipelineStatus.app — a tiny SwiftUI launcher that registers the
+#     widget extension with macOS (the widget can't be installed without a
+#     containing app).
+#   - GTDPipelineStatusWidget — the WidgetKit extension that renders the
+#     pinnable desktop widget.
+#
+# Both share `Shared/Snapshot.swift` to read ~/.gtd-pipeline-status.json
+# written by the capture-agent.
+name: GTDPipelineStatus
+options:
+  bundleIdPrefix: uk.kurdy.gtd
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+configs:
+  Debug: debug
+  Release: release
+settings:
+  base:
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"  # ad-hoc signing, same pattern as audio bundle
+    ENABLE_HARDENED_RUNTIME: NO
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+
+targets:
+  GTDPipelineStatus:
+    type: application
+    platform: macOS
+    sources:
+      - App
+      - Shared
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleName: GTD Pipeline Status
+        CFBundleShortVersionString: "0.1"
+        CFBundleVersion: "1"
+        LSUIElement: true  # no Dock icon — purely a widget host
+        NSHumanReadableCopyright: ""
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: uk.kurdy.gtd.pipeline-status
+        CODE_SIGN_ENTITLEMENTS: App/App.entitlements
+    dependencies:
+      - target: GTDPipelineStatusWidget
+
+  GTDPipelineStatusWidget:
+    type: app-extension
+    platform: macOS
+    sources:
+      - Widget
+      - Shared
+    info:
+      path: Widget/Info.plist
+      properties:
+        CFBundleName: GTDPipelineStatusWidget
+        CFBundleShortVersionString: "0.1"
+        CFBundleVersion: "1"
+        CFBundleDisplayName: GTD Pipeline
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: uk.kurdy.gtd.pipeline-status.widget
+        CODE_SIGN_ENTITLEMENTS: Widget/Widget.entitlements

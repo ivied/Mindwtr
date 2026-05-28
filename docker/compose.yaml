@@ -99,6 +99,10 @@ services:
       # sync-shared-memory.sh for the rsync that populates the host dir.
       - SHARED_MEMORY_DIR=${SHARED_MEMORY_DIR:-/app/shared-memory}
       - SHARED_MEMORY_REINDEX_INTERVAL_MS=${SHARED_MEMORY_REINDEX_INTERVAL_MS:-60000}
+      - PROACTIVE_INTERVAL_MS=${PROACTIVE_INTERVAL_MS:-21600000}
+      # Pipeline-status: writes last LLM verdicts to a file consumed by the
+      # macOS widget. Disabled when LLM_STATUS_FILE is unset.
+      - LLM_STATUS_FILE=${LLM_STATUS_FILE:-/app/widget-status/.gtd-pipeline-llm.json}
     ports:
       - "${HTTP_PORT:-3030}:3030"
     volumes:
@@ -107,12 +111,17 @@ services:
       # wiki/entities/*.md for the KNOWN_PERSONS registry. Path is the user's
       # local wiki dir; override WIKI_HOST_DIR when the wiki lives elsewhere.
       - ${WIKI_HOST_DIR:-/Users/sergeykurdyuk/Projects/GTD_automation/wiki}:/app/wiki:ro
-      # Read-only mount of the shared procedural memory mirror (FR85).
-      # Initially populated by docker/cloud-prod/sync-shared-memory.sh from
-      # OpenClaw via Tailscale. Override SHARED_MEMORY_HOST_DIR if the
-      # mirror lives elsewhere. Empty/missing dir is fine — the reader
-      # silently no-ops until a source subdir appears.
-      - ${SHARED_MEMORY_HOST_DIR:-/Users/sergeykurdyuk/shared-memory}:/app/shared-memory:ro
+      # Pipeline status JSON written by ai-service for the macOS widget.
+      # We mount the user home so the same file lives at ~/.gtd-pipeline-*.json
+      # on the host (where the sandboxed widget has a read-only exception).
+      - ${WIDGET_STATUS_HOST_DIR:-/Users/sergeykurdyuk}:/app/widget-status
+      # RW mount of the shared procedural memory mirror (FR85+CRUD).
+      # openclaw/ is populated by sync-shared-memory.sh from the host (host
+      # writes win on the next tick). mined/ is written by the Playbook Miner
+      # agent (outside the container). user/ is written by the CRUD API from
+      # this container. Empty/missing subdirs are fine — reader silently
+      # no-ops until they appear.
+      - ${SHARED_MEMORY_HOST_DIR:-/Users/sergeykurdyuk/shared-memory}:/app/shared-memory
 
   # Cloudflare Tunnel — outbound-only connector to CF edge. Routes
   # configured in CF dashboard at one.dash.cloudflare.com → Zero Trust →

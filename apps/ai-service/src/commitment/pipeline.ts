@@ -31,6 +31,7 @@ export interface ProceduralFeedbackSink {
   recordProposalRefs(proposalId: string, chunkIds: string[]): void
 }
 import { l0Filter } from './l0-filter'
+import { LlmPublisher, sourceChannelToVerdict } from '../status/llm-publisher'
 import {
   evaluateSourceDeny,
   type SourceDenyConfig,
@@ -80,6 +81,11 @@ export class CommitmentPipeline {
   private memoryContextProvider: ProposerContextProvider | null = null
   private proceduralContextProvider: ProceduralContextProvider | null = null
   private proceduralFeedback: ProceduralFeedbackSink | null = null
+  private llmPublisher: LlmPublisher | null = null
+
+  setLlmPublisher(publisher: LlmPublisher | null): void {
+    this.llmPublisher = publisher
+  }
 
   constructor(
     private proposer: Proposer,
@@ -253,8 +259,16 @@ export class CommitmentPipeline {
       )
     } catch (err) {
       this.log(`[commitment] proposer failed (${capture.id}): ${(err as Error).message}`)
+      this.llmPublisher?.record({
+        channel: sourceChannelToVerdict(capture.sourceChannel),
+        kind: 'error',
+        title: '',
+        reasoning: (err as Error).message,
+      })
       return { kind: 'error', error: err as Error }
     }
+
+    const verdictChannel = sourceChannelToVerdict(capture.sourceChannel)
 
     // Semantic dedup against existing inbox items. Proposer sets is_actionable
     // false AND duplicate_of_title together — treat as a distinct outcome so
@@ -263,6 +277,12 @@ export class CommitmentPipeline {
       this.log(
         `[commitment] duplicate-of-existing (${capture.id}): "${proposal.duplicate_of_title}"`
       )
+      this.llmPublisher?.record({
+        channel: verdictChannel,
+        kind: 'duplicate-of-existing',
+        title: proposal.duplicate_of_title,
+        reasoning: proposal.reasoning,
+      })
       return {
         kind: 'duplicate-of-existing',
         existingTitle: proposal.duplicate_of_title,
@@ -272,6 +292,12 @@ export class CommitmentPipeline {
 
     if (!proposal.is_actionable) {
       this.log(`[commitment] not-actionable (${capture.id}): ${proposal.reasoning}`)
+      this.llmPublisher?.record({
+        channel: verdictChannel,
+        kind: 'not-actionable',
+        title: proposal.title || '',
+        reasoning: proposal.reasoning,
+      })
       return { kind: 'not-actionable', reasoning: proposal.reasoning }
     }
 
@@ -283,6 +309,12 @@ export class CommitmentPipeline {
       this.log(
         `[commitment] wrong-role other→other (${capture.id}): ${proposal.reasoning}`
       )
+      this.llmPublisher?.record({
+        channel: verdictChannel,
+        kind: 'wrong-role',
+        title: proposal.title || '',
+        reasoning: proposal.reasoning,
+      })
       return { kind: 'wrong-role', whoOwes: proposal.who_owes, reasoning: proposal.reasoning }
     }
 
@@ -290,6 +322,14 @@ export class CommitmentPipeline {
       this.log(
         `[commitment] low-confidence ${proposal.confidence.toFixed(2)} (${capture.id}): ${proposal.title}`
       )
+      this.llmPublisher?.record({
+        channel: verdictChannel,
+        kind: 'low-confidence',
+        title: proposal.title,
+        confidence: proposal.confidence,
+        category: proposal.suggested_category,
+        reasoning: proposal.reasoning,
+      })
       return { kind: 'low-confidence', confidence: proposal.confidence, reasoning: proposal.reasoning }
     }
 
@@ -305,11 +345,26 @@ export class CommitmentPipeline {
         this.log(
           `[commitment] duplicate (${capture.id} → existing ${written.proposalId}): "${written.title}"`
         )
+        this.llmPublisher?.record({
+          channel: verdictChannel,
+          kind: 'duplicate',
+          title: written.title,
+          confidence: proposal.confidence,
+          category: proposal.suggested_category,
+        })
         return { kind: 'duplicate', existingProposalId: written.proposalId }
       }
       this.log(
         `[commitment] proposed (${capture.id} → proposal ${written.proposalId}): "${written.title}" conf=${proposal.confidence.toFixed(2)}`
       )
+      this.llmPublisher?.record({
+        channel: verdictChannel,
+        kind: 'created',
+        title: written.title,
+        confidence: proposal.confidence,
+        category: proposal.suggested_category,
+        reasoning: proposal.reasoning,
+      })
       // FR89: remember which playbook chunks informed this proposal so
       // resolution feedback can credit/debit them. Best-effort.
       if (this.proceduralFeedback && playbookRefs.length > 0) {

@@ -73,6 +73,13 @@ export interface AgentConfig {
   wikiOnlyApps: string[]
   /** Capture all displays (true) or only the primary (false). */
   multiDisplay: boolean
+  /** Path to the pipeline status JSON snapshot read by the macOS widget.
+   *  Empty string disables status publishing. */
+  statusFilePath: string
+  /** Path to gtd-widget-reload helper binary. Capture-agent shells out
+   *  to it after each snapshot write so the widget refreshes within ~1s
+   *  instead of WidgetKit's default 5-15 min cadence. Empty disables. */
+  widgetReloadHelperPath: string
 }
 
 export interface WikiConfig {

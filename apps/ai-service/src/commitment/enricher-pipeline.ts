@@ -29,6 +29,7 @@ import type {
 } from '../proposal-store/payloads'
 import type { ProposalStore } from '../proposal-store/store'
 import type { Enricher, EnrichedProposal } from './enricher'
+import { LlmPublisher } from '../status/llm-publisher'
 
 /** Source-agent identifier used in audit / filters. Keep stable. */
 export const SOURCE_AGENT_ENRICHER = 'enricher'
@@ -71,6 +72,7 @@ export type EnrichOutcome =
 
 export class EnricherPipeline {
   private notifier: ProposalNotifier | null = null
+  private llmPublisher: LlmPublisher | null = null
 
   constructor(
     private deps: EnricherPipelineDeps,
@@ -80,6 +82,10 @@ export class EnricherPipeline {
   /** Late-binding for the notifier so wiring code can resolve the bot→pipeline→notifier cycle. */
   setNotifier(notifier: ProposalNotifier | null): void {
     this.notifier = notifier
+  }
+
+  setLlmPublisher(publisher: LlmPublisher | null): void {
+    this.llmPublisher = publisher
   }
 
   async run(input: EnrichInput): Promise<EnrichOutcome> {
@@ -148,6 +154,14 @@ export class EnricherPipeline {
       console.log(
         `[enricher] proposed split (task ${input.taskId.slice(0, 8)} → proposal ${created.id.slice(0, 8)}): "${proposal.proposed_title.slice(0, 60)}" sub_actions=${proposal.sub_actions.length}`
       )
+      this.llmPublisher?.record({
+        channel: 'enricher',
+        kind: 'enriched-split',
+        title: proposal.proposed_title,
+        confidence: proposal.confidence,
+        category: proposal.category,
+        reasoning: proposal.reasoning,
+      })
       return { kind: 'proposed', proposalId: created.id, type: 'split' }
     }
 
@@ -156,6 +170,12 @@ export class EnricherPipeline {
       console.log(
         `[enricher] skip no-changes (task ${input.taskId.slice(0, 8)}): "${input.taskTitle.slice(0, 60)}" already matches enrichment`
       )
+      this.llmPublisher?.record({
+        channel: 'enricher',
+        kind: 'enriched-noop',
+        title: input.taskTitle,
+        reasoning: 'already matches enrichment',
+      })
       return { kind: 'skipped', reason: 'no-changes' }
     }
     const payload: ModifyPayload = {
@@ -183,6 +203,15 @@ export class EnricherPipeline {
     console.log(
       `[enricher] proposed modify (task ${input.taskId.slice(0, 8)} → proposal ${created.id.slice(0, 8)}): "${proposal.proposed_title.slice(0, 60)}" diff=[${diff.map((d) => d.field).join(',')}] conf=${proposal.confidence.toFixed(2)}`
     )
+    this.llmPublisher?.record({
+      channel: 'enricher',
+      kind: 'enriched-modify',
+      title: proposal.proposed_title,
+      confidence: proposal.confidence,
+      category: proposal.category,
+      reasoning: proposal.reasoning,
+      diff: diff.map((d) => d.field).join(','),
+    })
     return { kind: 'proposed', proposalId: created.id, type: 'modify' }
   }
 }
