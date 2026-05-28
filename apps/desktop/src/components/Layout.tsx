@@ -670,7 +670,7 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
                 role="main"
                 aria-label={tFallback(t, 'accessibility.mainContent', 'Main content')}
             >
-                <RecordingBanner />
+                <RecordingBanner onNavigatePlaybook={() => onViewChange('ai-playbook')} />
                 <div className={cn(
                     "mx-auto p-8 h-full",
                     isFocusMode

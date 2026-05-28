@@ -8,21 +8,28 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { Mic, Square, Loader2 } from 'lucide-react';
+import { Mic, Square, Loader2, CheckCircle2, AlertCircle, X } from 'lucide-react';
 import { cn } from '../lib/utils';
 import {
     isRecordingAvailable,
     getActiveRecording,
     stopRecording,
+    findRecording,
     type RecordingSession,
 } from '../lib/recording-client';
 
 const POLL_INTERVAL_MS = 5000;
 
-export function RecordingBanner() {
+interface PostStopState {
+    session: RecordingSession;
+    pollAttempts: number;
+}
+
+export function RecordingBanner({ onNavigatePlaybook }: { onNavigatePlaybook?: () => void } = {}) {
     const available = isRecordingAvailable();
     const [session, setSession] = useState<RecordingSession | null>(null);
     const [stopping, setStopping] = useState(false);
+    const [postStop, setPostStop] = useState<PostStopState | null>(null);
     const [now, setNow] = useState(() => Date.now());
 
     useEffect(() => {
@@ -56,8 +63,9 @@ export function RecordingBanner() {
         if (!session) return;
         setStopping(true);
         try {
-            await stopRecording(session.id);
+            const stopped = await stopRecording(session.id);
             setSession(null);
+            setPostStop({ session: stopped, pollAttempts: 0 });
         } catch {
             // Leave banner — user can retry.
         } finally {
@@ -65,6 +73,44 @@ export function RecordingBanner() {
         }
     }, [session]);
 
+    // Poll the just-stopped session every 3s until distillation reaches a
+    // terminal status (done/failed/skipped) or we time out at ~3 minutes.
+    useEffect(() => {
+        if (!postStop) return;
+        const id = setInterval(async () => {
+            try {
+                const fresh = await findRecording(postStop.session.id);
+                if (!fresh) return;
+                const terminal =
+                    fresh.distillationStatus === 'done' ||
+                    fresh.distillationStatus === 'failed' ||
+                    fresh.distillationStatus === 'skipped';
+                setPostStop((prev) =>
+                    prev ? { session: fresh, pollAttempts: prev.pollAttempts + 1 } : null
+                );
+                if (terminal || postStop.pollAttempts > 60) {
+                    clearInterval(id);
+                }
+            } catch {
+                // Silent — next tick will retry.
+            }
+        }, 3000);
+        return () => clearInterval(id);
+    }, [postStop]);
+
+    // Auto-dismiss post-stop chip 20s after a terminal state.
+    useEffect(() => {
+        if (!postStop) return;
+        const status = postStop.session.distillationStatus;
+        if (status !== 'done' && status !== 'failed' && status !== 'skipped') return;
+        const t = setTimeout(() => setPostStop(null), 20_000);
+        return () => clearTimeout(t);
+    }, [postStop]);
+
+    // Active session takes priority over the post-stop chip.
+    if (!session && postStop) {
+        return <PostStopChip state={postStop} onClose={() => setPostStop(null)} onOpen={onNavigatePlaybook} />;
+    }
     if (!session) return null;
 
     const elapsedMs = now - Date.parse(session.startedAt);
@@ -97,6 +143,82 @@ export function RecordingBanner() {
                 {stopping ? <Loader2 className="h-3 w-3 animate-spin" /> : <Square className="h-3 w-3" />}
                 Stop
             </button>
+        </div>
+    );
+}
+
+function PostStopChip({
+    state,
+    onClose,
+    onOpen,
+}: {
+    state: PostStopState;
+    onClose: () => void;
+    onOpen?: () => void;
+}) {
+    const status = state.session.distillationStatus;
+    const label = state.session.taskTitle || state.session.taskId;
+    const isRunning = status === 'pending' || status === 'running';
+    const isDone = status === 'done';
+    const isFailed = status === 'failed' || status === 'skipped';
+    return (
+        <div
+            className={cn(
+                'sticky top-0 z-40 flex items-center justify-between gap-3 border-b px-4 py-2 text-sm',
+                isRunning && 'border-amber-500/40 bg-amber-500/10',
+                isDone && 'border-emerald-500/40 bg-emerald-500/10',
+                isFailed && 'border-slate-500/40 bg-slate-500/10'
+            )}
+        >
+            <div className="flex items-center gap-2 min-w-0">
+                {isRunning ? (
+                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-600 dark:text-amber-400" />
+                ) : isDone ? (
+                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                ) : (
+                    <AlertCircle className="h-3.5 w-3.5 shrink-0 text-slate-600 dark:text-slate-400" />
+                )}
+                <span className="truncate">
+                    {isRunning ? (
+                        <>
+                            <span className="font-medium">Distilling recording…</span>{' '}
+                            <span className="text-muted-foreground">· {label}</span>
+                        </>
+                    ) : isDone ? (
+                        <>
+                            <span className="font-medium">Playbook ready</span>{' '}
+                            <span className="text-muted-foreground">· {label}</span>
+                        </>
+                    ) : (
+                        <>
+                            <span className="font-medium">Distillation {status}</span>{' '}
+                            <span className="text-muted-foreground">· {label}</span>
+                            {state.session.distillationError ? (
+                                <span className="text-muted-foreground"> · {state.session.distillationError}</span>
+                            ) : null}
+                        </>
+                    )}
+                </span>
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+                {isDone && onOpen ? (
+                    <button
+                        type="button"
+                        onClick={onOpen}
+                        className="rounded border border-emerald-500/50 bg-background px-2 py-1 text-xs font-medium hover:bg-emerald-500/10"
+                    >
+                        Open Playbook
+                    </button>
+                ) : null}
+                <button
+                    type="button"
+                    onClick={onClose}
+                    title="Dismiss"
+                    className="rounded p-1 hover:bg-muted"
+                >
+                    <X className="h-3.5 w-3.5" />
+                </button>
+            </div>
         </div>
     );
 }

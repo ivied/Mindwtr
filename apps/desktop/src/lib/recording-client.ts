@@ -89,3 +89,13 @@ export async function listRecordings(limit = 50): Promise<RecordingSession[]> {
     const r = await apiFetch<{ items: RecordingSession[] }>(`/v1/recordings?limit=${limit}`);
     return r.items;
 }
+
+/**
+ * Look up a session by id. The server doesn't expose GET /:id, but
+ * listRecordings(50) is usually enough since freshly-stopped sessions are
+ * always near the top.
+ */
+export async function findRecording(id: string): Promise<RecordingSession | null> {
+    const items = await listRecordings(50);
+    return items.find((s) => s.id === id) ?? null;
+}

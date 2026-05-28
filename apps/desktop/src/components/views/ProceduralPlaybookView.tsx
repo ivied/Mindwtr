@@ -37,6 +37,7 @@ export function ProceduralPlaybookView() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [filter, setFilter] = useState<Filter>('all');
+    const [sourceFilter, setSourceFilter] = useState<string>('all');
     const [busyId, setBusyId] = useState<string | null>(null);
     const [editing, setEditing] = useState<ProceduralChunk | null>(null);
     const [creating, setCreating] = useState(false);
@@ -111,13 +112,20 @@ export function ProceduralPlaybookView() {
         [load]
     );
 
+    const sources = useMemo(() => {
+        const s = new Set<string>();
+        for (const c of chunks) s.add(c.source);
+        return Array.from(s).sort();
+    }, [chunks]);
+
     const filtered = useMemo(() => {
         // Default "all" hides archived to keep the playbook view focused on
         // live rules; the dedicated 'archived' tab surfaces them on demand.
-        const rows =
-            filter === 'all'
-                ? chunks.filter((c) => c.appliesTo !== 'archived')
-                : chunks.filter((c) => c.appliesTo === filter);
+        const appliesPass = (c: ProceduralChunk) =>
+            filter === 'all' ? c.appliesTo !== 'archived' : c.appliesTo === filter;
+        const sourcePass = (c: ProceduralChunk) =>
+            sourceFilter === 'all' ? true : c.source === sourceFilter;
+        const rows = chunks.filter((c) => appliesPass(c) && sourcePass(c));
         // group by section title, preserving order
         const groups: { title: string; items: ProceduralChunk[] }[] = [];
         for (const c of rows) {
@@ -180,6 +188,26 @@ export function ProceduralPlaybookView() {
                                 ? `, ${stats.reliability.belowHalf} below 0.5`
                                 : ''}
                         </span>
+                    </div>
+                ) : null}
+                {sources.length > 1 ? (
+                    <div className="mt-2 flex flex-wrap gap-1 text-xs">
+                        <span className="text-muted-foreground self-center">Source:</span>
+                        {['all', ...sources].map((s) => (
+                            <button
+                                key={s}
+                                type="button"
+                                onClick={() => setSourceFilter(s)}
+                                className={cn(
+                                    'rounded-full px-2.5 py-0.5',
+                                    sourceFilter === s
+                                        ? 'bg-secondary text-secondary-foreground'
+                                        : 'border hover:bg-muted'
+                                )}
+                            >
+                                {s}
+                            </button>
+                        ))}
                     </div>
                 ) : null}
                 <div className="mt-3 flex gap-1">
