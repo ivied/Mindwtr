@@ -10,7 +10,7 @@ import { dirname } from 'node:path'
 
 export type DB = Database
 
-const SCHEMA_VERSION = 6
+const SCHEMA_VERSION = 7
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS captures (
@@ -260,6 +260,24 @@ CREATE TRIGGER IF NOT EXISTS procedural_chunks_fts_au AFTER UPDATE ON procedural
   INSERT INTO procedural_chunks_fts(rowid, section_title, text)
   VALUES (new.rowid, COALESCE(new.section_title, ''), new.text);
 END;
+
+-- v7 (Phase 2): task-grounded recording sessions. One row per "user
+-- presses 🎙 on task X" session. Captures collected during the session
+-- are tagged via source_meta JSON ({recording_session_id, task_id}).
+-- After stop the distillation worker reads those captures and writes a
+-- playbook chunk to shared-memory/user/recorded/<slug>.md.
+CREATE TABLE IF NOT EXISTS recording_sessions (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL,
+  task_title TEXT,
+  started_at TEXT NOT NULL,
+  stopped_at TEXT,
+  distillation_status TEXT NOT NULL DEFAULT 'pending',
+  distilled_chunk_id TEXT,
+  distillation_error TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rec_sess_active ON recording_sessions(stopped_at);
+CREATE INDEX IF NOT EXISTS idx_rec_sess_task ON recording_sessions(task_id);
 `
 
 const VEC_SCHEMA_SQL = `
@@ -381,4 +399,20 @@ function applyAdditiveMigrations(db: DB): void {
   db.run(
     'CREATE INDEX IF NOT EXISTS idx_ppr_chunk ON procedural_proposal_refs(chunk_id)'
   )
+
+  // v7: recording_sessions for task-grounded playbook capture (Phase 2).
+  db.run(
+    `CREATE TABLE IF NOT EXISTS recording_sessions (
+       id TEXT PRIMARY KEY,
+       task_id TEXT NOT NULL,
+       task_title TEXT,
+       started_at TEXT NOT NULL,
+       stopped_at TEXT,
+       distillation_status TEXT NOT NULL DEFAULT 'pending',
+       distilled_chunk_id TEXT,
+       distillation_error TEXT
+     )`
+  )
+  db.run('CREATE INDEX IF NOT EXISTS idx_rec_sess_active ON recording_sessions(stopped_at)')
+  db.run('CREATE INDEX IF NOT EXISTS idx_rec_sess_task ON recording_sessions(task_id)')
 }

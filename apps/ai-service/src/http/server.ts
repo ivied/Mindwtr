@@ -30,6 +30,7 @@ import type {
 import type { ProposalRecord, ProposalType } from '../proposal-store/types'
 import type { FieldDiff, ModifyPayload } from '../proposal-store/payloads'
 import type { PersonsProvider } from '../wiki/persons-reader'
+import type { RecordingSessionStore } from '../recording/store'
 import type { FocusContextAssembler, MemoryStore, HybridRetriever, IngestService } from '../memory'
 import type { ProceduralStore, AppliesTo } from '../memory/procedural'
 
@@ -110,6 +111,8 @@ export interface HttpServerConfig {
   memory?: MemoryHttpDeps | null
   /** Optional procedural memory — when set, exposes GET/POST /v1/procedural/* (FR88 review API). */
   procedural?: ProceduralHttpDeps | null
+  /** Optional recording-session store — exposes /v1/recordings/* (Phase 2). */
+  recordings?: { store: RecordingSessionStore } | null
   /** Allowed origins for CORS. Default ['http://localhost:5173']. */
   corsOrigins?: string[]
 }
@@ -211,6 +214,10 @@ export function createHttpServer(config: HttpServerConfig) {
 
   if (config.procedural) {
     mountProceduralRoutes(app, config.procedural)
+  }
+
+  if (config.recordings) {
+    mountRecordingRoutes(app, config.recordings)
   }
 
   return {
@@ -894,4 +901,65 @@ function mountProceduralRoutes(app: Hono, deps: ProceduralHttpDeps): void {
     })
   }
 }
+
+// ----------------------------------------------------------------------------
+// Recording sessions (Phase 2)
+// ----------------------------------------------------------------------------
+
+function mountRecordingRoutes(
+  app: Hono,
+  deps: { store: RecordingSessionStore }
+): void {
+  // GET /v1/recordings/active — capture-agent polls this every few seconds
+  // to decide whether to enter intensified mode. Public-ish: anything that
+  // can authenticate can read; we never tag the inverse "off" because no
+  // session is the default.
+  app.get('/v1/recordings/active', (c) => {
+    const session = deps.store.getActive()
+    return c.json({ session })
+  })
+
+  // GET /v1/recordings — recent list for the review/status UI.
+  app.get('/v1/recordings', (c) => {
+    const limit = c.req.query('limit') ? Number(c.req.query('limit')) : 50
+    return c.json({ items: deps.store.listRecent(limit) })
+  })
+
+  // POST /v1/recordings/start { taskId, taskTitle? } — start a session.
+  // Refuses if another session is already active (single-active invariant).
+  app.post('/v1/recordings/start', async (c) => {
+    let body: { taskId?: unknown; taskTitle?: unknown }
+    try {
+      body = (await c.req.json()) as typeof body
+    } catch {
+      return c.json({ error: 'invalid JSON' }, 400)
+    }
+    const taskId = typeof body.taskId === 'string' ? body.taskId.trim() : ''
+    if (!taskId) return c.json({ error: 'taskId is required' }, 400)
+    const existing = deps.store.getActive()
+    if (existing) {
+      return c.json(
+        {
+          error: 'a recording session is already active',
+          session: existing,
+        },
+        409
+      )
+    }
+    const taskTitle =
+      typeof body.taskTitle === 'string' ? body.taskTitle.trim() || null : null
+    const session = deps.store.start({ taskId, taskTitle })
+    return c.json({ ok: true, session }, 201)
+  })
+
+  // POST /v1/recordings/:id/stop — stop a session. Returns the session row;
+  // distillation worker (separate process) picks it up via status='pending'.
+  app.post('/v1/recordings/:id/stop', (c) => {
+    const id = c.req.param('id')
+    const session = deps.store.stop(id)
+    if (!session) return c.json({ error: 'session not found' }, 404)
+    return c.json({ ok: true, session })
+  })
+}
+
 

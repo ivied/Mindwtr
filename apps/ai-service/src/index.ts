@@ -47,6 +47,7 @@ import {
   ProceduralProposerBlock,
   LlmChunkClassifier,
 } from './memory/procedural'
+import { RecordingSessionStore } from './recording'
 
 const MINDWTR_CLOUD_URL = process.env.MINDWTR_CLOUD_URL ?? 'http://localhost:8787'
 const MINDWTR_AUTH_TOKEN = process.env.MINDWTR_AUTH_TOKEN ?? ''
@@ -193,6 +194,7 @@ let proactiveRunner: ProactiveRunner | null = null
 // inside the SHARED_MEMORY_DIR block below when procedural memory is on.
 let proceduralStore: ProceduralStore | null = null
 let proceduralReader: ProceduralReader | null = null
+const recordingStore = new RecordingSessionStore(contextStore.rawDb)
 
 // --- AI Enricher (push) + Commitment Detector (pull) + Reviser ---
 let enricherPipeline: EnricherPipeline | null = null
@@ -578,6 +580,7 @@ async function main() {
                 : undefined,
           }
         : null,
+      recordings: recordingStore ? { store: recordingStore } : null,
     })
     http = server.serve()
     console.log(
