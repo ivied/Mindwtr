@@ -16,6 +16,7 @@ import { join, relative } from 'node:path'
 import { parseCaptureMd } from './frontmatter'
 import { extractEntities, type Entity, type ExtractInput } from './entity-extractor'
 import type { LlmClient } from './llm-client'
+import { isSelfObservingCapture } from './self-observation'
 
 interface RollupState {
   lastTs: string
@@ -70,24 +71,42 @@ export async function runRollup(deps: RollupDeps): Promise<RollupResult> {
     return { newCaptures: 0, entitiesUpdated: 0, skipped: 0 }
   }
 
-  // Extract entities for each capture (one LLM call per capture).
-  // captureId → entity slugs (for co-occurrence)
+  // Extract entities for each capture (one LLM call per capture). Run a
+  // bounded pool of concurrent extractions instead of one-at-a-time — the
+  // calls are I/O-bound on the LLM, so N in flight cuts a pass from
+  // O(captures × latency) to roughly O(captures / N × latency). Without this
+  // the rollup falls behind at the 15s capture rate (a 111-capture pass took
+  // ~12 min serial). Order is irrelevant — results aggregate into a map.
+  const concurrency = Math.max(1, Number(process.env.WIKI_ROLLUP_CONCURRENCY ?? 8))
   const captureEntities: Array<{ capture: CaptureRef; entities: Entity[] }> = []
   let skipped = 0
-  for (const cap of captures) {
-    try {
-      const entities = await extractEntities(deps.llm, captureToInput(cap))
-      captureEntities.push({ capture: cap, entities })
-    } catch (err) {
-      log(`extract failed for ${cap.path}: ${(err as Error).message}`)
-      skipped++
+  let nextIdx = 0
+  const worker = async () => {
+    while (true) {
+      const i = nextIdx++
+      if (i >= captures.length) return
+      const cap = captures[i]!
+      try {
+        const entities = await extractEntities(deps.llm, captureToInput(cap))
+        captureEntities.push({ capture: cap, entities })
+      } catch (err) {
+        log(`extract failed for ${cap.path}: ${(err as Error).message}`)
+        skipped++
+      }
     }
   }
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, captures.length) }, worker)
+  )
 
   // Aggregate into entity records.
   const records = new Map<string, EntityRecord>()
   for (const { capture, entities } of captureEntities) {
     const slugsInThisCapture = new Set(entities.map((e) => e.slug))
+    // When the screen is the GTD/Mindwtr UI itself, every on-screen task
+    // co-occurs with every other — meaningless. Keep the mentions (the entity
+    // really was on screen) but don't record co-occurrence edges from it.
+    const selfObserving = isSelfObservingCapture(capture.body)
     for (const e of entities) {
       const rec = records.get(e.slug) ?? newRecord(e, capture.ts)
       rec.aliases.add(e.name)
@@ -101,9 +120,11 @@ export async function runRollup(deps: RollupDeps): Promise<RollupResult> {
         app: capture.app,
       })
       // co-occurrence: every other slug in this capture is "related"
-      for (const other of slugsInThisCapture) {
-        if (other === e.slug) continue
-        rec.related.set(other, (rec.related.get(other) ?? 0) + 1)
+      if (!selfObserving) {
+        for (const other of slugsInThisCapture) {
+          if (other === e.slug) continue
+          rec.related.set(other, (rec.related.get(other) ?? 0) + 1)
+        }
       }
       records.set(e.slug, rec)
     }

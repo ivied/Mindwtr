@@ -31,6 +31,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseEntityMd, serializeEntityMd } from './entity-frontmatter'
 import type { LlmClient } from '../llm-client'
+import { isSelfObservingCapture } from '../self-observation'
 
 export interface SynthesizerOptions {
   wikiDir: string
@@ -507,6 +508,9 @@ async function readCaptureContent(r: MentionRecord, slug: string): Promise<strin
     if (lower.includes(`slug: ${slug}`) || lower.includes(`entities/${slug}.md`)) {
       return null
     }
+    // The GTD/Mindwtr task-manager UI on screen — the entity is just a row in
+    // a list; nothing here describes the entity itself. Drop it.
+    if (isSelfObservingCapture(body)) return null
     return body.length > excerpt.length ? body.slice(0, MAX_CAPTURE_BODY_CHARS) : excerpt
   } catch {
     return excerpt
