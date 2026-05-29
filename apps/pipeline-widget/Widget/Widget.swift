@@ -217,19 +217,17 @@ private struct LargeView: View {
 private func llmBlock(_ llm: LlmSnapshot?) -> some View {
     VStack(alignment: .leading, spacing: 3) {
         HStack {
-            Text("LLM verdicts")
+            Text("Last LLM verdict")
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.secondary)
             Spacer()
-            if let l = llm {
-                Text(relativeAge(l.updatedAt))
+            if let v = llm?.verdicts.first {
+                Text(relativeAge(v.ts))
                     .font(.system(size: 9)).foregroundStyle(.tertiary)
             }
         }
-        if let verdicts = llm?.verdicts, !verdicts.isEmpty {
-            ForEach(Array(verdicts.prefix(3).enumerated()), id: \.offset) { _, v in
-                verdictRow(v)
-            }
+        if let v = llm?.verdicts.first {
+            latestVerdict(v)
         } else {
             Text("No LLM verdicts yet.")
                 .font(.system(size: 9))
@@ -239,40 +237,40 @@ private func llmBlock(_ llm: LlmSnapshot?) -> some View {
 }
 
 @ViewBuilder
-private func verdictRow(_ v: LlmVerdict) -> some View {
-    HStack(alignment: .top, spacing: 4) {
-        Text(channelEmoji(v.channel))
-            .font(.system(size: 10))
-        VStack(alignment: .leading, spacing: 1) {
-            HStack(spacing: 4) {
-                // Emoji dot is immune to widget tinting on the desktop.
-                Text("\(kindDot(v.kind)) \(kindLabel(v.kind))")
-                    .font(.system(size: 9, weight: .bold))
-                if let c = v.confidence {
-                    Text(String(format: "%.2f", c))
-                        .font(.system(size: 9, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-                if let cat = v.category {
-                    Text(cat)
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Text(relativeAge(v.ts))
-                    .font(.system(size: 8))
-                    .foregroundStyle(.tertiary)
-            }
-            if !v.title.isEmpty {
-                Text(v.title)
-                    .font(.system(size: 10))
-                    .lineLimit(1)
-            } else if let r = v.reasoning, !r.isEmpty {
-                Text(r)
-                    .font(.system(size: 9))
+private func latestVerdict(_ v: LlmVerdict) -> some View {
+    VStack(alignment: .leading, spacing: 3) {
+        HStack(spacing: 4) {
+            Text(channelEmoji(v.channel)).font(.system(size: 11))
+            // Emoji dot is immune to widget tinting on the desktop.
+            Text("\(kindDot(v.kind)) \(kindLabel(v.kind))")
+                .font(.system(size: 10, weight: .bold))
+            if let c = v.confidence {
+                Text(String(format: "%.2f", c))
+                    .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
             }
+            if let cat = v.category {
+                Text(cat)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        if !v.title.isEmpty {
+            Text(v.title)
+                .font(.system(size: 11, weight: .medium))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        if let r = v.reasoning, !r.isEmpty {
+            Text(r)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        if let diff = v.diff, !diff.isEmpty {
+            Text("diff: \(diff)")
+                .font(.system(size: 9))
+                .foregroundStyle(.tertiary)
         }
     }
 }

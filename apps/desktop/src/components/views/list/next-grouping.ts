@@ -16,15 +16,18 @@ const AI_STAGE_ORDER: ReadonlyArray<{ stage: string; title: string; dotColor: st
     { stage: 'queued', title: '📥 Queued', dotColor: '#6b7280' },
 ];
 
-function readAiStage(task: Task): string {
+function readAiStage(task: Task): string | null {
     const tag = (task.tags ?? []).find((t) => t.startsWith('ai-stage:'));
-    return tag ? tag.slice('ai-stage:'.length) : 'queued';
+    return tag ? tag.slice('ai-stage:'.length) : null;
 }
 
 export function groupTasksByAiStage({ tasks }: { tasks: Task[] }): TaskGroup[] {
     const buckets = new Map<string, Task[]>();
     for (const task of tasks) {
         const stage = readAiStage(task);
+        // No ai-stage tag → the task has left the agent flow (accepted/done,
+        // rejected/archived, or never routed). Drop it from the lane.
+        if (stage === null) continue;
         const bucket = buckets.get(stage) ?? [];
         bucket.push(task);
         buckets.set(stage, bucket);

@@ -35,7 +35,7 @@ export interface LlmVerdict {
   title: string
   confidence?: number
   category?: string
-  /** Short reasoning excerpt (≤240 chars). */
+  /** Reasoning excerpt (≤600 chars) — widget shows the latest in full. */
   reasoning?: string
   /** Comma-joined diff fields when Enricher patched a task. */
   diff?: string
@@ -83,7 +83,7 @@ export class LlmPublisher {
       title: (v.title ?? '').slice(0, 200),
       confidence: v.confidence,
       category: v.category,
-      reasoning: v.reasoning ? v.reasoning.slice(0, 240) : undefined,
+      reasoning: v.reasoning ? v.reasoning.slice(0, 600) : undefined,
       diff: v.diff,
     }
     this.verdicts.unshift(verdict)

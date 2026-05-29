@@ -25,6 +25,7 @@ import { sortDoneTasksForListView } from './list/done-sort';
 import { groupTasksByArea, groupTasksByContext, groupTasksByProject, groupTasksByAiStage, type NextGroupBy, type TaskGroup } from './list/next-grouping';
 import { useListSelection } from './list/useListSelection';
 import { StoreTaskItem } from './list/StoreTaskItem';
+import { AiAgentReviewControls } from '../AiAgentReviewControls';
 import { LIST_VIRTUALIZATION_THRESHOLD, LIST_VIRTUAL_ROW_ESTIMATE, LIST_VIRTUAL_OVERSCAN } from './list/useVirtualList';
 
 
@@ -937,21 +938,30 @@ export const ListView = memo(function ListView({ title, statusFilter, assignedTo
                                 <div className="divide-y divide-border/30">
                                     {group.tasks.map((task) => {
                                         const index = taskIndexById.get(task.id) ?? 0;
+                                        const showReviewControls =
+                                            isAiAgentGrouping &&
+                                            (task.tags ?? []).some(
+                                                (tg) => tg === 'ai-stage:review' || tg === 'ai-stage:error'
+                                            );
                                         return (
-                                            <StoreTaskItem
-                                                key={task.id}
-                                                taskId={task.id}
-                                                isSelected={index === selectedIndex}
-                                                index={index}
-                                                onSelectIndex={handleSelectIndex}
-                                                selectionMode={selectionMode}
-                                                isMultiSelected={multiSelectedIds.has(task.id)}
-                                                onToggleSelectId={toggleMultiSelect}
-                                                showQuickDone={showQuickDone}
-                                                readOnly={readOnly}
-                                                compactMetaEnabled={showListDetails}
-                                                showProjectBadgeInActions={false}
-                                            />
+                                            <div key={task.id}>
+                                                <StoreTaskItem
+                                                    taskId={task.id}
+                                                    isSelected={index === selectedIndex}
+                                                    index={index}
+                                                    onSelectIndex={handleSelectIndex}
+                                                    selectionMode={selectionMode}
+                                                    isMultiSelected={multiSelectedIds.has(task.id)}
+                                                    onToggleSelectId={toggleMultiSelect}
+                                                    showQuickDone={showQuickDone}
+                                                    readOnly={readOnly}
+                                                    compactMetaEnabled={showListDetails}
+                                                    showProjectBadgeInActions={false}
+                                                />
+                                                {showReviewControls ? (
+                                                    <AiAgentReviewControls task={task} />
+                                                ) : null}
+                                            </div>
                                         );
                                     })}
                                 </div>
