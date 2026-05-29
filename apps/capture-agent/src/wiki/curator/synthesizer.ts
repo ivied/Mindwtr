@@ -179,7 +179,14 @@ export async function runSynthesizer(
     })
   }
 
-  for (const c of budget) {
+  // Process entities through a bounded concurrency pool. Each is an
+  // independent LLM call; serial was fine for the 20/pass scheduled cadence
+  // but far too slow for a forced full re-synth of every entity. State is
+  // updated in memory per-entity (safe — single-threaded) and persisted once
+  // at the end, so concurrent writes never race the state file.
+  const concurrency = Math.max(1, Number(process.env.WIKI_SYNTH_CONCURRENCY ?? 6))
+
+  const processOne = async (c: Candidate): Promise<void> => {
     const fm = c.parsed!.frontmatter
     const relatedCandidates = (fm.related ?? [])
       .slice(0, MAX_RELATED_CANDIDATES)
@@ -196,7 +203,7 @@ export async function runSynthesizer(
         action: 'skip-empty-mentions',
         rationale: 'no .mentions.jsonl file or empty',
       })
-      continue
+      return
     }
 
     if (dryRun) {
@@ -206,7 +213,7 @@ export async function runSynthesizer(
         rationale: `would synthesize (mentions=${fm.mentionCount}, sample=${mentions.length})`,
       })
       result.synthesized += 1
-      continue
+      return
     }
 
     try {
@@ -225,7 +232,7 @@ export async function runSynthesizer(
           action: 'synth',
           rationale: 'LLM returned empty — skipped write',
         })
-        continue
+        return
       }
       let updatedBody = c.parsed!.body
       if (sections.about) {
@@ -243,9 +250,6 @@ export async function runSynthesizer(
         lastSynthAt: now.toISOString(),
         mentionCountAtSynth: fm.mentionCount,
       }
-      // Persist progress per-entity so a long run that crashes mid-way
-      // doesn't lose what's already been written.
-      await saveState(options.wikiDir, { ...state, synth: synthState })
       result.synthesized += 1
       const wroteParts = [
         sections.about ? `${sections.about.length}-char About` : '',
@@ -264,6 +268,18 @@ export async function runSynthesizer(
       log(`[synth] failed for ${c.slug}: ${(err as Error).message}`)
     }
   }
+
+  let nextIdx = 0
+  const worker = async () => {
+    while (true) {
+      const i = nextIdx++
+      if (i >= budget.length) return
+      await processOne(budget[i]!)
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, budget.length) }, worker)
+  )
 
   if (!dryRun) {
     await saveState(options.wikiDir, { ...state, synth: synthState })
