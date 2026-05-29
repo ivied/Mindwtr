@@ -69,8 +69,13 @@ interface SynthState {
 }
 
 const STATE_FILE = '.curator-state.json'
-const MAX_MENTIONS_IN_PROMPT = 25
+const MAX_MENTIONS_IN_PROMPT = 40
+/** Per-mention cap on full capture body text fed to the LLM (chars). */
+const MAX_CAPTURE_BODY_CHARS = 500
 const MAX_ABOUT_CHARS = 500
+/** How many co-occurrence candidates to hand the LLM for relationship typing. */
+const MAX_RELATED_CANDIDATES = 20
+const MAX_RELATIONSHIPS_CHARS = 800
 
 export async function runSynthesizer(
   options: SynthesizerOptions
@@ -175,8 +180,15 @@ export async function runSynthesizer(
 
   for (const c of budget) {
     const fm = c.parsed!.frontmatter
-    const mentionsPath = join(entitiesDir, `${c.slug}.mentions.jsonl`)
-    const mentions = await readMentions(mentionsPath, MAX_MENTIONS_IN_PROMPT)
+    const relatedCandidates = (fm.related ?? [])
+      .slice(0, MAX_RELATED_CANDIDATES)
+      .map((r) => r.slug)
+    const mentions = await gatherMentions(
+      entitiesDir,
+      c.slug,
+      relatedCandidates,
+      MAX_MENTIONS_IN_PROMPT
+    )
     if (mentions.length === 0) {
       result.decisions.push({
         slug: c.slug,
@@ -197,8 +209,16 @@ export async function runSynthesizer(
     }
 
     try {
-      const sections = await synthesizeEntity(options.llm, c.parsed!.frontmatter, mentions)
-      if (!sections.about && !sections.timeline) {
+      // gatherMentions already guaranteed captures co-occurring with each
+      // candidate are in the sample; the LLM verifies each candidate against
+      // that evidence and drops screen-adjacency noise.
+      const sections = await synthesizeEntity(
+        options.llm,
+        c.parsed!.frontmatter,
+        mentions,
+        relatedCandidates
+      )
+      if (!sections.about && !sections.timeline && !sections.relationships) {
         result.decisions.push({
           slug: c.slug,
           action: 'synth',
@@ -213,6 +233,9 @@ export async function runSynthesizer(
       if (sections.timeline) {
         updatedBody = spliceSection(updatedBody, fm.name, 'Timeline', sections.timeline)
       }
+      if (sections.relationships) {
+        updatedBody = spliceSection(updatedBody, fm.name, 'Relationships', sections.relationships)
+      }
       const newDoc = serializeEntityMd({ frontmatter: fm, body: updatedBody })
       await writeFile(c.path, newDoc, 'utf-8')
       synthState[c.slug] = {
@@ -226,6 +249,7 @@ export async function runSynthesizer(
       const wroteParts = [
         sections.about ? `${sections.about.length}-char About` : '',
         sections.timeline ? `${sections.timeline.split('\n').filter((l) => l.trim()).length}-line Timeline` : '',
+        sections.relationships ? `${sections.relationships.split('\n').filter((l) => l.trim().startsWith('-')).length}-rel Relationships` : '',
       ]
         .filter(Boolean)
         .join(' + ')
@@ -249,7 +273,7 @@ export async function runSynthesizer(
 
 // ---------------- LLM ----------------
 
-const SYSTEM_PROMPT = `You write two short sections for an entity in a developer's personal knowledge graph.
+const SYSTEM_PROMPT = `You write up to three short sections for an entity in a developer's personal knowledge graph.
 
 Output exactly this format (omit a section if there's nothing meaningful to say there):
 
@@ -261,27 +285,36 @@ Output exactly this format (omit a section if there's nothing meaningful to say 
 - YYYY-MM-DD: <event in 1 short clause>
 (3-8 milestones max — only events clearly grounded in the mentions; skip if there's no clear timeline arc)
 
+## Relationships
+- <candidate-slug> — <short plain-language phrase describing how it relates to this entity, grounded in the mentions>
+
 Rules:
 - Use ONLY information from the mentions. No speculation, no invented names/dates.
 - Plain text inside About — no bullets or sub-headers.
 - Timeline dates come from the timestamps in the mentions; group nearby events into one milestone if they describe the same thing.
+- Relationships: you are given CANDIDATE related entities — they merely appeared on screen at the same time, which does NOT mean they are related. Include a candidate ONLY when the mentions actually show how it relates to this entity, and describe that relation in a short natural phrase (e.g. "client who commissioned the build", "freelancer doing the API", "separate project, unrelated", "deploy target"). If a candidate has no real evidence in the mentions, OMIT it. Never guess. Omit ambient noise (radio/music apps, OS chrome, unrelated apps/tabs) entirely. It is correct to output few or zero relationships.
 - If mentions are OCR-garbled noise with no meaning, output exactly: SKIP
 - Output ONLY the section blocks above. No preamble, no closing summary, no quoting, no fences.`
 
 interface SynthSections {
   about: string
   timeline: string
+  relationships: string
 }
 
 export async function synthesizeEntity(
   llm: LlmClient,
   fm: { name: string; type: string; aliases: string[] },
-  mentions: string[]
+  mentions: string[],
+  relatedCandidates: string[] = []
 ): Promise<SynthSections> {
   const userPrompt = [
     `Entity: ${fm.name}`,
     `Type: ${fm.type}`,
     fm.aliases.length > 0 ? `Aliases: ${fm.aliases.join(', ')}` : '',
+    relatedCandidates.length > 0
+      ? `Candidate related entities (co-occurred on screen — verify against mentions before trusting): ${relatedCandidates.join(', ')}`
+      : '',
     '',
     'Mentions (most recent first):',
     ...mentions.map((m, i) => `${i + 1}. ${m}`),
@@ -301,14 +334,18 @@ export function parseSynthOutput(raw: string): SynthSections {
     .replace(/^```[a-z]*\s*/i, '')
     .replace(/```\s*$/i, '')
     .trim()
-  if (!cleaned || /^SKIP\b/i.test(cleaned)) return { about: '', timeline: '' }
-  if (cleaned.startsWith('{') || cleaned.startsWith('[')) return { about: '', timeline: '' }
+  if (!cleaned || /^SKIP\b/i.test(cleaned))
+    return { about: '', timeline: '', relationships: '' }
+  if (cleaned.startsWith('{') || cleaned.startsWith('['))
+    return { about: '', timeline: '', relationships: '' }
 
   const about = extractSection(cleaned, 'about')
   const timeline = extractSection(cleaned, 'timeline')
+  const relationships = extractSection(cleaned, 'relationships')
   return {
     about: about.slice(0, MAX_ABOUT_CHARS),
     timeline: sanitizeTimeline(timeline),
+    relationships: relationships.slice(0, MAX_RELATIONSHIPS_CHARS),
   }
 }
 
@@ -343,27 +380,145 @@ export function sanitizeAbout(raw: string): string {
   return parseSynthOutput(raw).about
 }
 
-async function readMentions(path: string, max: number): Promise<string[]> {
-  if (!existsSync(path)) return []
-  const text = await readFile(path, 'utf-8')
-  const lines = text.split('\n').filter((l) => l.trim())
-  // Most-recent-first by parse order — file is append-only chronological,
-  // so reverse and take first N.
-  const recent = lines.slice(-max).reverse()
-  return recent.map(prettifyMention)
+interface MentionRecord {
+  path: string
+  excerpt: string
+  ts: string
+  source: string
+  app: string
 }
 
-function prettifyMention(jsonLine: string): string {
-  try {
-    const obj = JSON.parse(jsonLine) as Record<string, unknown>
-    const ts = typeof obj.ts === 'string' ? obj.ts.slice(0, 16) : ''
-    const source = typeof obj.source === 'string' ? obj.source : ''
-    const app = typeof obj.app === 'string' ? obj.app : ''
-    const excerpt = typeof obj.excerpt === 'string' ? obj.excerpt.slice(0, 200) : ''
-    return `[${ts}] ${source}/${app}: ${excerpt}`.trim()
-  } catch {
-    return jsonLine.slice(0, 200)
+function parseMentionFile(text: string): MentionRecord[] {
+  // Newest-first (file is append-only chronological).
+  const out: MentionRecord[] = []
+  for (const line of text.split('\n').filter((l) => l.trim()).reverse()) {
+    try {
+      const o = JSON.parse(line) as Record<string, unknown>
+      out.push({
+        path: typeof o.capturePath === 'string' ? o.capturePath : '',
+        excerpt: typeof o.excerpt === 'string' ? o.excerpt : '',
+        ts: typeof o.ts === 'string' ? o.ts : '',
+        source: typeof o.source === 'string' ? o.source : '',
+        app: typeof o.app === 'string' ? o.app : '',
+      })
+    } catch {
+      /* skip malformed */
+    }
   }
+  return out
+}
+
+/**
+ * Build the mention sample fed to the LLM. Two goals beyond "recent captures":
+ *
+ *  1. Guarantee relationship evidence. For each co-occurrence candidate, pull
+ *     a couple of captures where the candidate AND this entity actually appear
+ *     together (intersection of their capturePaths). Without this, a strict
+ *     "recent only" sample drops real relationships (e.g. a client discussed
+ *     weeks ago) just because newer captures crowd them out.
+ *  2. Diversity. Dedup repeated excerpts so identical phrases don't eat the
+ *     budget, and skip self-referential meta-captures (where the entity's own
+ *     wiki page is what's on screen) — those describe the tooling, not the
+ *     entity.
+ */
+export async function gatherMentions(
+  entitiesDir: string,
+  slug: string,
+  candidates: string[],
+  max: number
+): Promise<string[]> {
+  const selfPath = join(entitiesDir, `${slug}.mentions.jsonl`)
+  if (!existsSync(selfPath)) return []
+  const records = parseMentionFile(await readFile(selfPath, 'utf-8'))
+
+  // candidate slug -> set of capturePaths it appears in
+  const candPaths = new Map<string, Set<string>>()
+  for (const cand of candidates) {
+    const cp = join(entitiesDir, `${cand}.mentions.jsonl`)
+    if (!existsSync(cp)) continue
+    const set = new Set<string>()
+    for (const r of parseMentionFile(await readFile(cp, 'utf-8'))) {
+      if (r.path) set.add(r.path)
+    }
+    candPaths.set(cand, set)
+  }
+
+  const usedPaths = new Set<string>()
+  const usedExcerpt = new Set<string>()
+  const chosen: MentionRecord[] = []
+  const EVIDENCE_PER_CANDIDATE = 2
+
+  const take = (r: MentionRecord) => {
+    if (r.path && usedPaths.has(r.path)) return
+    if (r.path) usedPaths.add(r.path)
+    const ek = r.excerpt.trim().toLowerCase()
+    if (ek) usedExcerpt.add(ek)
+    chosen.push(r)
+  }
+
+  // Pass 1: relationship evidence — a few co-occurring captures per candidate.
+  // (Only possible for records that carry a capturePath.)
+  for (const cand of candidates) {
+    const set = candPaths.get(cand)
+    if (!set) continue
+    let added = 0
+    for (const r of records) {
+      if (added >= EVIDENCE_PER_CANDIDATE || chosen.length >= max) break
+      if (r.path && set.has(r.path) && !usedPaths.has(r.path)) {
+        take(r)
+        added += 1
+      }
+    }
+    if (chosen.length >= max) break
+  }
+
+  // Pass 2: fill remaining budget with recent, distinct-excerpt captures.
+  for (const r of records) {
+    if (chosen.length >= max) break
+    const ek = r.excerpt.trim().toLowerCase()
+    if (ek && usedExcerpt.has(ek)) continue
+    take(r)
+  }
+
+  // Read full bodies, skipping meta-captures (the entity's own wiki page).
+  const out: string[] = []
+  for (const r of chosen) {
+    const content = await readCaptureContent(r, slug)
+    if (content === null) continue
+    out.push(`[${r.ts.slice(0, 16)}] ${r.source}/${r.app}: ${content}`.trim())
+  }
+  return out
+}
+
+/**
+ * Return the full capture body (capped), or the excerpt as fallback. Returns
+ * null when the capture is self-referential meta-noise — i.e. it's showing
+ * this entity's own wiki page (frontmatter `slug: <slug>` or the entity .md
+ * filename on screen), which describes the knowledge-graph tooling rather
+ * than the entity itself.
+ */
+async function readCaptureContent(r: MentionRecord, slug: string): Promise<string | null> {
+  const excerpt = r.excerpt.slice(0, 200)
+  if (!r.path || !existsSync(r.path)) return excerpt
+  try {
+    const raw = await readFile(r.path, 'utf-8')
+    const body = stripFrontmatter(raw).replace(/\s+/g, ' ').trim()
+    const lower = body.toLowerCase()
+    if (lower.includes(`slug: ${slug}`) || lower.includes(`entities/${slug}.md`)) {
+      return null
+    }
+    return body.length > excerpt.length ? body.slice(0, MAX_CAPTURE_BODY_CHARS) : excerpt
+  } catch {
+    return excerpt
+  }
+}
+
+function stripFrontmatter(md: string): string {
+  if (md.startsWith('---')) {
+    const end = md.indexOf('\n---', 3)
+    if (end >= 0) return md.slice(md.indexOf('\n', end + 1) + 1)
+  }
+  return md
 }
 
 // ---------------- body splice ----------------

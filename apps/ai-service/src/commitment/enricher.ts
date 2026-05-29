@@ -41,6 +41,14 @@ export type AiTaskType =
 export interface EnrichedProposal {
   is_actionable: boolean
   proposed_title: string
+  /**
+   * A short, self-contained description so the task carries enough context
+   * to act on later — without re-reading the original capture. Restates the
+   * goal in 1-3 sentences, folds in any concrete detail the Enricher saw
+   * (who/what/when, named entities, the source channel). Empty string only
+   * when the title is already fully self-explanatory.
+   */
+  proposed_description: string
   category: GtdCategory
   suggested_contexts: string[]
   suggested_tags: string[]
@@ -101,6 +109,11 @@ const ENRICHER_TOOL = {
           type: 'string',
           description:
             'Rewrite of the card title in GTD next-action form: imperative verb + concrete object (≤120 chars). Examples: "Pay Acme invoice", "Text nanny about Saturday 7pm", "Renew GoDaddy domain". If the original is already a good GTD next action, return it unchanged. Keep the language of the original text.',
+        },
+        proposed_description: {
+          type: 'string',
+          description:
+            'A self-contained description (1-3 sentences, ≤600 chars) that gives the task enough context to act on later WITHOUT re-reading the original source. Fold in concrete details you can see in the input: named people/projects/tools, what specifically is wanted, any deadline or constraint, and where it came from. Use the context blocks (past-similar / temporal) when relevant. If the task is ambiguous, state your best interpretation and what is unclear. Write in the language of the original text. Return empty string ONLY when the title is already fully self-explanatory (e.g. "Buy milk").',
         },
         category: {
           type: 'string',
@@ -218,6 +231,7 @@ const ENRICHER_TOOL = {
       required: [
         'is_actionable',
         'proposed_title',
+        'proposed_description',
         'category',
         'is_project',
         'project_name',
@@ -388,6 +402,7 @@ function normalize(parsed: Partial<EnrichedProposal>): EnrichedProposal {
   return {
     is_actionable: parsed.is_actionable !== false,
     proposed_title: asString(parsed.proposed_title).slice(0, 120),
+    proposed_description: asString(parsed.proposed_description).slice(0, 600),
     category,
     suggested_contexts: asStringArray(parsed.suggested_contexts, 10),
     suggested_tags: asStringArray(parsed.suggested_tags, 20),

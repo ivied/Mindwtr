@@ -123,12 +123,12 @@ describe('parseSynthOutput', () => {
     expect(p.timeline).not.toContain('no date here')
   })
 
-  it('SKIP yields empty for both', () => {
-    expect(parseSynthOutput('SKIP')).toEqual({ about: '', timeline: '' })
+  it('SKIP yields empty for all', () => {
+    expect(parseSynthOutput('SKIP')).toEqual({ about: '', timeline: '', relationships: '' })
   })
 
   it('falls back to whole text as About when no headers present', () => {
-    expect(parseSynthOutput('Just plain text.')).toEqual({ about: 'Just plain text.', timeline: '' })
+    expect(parseSynthOutput('Just plain text.')).toEqual({ about: 'Just plain text.', timeline: '', relationships: '' })
   })
 })
 

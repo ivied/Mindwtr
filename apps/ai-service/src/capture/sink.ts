@@ -125,6 +125,7 @@ export function createCaptureSink(deps: CaptureSinkDeps) {
           taskId: task.id,
           taskTitle: task.title,
           taskTags: initialTags,
+          taskDescription: task.description ?? '',
           text: item.text,
           sourceChannel: item.sourceChannel,
           sourceMeta: item.sourceMeta ?? null,

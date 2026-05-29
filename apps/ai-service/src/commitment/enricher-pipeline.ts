@@ -58,6 +58,9 @@ export interface EnrichInput {
   taskId: string
   taskTitle: string
   taskTags: string[]
+  /** Current task description, if any. The Enricher only fills a generated
+   *  description when this is empty — never clobbers user-written content. */
+  taskDescription?: string
   /** Raw user text that produced the task. Fed verbatim to the Enricher. */
   text: string
   sourceChannel: string
@@ -231,6 +234,17 @@ function buildModifyDiff(input: EnrichInput, p: EnrichedProposal): FieldDiff[] {
 
   if (p.proposed_title && p.proposed_title !== input.taskTitle) {
     diff.push({ field: 'title', from: input.taskTitle, to: p.proposed_title })
+  }
+
+  // Fill a generated description only when the task has none — never
+  // overwrite content the user wrote themselves.
+  const currentDesc = (input.taskDescription ?? '').trim()
+  if (p.proposed_description && currentDesc.length === 0) {
+    diff.push({
+      field: 'description',
+      from: input.taskDescription ?? '',
+      to: p.proposed_description,
+    })
   }
 
   const targetStatus = categoryToStatus(p.category)

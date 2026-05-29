@@ -11,6 +11,7 @@ function makeProposal(overrides: Partial<EnrichedProposal> = {}): EnrichedPropos
   return {
     is_actionable: true,
     proposed_title: 'Text nanny about Saturday',
+    proposed_description: '',
     category: 'two_minute',
     suggested_contexts: ['@phone'],
     suggested_tags: ['family'],
