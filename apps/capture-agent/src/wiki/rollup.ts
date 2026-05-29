@@ -71,6 +71,13 @@ export async function runRollup(deps: RollupDeps): Promise<RollupResult> {
     return { newCaptures: 0, entitiesUpdated: 0, skipped: 0 }
   }
 
+  // Drop near-identical consecutive frames before the expensive extraction.
+  // lastTs still advances over the FULL batch so skipped frames aren't
+  // reconsidered next pass.
+  const toProcess = dedupeNearIdentical(captures)
+  const deduped = captures.length - toProcess.length
+  if (deduped > 0) log(`deduped ${deduped} near-identical frame(s) → ${toProcess.length} to extract`)
+
   // Extract entities for each capture (one LLM call per capture). Run a
   // bounded pool of concurrent extractions instead of one-at-a-time — the
   // calls are I/O-bound on the LLM, so N in flight cuts a pass from
@@ -84,8 +91,8 @@ export async function runRollup(deps: RollupDeps): Promise<RollupResult> {
   const worker = async () => {
     while (true) {
       const i = nextIdx++
-      if (i >= captures.length) return
-      const cap = captures[i]!
+      if (i >= toProcess.length) return
+      const cap = toProcess[i]!
       try {
         const entities = await extractEntities(deps.llm, captureToInput(cap))
         captureEntities.push({ capture: cap, entities })
@@ -96,7 +103,7 @@ export async function runRollup(deps: RollupDeps): Promise<RollupResult> {
     }
   }
   await Promise.all(
-    Array.from({ length: Math.min(concurrency, captures.length) }, worker)
+    Array.from({ length: Math.min(concurrency, toProcess.length) }, worker)
   )
 
   // Aggregate into entity records.
@@ -223,6 +230,65 @@ async function listNewCaptures(wikiRoot: string, sinceTs: string): Promise<Captu
   }
   refs.sort((a, b) => (a.ts < b.ts ? -1 : 1))
   return refs
+}
+
+/**
+ * Drop near-identical consecutive frames. At a 15s capture rate the screen
+ * barely changes between shots, so most captures are duplicates of a recent
+ * one — extracting each is wasted LLM work (and, with the vision pipeline,
+ * wasted image tokens). We compare each capture's OCR word-set against the
+ * last few KEPT captures (a small window, so the two-display interleave is
+ * covered) and skip it when it's ≥ threshold similar.
+ *
+ * Audio captures are never deduped (each transcript is distinct content).
+ */
+export function dedupeNearIdentical(
+  refs: CaptureRef[],
+  opts: { threshold?: number; window?: number } = {}
+): CaptureRef[] {
+  const threshold = opts.threshold ?? Number(process.env.WIKI_ROLLUP_DEDUP_THRESHOLD ?? 0.92)
+  const window = opts.window ?? 4
+  if (threshold >= 1) return refs
+
+  const wordSet = (body: string): Set<string> =>
+    new Set(
+      body
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+        .split(/\s+/)
+        .filter((w) => w.length > 1)
+    )
+
+  const jaccard = (a: Set<string>, b: Set<string>): number => {
+    if (a.size === 0 && b.size === 0) return 1
+    if (a.size === 0 || b.size === 0) return 0
+    let inter = 0
+    const [small, large] = a.size < b.size ? [a, b] : [b, a]
+    for (const w of small) if (large.has(w)) inter += 1
+    return inter / (a.size + b.size - inter)
+  }
+
+  const kept: CaptureRef[] = []
+  const recentSets: Set<string>[] = []
+  for (const ref of refs) {
+    if (ref.source === 'audio') {
+      kept.push(ref)
+      continue
+    }
+    const set = wordSet(ref.body)
+    let dup = false
+    for (const prev of recentSets) {
+      if (jaccard(set, prev) >= threshold) {
+        dup = true
+        break
+      }
+    }
+    if (dup) continue
+    kept.push(ref)
+    recentSets.push(set)
+    if (recentSets.length > window) recentSets.shift()
+  }
+  return kept
 }
 
 async function walkMd(dir: string, out: string[]): Promise<void> {
