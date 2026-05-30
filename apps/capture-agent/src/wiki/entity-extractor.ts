@@ -107,7 +107,7 @@ function stripFences(s: string): string {
   return m ? m[1]! : s
 }
 
-function normalizeSlug(s: string): string {
+export function normalizeSlug(s: string): string {
   return s
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')

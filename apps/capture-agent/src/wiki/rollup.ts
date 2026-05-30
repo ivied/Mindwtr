@@ -12,11 +12,48 @@
 
 import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
-import { join, relative } from 'node:path'
+import { join, relative, dirname } from 'node:path'
 import { parseCaptureMd } from './frontmatter'
-import { extractEntities, type Entity, type ExtractInput } from './entity-extractor'
+import {
+  extractEntities,
+  normalizeSlug,
+  type Entity,
+  type EntityType,
+  type ExtractInput,
+} from './entity-extractor'
+import { extractActivity, type ActivityRecord, type EntityKind } from './activity-extractor'
 import type { LlmClient } from './llm-client'
 import { isSelfObservingCapture } from './self-observation'
+
+/** Map the vision extractor's coarse kind onto the graph's entity type. */
+function kindToEntityType(kind: EntityKind): EntityType {
+  switch (kind) {
+    case 'person': return 'person'
+    case 'project': return 'project'
+    case 'tool': return 'technology'
+    case 'org': return 'organization'
+    case 'place': return 'place'
+    default: return 'technology'
+  }
+}
+
+/** Derive graph entities from a vision ActivityRecord. */
+function activityToEntities(act: ActivityRecord): Entity[] {
+  const out: Entity[] = []
+  const seen = new Set<string>()
+  for (const e of act.entities) {
+    const slug = normalizeSlug(e.entity)
+    if (!slug || seen.has(slug)) continue
+    seen.add(slug)
+    out.push({
+      slug,
+      name: e.entity,
+      type: kindToEntityType(e.kind),
+      excerpt: e.role.slice(0, 80),
+    })
+  }
+  return out
+}
 
 interface RollupState {
   lastTs: string
@@ -32,6 +69,8 @@ interface CaptureRef {
   title: string
   url?: string
   body: string
+  /** Screenshot filename from frontmatter (sits next to the .md), if saved. */
+  image?: string
 }
 
 interface EntityRecord {
@@ -85,8 +124,17 @@ export async function runRollup(deps: RollupDeps): Promise<RollupResult> {
   // the rollup falls behind at the 15s capture rate (a 111-capture pass took
   // ~12 min serial). Order is irrelevant — results aggregate into a map.
   const concurrency = Math.max(1, Number(process.env.WIKI_ROLLUP_CONCURRENCY ?? 8))
+  // Vision path (variant C): for screen captures with a saved screenshot, the
+  // per-capture call becomes a vision+OCR activity extraction — one look at
+  // the screen feeds BOTH the entity graph (derived from the activity's
+  // entities) AND the attributed statements (persisted to the activity log).
+  // Audio, image-less captures, or vision failures fall back to text entity
+  // extraction so the graph is always fed. Disable with WIKI_ROLLUP_VISION=false.
+  const visionEnabled = process.env.WIKI_ROLLUP_VISION !== 'false'
   const captureEntities: Array<{ capture: CaptureRef; entities: Entity[] }> = []
+  const activities: Array<{ cap: CaptureRef; act: ActivityRecord }> = []
   let skipped = 0
+  let visionCount = 0
   let nextIdx = 0
   const worker = async () => {
     while (true) {
@@ -94,7 +142,27 @@ export async function runRollup(deps: RollupDeps): Promise<RollupResult> {
       if (i >= toProcess.length) return
       const cap = toProcess[i]!
       try {
-        const entities = await extractEntities(deps.llm, captureToInput(cap))
+        let entities: Entity[]
+        if (visionEnabled && cap.source === 'screen' && cap.image) {
+          try {
+            const imgPath = join(dirname(cap.path), cap.image)
+            const b64 = (await readFile(imgPath)).toString('base64')
+            const act = await extractActivity(deps.llm, {
+              imageBase64: b64,
+              ocrText: cap.body,
+              app: cap.app,
+              ts: cap.ts,
+            })
+            entities = activityToEntities(act)
+            activities.push({ cap, act })
+            visionCount += 1
+          } catch (visionErr) {
+            log(`vision failed for ${cap.path}, text fallback: ${(visionErr as Error).message}`)
+            entities = await extractEntities(deps.llm, captureToInput(cap))
+          }
+        } else {
+          entities = await extractEntities(deps.llm, captureToInput(cap))
+        }
         captureEntities.push({ capture: cap, entities })
       } catch (err) {
         log(`extract failed for ${cap.path}: ${(err as Error).message}`)
@@ -105,6 +173,14 @@ export async function runRollup(deps: RollupDeps): Promise<RollupResult> {
   await Promise.all(
     Array.from({ length: Math.min(concurrency, toProcess.length) }, worker)
   )
+  if (visionCount > 0) log(`vision-extracted ${visionCount} screen capture(s)`)
+
+  // Persist the full activity records (statements, participants, commitments)
+  // to an append-only per-day log. This is the attributed-content layer the
+  // entity graph alone can't hold — "who said / asked / committed what".
+  if (activities.length > 0) {
+    await persistActivities(deps.wikiRoot, activities)
+  }
 
   // Aggregate into entity records.
   const records = new Map<string, EntityRecord>()
@@ -223,6 +299,7 @@ async function listNewCaptures(wikiRoot: string, sinceTs: string): Promise<Captu
         title: String(meta.title ?? ''),
         url: meta.url ? String(meta.url) : undefined,
         body,
+        image: meta.image ? String(meta.image) : undefined,
       })
     } catch {
       // skip unreadable files
@@ -230,6 +307,31 @@ async function listNewCaptures(wikiRoot: string, sinceTs: string): Promise<Captu
   }
   refs.sort((a, b) => (a.ts < b.ts ? -1 : 1))
   return refs
+}
+
+/**
+ * Append activity records (one JSON line each) to a per-day log under
+ * `<wiki>/activities/<YYYY-MM-DD>.jsonl`. Append-only, mirrors the capture
+ * mentions log; downstream passes (and future "who said what" queries) read
+ * these. Each line carries the capture pointer + the full ActivityRecord.
+ */
+async function persistActivities(
+  wikiRoot: string,
+  activities: Array<{ cap: CaptureRef; act: ActivityRecord }>
+): Promise<void> {
+  const dir = join(wikiRoot, 'activities')
+  await mkdir(dir, { recursive: true })
+  const byDate = new Map<string, string[]>()
+  for (const { cap, act } of activities) {
+    const date = cap.ts.slice(0, 10)
+    const line = JSON.stringify({ ts: cap.ts, capturePath: cap.path, ...act })
+    const arr = byDate.get(date) ?? []
+    arr.push(line)
+    byDate.set(date, arr)
+  }
+  for (const [date, lines] of byDate) {
+    await appendFile(join(dir, `${date}.jsonl`), lines.join('\n') + '\n')
+  }
 }
 
 /**

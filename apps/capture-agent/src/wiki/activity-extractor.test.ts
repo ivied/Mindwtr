@@ -13,7 +13,7 @@ describe('parseActivity', () => {
         { who: 'Bob', what: 'blocked on the auth endpoint', kind: 'blocked' },
         { who: 'user', what: 'asked when the PR lands', kind: 'asked' },
       ],
-      entities: [{ entity: 'upwork-api', role: 'project under discussion' }],
+      entities: [{ entity: 'upwork-api', kind: 'project', role: 'project under discussion' }],
       commitments: [{ who_owes: 'Valeria', to_whom: 'user', what: 'ship design', by_when: 'Friday' }],
       state: 'focused',
       evidence: 'Telegram thread with three participants',
@@ -38,12 +38,12 @@ describe('parseActivity', () => {
     const raw = JSON.stringify({
       activity: 'x',
       statements: [{ who: 'A' }, { who: 'B', what: 'hi', kind: 'weird' }],
-      entities: [{ role: 'no entity' }, { entity: 'proj', role: 'r' }],
+      entities: [{ role: 'no entity' }, { entity: 'proj', kind: 'project', role: 'r' }],
       state: 'nonsense',
     })
     const a = parseActivity(raw)
     expect(a.statements).toEqual([{ who: 'B', what: 'hi', kind: 'other' }])
-    expect(a.entities).toEqual([{ entity: 'proj', role: 'r' }])
+    expect(a.entities).toEqual([{ entity: 'proj', kind: 'project', role: 'r' }])
     expect(a.state).toBe('unclear')
   })
 

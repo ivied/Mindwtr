@@ -31,9 +31,13 @@ export interface Statement {
   kind: StatementKind
 }
 
+export type EntityKind = 'person' | 'project' | 'tool' | 'org' | 'place' | 'other'
+
 export interface ActivityEntityRef {
   /** Entity as shown (name/slug-ish); canonicalized downstream. */
   entity: string
+  /** What kind of thing it is — becomes the graph node type. */
+  kind: EntityKind
   /** Its role IN THIS activity — e.g. "project being edited", "person messaged". */
   role: string
 }
@@ -89,7 +93,7 @@ Output ONLY a JSON object (no prose, no fences) with this shape:
   "statements": [
     { "who": "name or \\"user\\"", "what": "what they said/asked/want, faithful to the text", "kind": "said|asked|committed|decided|blocked|other" }
   ],
-  "entities": [ { "entity": "name", "role": "its role in THIS activity" } ],
+  "entities": [ { "entity": "name", "kind": "person|project|tool|org|place|other", "role": "its role in THIS activity" } ],
   "commitments": [ { "who_owes": "name", "to_whom": "name", "what": "the task", "by_when": "when or \\"\\"" } ],
   "state": "focused|switching|blocked|browsing|unclear",
   "evidence": "brief: what on screen supports this"
@@ -177,7 +181,15 @@ export function parseActivity(raw: string): ActivityRecord {
     ? (obj.entities as unknown[])
         .map((e) => e as Record<string, unknown>)
         .filter((e) => e && typeof e === 'object')
-        .map((e) => ({ entity: str(e.entity), role: str(e.role) }))
+        .map((e) => ({
+          entity: str(e.entity),
+          kind: (['person', 'project', 'tool', 'org', 'place', 'other'] as const).includes(
+            e.kind as EntityKind
+          )
+            ? (e.kind as EntityKind)
+            : 'other',
+          role: str(e.role),
+        }))
         .filter((e) => e.entity)
     : []
 
