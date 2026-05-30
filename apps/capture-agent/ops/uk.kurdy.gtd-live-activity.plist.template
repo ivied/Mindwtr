@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template for the live-activity runner — install-live-activity.sh substitutes
+  @BUN@ / @BUNDIR@ / @WORKDIR@ / @LOGDIR@ / @RELOAD@ and writes the result to
+  ~/Library/LaunchAgents/uk.kurdy.gtd-live-activity.plist.
+
+  Keeps the macOS widget's "Doing now" fresh: every interval it vision-extracts
+  the newest screen capture and writes ~/.gtd-pipeline-activity.json. LLM creds
+  (WIKI_LLM_BASE_URL / WIKI_LLM_API_KEY) come from .env.local in WorkingDirectory,
+  auto-loaded by bun. No mic/TCC needed, so ProcessType=Background is safe here.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>uk.kurdy.gtd-live-activity</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:@BUNDIR@</string>
+        <key>WIKI_LLM_MODEL</key>
+        <string>cc/claude-sonnet-4-6</string>
+        <key>WIKI_LIVE_ACTIVITY_INTERVAL_MS</key>
+        <string>60000</string>
+        <key>AGENT_WIDGET_RELOAD_HELPER</key>
+        <string>@RELOAD@</string>
+    </dict>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>@BUN@</string>
+        <string>run</string>
+        <string>src/wiki/activity-live-runner.ts</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>@WORKDIR@</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>@LOGDIR@/uk.kurdy.gtd-live-activity.out.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>@LOGDIR@/uk.kurdy.gtd-live-activity.err.log</string>
+</dict>
+</plist>
