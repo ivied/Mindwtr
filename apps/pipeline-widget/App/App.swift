@@ -13,12 +13,22 @@ struct GTDPipelineStatusApp: App {
 
 struct ContentView: View {
     @State private var snapshot: PipelineSnapshot? = SnapshotLoader.load()
+    @State private var activity: ActivitySnapshot? = ActivitySnapshotLoader.load()
     private let timer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("GTD Pipeline Status")
                 .font(.headline)
+
+            if let a = activity, !a.activity.isEmpty {
+                Text("👁 Doing now (\(relativeAge(a.ts))): \(a.activity)")
+                    .font(.callout)
+                if !a.surface.isEmpty {
+                    Text(a.surface).font(.caption).foregroundStyle(.secondary)
+                }
+                Divider()
+            }
 
             if let s = snapshot {
                 Text("updated: \(relativeAge(s.updatedAt))")
@@ -45,6 +55,9 @@ struct ContentView: View {
                 .foregroundStyle(.secondary)
         }
         .padding(20)
-        .onReceive(timer) { _ in snapshot = SnapshotLoader.load() }
+        .onReceive(timer) { _ in
+            snapshot = SnapshotLoader.load()
+            activity = ActivitySnapshotLoader.load()
+        }
     }
 }

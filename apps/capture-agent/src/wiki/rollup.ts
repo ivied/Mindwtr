@@ -180,6 +180,11 @@ export async function runRollup(deps: RollupDeps): Promise<RollupResult> {
   // entity graph alone can't hold — "who said / asked / committed what".
   if (activities.length > 0) {
     await persistActivities(deps.wikiRoot, activities)
+    // Also publish the single most-recent activity to a stable status file
+    // for the macOS widget's "what I'm doing now" line. Best-effort.
+    await publishLatestActivity(activities).catch((err) =>
+      log(`[rollup] latest-activity publish failed: ${(err as Error).message}`)
+    )
   }
 
   // Aggregate into entity records.
@@ -307,6 +312,33 @@ async function listNewCaptures(wikiRoot: string, sinceTs: string): Promise<Captu
   }
   refs.sort((a, b) => (a.ts < b.ts ? -1 : 1))
   return refs
+}
+
+/**
+ * Publish the most-recent activity to a stable JSON file the macOS widget
+ * reads for its "what I'm doing now" line. Atomic temp+rename, same-dir temp
+ * to dodge EXDEV. Disabled when AGENT_ACTIVITY_STATUS_FILE is empty.
+ */
+async function publishLatestActivity(
+  activities: Array<{ cap: CaptureRef; act: ActivityRecord }>
+): Promise<void> {
+  const filePath =
+    process.env.AGENT_ACTIVITY_STATUS_FILE ??
+    join(process.env.HOME ?? '', '.gtd-pipeline-activity.json')
+  if (!filePath || !process.env.HOME) return
+  const latest = activities.reduce((a, b) => (a.cap.ts >= b.cap.ts ? a : b))
+  const payload = {
+    updatedAt: new Date().toISOString(),
+    ts: latest.cap.ts,
+    activity: latest.act.activity,
+    project: latest.act.project,
+    surface: latest.act.surface,
+    state: latest.act.state,
+  }
+  const tmp = join(dirname(filePath), `.${'gtd-activity'}.${process.pid}.tmp`)
+  await writeFile(tmp, JSON.stringify(payload, null, 2), 'utf8')
+  const { rename } = await import('node:fs/promises')
+  await rename(tmp, filePath)
 }
 
 /**

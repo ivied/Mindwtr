@@ -83,6 +83,30 @@ enum LlmSnapshotLoader {
     }
 }
 
+// MARK: - Current activity (vision: "what I'm doing now")
+
+struct ActivitySnapshot: Decodable {
+    let updatedAt: Date
+    let ts: Date
+    let activity: String
+    let project: String
+    let surface: String
+    let state: String
+}
+
+enum ActivitySnapshotLoader {
+    static func defaultPath() -> URL {
+        URL(fileURLWithPath: "/Users/sergeykurdyuk/.gtd-pipeline-activity.json")
+    }
+
+    static func load(from url: URL = defaultPath()) -> ActivitySnapshot? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(ActivitySnapshot.self, from: data)
+    }
+}
+
 enum Freshness {
     case fresh   // < 2× expected interval
     case stale   // 2–10× interval

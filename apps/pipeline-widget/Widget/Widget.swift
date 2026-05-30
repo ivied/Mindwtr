@@ -26,18 +26,20 @@ struct PipelineEntry: TimelineEntry {
     let date: Date
     let snapshot: PipelineSnapshot?
     let llm: LlmSnapshot?
+    let activity: ActivitySnapshot?
 }
 
 struct PipelineTimelineProvider: TimelineProvider {
     func placeholder(in context: Context) -> PipelineEntry {
-        PipelineEntry(date: Date(), snapshot: nil, llm: nil)
+        PipelineEntry(date: Date(), snapshot: nil, llm: nil, activity: nil)
     }
 
     func getSnapshot(in context: Context, completion: @escaping (PipelineEntry) -> Void) {
         completion(PipelineEntry(
             date: Date(),
             snapshot: SnapshotLoader.load(),
-            llm: LlmSnapshotLoader.load()
+            llm: LlmSnapshotLoader.load(),
+            activity: ActivitySnapshotLoader.load()
         ))
     }
 
@@ -50,7 +52,8 @@ struct PipelineTimelineProvider: TimelineProvider {
         let entry = PipelineEntry(
             date: now,
             snapshot: SnapshotLoader.load(),
-            llm: LlmSnapshotLoader.load()
+            llm: LlmSnapshotLoader.load(),
+            activity: ActivitySnapshotLoader.load()
         )
         completion(Timeline(entries: [entry], policy: .after(now.addingTimeInterval(15))))
     }
@@ -63,8 +66,8 @@ struct PipelineWidgetView: View {
     var body: some View {
         switch family {
         case .systemSmall: SmallView(snapshot: entry.snapshot)
-        case .systemMedium: MediumView(snapshot: entry.snapshot, llm: entry.llm)
-        default: LargeView(snapshot: entry.snapshot, llm: entry.llm)
+        case .systemMedium: MediumView(snapshot: entry.snapshot, llm: entry.llm, activity: entry.activity)
+        default: LargeView(snapshot: entry.snapshot, llm: entry.llm, activity: entry.activity)
         }
     }
 }
@@ -107,6 +110,7 @@ private struct SmallView: View {
 private struct MediumView: View {
     let snapshot: PipelineSnapshot?
     let llm: LlmSnapshot?
+    let activity: ActivitySnapshot?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -120,6 +124,7 @@ private struct MediumView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            doingNow(activity)
             if let s = snapshot {
                 HStack(alignment: .top, spacing: 12) {
                     statusBlock(
@@ -159,6 +164,7 @@ private struct MediumView: View {
 private struct LargeView: View {
     let snapshot: PipelineSnapshot?
     let llm: LlmSnapshot?
+    let activity: ActivitySnapshot?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -172,6 +178,7 @@ private struct LargeView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            doingNow(activity)
             if let s = snapshot {
                 // Per-source state — explicit so a dead process is obvious
                 // without the user having to interpret a colour.
@@ -309,6 +316,29 @@ private func kindLabel(_ k: String) -> String {
     case "enriched-noop": return "NOOP"
     case "error": return "ERR"
     default: return k.uppercased()
+    }
+}
+
+@ViewBuilder
+private func doingNow(_ a: ActivitySnapshot?) -> some View {
+    if let a = a, !a.activity.isEmpty {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 4) {
+                Text("👁").font(.system(size: 10))
+                Text("Doing now").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                Text("· \(relativeAge(a.ts))").font(.system(size: 9)).foregroundStyle(.tertiary)
+                Spacer()
+            }
+            Text(a.activity)
+                .font(.system(size: 11, weight: .medium))
+                .fixedSize(horizontal: false, vertical: true)
+            if !a.surface.isEmpty {
+                Text(a.surface).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+        .padding(6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
     }
 }
 

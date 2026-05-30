@@ -8,6 +8,7 @@
     <array>
         <string>/Users/sergeykurdyuk/.gtd-pipeline-status.json</string>
         <string>/Users/sergeykurdyuk/.gtd-pipeline-llm.json</string>
+        <string>/Users/sergeykurdyuk/.gtd-pipeline-activity.json</string>
     </array>
 </dict>
 </plist>
