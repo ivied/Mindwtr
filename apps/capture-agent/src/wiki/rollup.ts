@@ -330,10 +330,7 @@ async function publishLatestActivity(
   const payload = {
     updatedAt: new Date().toISOString(),
     ts: latest.cap.ts,
-    activity: latest.act.activity,
-    project: latest.act.project,
-    surface: latest.act.surface,
-    state: latest.act.state,
+    ...latest.act,
   }
   const tmp = join(dirname(filePath), `.${'gtd-activity'}.${process.pid}.tmp`)
   await writeFile(tmp, JSON.stringify(payload, null, 2), 'utf8')

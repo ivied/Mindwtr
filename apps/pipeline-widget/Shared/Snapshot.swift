@@ -85,6 +85,12 @@ enum LlmSnapshotLoader {
 
 // MARK: - Current activity (vision: "what I'm doing now")
 
+struct ActivityStatement: Decodable {
+    let who: String
+    let what: String
+    let kind: String
+}
+
 struct ActivitySnapshot: Decodable {
     let updatedAt: Date
     let ts: Date
@@ -92,6 +98,12 @@ struct ActivitySnapshot: Decodable {
     let project: String
     let surface: String
     let state: String
+    let participants: [String]?
+    let statements: [ActivityStatement]?
+
+    enum CodingKeys: String, CodingKey {
+        case updatedAt, ts, activity, project, surface, state, participants, statements
+    }
 }
 
 enum ActivitySnapshotLoader {

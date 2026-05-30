@@ -178,7 +178,7 @@ private struct LargeView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            doingNow(activity)
+            doingNow(activity, showStatements: true)
             if let s = snapshot {
                 // Per-source state — explicit so a dead process is obvious
                 // without the user having to interpret a colour.
@@ -320,9 +320,9 @@ private func kindLabel(_ k: String) -> String {
 }
 
 @ViewBuilder
-private func doingNow(_ a: ActivitySnapshot?) -> some View {
+private func doingNow(_ a: ActivitySnapshot?, showStatements: Bool = false) -> some View {
     if let a = a, !a.activity.isEmpty {
-        VStack(alignment: .leading, spacing: 1) {
+        VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
                 Text("👁").font(.system(size: 10))
                 Text("Doing now").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
@@ -334,6 +334,18 @@ private func doingNow(_ a: ActivitySnapshot?) -> some View {
                 .fixedSize(horizontal: false, vertical: true)
             if !a.surface.isEmpty {
                 Text(a.surface).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
+            }
+            // On the Large widget, show the attributed statements vision read —
+            // "who said / asked / committed what".
+            if showStatements, let sts = a.statements, !sts.isEmpty {
+                ForEach(Array(sts.prefix(5).enumerated()), id: \.offset) { _, s in
+                    let kind = (s.kind != "said" && s.kind != "other") ? " [\(s.kind)]" : ""
+                    Text("• \(s.who)\(kind): \(s.what)")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .padding(6)
