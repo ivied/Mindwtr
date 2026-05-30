@@ -32,6 +32,12 @@ import { join } from 'node:path'
 import { parseEntityMd, serializeEntityMd } from './entity-frontmatter'
 import type { LlmClient } from '../llm-client'
 import { isSelfObservingCapture } from '../self-observation'
+import {
+  loadActivities,
+  statementsForEntity,
+  renderActivitySection,
+  type StoredActivity,
+} from '../activity-reader'
 
 export interface SynthesizerOptions {
   wikiDir: string
@@ -105,6 +111,16 @@ export async function runSynthesizer(
 
   const state = await loadState(options.wikiDir)
   const synthState = state.synth ?? {}
+
+  // Activity log (variant C): attributed statements involving each entity.
+  // Loaded once; the per-entity "## Activity" section is filled deterministically
+  // from it (no LLM) so it's grounded verbatim in what vision captured.
+  let activities: StoredActivity[] = []
+  try {
+    activities = await loadActivities(options.wikiDir, { days: 21 })
+  } catch (err) {
+    log(`[synth] activity log load failed: ${(err as Error).message}`)
+  }
 
   // Discover candidates.
   const entries = await readdir(entitiesDir)
@@ -226,7 +242,22 @@ export async function runSynthesizer(
         mentions,
         relatedCandidates
       )
-      if (!sections.about && !sections.timeline && !sections.relationships) {
+      // "## Activity" — attributed statements involving this entity, taken
+      // verbatim from the activity log (deterministic, not the LLM).
+      const activityMd = renderActivitySection(
+        statementsForEntity(
+          activities,
+          {
+            slug: c.slug,
+            name: fm.name,
+            aliases: fm.aliases,
+            isPerson: fm.type === 'person',
+          },
+          { max: 8 }
+        )
+      )
+
+      if (!sections.about && !sections.timeline && !sections.relationships && !activityMd) {
         result.decisions.push({
           slug: c.slug,
           action: 'synth',
@@ -243,6 +274,9 @@ export async function runSynthesizer(
       }
       if (sections.relationships) {
         updatedBody = spliceSection(updatedBody, fm.name, 'Relationships', sections.relationships)
+      }
+      if (activityMd) {
+        updatedBody = spliceSection(updatedBody, fm.name, 'Activity', activityMd)
       }
       const newDoc = serializeEntityMd({ frontmatter: fm, body: updatedBody })
       await writeFile(c.path, newDoc, 'utf-8')
