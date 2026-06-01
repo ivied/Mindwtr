@@ -30,6 +30,7 @@ import type {
 import type { ProposalStore } from '../proposal-store/store'
 import type { Enricher, EnrichedProposal } from './enricher'
 import { LlmPublisher } from '../status/llm-publisher'
+import { pickRoutingTargetTag } from '../threads/registry'
 
 /** Source-agent identifier used in audit / filters. Keep stable. */
 export const SOURCE_AGENT_ENRICHER = 'enricher'
@@ -261,7 +262,15 @@ function buildModifyDiff(input: EnrichInput, p: EnrichedProposal): FieldDiff[] {
   let routingTagAdditions: string[] | null = null
   if (p.is_ai_routable) {
     diff.push({ field: 'assignedTo', from: null, to: AI_AGENT_ASSIGNEE })
-    routingTagAdditions = [`ai-type:${p.ai_task_type}`, 'ai-stage:queued']
+    // Pre-fill WHERE it runs (Mac thread vs OpenClaw). Shown in the card chip;
+    // the user can override. A wrong guess is one tap to fix, so this stays a
+    // best-effort keyword match rather than a model call.
+    const targetTag = pickRoutingTargetTag(
+      p.proposed_title || input.taskTitle,
+      p.proposed_description ?? input.taskDescription,
+      input.taskTags
+    )
+    routingTagAdditions = [`ai-type:${p.ai_task_type}`, 'ai-stage:queued', targetTag]
   }
 
   const newTags = mergeTags(input.taskTags, p, routingTagAdditions ?? [])

@@ -203,6 +203,28 @@ export async function listPersons(q?: string, limit = 30): Promise<KnownPerson[]
     return data.items;
 }
 
+export interface RegistryThread {
+    sessionId: string;
+    alias: string;
+    repo: string;
+    repoLabel: string;
+    lastTouched: string;
+    summary: string;
+}
+
+/**
+ * Live Claude Code threads on the Mac, for the routing-target picker. Served by
+ * ai-service from a scan of ~/.claude/projects — the single source of truth, so
+ * the desktop no longer carries a static copy.
+ */
+export async function listThreads(q?: string, limit = 120): Promise<RegistryThread[]> {
+    const qs = new URLSearchParams();
+    if (q) qs.set('q', q);
+    qs.set('limit', String(limit));
+    const data = await apiFetch<{ items: RegistryThread[] }>(`/v1/threads?${qs.toString()}`);
+    return data.items;
+}
+
 export async function commentOnProposal(id: string, text: string): Promise<CommentResult> {
     return apiFetch<CommentResult>(`/v1/proposals/${id}/comments`, {
         method: 'POST',

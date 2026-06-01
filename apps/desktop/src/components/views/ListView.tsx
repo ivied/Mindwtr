@@ -26,6 +26,7 @@ import { groupTasksByArea, groupTasksByContext, groupTasksByProject, groupTasksB
 import { useListSelection } from './list/useListSelection';
 import { StoreTaskItem } from './list/StoreTaskItem';
 import { AiAgentReviewControls } from '../AiAgentReviewControls';
+import { RoutingTargetChip } from '../RoutingTargetChip';
 import { LIST_VIRTUALIZATION_THRESHOLD, LIST_VIRTUAL_ROW_ESTIMATE, LIST_VIRTUAL_OVERSCAN } from './list/useVirtualList';
 
 
@@ -958,6 +959,9 @@ export const ListView = memo(function ListView({ title, statusFilter, assignedTo
                                                     compactMetaEnabled={showListDetails}
                                                     showProjectBadgeInActions={false}
                                                 />
+                                                {isAiAgentGrouping && !showReviewControls ? (
+                                                    <RoutingTargetChip task={task} />
+                                                ) : null}
                                                 {showReviewControls ? (
                                                     <AiAgentReviewControls task={task} />
                                                 ) : null}

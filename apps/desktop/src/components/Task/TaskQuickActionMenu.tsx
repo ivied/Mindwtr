@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { Calendar, CalendarClock, ChevronRight, Copy, MapPin, Mic, Tag, Trash2, X } from 'lucide-react';
+import { Bot, Calendar, CalendarClock, ChevronRight, Copy, MapPin, Mic, Tag, Trash2, X } from 'lucide-react';
+import { queueForAgentTags } from '../../lib/routing-target';
 import { isRecordingAvailable, startRecording } from '../../lib/recording-client';
 import {
     hasTimeComponent,
@@ -444,6 +445,17 @@ export function TaskQuickActionMenu({
                     active: activePanel === 'contexts',
                     onClick: () => openPanel('contexts'),
                     showChevron: true,
+                })}
+                {!readOnly && task.assignedTo !== '@ai-agent' && renderMenuAction({
+                    icon: <Bot className="h-4 w-4" />,
+                    label: tFallback(t, 'task.sendToAgent', 'Отправить агенту'),
+                    onClick: () => {
+                        void onUpdateTask({
+                            assignedTo: '@ai-agent',
+                            tags: queueForAgentTags(task.tags),
+                        }).catch(() => {});
+                        onClose();
+                    },
                 })}
                 {!readOnly ? <div className="my-1 h-px bg-border/70" role="separator" /> : null}
                 {isRecordingAvailable() && renderMenuAction({

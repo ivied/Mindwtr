@@ -30,6 +30,7 @@ import type {
 import type { ProposalRecord, ProposalType } from '../proposal-store/types'
 import type { FieldDiff, ModifyPayload } from '../proposal-store/payloads'
 import type { PersonsProvider } from '../wiki/persons-reader'
+import { getThreadRegistry } from '../threads/registry'
 import type { RecordingSessionStore } from '../recording/store'
 import type { FocusContextAssembler, MemoryStore, HybridRetriever, IngestService } from '../memory'
 import type { ProceduralStore, AppliesTo } from '../memory/procedural'
@@ -512,6 +513,30 @@ function mountPersonsRoutes(app: Hono, provider: PersonsProvider): void {
         })
       : persons
 
+    return c.json({ items: filtered.slice(0, limit) })
+  })
+
+  // Live Claude Code threads on the Mac — the routing-target picker's source.
+  // Single source of truth (scanned from ~/.claude/projects); desktop fetches
+  // this instead of carrying a static copy.
+  app.get('/v1/threads', (c) => {
+    const q = (c.req.query('q') ?? '').trim().toLowerCase()
+    const limitRaw = Number(c.req.query('limit') ?? 120)
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 200) : 120
+    let threads
+    try {
+      threads = getThreadRegistry()
+    } catch (err) {
+      return c.json({ error: `thread scan failed: ${(err as Error).message}` }, 500)
+    }
+    const filtered = q
+      ? threads.filter(
+          (t) =>
+            t.alias.toLowerCase().includes(q) ||
+            t.repoLabel.toLowerCase().includes(q) ||
+            t.summary.toLowerCase().includes(q)
+        )
+      : threads
     return c.json({ items: filtered.slice(0, limit) })
   })
 }

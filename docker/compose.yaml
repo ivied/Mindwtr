@@ -78,6 +78,9 @@ services:
       - HTTP_PORT=${HTTP_PORT:-3030}
       - HTTP_AUTH_TOKEN=${HTTP_AUTH_TOKEN:-}
       - HTTP_CORS_ORIGINS=${HTTP_CORS_ORIGINS:-http://localhost:5173}
+      # Claude Code session store, scanned to build the routing-target thread
+      # registry served at /v1/threads. Points at the read-only mount below.
+      - CLAUDE_PROJECTS_DIR=${CLAUDE_PROJECTS_DIR:-/app/claude-projects}
       # TG chat that receives push notifications about new proposals.
       # Empty disables push (in-app + /proposals command still work).
       - TG_NOTIFY_CHAT_ID=${TG_NOTIFY_CHAT_ID:-}
@@ -111,6 +114,9 @@ services:
       # wiki/entities/*.md for the KNOWN_PERSONS registry. Path is the user's
       # local wiki dir; override WIKI_HOST_DIR when the wiki lives elsewhere.
       - ${WIKI_HOST_DIR:-/Users/sergeykurdyuk/Projects/GTD_automation/wiki}:/app/wiki:ro
+      # Read-only mount of the host's Claude Code session store so /v1/threads
+      # can scan it for the live thread registry (routing-target picker).
+      - ${CLAUDE_PROJECTS_HOST_DIR:-/Users/sergeykurdyuk/.claude/projects}:/app/claude-projects:ro
       # Pipeline status JSON written by ai-service for the macOS widget.
       # We mount the user home so the same file lives at ~/.gtd-pipeline-*.json
       # on the host (where the sandboxed widget has a read-only exception).
