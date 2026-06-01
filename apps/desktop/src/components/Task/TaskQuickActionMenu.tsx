@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { Bot, Calendar, CalendarClock, ChevronRight, Copy, MapPin, Mic, Tag, Trash2, X } from 'lucide-react';
-import { queueForAgentTags } from '../../lib/routing-target';
+import { parseRoutingTarget, queueForAgentTags } from '../../lib/routing-target';
+import { RoutingTargetOptions } from '../RoutingTargetOptions';
 import { isRecordingAvailable, startRecording } from '../../lib/recording-client';
 import {
     hasTimeComponent,
@@ -25,7 +26,7 @@ const VIEWPORT_MARGIN_PX = 8;
 const PANEL_GAP_PX = 8;
 const MENU_WIDTH_PX = 224;
 
-type QuickPanelId = 'startTime' | 'dueDate' | 'reviewAt' | 'area' | 'contexts' | null;
+type QuickPanelId = 'startTime' | 'dueDate' | 'reviewAt' | 'area' | 'contexts' | 'agentTarget' | null;
 
 interface TaskQuickActionMenuProps {
     task: Task;
@@ -87,6 +88,7 @@ export function TaskQuickActionMenu({
     const reviewButtonRef = useRef<HTMLButtonElement | null>(null);
     const areaButtonRef = useRef<HTMLButtonElement | null>(null);
     const contextsButtonRef = useRef<HTMLButtonElement | null>(null);
+    const agentButtonRef = useRef<HTMLButtonElement | null>(null);
     const [activePanel, setActivePanel] = useState<QuickPanelId>(null);
     const [panelPosition, setPanelPosition] = useState<{ left: number; top: number } | null>(null);
     const [menuSize, setMenuSize] = useState({ width: MENU_WIDTH_PX, height: 1 });
@@ -223,7 +225,9 @@ export function TaskQuickActionMenu({
                     ? reviewButtonRef.current
                     : activePanel === 'area'
                         ? areaButtonRef.current
-                        : contextsButtonRef.current;
+                        : activePanel === 'contexts'
+                            ? contextsButtonRef.current
+                            : agentButtonRef.current;
         const panel = panelRef.current;
         if (!anchor || !panel) return;
         const anchorRect = anchor.getBoundingClientRect();
@@ -270,7 +274,7 @@ export function TaskQuickActionMenu({
             setReviewTimeDraft(nextReviewDraft.time);
         } else if (panelId === 'area') {
             setAreaDraft(task.areaId || '');
-        } else {
+        } else if (panelId === 'contexts') {
             setContextsDraft(task.contexts?.join(', ') || '');
         }
         setActivePanel(panelId);
@@ -447,15 +451,12 @@ export function TaskQuickActionMenu({
                     showChevron: true,
                 })}
                 {!readOnly && task.assignedTo !== '@ai-agent' && renderMenuAction({
+                    ref: agentButtonRef,
                     icon: <Bot className="h-4 w-4" />,
                     label: tFallback(t, 'task.sendToAgent', 'Отправить агенту'),
-                    onClick: () => {
-                        void onUpdateTask({
-                            assignedTo: '@ai-agent',
-                            tags: queueForAgentTags(task.tags),
-                        }).catch(() => {});
-                        onClose();
-                    },
+                    active: activePanel === 'agentTarget',
+                    onClick: () => openPanel('agentTarget'),
+                    showChevron: true,
                 })}
                 {!readOnly ? <div className="my-1 h-px bg-border/70" role="separator" /> : null}
                 {isRecordingAvailable() && renderMenuAction({
@@ -507,7 +508,9 @@ export function TaskQuickActionMenu({
                                 ? reviewLabel
                                 : activePanel === 'area'
                                     ? areaLabel
-                                    : contextsLabel
+                                    : activePanel === 'contexts'
+                                        ? contextsLabel
+                                        : tFallback(t, 'task.sendToAgent', 'Отправить агенту')
                     }
                     className="fixed z-50 w-[min(30rem,calc(100vw-1rem))] rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-xl"
                     style={{
@@ -517,7 +520,18 @@ export function TaskQuickActionMenu({
                     }}
                     onContextMenu={(event) => event.preventDefault()}
                 >
-                    {activePanel === 'startTime' ? (
+                    {activePanel === 'agentTarget' ? (
+                        <RoutingTargetOptions
+                            current={parseRoutingTarget(task.tags)}
+                            onPick={(target) => {
+                                void onUpdateTask({
+                                    assignedTo: '@ai-agent',
+                                    tags: queueForAgentTags(task.tags, target),
+                                }).catch(() => {});
+                                onClose();
+                            }}
+                        />
+                    ) : activePanel === 'startTime' ? (
                         <div className="space-y-3">
                             <div className="space-y-1">
                                 <label className="text-xs font-medium text-muted-foreground">{startLabel}</label>
