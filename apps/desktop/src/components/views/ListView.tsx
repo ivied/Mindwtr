@@ -364,6 +364,9 @@ export const ListView = memo(function ListView({ title, statusFilter, assignedTo
 
                 if (deferredFilterInputs.statusFilter !== 'all' && t.status !== deferredFilterInputs.statusFilter) return false;
                 if (deferredFilterInputs.assignedToFilter && t.assignedTo !== deferredFilterInputs.assignedToFilter) return false;
+                // Agent-owned tasks live only in their own @ai-agent lane — keep
+                // them out of Focus/Next/Inbox and every other normal view.
+                if (deferredFilterInputs.assignedToFilter !== '@ai-agent' && t.assignedTo === '@ai-agent') return false;
                 // Respect statusFilter (handled above).
                 if (!allowDeferredProjectTasks && !isTaskInActiveProject(t, deferredFilterInputs.projectMap)) return false;
                 if (!taskMatchesAreaFilter(
