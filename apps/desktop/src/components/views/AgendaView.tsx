@@ -251,7 +251,9 @@ export function AgendaView() {
     // Filter active tasks
     const baseActiveTasks = useMemo(() => (
         derivedActiveTasks.filter(t =>
-            isTaskInActiveProject(t, projectMap)
+            // Agent-owned tasks live only in their @ai-agent lane — keep them out of Focus.
+            t.assignedTo !== '@ai-agent'
+            && isTaskInActiveProject(t, projectMap)
             && taskMatchesAreaFilter(t, resolvedAreaFilter, projectMap, areaById)
         )
     ), [derivedActiveTasks, projectMap, resolvedAreaFilter, areaById]);
