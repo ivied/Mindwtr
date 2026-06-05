@@ -1,0 +1,140 @@
+---
+description: GTD_mindwtr code-repo context — Mindwtr hard fork serving as Sergey's GTD engine. Companion to GTD_automation (planning + wiki).
+alwaysApply: true
+---
+
+# GTD_mindwtr — Cursor code-repo context
+
+This is the **code** repo. Planning, BMAD docs, and architecture diagrams live
+in the sibling repo `~/Projects/GTD_automation`. Read its
+`.cursor/rules/00-gtd-automation.mdc` for the full project context (north star,
+how to communicate with Sergey, deployment topology). This file covers only
+code-level conventions specific to this repo.
+
+## 1. What this repo is
+
+A **hard fork of Mindwtr** (`dongdongbh/Mindwtr`, AGPL-3.0). It runs the GTD
+engine + the AI Service that turns captures into proposals + the web UI + the
+desktop capture agent. Upstream is pulled periodically; conflicts are managed
+in `docker/cloud-prod/`.
+
+```
+apps/
+  cloud/          mindwtr-cloud  — Bun HTTP server, task store, /v1/data sync,
+                                   task-change webhook fan-out
+  desktop/        mindwtr-app    — Vite + React + nginx, web UI (Inbox, Focus,
+                                   AI Playbook View, RecordingBanner)
+  ai-service/    Bun + Hono — Enricher / Proposer / Reviser / ProactiveRunner
+                              / Memory module / Procedural pipeline /
+                              RecordingDistiller / RoutingTarget / ThreadRegistry
+  capture-agent/  Bun + Swift helpers — screens 30s + audio (Opus 32k) +
+                                          active-window, posts to ai-service
+                                          AGENT_ENDPOINT
+  mobile/         Expo React Native — Mindwtr fork for iOS+Android (bundleId
+                                       uk.kurdy.gtd.mindwtr via app.config.ts)
+docker/           compose.yaml (dev), cloud-prod/ (production kit for makurdi)
+packages/core/    @mindwtr/core — shared types, sync logic
+```
+
+## 2. Where prod lives
+
+Since 2026-06-03: **makurdi** (Rita's Mac · Tailscale 100.108.142.59 · Colima
+6GB / 3CPU). Laptop is a thin capture + Mac-worker host. See
+`_bmad-output/planning-artifacts/sprint-change-proposal-2026-06-03.md` in
+GTD_automation for the migration record.
+
+Public surface via Cloudflare Tunnel from makurdi:
+- `https://gtd.kurdy.uk` → mindwtr-app
+- `https://api.kurdy.uk` → mindwtr-cloud
+- `https://ai.kurdy.uk` → ai-service
+
+## 3. Code conventions
+
+- **TypeScript strict mode** across all apps. No `any` unless wrapping
+  third-party untyped APIs.
+- **Bun first** for ai-service / cloud / capture-agent. **Vite** for desktop.
+- **Hono routes** in ai-service live in `apps/ai-service/src/http/server.ts`
+  with auth via `Authorization: Bearer <HTTP_AUTH_TOKEN>`.
+- **SQLite + sqlite-vec** for ai-service memory. Schema migrations are
+  idempotent additive — see `apps/ai-service/src/context-store/db.ts`
+  (currently at v7, recording_sessions added FR92).
+- **No mocking the database in tests.** Use real sqlite in-memory; mock-vs-prod
+  divergence has burned us.
+- **No silent fallbacks.** Throw on bad env, fail-open is OK only where
+  explicitly documented (e.g. LLM classifier in procedural pipeline).
+- **Default to writing no comments.** Only add one when WHY is non-obvious
+  (hidden constraint, subtle invariant, specific bug workaround).
+- **Don't add backwards-compatibility hacks.** Renaming unused `_var`,
+  re-exporting removed types, `// removed` markers — delete the dead code.
+
+## 4. Key files / where things live
+
+| Need to change | File |
+|---|---|
+| Cloud REST endpoints | `apps/cloud/src/server.ts` |
+| Cloud CORS / auth / idle timeout | `apps/cloud/src/server-config.ts` |
+| ai-service HTTP routes | `apps/ai-service/src/http/server.ts` |
+| ai-service entrypoint / wiring | `apps/ai-service/src/index.ts` |
+| Proposer prompt (convergence node) | `apps/ai-service/src/commitment/` |
+| Enricher pipeline | `apps/ai-service/src/commitment/enricher-pipeline.ts` |
+| Procedural memory pipeline | `apps/ai-service/src/memory/procedural/` |
+| Recording distillation | `apps/ai-service/src/recording/` |
+| Memory module (events/facts) | `apps/ai-service/src/memory/store.ts` |
+| Routing target taxonomy | `apps/ai-service/src/commitment/routing-target.ts` |
+| Thread registry scan | `apps/ai-service/src/threads/` |
+| Mac-worker (host process) | `apps/ai-service/src/mac-worker/` |
+| Web UI AI Playbook view | `apps/desktop/src/components/views/ProceduralPlaybookView.tsx` |
+| Web UI recording banner | `apps/desktop/src/components/RecordingBanner.tsx` |
+| Web origin-aware cloud target | `apps/desktop/src/lib/cloud-target.ts` |
+| Capture-agent main loop | `apps/capture-agent/src/index.ts` + `runner.ts` |
+| Capture-agent active-window | `apps/capture-agent/src/capture/active-window.ts` |
+| Mobile bundle ID override | `apps/mobile/app.config.ts` (`MINDWTR_FORK_PERSONAL=0` reverts) |
+
+## 5. Recurring gotchas
+
+- **CF Tunnel + QUIC:** if `https://*.kurdy.uk` returns HTTP 530 while
+  containers are up, cloudflared lost QUIC to edge. Fix: `--protocol http2`
+  is already set; recreate container if logs spam
+  `failed to dial to edge with quic`.
+- **Docker Desktop on laptop:** stuck-daemon bug ~every 5 days. Restart via
+  `osascript -e 'quit app "Docker Desktop"' && open -a Docker`. Prod on makurdi
+  uses Colima — not affected.
+- **active-win Accessibility prompt loop:** capture-agent calls with
+  `accessibilityPermission: false, screenRecordingPermission: false`. The
+  Swift helper is ad-hoc signed, macOS TCC can't durably grant it. App name
+  is preserved (works without permission), title/url drop (we OCR them anyway).
+- **Multi-origin CORS:** `MINDWTR_CLOUD_CORS_ORIGIN` is comma-separated. Server
+  picks the request's Origin if it's in the allowlist (AsyncLocalStorage
+  context), else falls back to first allowed. `Vary: Origin` is always set.
+- **Bun idleTimeout:** mindwtr-cloud sets `idleTimeout: 120` (was 10s default)
+  — required for /v1/data full-blob PUT from mobile on slow uplinks.
+- **Web app self-heal:** desktop bundle has origin-aware cloud URL +
+  self-heal in `storage-adapter-web.ts`. If a stored URL is for the wrong
+  origin (localhost on gtd.kurdy.uk, or API pointed at the web origin
+  itself), it rewrites to the correct target on next load.
+- **Upstream merge can drop files silently.** Audit recipe in
+  `~/.claude/.../memory/project_mindwtr_upstream_merge_lossy.md` (Sergey's
+  Claude Code memory) — same loss likely affects other dirs.
+
+## 6. Worktrees
+
+If GTD_automation/CLAUDE.md mentions worktrees — those are for that repo. This
+repo doesn't currently use the same worktree workflow; if Sergey asks for a
+worktree here, ask first what isolation he needs (Docker compose project name,
+ports), since the pattern isn't standardized here yet.
+
+## 7. Testing
+
+- **Vitest** for unit. Tests co-located as `*.test.ts` / `*.test.tsx` next to
+  source.
+- **Real SQLite** for memory tests, not mocks.
+- **Don't bypass the LLM** with stubs unless the test is specifically about
+  retry/error paths. Most logic tests should accept "skip if LLM_API_KEY unset".
+
+## 8. When unsure
+
+- Read the file first, state actual current behavior, then propose change.
+- For architectural what-ifs, point at the relevant SCP in
+  `GTD_automation/_bmad-output/planning-artifacts/sprint-change-proposal-*.md`
+  and quote it.
+- BMAD is the source of truth for "what is planned". Chat is exploration.
