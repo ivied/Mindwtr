@@ -61,7 +61,7 @@ export interface ExtractInput {
   app: string
   title: string
   url?: string
-  source: 'audio' | 'screen'
+  source: string
   body: string
 }
 

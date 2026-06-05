@@ -23,6 +23,22 @@ export class FileStateStore {
   }
 
   async setLastSync(iso: string): Promise<void> {
+    await this.set(this.key, iso)
+  }
+
+  /** Read an arbitrary checkpoint key from the same JSON file. */
+  async get(key: string): Promise<string | null> {
+    try {
+      const raw = await readFile(this.filePath, 'utf8')
+      const data = JSON.parse(raw) as Record<string, string>
+      return data[key] ?? null
+    } catch {
+      return null
+    }
+  }
+
+  /** Write an arbitrary checkpoint key into the same JSON file. */
+  async set(key: string, iso: string): Promise<void> {
     await mkdir(dirname(this.filePath), { recursive: true })
     let data: Record<string, string> = {}
     try {
@@ -31,7 +47,7 @@ export class FileStateStore {
     } catch {
       // new file
     }
-    data[this.key] = iso
+    data[key] = iso
     await writeFile(this.filePath, JSON.stringify(data, null, 2), 'utf8')
   }
 }

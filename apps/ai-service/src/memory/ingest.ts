@@ -31,7 +31,10 @@ export interface IngestOptions {
 export interface IngestLiveInput {
   id: string
   ts: string
-  source: 'screen' | 'audio'
+  /** Logical source. screen/audio for passive capture; channel id
+   *  (slack_dm, slack_channel, notion_page, telegram_*) for push sources.
+   *  Stored verbatim so memory can filter/retrieve per-source. */
+  source: string
   app: string
   title: string
   url?: string
@@ -207,7 +210,7 @@ export class IngestService {
 interface ParsedCapture {
   id: string
   ts: string
-  source: 'screen' | 'audio'
+  source: string
   app: string
   title: string
   url: string | null
@@ -229,7 +232,7 @@ export function parseCaptureMd(text: string): ParsedCapture | null {
 
   const id = read('id') ?? ''
   const ts = read('ts') ?? ''
-  const source = (read('source') ?? '') as 'screen' | 'audio'
+  const source = read('source') ?? ''
   const app = read('app') ?? ''
   const title = read('title') ?? ''
   const url = read('url')

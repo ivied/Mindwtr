@@ -57,8 +57,13 @@ const LLM_BASE_URL = process.env.LLM_BASE_URL ?? ''
 const LLM_API_KEY = process.env.LLM_API_KEY ?? ''
 const LLM_MODEL = process.env.LLM_MODEL ?? 'cc/claude-opus-4-6'
 
-const SLACK_APP_TOKEN = process.env.SLACK_APP_TOKEN ?? ''
-const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN ?? ''
+// Comma-separated xoxp- user tokens, one per workspace. "See what I see"
+// across workspaces the user doesn't own (bot tokens can't do this).
+const SLACK_USER_TOKENS = (process.env.SLACK_USER_TOKENS ?? '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)
+const SLACK_POLL_INTERVAL_MS = Number(process.env.SLACK_POLL_INTERVAL_MS ?? 5 * 60 * 1000)
 
 const NOTION_API_KEY = process.env.NOTION_API_KEY ?? ''
 const NOTION_DATABASE_ID = process.env.NOTION_DATABASE_ID ?? ''
@@ -455,14 +460,21 @@ if (process.env.AI_AGENT_WATCHDOG !== 'false') {
 function buildChannels(): Channel[] {
   const channels: Channel[] = []
 
-  if (SLACK_APP_TOKEN && SLACK_BOT_TOKEN) {
+  if (SLACK_USER_TOKENS.length > 0) {
+    const state = new FileStateStore(channelStateFile(DATA_DIR), 'slack')
     channels.push(
       new SlackChannel(
-        { appToken: SLACK_APP_TOKEN, botToken: SLACK_BOT_TOKEN },
-        (item) => capture(item)
+        {
+          workspaces: SLACK_USER_TOKENS.map((token) => ({ token })),
+          pollIntervalMs: SLACK_POLL_INTERVAL_MS,
+        },
+        (item) => capture(item),
+        state
       )
     )
-    console.log('💬 Slack channel enabled')
+    console.log(
+      `💬 Slack channel enabled (${SLACK_USER_TOKENS.length} workspace(s), poll every ${SLACK_POLL_INTERVAL_MS}ms)`
+    )
   }
 
   if (NOTION_API_KEY && NOTION_DATABASE_ID) {

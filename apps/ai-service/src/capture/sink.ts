@@ -30,6 +30,18 @@ function isPull(item: CapturedItem): boolean {
   return PULL_CHANNELS.has(item.sourceChannel)
 }
 
+/**
+ * Map a capture's sourceChannel to the memory module's `events.source`.
+ * Passive capture keeps screen/audio; push sources keep their channel id so
+ * the long-lived memory corpus can filter/retrieve per-source (previously
+ * everything non-audio collapsed to 'screen').
+ */
+function sourceChannelToMemorySource(channel: CapturedItem['sourceChannel']): string {
+  if (channel === 'audio_capture') return 'audio'
+  if (channel === 'screen_capture') return 'screen'
+  return channel
+}
+
 export interface CaptureOptions {
   extraTags?: string[]
   onTaskCreated?: (taskId: string, title: string) => Promise<void>
@@ -66,7 +78,7 @@ export function createCaptureSink(deps: CaptureSinkDeps) {
     //     embedding) and runs the unified extractor for entities + facts.
     if (deps.memoryIngest && storedRecord) {
       const captured = storedRecord
-      const src = item.sourceChannel === 'audio_capture' ? 'audio' : 'screen'
+      const src = sourceChannelToMemorySource(item.sourceChannel)
       const meta = (item.sourceMeta ?? {}) as Record<string, unknown>
       const app =
         (typeof meta.app === 'string' ? meta.app : undefined) ?? item.sourceChannel
