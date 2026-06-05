@@ -57,6 +57,45 @@ body of A is long enough as well
     expect(chunks[0]!.sectionTitle).toBe('## Серега')
   })
 
+  it('strips a leading HTML metadata comment so it never becomes a (preamble) chunk', () => {
+    // Recorded playbooks open with a `<!-- source: recorded ... -->` block.
+    // It must not survive as a title-less junk chunk; only the real ##
+    // workflow section should be emitted.
+    const md = `<!--
+source: recorded
+recording_session_id: fa393a0f-7d37-4f43-82c6-92837d2e3219
+task_id: 71a690a3-4891-48bd-934c-41e2f408fb74
+task_title: Сгенерировать ответы на джобы в Upwork
+recorded_at: 2026-06-05T01:01:05.627Z
+stopped_at: 2026-06-05T01:09:47.861Z
+-->
+## Сгенерировать и отправить отклик на вакансию Upwork
+- Открыть релевантную вакансию на Upwork и скопировать описание работы.
+- Переключиться в VS Code и сгенерировать cover letter через прод.
+`
+    const chunks = chunkMarkdown(md)
+    expect(chunks.length).toBe(1)
+    expect(chunks[0]!.sectionTitle).toBe(
+      '## Сгенерировать и отправить отклик на вакансию Upwork'
+    )
+    // No chunk carries the metadata comment.
+    for (const c of chunks) {
+      expect(c.text).not.toContain('recording_session_id')
+      expect(c.text).not.toContain('<!--')
+    }
+  })
+
+  it('does NOT strip an HTML comment that appears mid-document', () => {
+    const md = `## Section A
+intro body that comfortably exceeds the minimum length threshold here
+<!-- inline note that should be preserved as part of the body -->
+more body content following the inline comment line for good measure
+`
+    const chunks = chunkMarkdown(md)
+    expect(chunks.length).toBe(1)
+    expect(chunks[0]!.text).toContain('inline note that should be preserved')
+  })
+
   it('drops sections whose body is below the minimum length', () => {
     const md = `## A
 short

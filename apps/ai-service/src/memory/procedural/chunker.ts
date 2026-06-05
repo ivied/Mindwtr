@@ -58,7 +58,12 @@ interface Section {
 }
 
 export function chunkMarkdown(content: string): RawChunk[] {
-  const sections = splitSections(content)
+  // Strip a leading HTML metadata comment (e.g. recorded playbooks open with
+  // `<!-- source: recorded\nrecording_session_id: ... -->`). Left in, it
+  // becomes a junk title-less `(preamble)` chunk that the classifier can't
+  // act on and that clutters the playbook UI. We only strip a comment that
+  // sits at the very top of the file (before any heading/content).
+  const sections = splitSections(stripLeadingHtmlComment(content))
 
   const out: RawChunk[] = []
   let index = 0
@@ -81,6 +86,17 @@ export function chunkMarkdown(content: string): RawChunk[] {
     }
   }
   return out
+}
+
+/**
+ * Remove a single HTML comment block (`<!-- ... -->`) that opens the file,
+ * along with any blank lines that follow it. Only strips when the comment is
+ * the very first non-whitespace content — inline/mid-document comments are
+ * left untouched so we never eat meaningful body text.
+ */
+function stripLeadingHtmlComment(content: string): string {
+  const leading = /^\s*<!--[\s\S]*?-->\s*/
+  return leading.test(content) ? content.replace(leading, '') : content
 }
 
 function splitSections(content: string): Section[] {

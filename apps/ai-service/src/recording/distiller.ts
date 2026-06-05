@@ -121,27 +121,32 @@ export class RecordingDistiller {
     await writeFile(absPath, file, 'utf8')
     await this.opts.proceduralReader.scanOnce()
 
-    // Reader writes the chunk under source='user' (mined/ and openclaw/ are
-    // separate); look it up by path (mined/recorded/... + filename).
+    // Reader writes the chunk(s) under source='user' (mined/ and openclaw/ are
+    // separate); look them up by path. A single distilled playbook can split
+    // into several sub-chunks (the chunker sub-splits long bullet lists), so
+    // classify EVERY chunk of this file — not just the first match. Otherwise
+    // only one sub-chunk goes 'universal' and the rest stay hidden from the
+    // Proposer.
     const relPath = `recorded/${fileName}`
     const created = this.opts.proceduralStore
-      .listChunks({ source: 'user', limit: 200 })
-      .items.find((r) => r.path === relPath)
+      .listChunks({ source: 'user', limit: 500 })
+      .items.filter((r) => r.path === relPath)
 
-    if (created) {
-      // Mark as 'recorded' applies-to via classify; for now, leave at default
-      // 'universal' so the proposer can use it immediately. Mark classified_by='user'
-      // is set on creation through normal upsert (since we're writing a file).
-      this.opts.proceduralStore.classify(created.id, 'universal', 'user')
+    for (const chunk of created) {
+      // Recorded playbooks are user-authored intent: make them immediately
+      // visible to the Proposer ('universal') and mark the verdict terminal
+      // ('user') so the automated classifier never re-hides them.
+      this.opts.proceduralStore.classify(chunk.id, 'universal', 'user')
     }
 
+    const primaryChunkId = created[0]?.id ?? null
     this.opts.sessionStore.setDistillationStatus(session.id, 'done', {
-      chunkId: created?.id ?? null,
+      chunkId: primaryChunkId,
     })
     this.opts.log?.(
-      `[distill] ${session.id.slice(0, 8)} done → ${fileName} (${captures.length} captures, chunk=${created?.id.slice(0, 8) ?? 'not-indexed'})`
+      `[distill] ${session.id.slice(0, 8)} done → ${fileName} (${captures.length} captures, ${created.length} chunk(s) → universal)`
     )
-    this.opts.onDraftReady?.(session, created?.id ?? null)
+    this.opts.onDraftReady?.(session, primaryChunkId)
   }
 
   private fetchSessionCaptures(session: RecordingSession): SessionCapture[] {
