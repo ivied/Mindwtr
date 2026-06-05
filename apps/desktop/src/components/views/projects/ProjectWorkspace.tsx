@@ -739,10 +739,10 @@ export function ProjectWorkspace({
 
             const initialProps: Partial<Task> = {
                 projectId: selectedProject.id,
-                status: 'next',
+                status: 'someday',
                 ...props,
             };
-            if (!props.status) initialProps.status = 'next';
+            if (!props.status) initialProps.status = 'someday';
             if (!props.projectId) initialProps.projectId = selectedProject.id;
 
             if (!initialProps.projectId && projectTitle) {

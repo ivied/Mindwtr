@@ -678,7 +678,7 @@ function TaskListComponent({
     if (!newTaskTitle.trim()) return;
 
     const defaultStatus: TaskStatus = projectId
-      ? 'next'
+      ? 'someday'
       : (statusFilter !== 'all' ? statusFilter : 'inbox');
 
     const { title: parsedTitle, props, projectTitle, invalidDateCommands } = parseQuickAdd(newTaskTitle, projects, new Date(), areas);
