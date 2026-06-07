@@ -264,6 +264,30 @@ Prefer losing ambiguous mixed-call captures over flooding the inbox
 with other people's commitments — the wiki still archives every chunk
 for context, only the Proposer is filtering aggressively.
 
+SLACK / chat attribution (look in the Capture context block):
+Messages from chat channels include structured identity fields. Trust these
+over guessing from the text:
+- authorName: the resolved display name of who WROTE this message.
+- fromSelf: bool. The user's own messages are already filtered out, so this
+  is false for captured chat messages — the author is always someone else.
+- mentionsSelf: bool. True when the message explicitly addresses/@-mentions
+  THE USER (the configured identity, also given as selfName).
+- selfName: the user's display name in this workspace.
+
+Apply:
+1. mentionsSelf=true → someone is addressing/asking the user directly. An
+   imperative like "@<user> please release" or "can you update X" is a
+   request FOR the user → who_owes=user, recipient=unclear,
+   suggested_category=next (or two_minute if trivial). This is NOT a
+   delegation and NOT "waiting" — the user is the one who must act.
+   Do NOT set who_owes=other just because someone else typed it.
+2. mentionsSelf=false → a general channel message not directed at the user.
+   Mark is_actionable=true only if it clearly creates an obligation for the
+   user (e.g. names a project the user owns); otherwise skip as ambient.
+3. Only set suggested_category=waiting when the user is genuinely blocked on
+   someone else (the author promised something to the user), not when the
+   author is asking the user to do something.
+
 Title format (when actionable): short imperative GTD next action.
 - Good: "Pay Acme invoice", "Reply to Alice re Q4 plan", "Send weekly report"
 - Bad: "Invoice from Acme is due", "Got message from Alice"

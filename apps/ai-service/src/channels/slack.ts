@@ -157,8 +157,11 @@ export class SlackChannel implements Channel {
 class SlackWorkspace {
   private web: WebClient
   private selfUserId = ''
+  private selfName = ''
   teamName = '<unknown>'
   teamId = ''
+  /** Slack userId → display name cache (best-effort, populated lazily). */
+  private nameCache = new Map<string, string>()
 
   constructor(
     token: string,
@@ -175,6 +178,36 @@ class SlackWorkspace {
     this.selfUserId = (auth.user_id as string) ?? ''
     this.teamName = (auth.team as string) ?? '<unknown>'
     this.teamId = (auth.team_id as string) ?? ''
+    this.selfName = await this.userName(this.selfUserId)
+  }
+
+  /** Resolve a Slack userId to a display name, cached. Falls back to the id. */
+  private async userName(userId: string | undefined): Promise<string> {
+    if (!userId) return ''
+    const hit = this.nameCache.get(userId)
+    if (hit !== undefined) return hit
+    try {
+      const info = await this.web.users.info({ user: userId })
+      const u = info.user as { real_name?: string; name?: string } | undefined
+      const name = u?.real_name ?? u?.name ?? userId
+      this.nameCache.set(userId, name)
+      await this.pace()
+      return name
+    } catch {
+      this.nameCache.set(userId, userId)
+      return userId
+    }
+  }
+
+  /** Replace <@U123> mentions in text with @DisplayName, resolving via cache. */
+  private async resolveMentions(text: string): Promise<string> {
+    const ids = [...text.matchAll(/<@([A-Z0-9]+)>/g)].map((m) => m[1]!)
+    let out = text
+    for (const id of [...new Set(ids)]) {
+      const name = await this.userName(id)
+      out = out.replaceAll(`<@${id}>`, `@${name}`)
+    }
+    return out
   }
 
   async poll(): Promise<void> {
@@ -208,7 +241,7 @@ class SlackWorkspace {
       let newestTs = cursor
       for (const msg of messages) {
         if (msg.ts > newestTs) newestTs = msg.ts
-        const item = this.toCapturedItem(conv, msg)
+        const item = await this.toCapturedItem(conv, msg)
         if (!item) continue
         try {
           await this.sink(item)
@@ -260,19 +293,26 @@ class SlackWorkspace {
       .sort((a, b) => (a.ts < b.ts ? -1 : 1))
   }
 
-  private toCapturedItem(conv: SlackConversation, msg: SlackMessage): CapturedItem | null {
+  private async toCapturedItem(
+    conv: SlackConversation,
+    msg: SlackMessage
+  ): Promise<CapturedItem | null> {
     // Skip system messages (joins, topic changes, etc.) and any bot output.
     if (msg.subtype) return null
     if (msg.bot_id) return null
     if (msg.user && msg.user === this.selfUserId) {
-      // Keep own messages? They're context too, but for GTD "what others want
-      // from me" the signal is inbound. Drop self to cut noise.
+      // Own messages are noise for "what others want from me" — drop them.
+      // (Mentions of self authored by others still pass; that's the signal.)
       return null
     }
-    const text = msg.text?.trim()
-    if (!text) return null
+    const rawText = msg.text?.trim()
+    if (!rawText) return null
 
     const isDm = !!conv.is_im || !!conv.is_mpim
+    const mentionsSelf = rawText.includes(`<@${this.selfUserId}>`)
+    const authorName = await this.userName(msg.user)
+    const text = await this.resolveMentions(rawText)
+
     return {
       text,
       sourceChannel: isDm ? 'slack_dm' : 'slack_channel',
@@ -284,6 +324,13 @@ class SlackWorkspace {
         channelId: conv.id,
         channelName: conv.name,
         userId: msg.user,
+        authorName,
+        // Identity signals for the Proposer: this message is from someone else
+        // (own messages are dropped above). mentionsSelf=true means the user is
+        // being addressed/asked — a request FOR the user, not a delegation.
+        fromSelf: false,
+        mentionsSelf,
+        selfName: this.selfName,
         ts: msg.ts,
         isDm,
       },
