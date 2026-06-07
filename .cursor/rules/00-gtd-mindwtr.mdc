@@ -115,6 +115,16 @@ Public surface via Cloudflare Tunnel from makurdi:
 - **Upstream merge can drop files silently.** Audit recipe in
   `~/.claude/.../memory/project_mindwtr_upstream_merge_lossy.md` (Sergey's
   Claude Code memory) — same loss likely affects other dirs.
+- **NEVER open ai-service `context.db` from the host while the container runs.**
+  It corrupted twice this way. The DB now lives in the Docker named volume
+  `ai-service-data` (ext4 in the Colima VM), NOT a bind-mount — SQLite WAL
+  (mmap + file locks) is unreliable across virtiofs, and a host SQLite build
+  reading the live WAL/SHM alongside the container's bun:sqlite corrupts it.
+  To inspect: `docker exec ai-service bun -e '...new Database(...)'`. db.ts
+  sets `busy_timeout=5000` + `synchronous=FULL`.
+- **Back up before every ai-service recreate:** `bash docker/predeploy-backup.sh`
+  (online `VACUUM INTO` *inside* the container → integrity-checked → `docker cp`
+  to `docker/ai-service-backups/`). Restore recipe is printed by the script.
 
 ## 6. Worktrees
 
