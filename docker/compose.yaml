@@ -109,7 +109,14 @@ services:
     ports:
       - "${HTTP_PORT:-3030}:3030"
     volumes:
-      - ./ai-service-data:/app/data
+      # context.db lives in a Docker named volume (ext4 inside the Colima VM),
+      # NOT a host bind-mount. SQLite WAL uses mmap + file locks that are
+      # unreliable across the virtiofs VM↔host boundary — concurrent access
+      # (e.g. inspecting the DB from the host while the container writes) has
+      # corrupted the DB twice. The volume keeps WAL on a real Linux fs.
+      # To read the DB safely: `docker exec ai-service ...`, never open the
+      # underlying file from macOS while the container is running.
+      - ai-service-data:/app/data
       # Read-only mount of the capture-wiki root so the Proposer can read
       # wiki/entities/*.md for the KNOWN_PERSONS registry. Path is the user's
       # local wiki dir; override WIKI_HOST_DIR when the wiki lives elsewhere.
@@ -153,3 +160,11 @@ services:
     # timeout: no recent network activity". HTTP/2 falls back to TCP/443
     # which survives NAT / network changes / Mac sleep far better.
     command: tunnel --no-autoupdate run --protocol http2 --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
+
+volumes:
+  # ai-service context.db (captures, proposals, memory events/facts, vec/FTS).
+  # Named volume on the VM's ext4 — see the mount note on ai-service above.
+  # Explicit `name:` so it isn't prefixed with the compose project ("docker_"),
+  # keeping backup/restore commands stable. Back up with predeploy-backup.sh.
+  ai-service-data:
+    name: ai-service-data

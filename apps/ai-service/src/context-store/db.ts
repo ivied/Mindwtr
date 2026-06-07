@@ -323,9 +323,16 @@ export function openDb(dbPath: string): OpenDbResult {
   mkdirSync(dirname(dbPath), { recursive: true })
   // enableLoadExtension is required for sqlite-vec
   const db = new Database(dbPath, { create: true })
-  // bun:sqlite gates loadExtension behind a runtime flag
   db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA foreign_keys = ON')
+  // Wait up to 5s for a competing writer instead of failing instantly with
+  // SQLITE_BUSY. Cheap insurance against transient lock contention.
+  db.exec('PRAGMA busy_timeout = 5000')
+  // synchronous=FULL: fsync the WAL on every commit. The default in WAL mode
+  // is NORMAL, which can leave the DB inconsistent on an unclean stop. The DB
+  // lives on a Docker volume backed by virtiofs (Colima), where mmap/fsync
+  // semantics are weaker — FULL trades a little write throughput for durability.
+  db.exec('PRAGMA synchronous = FULL')
 
   let vecAvailable = false
   try {

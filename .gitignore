@@ -104,6 +104,7 @@ pnpm-workspace.yaml
 # Docker local data
 docker/data/
 docker/ai-service-data/
+docker/ai-service-backups/
 
 # Tesseract OCR trained data (downloaded on first run)
 **/*.traineddata
