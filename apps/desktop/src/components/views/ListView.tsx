@@ -376,7 +376,7 @@ export const ListView = memo(function ListView({ title, statusFilter, assignedTo
                     deferredFilterInputs.areaById
                 )) return false;
 
-                if (deferredFilterInputs.statusFilter === 'next') {
+                if (deferredFilterInputs.statusFilter === 'next' || deferredFilterInputs.statusFilter === 'inbox') {
                     const start = safeParseDate(t.startTime);
                     if (start && start > now) return false;
                 }
