@@ -52,12 +52,25 @@ export interface RawChunk {
   text: string
 }
 
+export interface ChunkOptions {
+  /**
+   * When true, each `##` section is emitted as ONE chunk regardless of
+   * length — the FR87 sub-split (designed for OpenClaw's MEMORY.md, where a
+   * single section mixes universal + runtime-specific rules) is skipped.
+   *
+   * Used for recorded playbooks: a distilled session is a single coherent
+   * workflow under one heading; fragmenting it across sub-chunks adds no
+   * classification value and splinters the playbook the user sees.
+   */
+  noSubSplit?: boolean
+}
+
 interface Section {
   title: string
   bodyLines: string[]
 }
 
-export function chunkMarkdown(content: string): RawChunk[] {
+export function chunkMarkdown(content: string, opts: ChunkOptions = {}): RawChunk[] {
   // Strip a leading HTML metadata comment (e.g. recorded playbooks open with
   // `<!-- source: recorded\nrecording_session_id: ... -->`). Left in, it
   // becomes a junk title-less `(preamble)` chunk that the classifier can't
@@ -76,8 +89,13 @@ export function chunkMarkdown(content: string): RawChunk[] {
     const body = bodyLines.join('\n').trim()
     if (body.length < MIN_BODY) continue
 
+    // noSubSplit: keep the whole section as a single chunk (recorded
+    // playbooks). Otherwise sub-split only when the body is large enough to
+    // plausibly mix concerns (FR87).
     const subTexts =
-      body.length < SECTION_SPLIT_THRESHOLD ? [body] : splitIntoSubChunks(body)
+      opts.noSubSplit || body.length < SECTION_SPLIT_THRESHOLD
+        ? [body]
+        : splitIntoSubChunks(body)
 
     for (const text of subTexts) {
       if (text.length < MIN_BODY) continue

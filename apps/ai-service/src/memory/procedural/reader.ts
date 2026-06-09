@@ -227,7 +227,11 @@ export class ProceduralReader {
         const fileStat = await stat(abs)
         const fileMtime = Math.floor(fileStat.mtimeMs)
         const content = await readFile(abs, 'utf-8')
-        const chunks = chunkMarkdown(content)
+        // Recorded playbooks (user/recorded/*.md) are single coherent
+        // workflows under one heading — keep them whole rather than
+        // sub-splitting a long bullet list across chunks.
+        const noSubSplit = source === 'user' && /^recorded[\\/]/.test(relPath)
+        const chunks = chunkMarkdown(content, { noSubSplit })
         if (chunks.length === 0) {
           this.opts.store.deleteByPath(source, relPath)
           continue

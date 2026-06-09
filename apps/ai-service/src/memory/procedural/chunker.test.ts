@@ -228,6 +228,29 @@ ${bigBlock}
       }
     })
 
+    it('noSubSplit keeps a large section as ONE chunk (recorded playbooks)', () => {
+      // A recorded playbook is a single coherent workflow under one ##.
+      // Even a long bullet list must stay one chunk when noSubSplit is set.
+      const bullets = Array.from(
+        { length: 30 },
+        (_, i) =>
+          `- step ${i}: a reasonably long instruction line so the body crosses the split threshold easily`
+      ).join('\n')
+      const md = `## Сгенерировать и отправить отклик на вакансию Upwork\n${bullets}\n`
+
+      // Without the flag the section sub-splits.
+      expect(chunkMarkdown(md).length).toBeGreaterThanOrEqual(2)
+
+      // With the flag it stays a single chunk carrying the whole workflow.
+      const whole = chunkMarkdown(md, { noSubSplit: true })
+      expect(whole.length).toBe(1)
+      expect(whole[0]!.sectionTitle).toBe(
+        '## Сгенерировать и отправить отклик на вакансию Upwork'
+      )
+      expect(whole[0]!.text).toContain('step 0')
+      expect(whole[0]!.text).toContain('step 29')
+    })
+
     it('keeps an indented continuation line attached to its bullet when splitting', () => {
       const lines: string[] = []
       for (let i = 0; i < 20; i++) {
