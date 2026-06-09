@@ -17,10 +17,18 @@
  *     ts to saved cursor → only fetch conversations.history(oldest=cursor) where
  *     it moved. Silent conversations cost ~one list call, not a history call.
  *
- * Rate limit: conversations.history is ~5 req/min per workspace for non-Marketplace
- * apps. We pace history calls per workspace and walk conversations over many cycles
- * rather than hammering all of them at once. This is background collection, not
- * realtime — lag of minutes is acceptable.
+ * Rate limit (post-March-2026): conversations.history for non-Marketplace apps
+ * is Tier 1 — 1 request/minute per workspace, max 15 messages/call. We treat
+ * conversations.history as a scarce budget:
+ *   - A per-workspace token bucket caps history calls to historyBudgetPerMin
+ *     (default 1) and refuses calls that would exceed it.
+ *   - 429s parse Retry-After and pause the bucket until the window clears.
+ *   - We do NOT call history just to peek at the latest ts (the old latestTs
+ *     double-spent the budget). Instead each eligible conversation spends one
+ *     history call to fetch-since-cursor directly.
+ *   - Conversations are walked round-robin across cycles so a busy first
+ *     channel can't starve the rest under a 1/min ceiling.
+ * This is background collection, not realtime — lag of minutes is acceptable.
  *
  * Push/pull:
  *   - DMs (im) and group DMs (mpim) → slack_dm  → push (creates inbox task).
@@ -41,11 +49,11 @@ export interface SlackConfig {
   /** Poll cadence per workspace. Default 5 min. */
   pollIntervalMs?: number
   /**
-   * Max history fetches per workspace per cycle. Keeps us under the ~5 req/min
-   * history limit. Default 4 (leaves headroom for the list call).
+   * conversations.history calls allowed per workspace per rolling minute.
+   * Slack's Tier-1 ceiling for non-Marketplace apps is 1. Default 1.
    */
-  maxHistoryPerCycle?: number
-  /** Delay between paced API calls within a workspace. Default 1500ms. */
+  historyBudgetPerMin?: number
+  /** Delay between paced non-history API calls within a workspace. Default 1500ms. */
   pacingMs?: number
 }
 
@@ -76,8 +84,54 @@ interface SlackMessage {
 }
 
 const DEFAULT_POLL_INTERVAL_MS = 5 * 60 * 1000
-const DEFAULT_MAX_HISTORY_PER_CYCLE = 4
+const DEFAULT_HISTORY_BUDGET_PER_MIN = 1
 const DEFAULT_PACING_MS = 1500
+
+/**
+ * Per-workspace budget for conversations.history. Refills 1/min (sliding
+ * window over the last 60s). When Slack returns 429 with Retry-After, we
+ * block the bucket until that deadline regardless of the window.
+ */
+export class HistoryBudget {
+  private timestamps: number[] = []
+  private blockedUntil = 0
+
+  constructor(private perMin: number) {}
+
+  /** True if a history call may be spent right now. */
+  canSpend(now = Date.now()): boolean {
+    if (now < this.blockedUntil) return false
+    this.prune(now)
+    return this.timestamps.length < this.perMin
+  }
+
+  spend(now = Date.now()): void {
+    this.timestamps.push(now)
+  }
+
+  /** Apply a Retry-After (seconds) pause from a 429 response. */
+  penalize(retryAfterSec: number, now = Date.now()): void {
+    const until = now + Math.max(1, retryAfterSec) * 1000
+    if (until > this.blockedUntil) this.blockedUntil = until
+  }
+
+  private prune(now: number): void {
+    const cutoff = now - 60_000
+    while (this.timestamps.length > 0 && this.timestamps[0]! < cutoff) {
+      this.timestamps.shift()
+    }
+  }
+}
+
+/** Extract Retry-After seconds from a Slack WebAPI error, defaulting to 60. */
+function retryAfterFromError(err: unknown): number | null {
+  const e = err as { code?: string; retryAfter?: number; data?: { error?: string } }
+  // @slack/web-api surfaces rate limits as code 'slack_webapi_rate_limited_error'
+  // with a numeric retryAfter (seconds) on the error object.
+  if (typeof e?.retryAfter === 'number') return e.retryAfter
+  if (e?.code === 'slack_webapi_rate_limited_error') return 60
+  return null
+}
 
 export class SlackChannel implements Channel {
   readonly name = 'slack'
@@ -94,10 +148,10 @@ export class SlackChannel implements Channel {
     cursors: ConversationCursorStore
   ) {
     this.pollIntervalMs = config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
-    const maxHistory = config.maxHistoryPerCycle ?? DEFAULT_MAX_HISTORY_PER_CYCLE
+    const historyBudget = config.historyBudgetPerMin ?? DEFAULT_HISTORY_BUDGET_PER_MIN
     const pacingMs = config.pacingMs ?? DEFAULT_PACING_MS
     this.workspaces = config.workspaces.map(
-      (ws) => new SlackWorkspace(ws.token, sink, cursors, maxHistory, pacingMs)
+      (ws) => new SlackWorkspace(ws.token, sink, cursors, historyBudget, pacingMs)
     )
   }
 
@@ -162,15 +216,19 @@ class SlackWorkspace {
   teamId = ''
   /** Slack userId → display name cache (best-effort, populated lazily). */
   private nameCache = new Map<string, string>()
+  private historyBudget: HistoryBudget
+  /** Round-robin offset into the conversation list across cycles. */
+  private rrOffset = 0
 
   constructor(
     token: string,
     private sink: CaptureSink,
     private cursors: ConversationCursorStore,
-    private maxHistoryPerCycle: number,
+    historyBudgetPerMin: number,
     private pacingMs: number
   ) {
     this.web = new WebClient(token)
+    this.historyBudget = new HistoryBudget(historyBudgetPerMin)
   }
 
   async init(): Promise<void> {
@@ -212,32 +270,50 @@ class SlackWorkspace {
 
   async poll(): Promise<void> {
     const conversations = await this.listConversations()
-    let historyBudget = this.maxHistoryPerCycle
+    if (conversations.length === 0) return
 
-    for (const conv of conversations) {
+    // Round-robin: start where we left off so a busy early channel can't
+    // starve the rest under a 1/min history ceiling.
+    const n = conversations.length
+    const start = this.rrOffset % n
+    const ordered = [...conversations.slice(start), ...conversations.slice(0, start)]
+    this.rrOffset = (start + 1) % n
+
+    for (const conv of ordered) {
       const key = `slack:${this.teamId}:${conv.id}`
-      const latest = await this.latestTs(conv.id)
-      if (!latest) continue // empty conversation
-
       const cursor = await this.cursors.get(key)
 
       // Bootstrap: first time we see this conversation, mark "watch from now"
-      // without backfilling history into the inbox.
+      // without backfilling history into the inbox. Uses conversations.info
+      // (Tier 3, not the scarce history budget) to read the latest ts.
       if (cursor === null) {
-        await this.cursors.set(key, latest)
+        const latest = await this.latestTsViaInfo(conv.id)
+        if (latest) await this.cursors.set(key, latest)
         continue
       }
 
-      if (latest <= cursor) continue // nothing new since we last looked
+      // Spend one history call to pull anything since the cursor. If the
+      // budget is exhausted (or we're in a 429 penalty window), stop the whole
+      // cycle: leave cursors untouched so nothing is lost, resume next cycle.
+      if (!this.historyBudget.canSpend()) break
+      this.historyBudget.spend()
 
-      if (historyBudget <= 0) {
-        // Out of history budget this cycle — leave cursor as-is, pick it up next
-        // cycle. We do NOT advance the cursor, so no messages are lost.
+      let messages: SlackMessage[]
+      try {
+        messages = await this.fetchSince(conv.id, cursor)
+      } catch (err) {
+        const retryAfter = retryAfterFromError(err)
+        if (retryAfter !== null) {
+          this.historyBudget.penalize(retryAfter)
+          console.warn(
+            `[slack] history rate-limited (${this.teamName}); backing off ${retryAfter}s`
+          )
+          break // stop this cycle; cursor untouched
+        }
+        console.error(`[slack] fetchSince failed (${this.teamName} ${conv.id}):`, err)
         continue
       }
-      historyBudget--
 
-      const messages = await this.fetchSince(conv.id, cursor)
       let newestTs = cursor
       for (const msg of messages) {
         if (msg.ts > newestTs) newestTs = msg.ts
@@ -272,20 +348,32 @@ class SlackWorkspace {
     return out
   }
 
-  /** Latest message ts in a conversation without pulling full history. */
-  private async latestTs(channel: string): Promise<string | null> {
-    const res = await this.web.conversations.history({ channel, limit: 1 })
-    const msg = (res.messages ?? [])[0] as SlackMessage | undefined
-    await this.pace()
-    return msg?.ts ?? null
+  /**
+   * Latest message ts via conversations.info (Tier 3), used only at bootstrap
+   * to set the initial cursor without spending the scarce history budget.
+   * The `latest` field is present in the live response but not typed by
+   * @slack/web-api, hence the cast.
+   */
+  private async latestTsViaInfo(channel: string): Promise<string | null> {
+    try {
+      const res = await this.web.conversations.info({ channel })
+      const ch = res.channel as { latest?: { ts?: string } } | undefined
+      await this.pace()
+      return ch?.latest?.ts ?? null
+    } catch (err) {
+      // Bootstrap is best-effort; a failure just means we retry next cycle.
+      console.warn(`[slack] info failed (${this.teamName} ${channel}):`, (err as Error).message)
+      return null
+    }
   }
 
+  /** Max 15 messages/call on the Tier-1 limit; we request 15. */
   private async fetchSince(channel: string, oldest: string): Promise<SlackMessage[]> {
     const res = await this.web.conversations.history({
       channel,
       oldest,
       inclusive: false,
-      limit: 100,
+      limit: 15,
     })
     await this.pace()
     return ((res.messages ?? []) as SlackMessage[])
