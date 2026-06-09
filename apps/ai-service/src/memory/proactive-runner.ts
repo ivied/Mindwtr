@@ -72,6 +72,13 @@ export class ProactiveRunner {
   private readonly now: () => Date
   private readonly log: (msg: string) => void
 
+  // Per-pass snapshot of all Mindwtr tasks. Loaded once at the start of the
+  // forward pass and matched against in-memory, so the task-signal gate
+  // doesn't fire one cloud request per fact group (which exhausted the
+  // cloud's 120 req/min limit → 429 → gate fell back to legacy "propose
+  // anyway", which is what re-surfaced already-done items).
+  private taskSnapshot: Task[] | null = null
+
   constructor(private readonly opts: ProactiveRunnerOptions) {
     this.config = { ...DEFAULT_PROACTIVE_CONFIG, ...(opts.config ?? {}) }
     this.now = opts.now ?? (() => new Date())
@@ -108,6 +115,36 @@ export class ProactiveRunner {
 
     const groups = this.findStaleFactGroups()
     this.log(`[proactive] scanning ${groups.length} stale fact groups`)
+
+    // Load the task snapshot once per pass. If the gate is required but the
+    // snapshot can't be loaded (cloud 429 / outage), abort the whole pass —
+    // proposing without the gate is exactly the failure mode that re-surfaces
+    // already-done items. Skipping is cheap (we run again next interval).
+    this.taskSnapshot = null
+    if (this.config.requireTaskSignal && this.opts.mindwtrClient) {
+      try {
+        this.taskSnapshot = await this.loadTaskSnapshot()
+        this.log(`[proactive] loaded task snapshot: ${this.taskSnapshot.length} tasks`)
+      } catch (err) {
+        this.log(
+          `[proactive] task snapshot load failed — aborting pass to avoid stale proposals: ${(err as Error).message}`
+        )
+        return {
+          scannedGroups: groups.length,
+          proposed: 0,
+          skipped: groups.length,
+          errors: 1,
+          elapsedMs: Date.now() - startedAt,
+          decisions: [
+            {
+              entitySlug: '*',
+              action: 'error',
+              reason: `task snapshot load failed: ${(err as Error).message}`,
+            },
+          ],
+        }
+      }
+    }
 
     // Pre-load recent proactive proposals for dedup-window filtering.
     const recentProactive = this.opts.proposalStore.listRecentByAgent(
@@ -316,26 +353,19 @@ export class ProactiveRunner {
     | { kind: 'none' }
     | { kind: 'lookup-failed'; error: string }
   > {
-    if (!this.opts.mindwtrClient) return { kind: 'lookup-failed', error: 'no client' }
+    // Snapshot is loaded once per pass in runStaleFactsPass. A null snapshot
+    // here means the gate is disabled or the client is missing — both already
+    // handled by the caller, so treat as lookup-failed for safety.
+    if (!this.taskSnapshot) return { kind: 'lookup-failed', error: 'no task snapshot' }
 
-    const terms = this.buildEntitySearchTerms(group)
-    const seen = new Map<string, Task>()
-    try {
-      for (const term of terms) {
-        const tasks = await this.opts.mindwtrClient.searchTasks(term, { limit: 25 })
-        for (const t of tasks) {
-          if (!seen.has(t.id)) seen.set(t.id, t)
-        }
-      }
-    } catch (err) {
-      return { kind: 'lookup-failed', error: (err as Error).message }
-    }
-
+    const terms = this.buildEntitySearchTerms(group).map(normalizeForMatch)
     const activeStatuses = new Set(this.config.openTaskStatuses)
     let active = 0
     let inactive = 0
-    for (const t of seen.values()) {
-      if (activeStatuses.has(t.status)) active += 1
+    for (const task of this.taskSnapshot) {
+      const haystack = normalizeForMatch(`${task.title} ${task.description ?? ''}`)
+      if (!terms.some((term) => term.length > 0 && haystack.includes(term))) continue
+      if (activeStatuses.has(task.status)) active += 1
       else inactive += 1
     }
     if (active > 0) return { kind: 'active', activeCount: active }
@@ -344,10 +374,40 @@ export class ProactiveRunner {
   }
 
   /**
-   * Search terms for entity-to-task matching. Slug (canonical) plus
-   * de-dashed slug plus the first 2-3 distinctive words from each fact
-   * statement. Lossy by design — false negatives just degrade noise
-   * suppression; false positives would silence too aggressively.
+   * Load every task once per pass (all statuses, paginated). Replaces the
+   * per-group searchTasks calls so a single forward pass makes a bounded
+   * handful of cloud requests instead of hundreds.
+   */
+  private async loadTaskSnapshot(): Promise<Task[]> {
+    if (!this.opts.mindwtrClient) throw new Error('no mindwtr client')
+    const all: Task[] = []
+    const seen = new Set<string>()
+    const pageSize = 200
+    let offset = 0
+    // Bounded paging guard — never loop forever on a misbehaving backend.
+    for (let page = 0; page < 50; page++) {
+      const batch = await this.opts.mindwtrClient.listTasks({
+        all: true,
+        limit: pageSize,
+        offset,
+      })
+      for (const t of batch) {
+        if (!seen.has(t.id)) {
+          seen.add(t.id)
+          all.push(t)
+        }
+      }
+      if (batch.length < pageSize) break
+      offset += pageSize
+    }
+    return all
+  }
+
+  /**
+   * Match terms for entity→task lookup against the in-memory task snapshot.
+   * Slug (canonical) plus de-dashed slug plus the first 2-3 distinctive words
+   * from each fact statement. Lossy by design — false negatives just degrade
+   * noise suppression; false positives would silence too aggressively.
    */
   private buildEntitySearchTerms(group: StaleFactGroup): string[] {
     const cap = this.config.taskSignalMaxSearchTermsPerGroup
@@ -1015,6 +1075,11 @@ function emptyCompletion(): CompletionEvaluation {
  * Drops the fact-type prefix verbs ("waiting on", "working on") so the
  * residual is the actual subject ("Joe code review", "Anna invoice").
  */
+/** Lowercase + collapse whitespace for substring matching facts ↔ tasks. */
+function normalizeForMatch(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, ' ').trim()
+}
+
 export function extractEntityPhrase(statement: string): string | null {
   if (!statement) return null
   const s = statement

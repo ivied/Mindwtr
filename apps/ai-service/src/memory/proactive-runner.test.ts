@@ -393,6 +393,39 @@ describe('ProactiveRunner.run', () => {
       expect(memoryStore.activeFactsFor('anna-saraeva').length).toBe(1) // not expired (user might still review)
     })
 
+    it('aborts the whole pass when the task snapshot fails to load (no stale proposals on cloud 429)', async () => {
+      seedFact({ slug: 'joe', type: 'waiting_on', statement: 'waiting on Joe', hoursAgo: 50 })
+      const runner = new ProactiveRunner({
+        memoryStore,
+        proposalStore,
+        llm: noopLlm(),
+        mindwtrClient: throwingMindwtrClient(),
+        now: () => NOW,
+      })
+      const r = await runner.runStaleFactsPass()
+      expect(r.proposed).toBe(0)
+      expect(r.errors).toBe(1)
+      expect(r.decisions[0]!.action).toBe('error')
+      expect(r.decisions[0]!.reason).toContain('snapshot load failed')
+    })
+
+    it('detects a done task even when its title does not contain the entity slug', async () => {
+      // Fact slug 'kurt' but the done task is titled "Onboarding deck" —
+      // matched via the fact statement phrase, not the slug.
+      seedFact({ slug: 'kurt', type: 'working_on', statement: 'working on Onboarding deck', hoursAgo: 90 })
+      const task = mkTask({ id: 'k3', title: 'Onboarding deck final', status: 'done' })
+      const runner = new ProactiveRunner({
+        memoryStore,
+        proposalStore,
+        llm: noopLlm(),
+        mindwtrClient: fakeMindwtrClient([task]),
+        now: () => NOW,
+      })
+      const r = await runner.runStaleFactsPass()
+      expect(r.proposed).toBe(0)
+      expect(r.decisions[0]!.action).toBe('skipped-task-already-resolved')
+    })
+
     it('falls back to legacy behavior when requireTaskSignal=false', async () => {
       seedFact({ slug: 'joe', type: 'waiting_on', statement: 'waiting on Joe', hoursAgo: 50 })
       const llm = mkLlm(
@@ -439,17 +472,21 @@ describe('ProactiveRunner.run', () => {
 
 function fakeMindwtrClient(tasks: Task[]): MindwtrClient {
   return {
+    // `all` is honored implicitly — the fake holds every status already.
+    // Without an explicit status filter it returns the full set (the
+    // forward-pass snapshot path), otherwise filters by status (reverse pass).
     listTasks: async (params: { status?: string } = {}) => {
       if (!params.status) return tasks
       return tasks.filter((t) => t.status === params.status)
     },
-    searchTasks: async (query: string) => {
-      const q = query.toLowerCase()
-      return tasks.filter(
-        (t) =>
-          t.title.toLowerCase().includes(q) ||
-          (t.description ?? '').toLowerCase().includes(q)
-      )
+  } as unknown as MindwtrClient
+}
+
+/** Client whose listTasks always throws — simulates cloud 429 / outage. */
+function throwingMindwtrClient(): MindwtrClient {
+  return {
+    listTasks: async () => {
+      throw new Error('429 Rate limit exceeded')
     },
   } as unknown as MindwtrClient
 }

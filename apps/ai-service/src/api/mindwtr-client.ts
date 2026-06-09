@@ -73,6 +73,8 @@ interface ListTasksParams {
   offset?: number
   sortBy?: string
   sortOrder?: 'asc' | 'desc'
+  /** Include done/archived tasks (cloud expects all=1). */
+  all?: boolean
 }
 
 export class MindwtrClient {
@@ -108,27 +110,18 @@ export class MindwtrClient {
   async listTasks(params: ListTasksParams = {}): Promise<Task[]> {
     const query = new URLSearchParams()
     for (const [key, value] of Object.entries(params)) {
-      if (value !== undefined) query.set(key, String(value))
+      if (value === undefined) continue
+      // Cloud reads `all` as the literal '1', not 'true'.
+      if (key === 'all') {
+        if (value) query.set('all', '1')
+        continue
+      }
+      query.set(key, String(value))
     }
     const res = await fetch(`${this.baseUrl}/v1/tasks?${query}`, {
       headers: this.headers,
     })
     if (!res.ok) throw new Error(`listTasks failed: ${res.status} ${await res.text()}`)
-    const data = await res.json()
-    return data.tasks ?? data
-  }
-
-  /**
-   * Substring search across tasks of every status (including archived/done).
-   * Used by ProactiveRunner to decide if an entity has any task footprint
-   * before proposing a follow-up.
-   */
-  async searchTasks(query: string, opts: { limit?: number } = {}): Promise<Task[]> {
-    const trimmed = query.trim()
-    if (!trimmed) return []
-    const qs = new URLSearchParams({ query: trimmed, all: '1', limit: String(opts.limit ?? 50) })
-    const res = await fetch(`${this.baseUrl}/v1/tasks?${qs}`, { headers: this.headers })
-    if (!res.ok) throw new Error(`searchTasks failed: ${res.status} ${await res.text()}`)
     const data = await res.json()
     return data.tasks ?? data
   }
