@@ -24,6 +24,8 @@ import { toTaskSuggestion } from './normalizer'
 const PULL_CHANNELS = new Set<CapturedItem['sourceChannel']>([
   'screen_capture',
   'audio_capture',
+  'slack_dm',
+  'slack_channel',
 ])
 
 function isPull(item: CapturedItem): boolean {
