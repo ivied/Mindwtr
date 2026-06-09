@@ -126,9 +126,16 @@ export class MemoryStore {
     }
 
     if (embedding && this.vecAvailable) {
-      this.db
-        .query('INSERT OR REPLACE INTO events_vec (event_id, embedding) VALUES (?, ?)')
-        .run(input.id, embeddingToBytes(embedding))
+      try {
+        this.db
+          .query('INSERT OR REPLACE INTO events_vec (event_id, embedding) VALUES (?, ?)')
+          .run(input.id, embeddingToBytes(embedding))
+      } catch (err) {
+        console.error(
+          `[memory] vec insert failed for event ${input.id} — semantic search degraded, FTS still works:`,
+          (err as Error).message
+        )
+      }
     }
     return true
   }
@@ -276,11 +283,18 @@ export class MemoryStore {
       )
       .run(s.date, s.summary, s.eventCount, s.factsAdded, s.createdAt)
     if (embedding && this.vecAvailable) {
-      this.db
-        .query(
-          'INSERT OR REPLACE INTO daily_summary_vec (date, embedding) VALUES (?, ?)'
+      try {
+        this.db
+          .query(
+            'INSERT OR REPLACE INTO daily_summary_vec (date, embedding) VALUES (?, ?)'
+          )
+          .run(s.date, embeddingToBytes(embedding))
+      } catch (err) {
+        console.error(
+          `[memory] daily_summary_vec insert failed for ${s.date}:`,
+          (err as Error).message
         )
-        .run(s.date, embeddingToBytes(embedding))
+      }
     }
   }
 

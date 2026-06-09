@@ -130,10 +130,17 @@ export class ContextStore {
     )
 
     if (embedding) {
-      this.db.run(
-        'INSERT INTO captures_vec (capture_id, embedding) VALUES (?, ?)',
-        [id, embeddingToBytes(embedding)]
-      )
+      try {
+        this.db.run(
+          'INSERT INTO captures_vec (capture_id, embedding) VALUES (?, ?)',
+          [id, embeddingToBytes(embedding)]
+        )
+      } catch (err) {
+        console.error(
+          `[context-store] vec insert failed for ${id} — semantic search degraded, FTS still works:`,
+          (err as Error).message
+        )
+      }
     }
 
     return {

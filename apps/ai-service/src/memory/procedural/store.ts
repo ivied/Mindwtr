@@ -146,10 +146,17 @@ export class ProceduralStore {
     )
 
     if (this.vecAvailable && input.embedding) {
-      this.db.run(
-        'INSERT INTO procedural_chunks_vec(chunk_id, embedding) VALUES (?, ?)',
-        [id, embeddingToBytes(input.embedding)]
-      )
+      try {
+        this.db.run(
+          'INSERT INTO procedural_chunks_vec(chunk_id, embedding) VALUES (?, ?)',
+          [id, embeddingToBytes(input.embedding)]
+        )
+      } catch (err) {
+        console.error(
+          `[procedural] vec insert failed for chunk ${id} — semantic search degraded, FTS still works:`,
+          (err as Error).message
+        )
+      }
     }
     return id
   }
@@ -371,7 +378,14 @@ export class ProceduralStore {
 
   deleteById(id: string): void {
     if (this.vecAvailable) {
-      this.db.run('DELETE FROM procedural_chunks_vec WHERE chunk_id = ?', [id])
+      try {
+        this.db.run('DELETE FROM procedural_chunks_vec WHERE chunk_id = ?', [id])
+      } catch (err) {
+        console.error(
+          `[procedural] vec delete failed for chunk ${id}:`,
+          (err as Error).message
+        )
+      }
     }
     this.db.run('DELETE FROM procedural_chunks WHERE id = ?', [id])
   }
