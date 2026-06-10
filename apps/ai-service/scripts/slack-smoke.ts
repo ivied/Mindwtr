@@ -21,7 +21,9 @@
 import { SlackChannel } from '../src/channels/slack.ts'
 import type { CapturedItem } from '../src/capture/normalizer.ts'
 
-const REWIND_MS = 1000 * 60 * 60 * 24 * 30 // treat last 30 days as "new" in pass 2
+// Treat last N hours as "new" in pass 2 (default 24h; search mode pulls every
+// message in the window, so keep it short).
+const REWIND_MS = Number(process.env.SMOKE_REWIND_HOURS ?? 24) * 3600_000
 
 const tokens = (process.env.SLACK_USER_TOKENS ?? '')
   .split(',')

@@ -7,32 +7,28 @@
  * channels they're a member of). Each workspace yields its own xoxp- token, so
  * config is an array of { token } — one per workspace.
  *
- * Polling model (validated against live data):
- *   - "New for the agent" = our own saved cursor per conversation, NOT Slack's
- *     unread_count (which is 0 whenever the user has read it in the Slack client,
- *     so it never fires for a human who reads their own messages).
- *   - Bootstrap: on first sight of a conversation, save latest ts WITHOUT
- *     pulling history — we start watching from "now", not backfill the archive.
- *   - Each cycle: list conversations (cheap) → for each, compare latest message
- *     ts to saved cursor → only fetch conversations.history(oldest=cursor) where
- *     it moved. Silent conversations cost ~one list call, not a history call.
+ * Primary path — search.messages as the "what's new" feed:
+ *   conversations.history for non-Marketplace apps is Tier 1 since 2026-03-03
+ *   (1 request/minute per workspace, max 15 messages), which makes
+ *   per-conversation polling useless at 300+ conversations (~28h per full
+ *   round). search.messages is NOT subject to that cut (Tier 2, ~20/min) and
+ *   one `after:<date>` query returns every new message across the whole
+ *   workspace — channels, DMs, and thread replies (which history never
+ *   surfaces). Matches carry full text + author + channel, so no history
+ *   calls are needed at all. One workspace-level cursor (newest seen ts)
+ *   replaces per-conversation cursors.
  *
- * Rate limit (post-March-2026): conversations.history for non-Marketplace apps
- * is Tier 1 — 1 request/minute per workspace, max 15 messages/call. We treat
- * conversations.history as a scarce budget:
- *   - A per-workspace token bucket caps history calls to historyBudgetPerMin
- *     (default 1) and refuses calls that would exceed it.
- *   - 429s parse Retry-After and pause the bucket until the window clears.
- *   - We do NOT call history just to peek at the latest ts (the old latestTs
- *     double-spent the budget). Instead each eligible conversation spends one
- *     history call to fetch-since-cursor directly.
- *   - Conversations are walked round-robin across cycles so a busy first
- *     channel can't starve the rest under a 1/min ceiling.
+ * Fallback path — per-conversation history round-robin:
+ *   Used only when the token lacks search scopes (detected at init). Walks
+ *   conversations round-robin, spending the scarce 1/min history budget on
+ *   one conversation per cycle. Slow but correct; acceptable for small
+ *   workspaces.
+ *
  * This is background collection, not realtime — lag of minutes is acceptable.
  *
- * Push/pull:
- *   - DMs (im) and group DMs (mpim) → slack_dm  → push (creates inbox task).
- *   - Channels (public/private)     → slack_channel → pull (Context Store only).
+ * Push/pull: both slack_dm (im/mpim) and slack_channel are pull — they land
+ * in the Context Store and go through the Commitment pipeline, never straight
+ * to the inbox.
  */
 
 import { WebClient } from '@slack/web-api'
@@ -83,9 +79,26 @@ interface SlackMessage {
   bot_id?: string
 }
 
+interface SearchMatch {
+  ts?: string
+  text?: string
+  user?: string
+  username?: string
+  channel?: {
+    id?: string
+    name?: string
+    is_im?: boolean
+    is_mpim?: boolean
+    is_private?: boolean
+    is_group?: boolean
+  }
+}
+
 const DEFAULT_POLL_INTERVAL_MS = 5 * 60 * 1000
 const DEFAULT_HISTORY_BUDGET_PER_MIN = 1
 const DEFAULT_PACING_MS = 1500
+/** Hard cap on search pagination per cycle (100 matches/page). */
+const SEARCH_MAX_PAGES = 5
 
 /**
  * Per-workspace budget for conversations.history. Refills 1/min (sliding
@@ -216,6 +229,7 @@ class SlackWorkspace {
   teamId = ''
   /** Slack userId → display name cache (best-effort, populated lazily). */
   private nameCache = new Map<string, string>()
+  private searchAvailable = false
   private historyBudget: HistoryBudget
   /** Round-robin offset into the conversation list across cycles. */
   private rrOffset = 0
@@ -237,6 +251,23 @@ class SlackWorkspace {
     this.teamName = (auth.team as string) ?? '<unknown>'
     this.teamId = (auth.team_id as string) ?? ''
     this.selfName = await this.userName(this.selfUserId)
+    this.searchAvailable = await this.probeSearch()
+    console.log(
+      `[slack] ${this.teamName}: mode=${this.searchAvailable ? 'search' : 'history-rr'}`
+    )
+  }
+
+  /** True if this token can call search.messages (has search:read.* scopes). */
+  private async probeSearch(): Promise<boolean> {
+    try {
+      await this.web.search.messages({ query: `after:${dateNDaysAgo(1)}`, count: 1 })
+      return true
+    } catch (err) {
+      const e = err as { data?: { error?: string } }
+      if (e?.data?.error === 'missing_scope') return false
+      // Transient failure — assume search works, poll() handles errors anyway.
+      return true
+    }
   }
 
   /** Resolve a Slack userId to a display name, cached. Falls back to the id. */
@@ -269,6 +300,107 @@ class SlackWorkspace {
   }
 
   async poll(): Promise<void> {
+    if (this.searchAvailable) {
+      await this.pollViaSearch()
+      return
+    }
+    await this.pollViaHistory()
+  }
+
+  /**
+   * Search-based poll: one search.messages query per cycle returns every new
+   * message workspace-wide. The cursor is the newest ts we've ingested
+   * (workspace-level, key `slack-search:<teamId>`).
+   */
+  private async pollViaSearch(): Promise<void> {
+    const key = `slack-search:${this.teamId}`
+    const cursor = await this.cursors.get(key)
+
+    // Bootstrap: watch from "now", don't backfill the archive.
+    if (cursor === null) {
+      await this.cursors.set(key, `${Math.floor(Date.now() / 1000)}.000000`)
+      return
+    }
+
+    // search `after:` is date-granular, so over-fetch from the cursor's day
+    // and filter client-side by exact ts. sort=timestamp asc would be ideal
+    // but Slack only sorts desc reliably — fetch desc, stop paging once a
+    // page's oldest match is older than the cursor.
+    const afterDate = new Date(Number(cursor.split('.')[0]) * 1000 - 86_400_000)
+      .toISOString()
+      .slice(0, 10)
+
+    const fresh: SearchMatch[] = []
+    let page = 1
+    while (page <= SEARCH_MAX_PAGES) {
+      let matches: SearchMatch[]
+      let pages = 1
+      try {
+        const res = await this.web.search.messages({
+          query: `after:${afterDate}`,
+          sort: 'timestamp',
+          sort_dir: 'desc',
+          count: 100,
+          page,
+        })
+        const m = res.messages as
+          | { matches?: SearchMatch[]; paging?: { pages?: number } }
+          | undefined
+        matches = m?.matches ?? []
+        pages = m?.paging?.pages ?? 1
+      } catch (err) {
+        const retryAfter = retryAfterFromError(err)
+        if (retryAfter !== null) {
+          console.warn(`[slack] search rate-limited (${this.teamName}); backing off ${retryAfter}s`)
+          return // cursor untouched; retry next cycle
+        }
+        console.error(`[slack] search failed (${this.teamName}):`, err)
+        return
+      }
+
+      let sawOlder = false
+      for (const match of matches) {
+        if (!match.ts) continue
+        if (compareSlackTs(match.ts, cursor) <= 0) {
+          sawOlder = true
+          continue
+        }
+        fresh.push(match)
+      }
+      if (sawOlder || page >= pages) break
+      page++
+      await this.pace()
+    }
+
+    if (fresh.length === 0) return
+
+    // Oldest-first so cursor advances correctly even if a capture fails midway.
+    fresh.sort((a, b) => compareSlackTs(a.ts!, b.ts!))
+
+    let newest = cursor
+    for (const match of fresh) {
+      const item = await this.matchToCapturedItem(match)
+      if (item) {
+        try {
+          await this.sink(item)
+        } catch (err) {
+          console.error(`[slack] capture failed (${this.teamName}):`, err)
+        }
+      }
+      if (compareSlackTs(match.ts!, newest) > 0) {
+        newest = match.ts!
+        await this.cursors.set(key, newest)
+      }
+    }
+    console.log(`[slack] ${this.teamName}: ${fresh.length} new message(s) via search`)
+  }
+
+  /**
+   * Fallback for tokens without search scopes: per-conversation history
+   * round-robin under the 1/min Tier-1 budget. Slow (one conversation per
+   * cycle) — fine only for small workspaces.
+   */
+  private async pollViaHistory(): Promise<void> {
     const conversations = await this.listConversations()
     if (conversations.length === 0) return
 
@@ -381,6 +513,48 @@ class SlackWorkspace {
       .sort((a, b) => (a.ts < b.ts ? -1 : 1))
   }
 
+  /**
+   * Build a CapturedItem straight from a search match — no history call.
+   * Search matches lack subtype/bot_id; bot posts are filtered by missing
+   * `user` (search returns bot messages with username but no user id).
+   */
+  private async matchToCapturedItem(match: SearchMatch): Promise<CapturedItem | null> {
+    if (!match.ts || !match.channel?.id) return null
+    if (!match.user) return null
+    if (match.user === this.selfUserId) return null
+    const rawText = match.text?.trim()
+    if (!rawText) return null
+
+    const ch = match.channel
+    const isDm = !!ch.is_im || !!ch.is_mpim
+    const mentionsSelf = rawText.includes(`<@${this.selfUserId}>`)
+    const authorName = match.username || (await this.userName(match.user))
+    const text = await this.resolveMentions(rawText)
+
+    return {
+      text,
+      sourceChannel: isDm ? 'slack_dm' : 'slack_channel',
+      type: 'text',
+      timestamp: slackTsToIso(match.ts),
+      sourceMeta: {
+        workspace: this.teamName,
+        teamId: this.teamId,
+        channelId: ch.id,
+        channelName: ch.name,
+        userId: match.user,
+        authorName,
+        // Identity signals for the Proposer: this message is from someone else
+        // (own messages are dropped above). mentionsSelf=true means the user is
+        // being addressed/asked — a request FOR the user, not a delegation.
+        fromSelf: false,
+        mentionsSelf,
+        selfName: this.selfName,
+        ts: match.ts,
+        isDm,
+      },
+    }
+  }
+
   private async toCapturedItem(
     conv: SlackConversation,
     msg: SlackMessage
@@ -434,4 +608,16 @@ function slackTsToIso(ts: string): string {
   const [seconds, micro] = ts.split('.')
   const ms = Number(seconds) * 1000 + Math.floor(Number(micro ?? '0') / 1000)
   return new Date(ms).toISOString()
+}
+
+/** Numeric compare of Slack ts strings ("1781131391.484159"). */
+function compareSlackTs(a: string, b: string): number {
+  const na = Number(a)
+  const nb = Number(b)
+  return na < nb ? -1 : na > nb ? 1 : 0
+}
+
+/** YYYY-MM-DD for `after:` search qualifiers, N days back from now. */
+function dateNDaysAgo(n: number): string {
+  return new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10)
 }
