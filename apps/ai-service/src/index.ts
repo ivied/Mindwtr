@@ -38,6 +38,7 @@ import {
 } from './memory'
 import { SlugCanonicalizer } from './memory/slug-canonicalizer'
 import { LlmPublisher } from './status/llm-publisher'
+import { HealthMonitor, HealthAlerter } from './status/health'
 import { startAgentWatchdog, DEFAULT_AGENT_WATCHDOG_CONFIG } from './agent-watchdog'
 import { ReviewNotifier } from './agent-watchdog/review-notifier'
 import {
@@ -317,7 +318,10 @@ if (LLM_BASE_URL && LLM_API_KEY) {
       },
     })
     setInterval(
-      () => void recordingDistiller!.distillPending().catch(() => {}),
+      () =>
+        void recordingDistiller!
+          .distillPending()
+          .catch((err: Error) => console.error('[distill] sweep failed:', err.message)),
       30_000
     )
     console.log('🎙 Recording distiller enabled (30s sweep)')
@@ -551,6 +555,18 @@ async function main() {
 
   // bot is constructed at module load above; nothing to do here.
 
+  const healthMonitor = new HealthMonitor({
+    db: contextStore.rawDb,
+    cloudHealthCheck: () => mindwtr.healthCheck(),
+  })
+  const healthAlerter = TG_NOTIFY_CHAT_ID
+    ? new HealthAlerter({ bot, monitor: healthMonitor, notifyChatId: TG_NOTIFY_CHAT_ID })
+    : null
+  if (healthAlerter) {
+    healthAlerter.start()
+    console.log(`🩺 Health alerter → TG chat ${TG_NOTIFY_CHAT_ID} (5m interval, transition-only)`)
+  }
+
   // Optional HTTP capture endpoint (used by desktop capture-agent and ad-hoc clients)
   let http: { stop: () => void } | null = null
   if (HTTP_AUTH_TOKEN) {
@@ -559,6 +575,7 @@ async function main() {
       authToken: HTTP_AUTH_TOKEN,
       capture,
       contextStore,
+      healthMonitor,
       corsOrigins: HTTP_CORS_ORIGINS,
       proposals: commentHandler
         ? {
@@ -704,6 +721,7 @@ async function main() {
     console.log('🛑 Shutting down...')
     clearInterval(purgeTimer)
     clearInterval(expiryTimer)
+    if (healthAlerter) healthAlerter.stop()
     if (dailySummaryTimer) clearInterval(dailySummaryTimer)
     if (proactiveTimer) clearInterval(proactiveTimer)
     if (http) http.stop()

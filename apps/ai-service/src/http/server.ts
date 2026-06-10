@@ -32,6 +32,7 @@ import type { FieldDiff, ModifyPayload } from '../proposal-store/payloads'
 import type { PersonsProvider } from '../wiki/persons-reader'
 import { getThreadRegistry } from '../threads/registry'
 import type { RecordingSessionStore } from '../recording/store'
+import type { HealthReport } from '../status/health'
 import type { FocusContextAssembler, MemoryStore, HybridRetriever, IngestService } from '../memory'
 import type { ProceduralStore, AppliesTo } from '../memory/procedural'
 
@@ -120,12 +121,18 @@ export interface HttpServerConfig {
   } | null
   /** Allowed origins for CORS. Default ['http://localhost:5173']. */
   corsOrigins?: string[]
+  /** Optional real component checks; when unset /health returns static ok. */
+  healthMonitor?: { check(): Promise<HealthReport> } | null
 }
 
 export function createHttpServer(config: HttpServerConfig) {
   const app = new Hono()
 
-  app.get('/health', (c) => c.json({ ok: true }))
+  app.get('/health', async (c) => {
+    if (!config.healthMonitor) return c.json({ ok: true })
+    const report = await config.healthMonitor.check()
+    return c.json(report, report.ok ? 200 : 503)
+  })
 
   // CORS must precede bearerAuth: browser preflight OPTIONS arrives without
   // an Authorization header and would otherwise be rejected with 401.
