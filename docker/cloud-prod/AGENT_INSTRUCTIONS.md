@@ -2,7 +2,7 @@
 
 You are a coding agent deploying changes to the production GTD stack. Production lives on **makurdi**, an always-on macOS host on Tailscale. The laptop is no longer the prod host — it only runs `capture-agent` + IDE.
 
-If you see references to Hetzner VPS / `ssh hetzner-mfp` anywhere in this repo, treat them as **historical** — see `AGENT_INSTRUCTIONS_HETZNER_LEGACY.md`. The Hetzner deployment was planned but never went live; makurdi replaced it on 2026-06-03 (see `_bmad-output/planning-artifacts/sprint-change-proposal-2026-06-03.md` in the GTD_automation repo).
+If you see references to Hetzner VPS / `ssh hetzner-mfp` anywhere, treat them as **historical**. The Hetzner deployment was planned but never went live; makurdi replaced it on 2026-06-03 (see `_bmad-output/planning-artifacts/sprint-change-proposal-2026-06-03.md` in the GTD_automation repo). The Hetzner-era kit (compose.prod.yaml, SETUP.md, VALUES.md, migrate-data.sh, the legacy runbook) was deleted 2026-06-09 — prod deploys use `docker/compose.yaml` directly.
 
 This runbook is your authoritative source. Follow it strictly.
 
