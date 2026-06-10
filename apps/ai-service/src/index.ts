@@ -64,6 +64,18 @@ const SLACK_USER_TOKENS = (process.env.SLACK_USER_TOKENS ?? '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean)
+// Browser session tokens for workspaces where we CAN'T install an app:
+// `xoxc-token|xoxd-cookie` pairs, comma-separated. Telethon-style — uses the
+// user's own browser session, no OAuth install. xoxc rotates; against ToS.
+const SLACK_SESSION_TOKENS = (process.env.SLACK_SESSION_TOKENS ?? '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)
+  .map((pair) => {
+    const [token, cookie] = pair.split('|').map((s) => s.trim())
+    return { token: token ?? '', cookie: cookie ?? '' }
+  })
+  .filter((w) => w.token.startsWith('xoxc-') && w.cookie.startsWith('xoxd-'))
 const SLACK_POLL_INTERVAL_MS = Number(process.env.SLACK_POLL_INTERVAL_MS ?? 5 * 60 * 1000)
 
 const NOTION_API_KEY = process.env.NOTION_API_KEY ?? ''
@@ -464,12 +476,16 @@ if (process.env.AI_AGENT_WATCHDOG !== 'false') {
 function buildChannels(): Channel[] {
   const channels: Channel[] = []
 
-  if (SLACK_USER_TOKENS.length > 0) {
+  const slackWorkspaces = [
+    ...SLACK_USER_TOKENS.map((token) => ({ token })),
+    ...SLACK_SESSION_TOKENS,
+  ]
+  if (slackWorkspaces.length > 0) {
     const state = new FileStateStore(channelStateFile(DATA_DIR), 'slack')
     channels.push(
       new SlackChannel(
         {
-          workspaces: SLACK_USER_TOKENS.map((token) => ({ token })),
+          workspaces: slackWorkspaces,
           pollIntervalMs: SLACK_POLL_INTERVAL_MS,
         },
         (item) => capture(item),
@@ -477,7 +493,7 @@ function buildChannels(): Channel[] {
       )
     )
     console.log(
-      `💬 Slack channel enabled (${SLACK_USER_TOKENS.length} workspace(s), poll every ${SLACK_POLL_INTERVAL_MS}ms)`
+      `💬 Slack channel enabled (${SLACK_USER_TOKENS.length} oauth + ${SLACK_SESSION_TOKENS.length} session workspace(s), poll every ${SLACK_POLL_INTERVAL_MS}ms)`
     )
   }
 

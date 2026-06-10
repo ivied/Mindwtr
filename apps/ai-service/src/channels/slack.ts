@@ -36,8 +36,22 @@ import type { Channel, CaptureSink } from './types'
 import type { CapturedItem } from '../capture/normalizer'
 
 export interface SlackWorkspaceConfig {
-  /** xoxp- user token for one workspace. */
+  /**
+   * Workspace token. Either an xoxp- OAuth user token, or an xoxc- browser
+   * session token (the web client's own token). xoxc requires `cookie`.
+   */
   token: string
+  /**
+   * The `d` cookie value (xoxd-...) for xoxc session tokens. When set, every
+   * request carries `Cookie: d=<cookie>` so Slack accepts the session token,
+   * exactly like the browser tab it was lifted from. Omit for xoxp tokens.
+   *
+   * Tradeoff: no app install needed in the workspace ("see what I see" via
+   * your own session), but xoxc rotates (hours→weeks) and this is against
+   * Slack ToS — on rotation the workspace logs invalid_auth and goes idle
+   * until the token is refreshed from DevTools.
+   */
+  cookie?: string
 }
 
 export interface SlackConfig {
@@ -164,7 +178,7 @@ export class SlackChannel implements Channel {
     const historyBudget = config.historyBudgetPerMin ?? DEFAULT_HISTORY_BUDGET_PER_MIN
     const pacingMs = config.pacingMs ?? DEFAULT_PACING_MS
     this.workspaces = config.workspaces.map(
-      (ws) => new SlackWorkspace(ws.token, sink, cursors, historyBudget, pacingMs)
+      (ws) => new SlackWorkspace(ws.token, ws.cookie, sink, cursors, historyBudget, pacingMs)
     )
   }
 
@@ -236,12 +250,24 @@ class SlackWorkspace {
 
   constructor(
     token: string,
+    cookie: string | undefined,
     private sink: CaptureSink,
     private cursors: ConversationCursorStore,
     historyBudgetPerMin: number,
     private pacingMs: number
   ) {
-    this.web = new WebClient(token)
+    // xoxc session tokens need the `d` cookie + browser-like headers so Slack
+    // treats the traffic like the tab the token was lifted from. xoxp tokens
+    // use plain bearer auth.
+    this.web = cookie
+      ? new WebClient(token, {
+          headers: {
+            Cookie: `d=${cookie}`,
+            'User-Agent':
+              'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+          },
+        })
+      : new WebClient(token)
     this.historyBudget = new HistoryBudget(historyBudgetPerMin)
   }
 
