@@ -62,8 +62,15 @@ export interface EnrichInput {
   /** Current task description, if any. The Enricher only fills a generated
    *  description when this is empty — never clobbers user-written content. */
   taskDescription?: string
+  /** Current task status. Used as the `from` side of the status diff so
+   *  re-enrichment of a non-inbox task doesn't claim it came from inbox.
+   *  Defaults to 'inbox' (the original create-time enrichment path). */
+  taskStatus?: string
   /** Raw user text that produced the task. Fed verbatim to the Enricher. */
   text: string
+  /** Fresh capture about an EXISTING task (re-enrichment). Rendered as a
+   *  NEW_EVIDENCE block so the Enricher updates rather than re-derives. */
+  newEvidence?: string
   sourceChannel: string
   sourceMeta?: Record<string, unknown> | null
   /** Context Store row id when available; used for cross-linking in audit. */
@@ -120,6 +127,7 @@ export class EnricherPipeline {
     const proposal = await this.deps.enricher.enrich(input.text, {
       sourceMeta: input.sourceMeta ?? undefined,
       priorContext,
+      newEvidence: input.newEvidence,
     })
 
     if (proposal.is_noise) {
@@ -139,24 +147,9 @@ export class EnricherPipeline {
 
     if (proposal.is_project && proposal.sub_actions.length > 0) {
       const payload = buildSplitPayload(input, proposal, traceback)
-      const created = this.deps.proposalStore.create({
-        type: 'split',
-        targetTaskIds: [input.taskId],
-        sourceAgent: SOURCE_AGENT_ENRICHER,
-        sourceCaptureId: input.sourceCaptureId ?? null,
-        payload,
-        originSnapshot: { taskId: input.taskId, title: input.taskTitle, tags: input.taskTags },
-        summary: proposal.reasoning.slice(0, 160),
-      })
-      if (this.notifier?.enabled) {
-        void this.notifier
-          .notifyCreated(created)
-          .catch((err) =>
-            console.error('[enricher-pipeline] notifier failed:', (err as Error).message)
-          )
-      }
+      const { proposalId, revised } = this.persist(input, 'split', payload, proposal.reasoning)
       console.log(
-        `[enricher] proposed split (task ${input.taskId.slice(0, 8)} → proposal ${created.id.slice(0, 8)}): "${proposal.proposed_title.slice(0, 60)}" sub_actions=${proposal.sub_actions.length}`
+        `[enricher] ${revised ? 'revised' : 'proposed'} split (task ${input.taskId.slice(0, 8)} → proposal ${proposalId.slice(0, 8)}): "${proposal.proposed_title.slice(0, 60)}" sub_actions=${proposal.sub_actions.length}`
       )
       this.llmPublisher?.record({
         channel: 'enricher',
@@ -166,7 +159,7 @@ export class EnricherPipeline {
         category: proposal.category,
         reasoning: proposal.reasoning,
       })
-      return { kind: 'proposed', proposalId: created.id, type: 'split' }
+      return { kind: 'proposed', proposalId, type: 'split' }
     }
 
     const diff = buildModifyDiff(input, proposal)
@@ -188,24 +181,9 @@ export class EnricherPipeline {
       diff,
       traceback,
     }
-    const created = this.deps.proposalStore.create({
-      type: 'modify',
-      targetTaskIds: [input.taskId],
-      sourceAgent: SOURCE_AGENT_ENRICHER,
-      sourceCaptureId: input.sourceCaptureId ?? null,
-      payload,
-      originSnapshot: { taskId: input.taskId, title: input.taskTitle, tags: input.taskTags },
-      summary: proposal.reasoning.slice(0, 160),
-    })
-    if (this.notifier?.enabled) {
-      void this.notifier
-        .notifyCreated(created)
-        .catch((err) =>
-          console.error('[enricher-pipeline] notifier failed:', (err as Error).message)
-        )
-    }
+    const { proposalId, revised } = this.persist(input, 'modify', payload, proposal.reasoning)
     console.log(
-      `[enricher] proposed modify (task ${input.taskId.slice(0, 8)} → proposal ${created.id.slice(0, 8)}): "${proposal.proposed_title.slice(0, 60)}" diff=[${diff.map((d) => d.field).join(',')}] conf=${proposal.confidence.toFixed(2)}`
+      `[enricher] ${revised ? 'revised' : 'proposed'} modify (task ${input.taskId.slice(0, 8)} → proposal ${proposalId.slice(0, 8)}): "${proposal.proposed_title.slice(0, 60)}" diff=[${diff.map((d) => d.field).join(',')}] conf=${proposal.confidence.toFixed(2)}`
     )
     this.llmPublisher?.record({
       channel: 'enricher',
@@ -216,7 +194,75 @@ export class EnricherPipeline {
       reasoning: proposal.reasoning,
       diff: diff.map((d) => d.field).join(','),
     })
-    return { kind: 'proposed', proposalId: created.id, type: 'modify' }
+    return { kind: 'proposed', proposalId, type: 'modify' }
+  }
+
+  /**
+   * Persist an enrichment result, superseding rather than duplicating any
+   * pending Enricher proposal already targeting the task (re-enrichment on
+   * new evidence, double-fired webhooks):
+   *   - pending proposal of the SAME type → addVersion (the card shows v2+,
+   *     thread and history preserved);
+   *   - pending proposal of a DIFFERENT type → transition to 'superseded'
+   *     and create a fresh proposal.
+   * TG notification fires only for fresh proposals — revisions stay quiet.
+   */
+  private persist(
+    input: EnrichInput,
+    type: 'modify' | 'split',
+    payload: ModifyPayload | SplitPayload,
+    reasoning: string
+  ): { proposalId: string; revised: boolean } {
+    const summary = reasoning.slice(0, 160)
+    const pending = this.deps.proposalStore.listPending({
+      sourceAgent: SOURCE_AGENT_ENRICHER,
+      targetTaskId: input.taskId,
+      limit: 10,
+    })
+
+    const sameType = pending.find((p) => p.type === type)
+    for (const p of pending) {
+      if (sameType && p.id === sameType.id) continue
+      try {
+        this.deps.proposalStore.transition(p.id, 'superseded', 'agent', {
+          reason: 're-enrichment produced a new proposal',
+          replacedByType: type,
+        })
+      } catch (err) {
+        console.error(
+          `[enricher-pipeline] supersede ${p.id.slice(0, 8)} failed:`,
+          (err as Error).message
+        )
+      }
+    }
+
+    if (sameType) {
+      this.deps.proposalStore.addVersion({
+        proposalId: sameType.id,
+        payload,
+        author: 'agent',
+        summary: input.newEvidence ? `re-enriched on new evidence: ${summary}` : summary,
+      })
+      return { proposalId: sameType.id, revised: true }
+    }
+
+    const created = this.deps.proposalStore.create({
+      type,
+      targetTaskIds: [input.taskId],
+      sourceAgent: SOURCE_AGENT_ENRICHER,
+      sourceCaptureId: input.sourceCaptureId ?? null,
+      payload,
+      originSnapshot: { taskId: input.taskId, title: input.taskTitle, tags: input.taskTags },
+      summary,
+    })
+    if (this.notifier?.enabled) {
+      void this.notifier
+        .notifyCreated(created)
+        .catch((err) =>
+          console.error('[enricher-pipeline] notifier failed:', (err as Error).message)
+        )
+    }
+    return { proposalId: created.id, revised: false }
   }
 }
 
@@ -248,9 +294,10 @@ function buildModifyDiff(input: EnrichInput, p: EnrichedProposal): FieldDiff[] {
     })
   }
 
+  const currentStatus = input.taskStatus ?? 'inbox'
   const targetStatus = categoryToStatus(p.category)
-  if (targetStatus !== 'inbox') {
-    diff.push({ field: 'status', from: 'inbox', to: targetStatus })
+  if (targetStatus !== currentStatus) {
+    diff.push({ field: 'status', from: currentStatus, to: targetStatus })
   }
 
   // AI routing: when the Enricher decided this task fits a generalist agent

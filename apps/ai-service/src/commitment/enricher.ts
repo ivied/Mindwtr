@@ -294,6 +294,14 @@ Quality bar:
 - "Write a draft reply to Allison Walker about Custom Tracking App estimate" → is_ai_routable=TRUE, ai_task_type="draft" (user will review and send).
 - Mixed-language input is fine — keep titles in the source language.
 
+Re-enrichment (NEW_EVIDENCE block):
+The user message MAY include a NEW_EVIDENCE block — information captured AFTER the task was created (a later conversation, screen text, or audio transcript that mentions this task). When present, the card text is an EXISTING task and your job is to UPDATE the enrichment to reflect the new information:
+- Task was delegated / handed to someone ("перепоручил Насте", "asked Bob to handle it") → category=waiting, is_delegation=true, delegate_to=<person>. Keep the title's intent but reframe as waiting-for ("Дождаться от Насти ...").
+- Deadline moved or appeared → update smart.time_bound.
+- Scope/details clarified → fold them into proposed_description (and title only if the old title is now wrong).
+- Evidence says it's already done → is_noise=false, keep category, but say so in reasoning (the user resolves completion themselves).
+Do NOT rewrite fields the evidence doesn't touch — keep them consistent with the existing task.
+
 Edge cases:
 - One word or unparseable text: confidence < 0.5, is_actionable=true (user added it for a reason), category="next", proposed_title=original text.
 - Pure quote/URL/snippet with no commitment hint: is_noise=true OR category="reference" — use your judgement.
@@ -308,7 +316,13 @@ export class Enricher {
 
   async enrich(
     text: string,
-    options: { sourceMeta?: Record<string, unknown>; priorContext?: string } = {}
+    options: {
+      sourceMeta?: Record<string, unknown>
+      priorContext?: string
+      /** Fresh capture about an EXISTING task — triggers re-enrichment mode
+       *  (rendered as a NEW_EVIDENCE block, see prompt). */
+      newEvidence?: string
+    } = {}
   ): Promise<EnrichedProposal> {
     const userMessage = this.buildUserMessage(text, options)
 
@@ -341,7 +355,7 @@ export class Enricher {
 
   private buildUserMessage(
     text: string,
-    options: { sourceMeta?: Record<string, unknown>; priorContext?: string }
+    options: { sourceMeta?: Record<string, unknown>; priorContext?: string; newEvidence?: string }
   ): string {
     const parts: string[] = []
     if (options.sourceMeta && Object.keys(options.sourceMeta).length > 0) {
@@ -349,6 +363,11 @@ export class Enricher {
     }
     if (options.priorContext && options.priorContext.length > 0) {
       parts.push(`Past similar items:\n${options.priorContext}`)
+    }
+    if (options.newEvidence && options.newEvidence.trim().length > 0) {
+      parts.push(
+        `NEW_EVIDENCE (captured AFTER this task was created — update the enrichment per the re-enrichment rules):\n${options.newEvidence.trim().slice(0, 2000)}`
+      )
     }
     parts.push(`Card text:\n${text}`)
     return parts.join('\n\n')

@@ -40,7 +40,7 @@ function makeEnricher(proposal: EnrichedProposal): Enricher {
   return { enrich: mock(async () => proposal) } as unknown as Enricher
 }
 
-function makeStore(): ProposalStore & { _last?: unknown } {
+function makeStore(pending: ProposalRecord[] = []): ProposalStore & { _last?: unknown } {
   const recorded: unknown[] = []
   const store = {
     create: mock((input: unknown) => {
@@ -62,9 +62,30 @@ function makeStore(): ProposalStore & { _last?: unknown } {
       }
       return record
     }),
+    listPending: mock(() => pending),
+    addVersion: mock(() => ({})),
+    transition: mock(() => {}),
     _last: recorded,
   }
   return store as unknown as ProposalStore & { _last?: unknown }
+}
+
+function makePendingRecord(overrides: Partial<ProposalRecord> = {}): ProposalRecord {
+  return {
+    id: 'prev-1',
+    type: 'modify',
+    targetTaskIds: ['t-1'],
+    sourceCaptureId: null,
+    sourceAgent: SOURCE_AGENT_ENRICHER,
+    status: 'pending',
+    currentPayload: { kind: 'modify', taskId: 't-1', diff: [] },
+    currentVersion: 1,
+    originSnapshot: null,
+    createdAt: '2026-05-09T00:00:00Z',
+    resolvedAt: null,
+    resolvedBy: null,
+    ...overrides,
+  }
 }
 
 function baseInput() {
@@ -370,6 +391,106 @@ describe('EnricherPipeline.run', () => {
     expect(payload.diff.find((d) => d.field === 'status')!.to).toBe('waiting')
     const tagsEntry = payload.diff.find((d) => d.field === 'tags')! as { to: string[] }
     expect(tagsEntry.to).toContain('delegated')
+  })
+
+  it('re-enrichment: adds a version to an existing pending proposal of the same type', async () => {
+    const enricher = makeEnricher(
+      makeProposal({ category: 'waiting', is_delegation: true, delegate_to: 'Настя' })
+    )
+    const prev = makePendingRecord({ id: 'prev-modify', type: 'modify' })
+    const store = makeStore([prev])
+    const notifier = {
+      enabled: true,
+      notifyCreated: mock(async () => {}),
+    } as unknown as ProposalNotifier
+    const pipe = new EnricherPipeline({ enricher, proposalStore: store, retriever: null })
+    pipe.setNotifier(notifier)
+
+    const outcome = await pipe.run({
+      ...baseInput(),
+      newEvidence: 'я перепоручил эту задачу Насте',
+    })
+
+    expect(outcome.kind).toBe('proposed')
+    if (outcome.kind !== 'proposed') return
+    expect(outcome.proposalId).toBe('prev-modify')
+    expect(store.create).not.toHaveBeenCalled()
+
+    const addVersionCalls = (store.addVersion as unknown as { mock: { calls: [{ proposalId: string; author: string; summary?: string }][] } }).mock.calls
+    expect(addVersionCalls.length).toBe(1)
+    expect(addVersionCalls[0][0].proposalId).toBe('prev-modify')
+    expect(addVersionCalls[0][0].author).toBe('agent')
+    expect(addVersionCalls[0][0].summary).toContain('re-enriched on new evidence')
+
+    // Revisions stay quiet — no TG re-notification.
+    await new Promise((r) => setTimeout(r, 0))
+    expect(notifier.notifyCreated).not.toHaveBeenCalled()
+  })
+
+  it('re-enrichment: supersedes a pending proposal of a different type and creates fresh', async () => {
+    const enricher = makeEnricher(
+      makeProposal({
+        is_project: true,
+        project_name: 'Big project',
+        sub_actions: [{ title: 'First step', suggested_category: 'next' }],
+      })
+    )
+    const prev = makePendingRecord({ id: 'prev-modify', type: 'modify' })
+    const store = makeStore([prev])
+    const pipe = new EnricherPipeline({ enricher, proposalStore: store, retriever: null })
+
+    const outcome = await pipe.run(baseInput())
+
+    expect(outcome.kind).toBe('proposed')
+    if (outcome.kind !== 'proposed') return
+    expect(outcome.type).toBe('split')
+
+    const transitionCalls = (store.transition as unknown as { mock: { calls: [string, string, string][] } }).mock.calls
+    expect(transitionCalls.length).toBe(1)
+    expect(transitionCalls[0][0]).toBe('prev-modify')
+    expect(transitionCalls[0][1]).toBe('superseded')
+    expect(store.create).toHaveBeenCalled()
+  })
+
+  it('uses taskStatus as the from-side of the status diff and skips when unchanged', async () => {
+    const enricher = makeEnricher(
+      makeProposal({ category: 'waiting', suggested_contexts: [], suggested_tags: [] })
+    )
+    const store = makeStore()
+    const pipe = new EnricherPipeline({ enricher, proposalStore: store, retriever: null })
+
+    await pipe.run({ ...baseInput(), taskStatus: 'next' })
+
+    const calls = (store.create as unknown as { mock: { calls: [{ payload: ModifyPayload }][] } }).mock.calls
+    const statusEntry = calls[0][0].payload.diff.find((d) => d.field === 'status')!
+    expect(statusEntry.from).toBe('next')
+    expect(statusEntry.to).toBe('waiting')
+
+    // Same status → no diff entry.
+    const enricher2 = makeEnricher(
+      makeProposal({ category: 'next', suggested_contexts: [], suggested_tags: [] })
+    )
+    const store2 = makeStore()
+    const pipe2 = new EnricherPipeline({ enricher: enricher2, proposalStore: store2, retriever: null })
+    await pipe2.run({ ...baseInput(), taskStatus: 'next' })
+    const calls2 = (store2.create as unknown as { mock: { calls: [{ payload: ModifyPayload }][] } }).mock.calls
+    expect(calls2[0][0].payload.diff.find((d) => d.field === 'status')).toBeUndefined()
+  })
+
+  it('passes newEvidence through to the enricher options', async () => {
+    let receivedOptions: { newEvidence?: string } | null = null
+    const enricher = {
+      enrich: mock(async (_text: string, opts: { newEvidence?: string }) => {
+        receivedOptions = opts
+        return makeProposal()
+      }),
+    } as unknown as Enricher
+    const store = makeStore()
+    const pipe = new EnricherPipeline({ enricher, proposalStore: store, retriever: null })
+
+    await pipe.run({ ...baseInput(), newEvidence: 'перепоручил Насте' })
+
+    expect(receivedOptions!.newEvidence).toBe('перепоручил Насте')
   })
 
   it('puts SMART fields into the umbrella description on split', async () => {

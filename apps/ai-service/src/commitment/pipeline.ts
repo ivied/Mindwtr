@@ -30,6 +30,23 @@ import type { ProceduralContextProvider } from '../memory/procedural/proposer-bl
 export interface ProceduralFeedbackSink {
   recordProposalRefs(proposalId: string, chunkIds: string[]): void
 }
+
+/**
+ * Fired when the Proposer marks a capture as duplicate-of-existing: the
+ * capture is ABOUT a task the user already has (same intent, new info —
+ * e.g. "перепоручил Насте" about an open card). Instead of dropping that
+ * signal, the wiring layer re-runs the Enricher on the matched task with
+ * the capture as NEW_EVIDENCE so the pending suggestion gets updated.
+ * Fire-and-forget; errors are the hook's problem.
+ */
+export type DuplicateOfExistingHook = (info: {
+  existingTitle: string
+  captureText: string
+  sourceChannel: string
+  sourceMeta: Record<string, unknown> | null
+  sourceCaptureId: string
+  reasoning: string
+}) => void
 import { l0Filter } from './l0-filter'
 import { LlmPublisher, sourceChannelToVerdict } from '../status/llm-publisher'
 import {
@@ -82,6 +99,7 @@ export class CommitmentPipeline {
   private proceduralContextProvider: ProceduralContextProvider | null = null
   private proceduralFeedback: ProceduralFeedbackSink | null = null
   private llmPublisher: LlmPublisher | null = null
+  private duplicateOfExistingHook: DuplicateOfExistingHook | null = null
 
   setLlmPublisher(publisher: LlmPublisher | null): void {
     this.llmPublisher = publisher
@@ -150,6 +168,13 @@ export class CommitmentPipeline {
    *  resolution feedback can adjust their reliability_score. */
   setProceduralFeedback(sink: ProceduralFeedbackSink | null): void {
     this.proceduralFeedback = sink
+  }
+
+  /** Optional: re-enrichment trigger. Called (fire-and-forget) when a capture
+   *  is suppressed as duplicate-of-existing, so the matched task's Enricher
+   *  suggestion can be refreshed with the capture as new evidence. */
+  setDuplicateOfExistingHook(hook: DuplicateOfExistingHook | null): void {
+    this.duplicateOfExistingHook = hook
   }
 
   async run(capture: CaptureRecord): Promise<PipelineOutcome> {
@@ -283,6 +308,24 @@ export class CommitmentPipeline {
         title: proposal.duplicate_of_title,
         reasoning: proposal.reasoning,
       })
+      // The capture carries new information about an existing task — hand it
+      // to the re-enrichment hook instead of dropping it on the floor.
+      if (this.duplicateOfExistingHook) {
+        try {
+          this.duplicateOfExistingHook({
+            existingTitle: proposal.duplicate_of_title,
+            captureText: capture.text,
+            sourceChannel: capture.sourceChannel,
+            sourceMeta: capture.sourceMeta ?? null,
+            sourceCaptureId: capture.id,
+            reasoning: proposal.reasoning,
+          })
+        } catch (err) {
+          this.log(
+            `[commitment] duplicate-of-existing hook threw (${capture.id}): ${(err as Error).message}`
+          )
+        }
+      }
       return {
         kind: 'duplicate-of-existing',
         existingTitle: proposal.duplicate_of_title,

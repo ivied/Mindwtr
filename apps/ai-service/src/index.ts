@@ -244,6 +244,53 @@ if (LLM_BASE_URL && LLM_API_KEY) {
   commitmentPipeline.setInboxTitlesProvider(
     new MindwtrInboxTitles({ client: mindwtr, proposalStore })
   )
+  // Re-enrichment loop: a capture suppressed as duplicate-of-existing is
+  // NEW INFORMATION about a task the user already has ("перепоручил Насте"
+  // about an open card). Resolve the matched title back to the task and
+  // re-run the Enricher with the capture as NEW_EVIDENCE — the pending
+  // suggestion gets a v2 instead of the signal being dropped.
+  const enricherForReEnrich = enricherPipeline
+  commitmentPipeline.setDuplicateOfExistingHook((info) => {
+    void (async () => {
+      try {
+        const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim()
+        const wanted = norm(info.existingTitle)
+        let match: Awaited<ReturnType<typeof mindwtr.listTasks>>[number] | undefined
+        for (const status of ['inbox', 'next', 'waiting'] as const) {
+          const tasks = await mindwtr.listTasks({ status, limit: 200 })
+          match = tasks.find((t) => norm(t.title ?? '') === wanted)
+          if (match) break
+        }
+        if (!match) {
+          console.log(
+            `[re-enrich] no open task matched "${info.existingTitle.slice(0, 60)}" — skip`
+          )
+          return
+        }
+        const outcome = await enricherForReEnrich.run({
+          taskId: match.id,
+          taskTitle: match.title,
+          taskTags: match.tags ?? [],
+          taskDescription: match.description ?? '',
+          taskStatus: match.status,
+          text: match.title + (match.description ? '\n' + match.description : ''),
+          newEvidence: info.captureText,
+          sourceChannel: info.sourceChannel,
+          sourceMeta: {
+            ...(info.sourceMeta ?? {}),
+            reenrich_trigger: 'duplicate-of-existing',
+            proposer_reasoning: info.reasoning,
+          },
+          sourceCaptureId: info.sourceCaptureId,
+        })
+        console.log(
+          `[re-enrich] task ${match.id.slice(0, 8)} "${match.title.slice(0, 50)}" → ${outcome.kind}${outcome.kind === 'proposed' ? ` (${outcome.type} ${outcome.proposalId.slice(0, 8)})` : ` (${outcome.reason})`}`
+        )
+      } catch (err) {
+        console.error('[re-enrich] failed:', (err as Error).message)
+      }
+    })()
+  })
   // Identity anchor for role disambiguation. Empty USER_IDENTITY_NAME = no
   // anchor (Proposer reverts to "user = machine owner" heuristic).
   if (USER_IDENTITY_NAME) {
@@ -650,6 +697,7 @@ async function main() {
                       taskTitle: fields.title ?? '',
                       taskTags: Array.isArray(fields.tags) ? fields.tags : [],
                       taskDescription: fields.description ?? '',
+                      taskStatus: typeof fields.status === 'string' ? fields.status : undefined,
                       text,
                       sourceChannel: 'manual',
                       sourceMeta: { origin: 'mindwtr-ui-or-sync' },

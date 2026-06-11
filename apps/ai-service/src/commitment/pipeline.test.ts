@@ -232,6 +232,57 @@ describe('CommitmentPipeline', () => {
     expect(writer.write).not.toHaveBeenCalled()
   })
 
+  it('fires the duplicate-of-existing hook with capture info (re-enrichment trigger)', async () => {
+    const proposer = {
+      propose: mock(async () =>
+        makeProposal({
+          is_actionable: false,
+          duplicate_of_title: 'Send Q4 report — final draft',
+          reasoning: 'Already in inbox',
+        })
+      ),
+    } as unknown as Proposer
+    const writer = { write: mock() } as unknown as ProposalWriter
+    // useL0=false: the Russian capture text has no L0 regex cues — we want it
+    // to reach the Proposer so the duplicate branch (and the hook) fires.
+    const p = new CommitmentPipeline(
+      proposer,
+      writer,
+      { minConfidence: 0.7, useL0: false },
+      silent()
+    )
+    const hook = mock(() => {})
+    p.setDuplicateOfExistingHook(hook)
+
+    await p.run(record({ text: 'делегировал отчёт Насте' }))
+
+    expect(hook).toHaveBeenCalledTimes(1)
+    const info = (hook as unknown as { mock: { calls: [{ existingTitle: string; captureText: string; reasoning: string }][] } }).mock.calls[0][0]
+    expect(info.existingTitle).toBe('Send Q4 report — final draft')
+    expect(info.captureText).toBe('делегировал отчёт Насте')
+    expect(info.reasoning).toBe('Already in inbox')
+  })
+
+  it('a throwing duplicate-of-existing hook does not break the outcome', async () => {
+    const proposer = {
+      propose: mock(async () =>
+        makeProposal({
+          is_actionable: false,
+          duplicate_of_title: 'Pay rent',
+          reasoning: 'dup',
+        })
+      ),
+    } as unknown as Proposer
+    const writer = { write: mock() } as unknown as ProposalWriter
+    const p = new CommitmentPipeline(proposer, writer, undefined, silent())
+    p.setDuplicateOfExistingHook(() => {
+      throw new Error('hook exploded')
+    })
+
+    const out = await p.run(record())
+    expect(out.kind).toBe('duplicate-of-existing')
+  })
+
   it('passes knownPersons into proposer.propose when provider is set', async () => {
     const proposer = { propose: mock(async () => makeProposal()) } as unknown as Proposer
     const writer = {
