@@ -28,10 +28,15 @@ async function load() {
 syncBtn.addEventListener('click', async () => {
   syncBtn.disabled = true
   syncBtn.textContent = 'Pushing…'
-  const status = await chrome.runtime.sendMessage({ type: 'syncNow' })
-  render(status)
-  syncBtn.disabled = false
-  syncBtn.textContent = 'Push tokens now'
+  try {
+    const status = await chrome.runtime.sendMessage({ type: 'syncNow' })
+    render(status)
+  } catch (err) {
+    render({ ok: false, error: err?.message ?? 'worker not responding' })
+  } finally {
+    syncBtn.disabled = false
+    syncBtn.textContent = 'Push tokens now'
+  }
 })
 
 document.getElementById('options').addEventListener('click', (e) => {
