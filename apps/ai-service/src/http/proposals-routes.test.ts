@@ -171,7 +171,6 @@ describe('POST /v1/proposals/:id/approve', () => {
   })
 
   it('partial approval: includeFields filters modify diff before apply', async () => {
-    const handler = setupServer()
     const p = store.create({
       type: 'modify',
       targetTaskIds: ['task-x'],
@@ -273,7 +272,6 @@ describe('POST /v1/proposals/:id/approve', () => {
   })
 
   it('full approve still works (no includeFields → applies whole diff)', async () => {
-    const handler = setupServer()
     const p = store.create({
       type: 'modify',
       targetTaskIds: ['task-y'],
@@ -315,7 +313,6 @@ describe('POST /v1/proposals/:id/approve', () => {
   })
 
   it('returns 409 on stale (drift detected)', async () => {
-    const handler = setupServer()
     mindwtr = makeMindwtr({
       getTask: mock(async () => taskOf({ id: 'task-x', title: 'user-edited' })),
     } as Partial<MindwtrClient>)

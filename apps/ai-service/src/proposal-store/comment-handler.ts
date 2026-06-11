@@ -60,7 +60,7 @@ export class CommentHandler {
       text,
     })
 
-    let detail: ProposalDetail | null = this.deps.store.getDetail(input.proposalId)
+    const detail: ProposalDetail | null = this.deps.store.getDetail(input.proposalId)
     if (!detail) {
       throw new Error(`Proposal ${input.proposalId} not found after comment append`)
     }

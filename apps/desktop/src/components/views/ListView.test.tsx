@@ -98,7 +98,7 @@ describe('ListView', () => {
     expect(html).toContain('data-view-filter-input');
   });
 
-  it('keeps future-start inbox tasks visible while hiding future-start next actions', async () => {
+  it('hides future-start tasks in both inbox and next views until their start date', async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date('2026-04-16T10:00:00Z'));
@@ -110,6 +110,11 @@ describe('ListView', () => {
             status: 'inbox',
             startTime: '2026-04-20',
           }),
+          makeTask('inbox-started', {
+            title: 'Started inbox task',
+            status: 'inbox',
+            startTime: '2026-04-10',
+          }),
           makeTask('next-future', {
             title: 'Future next task',
             status: 'next',
@@ -120,7 +125,8 @@ describe('ListView', () => {
       });
 
       const inbox = renderListView('inbox', 'Inbox');
-      expect(inbox.queryByText('Future inbox task')).toBeInTheDocument();
+      expect(inbox.queryByText('Started inbox task')).toBeInTheDocument();
+      expect(inbox.queryByText('Future inbox task')).not.toBeInTheDocument();
       inbox.unmount();
 
       const next = renderListView('next', 'Next');

@@ -378,7 +378,9 @@ describe('TaskStore', () => {
     });
 
     it('filters soft-deleted attachments from visible tasks while preserving tombstones in _allTasks', async () => {
-        const now = '2026-03-01T10:00:00.000Z';
+        // Real clock: fetchData purges tombstones older than the 90-day
+        // retention against Date.now(), so a frozen date silently expires.
+        const now = new Date().toISOString();
         mockStorage.getData = vi.fn().mockResolvedValue({
             tasks: [
                 {

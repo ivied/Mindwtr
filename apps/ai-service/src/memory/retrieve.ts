@@ -145,7 +145,7 @@ async function vecSearch(
   // sqlite-vec returns rows by distance ascending; we keep that as rank.
   // Filters are applied with a join.
   const params: Array<string | number | Uint8Array> = [embeddingToBytes(vec), perChannel * 3]
-  let inner = `
+  const inner = `
     SELECT events_vec.event_id AS id, events_vec.distance AS distance
     FROM events_vec
     WHERE events_vec.embedding MATCH ? AND k = ?
