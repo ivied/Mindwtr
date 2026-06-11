@@ -479,17 +479,29 @@ if (LLM_BASE_URL && LLM_API_KEY) {
 
 // Batch high-volume Slack captures so the Commitment LLM runs on a cadence
 // (default every SLACK_POLL_INTERVAL_MS) instead of once per message.
+// envInt treats empty/0/NaN as "unset" — compose passes the var through as an
+// empty string when not configured, which Number() turns into 0 (not NaN), so
+// a plain ?? wouldn't fall back.
+const envInt = (raw: string | undefined, fallback: number): number => {
+  const n = Number(raw)
+  return Number.isFinite(n) && n > 0 ? n : fallback
+}
+const COMMITMENT_BATCH_INTERVAL_MS = envInt(
+  process.env.COMMITMENT_BATCH_INTERVAL_MS,
+  SLACK_POLL_INTERVAL_MS
+)
+const COMMITMENT_BATCH_MAX = envInt(process.env.COMMITMENT_BATCH_MAX, 30)
 const commitmentBatcher =
   commitmentPipeline
     ? new CommitmentBatcher(commitmentPipeline, {
-        flushIntervalMs: Number(process.env.COMMITMENT_BATCH_INTERVAL_MS ?? SLACK_POLL_INTERVAL_MS),
-        maxPerFlush: Number(process.env.COMMITMENT_BATCH_MAX ?? 30),
+        flushIntervalMs: COMMITMENT_BATCH_INTERVAL_MS,
+        maxPerFlush: COMMITMENT_BATCH_MAX,
       })
     : null
 if (commitmentBatcher) {
   commitmentBatcher.start()
   console.log(
-    `🪣 Commitment batcher on (drain every ${Number(process.env.COMMITMENT_BATCH_INTERVAL_MS ?? SLACK_POLL_INTERVAL_MS)}ms, max ${Number(process.env.COMMITMENT_BATCH_MAX ?? 30)}/drain)`
+    `🪣 Commitment batcher on (drain every ${COMMITMENT_BATCH_INTERVAL_MS}ms, max ${COMMITMENT_BATCH_MAX}/drain)`
   )
 }
 
