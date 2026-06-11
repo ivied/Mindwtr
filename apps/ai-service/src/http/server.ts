@@ -123,6 +123,13 @@ export interface HttpServerConfig {
   corsOrigins?: string[]
   /** Optional real component checks; when unset /health returns static ok. */
   healthMonitor?: { check(): Promise<HealthReport> } | null
+  /**
+   * Optional Slack session-credential receiver — when set, exposes
+   * POST /v1/slack/session for the browser extension to push xoxc+d tokens.
+   */
+  slackSession?: {
+    upsert(token: string, cookie: string): Promise<{ teamId: string; teamName: string }>
+  } | null
 }
 
 export function createHttpServer(config: HttpServerConfig) {
@@ -140,7 +147,15 @@ export function createHttpServer(config: HttpServerConfig) {
   app.use(
     '/v1/*',
     cors({
-      origin: corsOrigins,
+      // Allow the configured web origins, plus any chrome-extension:// origin
+      // (the Slack token-pusher extension's id isn't known ahead of time; the
+      // bearer token is the real guard).
+      origin: (origin) => {
+        if (!origin) return corsOrigins[0] ?? null
+        if (corsOrigins.includes(origin)) return origin
+        if (origin.startsWith('chrome-extension://')) return origin
+        return null
+      },
       allowHeaders: ['Authorization', 'Content-Type'],
       allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
       maxAge: 86400,
@@ -230,6 +245,36 @@ export function createHttpServer(config: HttpServerConfig) {
 
   if (config.recordings) {
     mountRecordingRoutes(app, config.recordings)
+  }
+
+  if (config.slackSession) {
+    const slackSession = config.slackSession
+    // POST /v1/slack/session { token: 'xoxc-...', cookie: 'xoxd-...' }
+    // Browser extension pushes a freshly-lifted session credential. We resolve
+    // identity (auth.test) and register/refresh the workspace in the poller.
+    app.post('/v1/slack/session', async (c) => {
+      let body: { token?: unknown; cookie?: unknown }
+      try {
+        body = (await c.req.json()) as typeof body
+      } catch {
+        return c.json({ error: 'invalid JSON' }, 400)
+      }
+      const token = typeof body.token === 'string' ? body.token.trim() : ''
+      const cookie = typeof body.cookie === 'string' ? body.cookie.trim() : ''
+      if (!token.startsWith('xoxc-')) return c.json({ error: 'token must be xoxc-' }, 400)
+      if (!cookie.startsWith('xoxd-')) return c.json({ error: 'cookie must be xoxd-' }, 400)
+      try {
+        const { teamId, teamName } = await slackSession.upsert(token, cookie)
+        return c.json({ ok: true, teamId, teamName })
+      } catch (err) {
+        const e = err as { data?: { error?: string } }
+        const reason = e?.data?.error ?? (err as Error).message
+        // invalid_auth → the credential is dead; tell the extension so it can
+        // surface "re-login" instead of silently retrying.
+        const status = reason === 'invalid_auth' ? 401 : 502
+        return c.json({ error: `slack auth failed: ${reason}` }, status)
+      }
+    })
   }
 
   return {

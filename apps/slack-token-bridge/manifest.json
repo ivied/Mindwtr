@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Slack Token Bridge (GTD)",
+  "version": "1.0.0",
+  "description": "Lifts your Slack browser session (xoxc + d cookie) from every signed-in workspace and pushes it to your ai-service, so the GTD agent can see what you see. Personal use.",
+  "permissions": ["cookies", "tabs", "scripting", "storage", "alarms"],
+  "host_permissions": [
+    "https://*.slack.com/*",
+    "https://app.slack.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Slack Token Bridge"
+  },
+  "options_page": "options.html",
+  "icons": {
+    "128": "icons/icon128.png"
+  }
+}

@@ -8,6 +8,7 @@ import type { Channel } from './channels/types'
 import { SlackChannel } from './channels/slack'
 import { NotionChannel } from './channels/notion'
 import { FileStateStore, channelStateFile } from './channels/state-store'
+import { SlackSessionStore, slackSessionFile } from './channels/slack-session-store'
 import { ContextStore } from './context-store/store'
 import { OpenAIEmbeddings } from './context-store/embeddings'
 import { ProposalStore } from './proposal-store/store'
@@ -473,27 +474,30 @@ if (process.env.AI_AGENT_WATCHDOG !== 'false') {
   )
 }
 
-function buildChannels(): Channel[] {
+function buildChannels(): { channels: Channel[]; slack: SlackChannel | null } {
   const channels: Channel[] = []
+  let slack: SlackChannel | null = null
 
   const slackWorkspaces = [
     ...SLACK_USER_TOKENS.map((token) => ({ token })),
     ...SLACK_SESSION_TOKENS,
   ]
-  if (slackWorkspaces.length > 0) {
+  // Build the Slack channel whenever ANY Slack path is enabled — env tokens
+  // OR the session receiver (HTTP_AUTH_TOKEN gates the extension push). With
+  // only the receiver, it starts idle and the extension fills it at runtime.
+  if (slackWorkspaces.length > 0 || HTTP_AUTH_TOKEN) {
     const state = new FileStateStore(channelStateFile(DATA_DIR), 'slack')
-    channels.push(
-      new SlackChannel(
-        {
-          workspaces: slackWorkspaces,
-          pollIntervalMs: SLACK_POLL_INTERVAL_MS,
-        },
-        (item) => capture(item),
-        state
-      )
+    slack = new SlackChannel(
+      {
+        workspaces: slackWorkspaces,
+        pollIntervalMs: SLACK_POLL_INTERVAL_MS,
+      },
+      (item) => capture(item),
+      state
     )
+    channels.push(slack)
     console.log(
-      `💬 Slack channel enabled (${SLACK_USER_TOKENS.length} oauth + ${SLACK_SESSION_TOKENS.length} session workspace(s), poll every ${SLACK_POLL_INTERVAL_MS}ms)`
+      `💬 Slack channel enabled (${SLACK_USER_TOKENS.length} oauth + ${SLACK_SESSION_TOKENS.length} session env, poll every ${SLACK_POLL_INTERVAL_MS}ms; extension push ${HTTP_AUTH_TOKEN ? 'on' : 'off'})`
     )
   }
 
@@ -509,7 +513,7 @@ function buildChannels(): Channel[] {
     console.log(`📝 Notion channel enabled (poll every ${NOTION_POLL_INTERVAL_MS}ms)`)
   }
 
-  return channels
+  return { channels, slack }
 }
 
 async function main() {
@@ -559,13 +563,29 @@ async function main() {
   )
 
   // Start additional channels
-  const channels = buildChannels()
+  const { channels, slack: slackChannel } = buildChannels()
   for (const ch of channels) {
     try {
       await ch.start()
       console.log(`✅ ${ch.name} channel started`)
     } catch (err) {
       console.error(`Failed to start ${ch.name}:`, err)
+    }
+  }
+
+  // Restore session workspaces pushed by the browser extension on a previous
+  // run, so a restart doesn't require re-extracting. Best-effort per record:
+  // a dead credential just logs invalid_auth and is skipped.
+  const slackSessionStore = new SlackSessionStore(slackSessionFile(DATA_DIR))
+  if (slackChannel) {
+    const saved = await slackSessionStore.load()
+    for (const rec of saved) {
+      try {
+        await slackChannel.upsertSessionWorkspace(rec.token, rec.cookie)
+      } catch (err) {
+        const reason = (err as { data?: { error?: string } })?.data?.error ?? (err as Error).message
+        console.warn(`[slack] saved session for ${rec.teamName} no longer valid (${reason})`)
+      }
     }
   }
 
@@ -593,6 +613,21 @@ async function main() {
       contextStore,
       healthMonitor,
       corsOrigins: HTTP_CORS_ORIGINS,
+      slackSession: slackChannel
+        ? {
+            upsert: async (token, cookie) => {
+              const res = await slackChannel.upsertSessionWorkspace(token, cookie)
+              // Persist only after auth succeeded so we never store a dead cred.
+              await slackSessionStore.upsert({
+                ...res,
+                token,
+                cookie,
+                updatedAt: new Date().toISOString(),
+              })
+              return res
+            },
+          }
+        : null,
       proposals: commentHandler
         ? {
             store: proposalStore,

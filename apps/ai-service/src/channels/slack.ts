@@ -168,6 +168,10 @@ export class SlackChannel implements Channel {
   private timer: NodeJS.Timeout | null = null
   private stopped = false
   private running = false
+  private readonly sink: CaptureSink
+  private readonly cursors: ConversationCursorStore
+  private readonly historyBudget: number
+  private readonly pacingMs: number
 
   constructor(
     config: SlackConfig,
@@ -175,11 +179,35 @@ export class SlackChannel implements Channel {
     cursors: ConversationCursorStore
   ) {
     this.pollIntervalMs = config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
-    const historyBudget = config.historyBudgetPerMin ?? DEFAULT_HISTORY_BUDGET_PER_MIN
-    const pacingMs = config.pacingMs ?? DEFAULT_PACING_MS
+    this.historyBudget = config.historyBudgetPerMin ?? DEFAULT_HISTORY_BUDGET_PER_MIN
+    this.pacingMs = config.pacingMs ?? DEFAULT_PACING_MS
+    this.sink = sink
+    this.cursors = cursors
     this.workspaces = config.workspaces.map(
-      (ws) => new SlackWorkspace(ws.token, ws.cookie, sink, cursors, historyBudget, pacingMs)
+      (ws) => new SlackWorkspace(ws.token, ws.cookie, sink, cursors, this.historyBudget, this.pacingMs)
     )
+  }
+
+  /**
+   * Add or refresh a session-token (xoxc+d) workspace at runtime — the browser
+   * extension calls this through POST /v1/slack/session whenever it lifts a
+   * fresh credential. init() resolves identity; if a workspace with the same
+   * teamId already exists we swap its credential in place (token rotation)
+   * rather than duplicating it. Returns the resolved team name on success.
+   * Throws on auth failure so the caller can surface invalid_auth.
+   */
+  async upsertSessionWorkspace(token: string, cookie: string): Promise<{ teamId: string; teamName: string }> {
+    const ws = new SlackWorkspace(token, cookie, this.sink, this.cursors, this.historyBudget, this.pacingMs)
+    await ws.init() // throws on bad credential — caller maps to 401
+    const existingIdx = this.workspaces.findIndex((w) => w.teamId === ws.teamId)
+    if (existingIdx >= 0) {
+      this.workspaces[existingIdx] = ws
+      console.log(`[slack] session workspace refreshed: ${ws.teamName} (${ws.teamId})`)
+    } else {
+      this.workspaces.push(ws)
+      console.log(`[slack] session workspace added: ${ws.teamName} (${ws.teamId})`)
+    }
+    return { teamId: ws.teamId, teamName: ws.teamName }
   }
 
   async start(): Promise<void> {
@@ -196,14 +224,21 @@ export class SlackChannel implements Channel {
       }
     }
     this.workspaces = ok
+    // Always arm the loop, even with zero workspaces: the browser extension
+    // may push session workspaces later via upsertSessionWorkspace().
     if (this.workspaces.length === 0) {
-      console.warn('[slack] no usable workspaces — channel idle')
-      return
+      console.warn('[slack] no usable workspaces yet — idle, waiting for session push')
+    } else {
+      console.log(
+        `[slack] ${this.workspaces.length} workspace(s): ${this.workspaces.map((w) => w.teamName).join(', ')}`
+      )
     }
-    console.log(
-      `[slack] ${this.workspaces.length} workspace(s): ${this.workspaces.map((w) => w.teamName).join(', ')}`
-    )
-    this.timer = setTimeout(() => void this.loop(), 2000)
+    this.scheduleLoop(2000)
+  }
+
+  private scheduleLoop(delayMs: number): void {
+    if (this.stopped || this.timer) return
+    this.timer = setTimeout(() => void this.loop(), delayMs)
   }
 
   async stop(): Promise<void> {
@@ -229,9 +264,8 @@ export class SlackChannel implements Channel {
     } finally {
       this.running = false
     }
-    if (!this.stopped) {
-      this.timer = setTimeout(() => void this.loop(), this.pollIntervalMs)
-    }
+    this.timer = null
+    this.scheduleLoop(this.pollIntervalMs)
   }
 }
 

@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        font: 13px/1.5 -apple-system, system-ui, sans-serif;
+        width: 280px;
+        margin: 0;
+        padding: 12px;
+        color: #1d1c1d;
+      }
+      h1 {
+        font-size: 14px;
+        margin: 0 0 8px;
+      }
+      .status {
+        padding: 8px;
+        border-radius: 6px;
+        margin-bottom: 10px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .ok {
+        background: #e8f5e9;
+        color: #1b5e20;
+      }
+      .err {
+        background: #ffebee;
+        color: #b71c1c;
+      }
+      .muted {
+        color: #616061;
+      }
+      button {
+        width: 100%;
+        padding: 8px;
+        border: 0;
+        border-radius: 6px;
+        background: #007a5a;
+        color: #fff;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+      a {
+        color: #1264a3;
+        font-size: 12px;
+      }
+      .row {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Slack Token Bridge</h1>
+    <div id="status" class="status muted">Loading…</div>
+    <button id="sync">Push tokens now</button>
+    <div class="row">
+      <a href="#" id="options">Settings</a>
+      <span class="muted" id="when"></span>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>
