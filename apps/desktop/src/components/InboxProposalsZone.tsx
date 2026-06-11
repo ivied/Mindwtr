@@ -32,7 +32,7 @@ import { SyncService } from '../lib/sync-service';
 const POLL_INTERVAL_MS = 30_000;
 
 export function InboxProposalsZone() {
-    if (!isProposalsAvailable()) return null;
+    const available = isProposalsAvailable();
 
     const [proposals, setProposals] = useState<ProposalSummary[] | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -44,6 +44,7 @@ export function InboxProposalsZone() {
     });
 
     useEffect(() => {
+        if (!available) return;
         let cancelled = false;
         const load = async () => {
             try {
@@ -63,9 +64,11 @@ export function InboxProposalsZone() {
             cancelled = true;
             window.clearInterval(t);
         };
-    }, [refreshKey]);
+    }, [refreshKey, available]);
 
     const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
+
+    if (!available) return null;
 
     // Quiet when nothing to show — zero visual footprint.
     if (proposals !== null && proposals.length === 0 && !error) return null;

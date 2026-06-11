@@ -11,7 +11,10 @@ import { HybridRetriever } from './retrieve'
 import type { LLMClient } from '../ai/client'
 import type { MindwtrClient, Task } from '../api/mindwtr-client'
 
-const NOW = new Date('2026-05-14T12:00:00.000Z')
+// Must be the real wall clock: HybridRetriever filters events by
+// Date.now() (withinDays window), so a frozen date in the past silently
+// drops every seeded event once the window passes.
+const NOW = new Date()
 const HOUR = 60 * 60 * 1000
 
 function mkLlm(content: string | ((promptUser: string) => string)): LLMClient {

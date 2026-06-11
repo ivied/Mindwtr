@@ -179,7 +179,8 @@ const defaultGetTauriFetch = async (): Promise<typeof fetch | undefined> => {
     if (!syncServiceDependencies.isTauriRuntime()) return undefined;
     try {
         const mod = await import('@tauri-apps/plugin-http');
-        return mod.fetch;
+        // bun-types' fetch adds a `preconnect` property the tauri fetch lacks.
+        return mod.fetch as unknown as typeof fetch;
     } catch (error) {
         logSyncWarning('Failed to load tauri http fetch', error);
         return undefined;

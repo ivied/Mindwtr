@@ -117,11 +117,9 @@ const tryBootstrapFromCloud = async (): Promise<AppData | null> => {
         data.areas = Array.isArray(data.areas) ? data.areas : [];
         data.sections = Array.isArray(data.sections) ? data.sections : [];
         await idbPut(data);
-        // eslint-disable-next-line no-console
         console.log(`[mindwtr] auto-bootstrapped from cloud: ${data.tasks.length} tasks, ${data.projects.length} projects, ${data.areas.length} areas`);
         return data as AppData;
     } catch (error) {
-        // eslint-disable-next-line no-console
         console.warn('[mindwtr] cloud bootstrap failed', error);
         return null;
     }

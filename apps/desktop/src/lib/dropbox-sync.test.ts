@@ -26,14 +26,14 @@ describe('desktop dropbox-sync conflict parsing', () => {
 
     it('treats nested path/conflict as conflict', async () => {
         const fetcher = async () => buildResponse(409, '{"error":{".tag":"path","path":{".tag":"conflict"}}}');
-        await expect(uploadDropboxAppData('token', appData, 'rev-1', fetcher as typeof fetch))
+        await expect(uploadDropboxAppData('token', appData, 'rev-1', fetcher as unknown as typeof fetch))
             .rejects
             .toBeInstanceOf(DropboxConflictError);
     });
 
     it('does not treat path/not_found as conflict', async () => {
         const fetcher = async () => buildResponse(409, '{"error":{".tag":"path","path":{".tag":"not_found"}}}');
-        await expect(uploadDropboxAppData('token', appData, 'rev-1', fetcher as typeof fetch))
+        await expect(uploadDropboxAppData('token', appData, 'rev-1', fetcher as unknown as typeof fetch))
             .rejects
             .toThrow('Dropbox upload failed: HTTP 409');
     });

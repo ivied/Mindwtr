@@ -32,12 +32,13 @@ interface Props {
 }
 
 export function TaskProposalsInline({ taskId }: Props) {
-    if (!isProposalsAvailable()) return null;
+    const available = isProposalsAvailable();
 
     const [proposals, setProposals] = useState<ProposalSummary[] | null>(null);
     const [refreshKey, setRefreshKey] = useState(0);
 
     useEffect(() => {
+        if (!available) return;
         let cancelled = false;
         const load = async () => {
             try {
@@ -53,9 +54,9 @@ export function TaskProposalsInline({ taskId }: Props) {
             cancelled = true;
             window.clearInterval(t);
         };
-    }, [taskId, refreshKey]);
+    }, [taskId, refreshKey, available]);
 
-    if (!proposals || proposals.length === 0) return null;
+    if (!available || !proposals || proposals.length === 0) return null;
 
     const refresh = () => setRefreshKey((k) => k + 1);
 
