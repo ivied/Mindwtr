@@ -15,6 +15,7 @@
 import type { MindwtrClient } from '../api/mindwtr-client'
 import type { ContextStore } from '../context-store/store'
 import type { CommitmentPipeline } from '../commitment/pipeline'
+import type { CommitmentBatcher } from '../commitment/batcher'
 import type { EnricherPipeline } from '../commitment/enricher-pipeline'
 import type { CaptureRecord } from '../context-store/types'
 import type { IngestService } from '../memory'
@@ -31,6 +32,15 @@ const PULL_CHANNELS = new Set<CapturedItem['sourceChannel']>([
 function isPull(item: CapturedItem): boolean {
   return PULL_CHANNELS.has(item.sourceChannel)
 }
+
+// Slack arrives in high volume across many workspaces — route it through the
+// time-windowed batcher so the LLM runs on a cadence instead of per message.
+// Screen/audio stay on the immediate path (they're low-rate and want
+// reactivity, e.g. recording sessions).
+const BATCHED_CHANNELS = new Set<CapturedItem['sourceChannel']>([
+  'slack_dm',
+  'slack_channel',
+])
 
 /**
  * Map a capture's sourceChannel to the memory module's `events.source`.
@@ -58,6 +68,9 @@ export interface CaptureSinkDeps {
   enricherPipeline?: EnricherPipeline | null
   /** When set, pull captures fire through this pipeline (async, fire-and-forget). */
   commitmentPipeline?: CommitmentPipeline | null
+  /** When set, batched pull channels (Slack) enqueue here instead of running
+   *  the pipeline immediately, spreading LLM cost over a fixed interval. */
+  commitmentBatcher?: CommitmentBatcher | null
   /** When set, every persisted capture is also fire-and-forget ingested into
    *  the long-lived memory module (events + LLM-extracted facts). Independent
    *  of the short-TTL Context Store. */
@@ -102,17 +115,21 @@ export function createCaptureSink(deps: CaptureSinkDeps) {
         )
     }
 
-    // 2. Pull channels: fire-and-forget Commitment Detector, then stop.
-    //    Inbox proposals (when LLM says actionable) are written by the pipeline.
+    // 2. Pull channels: route to Commitment Detector, then stop.
+    //    Batched channels (Slack) enqueue for a periodic drain; everything else
+    //    runs immediately. Inbox proposals are written by the pipeline either way.
     if (isPull(item) || options.contextOnly) {
-      if (isPull(item) && deps.commitmentPipeline && storedRecord) {
+      if (isPull(item) && storedRecord) {
         const record = storedRecord
-        void deps
-          .commitmentPipeline
-          .run(record)
-          .catch((err) =>
-            console.error(`[sink] commitment pipeline failed for ${record.id}:`, err)
-          )
+        if (BATCHED_CHANNELS.has(item.sourceChannel) && deps.commitmentBatcher) {
+          deps.commitmentBatcher.enqueue(record)
+        } else if (deps.commitmentPipeline) {
+          void deps.commitmentPipeline
+            .run(record)
+            .catch((err) =>
+              console.error(`[sink] commitment pipeline failed for ${record.id}:`, err)
+            )
+        }
       }
       return
     }

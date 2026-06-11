@@ -22,6 +22,7 @@ import { EnricherPipeline } from './commitment/enricher-pipeline'
 import { Reviser } from './commitment/reviser'
 import { ProposalWriter } from './commitment/writer'
 import { CommitmentPipeline, DEFAULT_PIPELINE_CONFIG } from './commitment/pipeline'
+import { CommitmentBatcher } from './commitment/batcher'
 import { denyConfigFromEnv } from './commitment/source-deny'
 import { MindwtrInboxTitles } from './commitment/inbox-titles'
 import { WikiPersonsProvider } from './wiki/persons-reader'
@@ -78,6 +79,14 @@ const SLACK_SESSION_TOKENS = (process.env.SLACK_SESSION_TOKENS ?? '')
   })
   .filter((w) => w.token.startsWith('xoxc-') && w.cookie.startsWith('xoxd-'))
 const SLACK_POLL_INTERVAL_MS = Number(process.env.SLACK_POLL_INTERVAL_MS ?? 5 * 60 * 1000)
+// Comma-separated Slack team IDs to poll. The extension pushes every signed-in
+// workspace; this keeps only the ones that matter. Empty = poll all.
+const SLACK_TEAM_ALLOWLIST = new Set(
+  (process.env.SLACK_TEAM_ALLOWLIST ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+)
 
 const NOTION_API_KEY = process.env.NOTION_API_KEY ?? ''
 const NOTION_DATABASE_ID = process.env.NOTION_DATABASE_ID ?? ''
@@ -468,11 +477,28 @@ if (LLM_BASE_URL && LLM_API_KEY) {
   console.warn('⚠️ LLM_BASE_URL or LLM_API_KEY not set — Enricher & Commitment Detector disabled')
 }
 
+// Batch high-volume Slack captures so the Commitment LLM runs on a cadence
+// (default every SLACK_POLL_INTERVAL_MS) instead of once per message.
+const commitmentBatcher =
+  commitmentPipeline
+    ? new CommitmentBatcher(commitmentPipeline, {
+        flushIntervalMs: Number(process.env.COMMITMENT_BATCH_INTERVAL_MS ?? SLACK_POLL_INTERVAL_MS),
+        maxPerFlush: Number(process.env.COMMITMENT_BATCH_MAX ?? 30),
+      })
+    : null
+if (commitmentBatcher) {
+  commitmentBatcher.start()
+  console.log(
+    `🪣 Commitment batcher on (drain every ${Number(process.env.COMMITMENT_BATCH_INTERVAL_MS ?? SLACK_POLL_INTERVAL_MS)}ms, max ${Number(process.env.COMMITMENT_BATCH_MAX ?? 30)}/drain)`
+  )
+}
+
 const capture = createCaptureSink({
   mindwtr,
   enricherPipeline,
   contextStore,
   commitmentPipeline,
+  commitmentBatcher,
   memoryIngest,
 })
 
@@ -541,13 +567,15 @@ function buildChannels(): { channels: Channel[]; slack: SlackChannel | null } {
       {
         workspaces: slackWorkspaces,
         pollIntervalMs: SLACK_POLL_INTERVAL_MS,
+        teamAllowlist: SLACK_TEAM_ALLOWLIST,
       },
       (item) => capture(item),
       state
     )
     channels.push(slack)
+    const allowDesc = SLACK_TEAM_ALLOWLIST.size > 0 ? `${SLACK_TEAM_ALLOWLIST.size} allowlisted` : 'all teams'
     console.log(
-      `💬 Slack channel enabled (${SLACK_USER_TOKENS.length} oauth + ${SLACK_SESSION_TOKENS.length} session env, poll every ${SLACK_POLL_INTERVAL_MS}ms; extension push ${HTTP_AUTH_TOKEN ? 'on' : 'off'})`
+      `💬 Slack channel enabled (${SLACK_USER_TOKENS.length} oauth + ${SLACK_SESSION_TOKENS.length} session env, ${allowDesc}, poll every ${SLACK_POLL_INTERVAL_MS}ms; extension push ${HTTP_AUTH_TOKEN ? 'on' : 'off'})`
     )
   }
 
@@ -666,15 +694,18 @@ async function main() {
       slackSession: slackChannel
         ? {
             upsert: async (token, cookie) => {
-              const res = await slackChannel.upsertSessionWorkspace(token, cookie)
+              const { teamId, teamName } = await slackChannel.upsertSessionWorkspace(token, cookie)
               // Persist only after auth succeeded so we never store a dead cred.
+              // Non-allowlisted teams are persisted too (cheap, and lets the
+              // allowlist change later without a re-push from the extension).
               await slackSessionStore.upsert({
-                ...res,
+                teamId,
+                teamName,
                 token,
                 cookie,
                 updatedAt: new Date().toISOString(),
               })
-              return res
+              return { teamId, teamName }
             },
           }
         : null,
