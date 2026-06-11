@@ -13,7 +13,10 @@ export interface ProceduralProposerBlockOptions {
   maxChars?: number
   /** Top-K chunks to include before maxChars truncation. Default 5. */
   topK?: number
-  /** Restrict retrieval to a single source. Default 'openclaw'. */
+  /** Restrict retrieval to a single source (e.g. 'openclaw'). Default:
+   *  no filter — openclaw + mined + user-recorded playbooks all surface.
+   *  (Was 'openclaw'-only before user/mined sources existed; that hid
+   *  UI-recorded playbooks from every agent.) */
   source?: string
   /** Per-chunk excerpt cap, to keep one rule from eating the budget. Default 400. */
   perChunkChars?: number
@@ -40,7 +43,7 @@ export class ProceduralProposerBlock implements ProceduralContextProvider {
   constructor(private readonly opts: ProceduralProposerBlockOptions) {
     this.maxChars = opts.maxChars ?? 1200
     this.topK = opts.topK ?? 5
-    this.source = opts.source ?? 'openclaw'
+    this.source = opts.source
     this.perChunkChars = opts.perChunkChars ?? 400
   }
 

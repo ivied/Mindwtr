@@ -348,12 +348,15 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     })
     proceduralReader.start()
     const proceduralRetriever = new ProceduralRetriever(proceduralStore, embeddings)
-    commitmentPipeline.setProceduralContextProvider(
-      new ProceduralProposerBlock({ retriever: proceduralRetriever })
-    )
+    const playbookBlock = new ProceduralProposerBlock({ retriever: proceduralRetriever })
+    commitmentPipeline.setProceduralContextProvider(playbookBlock)
     // FR89: record which playbook chunks fed each written proposal so
     // approve/reject can adjust their reliability_score.
     commitmentPipeline.setProceduralFeedback(proceduralStore)
+    // The Enricher gets the same KNOWN_PLAYBOOK block — recorded procedures
+    // and channel rules shape its title/description/tags/split suggestions.
+    enricherPipeline.setProceduralContextProvider(playbookBlock)
+    enricherPipeline.setProceduralFeedback(proceduralStore)
     console.log(
       `📖 Procedural memory enabled (root=${SHARED_MEMORY_DIR}, reindex=${SHARED_MEMORY_REINDEX_INTERVAL_MS}ms, chunks=${proceduralStore.countChunks()}, classifier=llm)`
     )

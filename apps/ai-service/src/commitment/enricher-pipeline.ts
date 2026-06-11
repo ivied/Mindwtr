@@ -28,7 +28,9 @@ import type {
   SplitPayload,
 } from '../proposal-store/payloads'
 import type { ProposalStore } from '../proposal-store/store'
+import type { ProceduralContextProvider } from '../memory/procedural/proposer-block'
 import type { Enricher, EnrichedProposal } from './enricher'
+import type { ProceduralFeedbackSink } from './pipeline'
 import { LlmPublisher } from '../status/llm-publisher'
 import { pickRoutingTargetTag } from '../threads/registry'
 
@@ -84,6 +86,8 @@ export type EnrichOutcome =
 export class EnricherPipeline {
   private notifier: ProposalNotifier | null = null
   private llmPublisher: LlmPublisher | null = null
+  private proceduralContextProvider: ProceduralContextProvider | null = null
+  private proceduralFeedback: ProceduralFeedbackSink | null = null
 
   constructor(
     private deps: EnricherPipelineDeps,
@@ -97,6 +101,18 @@ export class EnricherPipeline {
 
   setLlmPublisher(publisher: LlmPublisher | null): void {
     this.llmPublisher = publisher
+  }
+
+  /** Optional: playbook excerpts from procedural memory surface to the
+   *  Enricher as a KNOWN_PLAYBOOK block (rules, recorded procedures). */
+  setProceduralContextProvider(provider: ProceduralContextProvider | null): void {
+    this.proceduralContextProvider = provider
+  }
+
+  /** Optional (FR89): record which playbook chunks fed each proposal so
+   *  approve/reject can adjust their reliability_score. */
+  setProceduralFeedback(sink: ProceduralFeedbackSink | null): void {
+    this.proceduralFeedback = sink
   }
 
   async run(input: EnrichInput): Promise<EnrichOutcome> {
@@ -124,10 +140,27 @@ export class EnricherPipeline {
     }
     const priorContext = contextBlocks.length > 0 ? contextBlocks.join('\n\n') : undefined
 
+    // Playbook excerpts (recorded procedures, channel rules, do-not rules)
+    // from procedural memory. Fail-open: no playbook block on error.
+    let playbookContext: string | undefined
+    let playbookRefs: string[] = []
+    if (this.proceduralContextProvider) {
+      try {
+        const pb = await this.proceduralContextProvider.getPlaybookContext(input.text)
+        if (pb) {
+          playbookContext = pb.text
+          playbookRefs = pb.refs
+        }
+      } catch (err) {
+        console.error('[enricher-pipeline] playbook context failed:', (err as Error).message)
+      }
+    }
+
     const proposal = await this.deps.enricher.enrich(input.text, {
       sourceMeta: input.sourceMeta ?? undefined,
       priorContext,
       newEvidence: input.newEvidence,
+      playbookContext,
     })
 
     if (proposal.is_noise) {
@@ -147,7 +180,13 @@ export class EnricherPipeline {
 
     if (proposal.is_project && proposal.sub_actions.length > 0) {
       const payload = buildSplitPayload(input, proposal, traceback)
-      const { proposalId, revised } = this.persist(input, 'split', payload, proposal.reasoning)
+      const { proposalId, revised } = this.persist(
+        input,
+        'split',
+        payload,
+        proposal.reasoning,
+        playbookRefs
+      )
       console.log(
         `[enricher] ${revised ? 'revised' : 'proposed'} split (task ${input.taskId.slice(0, 8)} → proposal ${proposalId.slice(0, 8)}): "${proposal.proposed_title.slice(0, 60)}" sub_actions=${proposal.sub_actions.length}`
       )
@@ -181,7 +220,13 @@ export class EnricherPipeline {
       diff,
       traceback,
     }
-    const { proposalId, revised } = this.persist(input, 'modify', payload, proposal.reasoning)
+    const { proposalId, revised } = this.persist(
+      input,
+      'modify',
+      payload,
+      proposal.reasoning,
+      playbookRefs
+    )
     console.log(
       `[enricher] ${revised ? 'revised' : 'proposed'} modify (task ${input.taskId.slice(0, 8)} → proposal ${proposalId.slice(0, 8)}): "${proposal.proposed_title.slice(0, 60)}" diff=[${diff.map((d) => d.field).join(',')}] conf=${proposal.confidence.toFixed(2)}`
     )
@@ -211,7 +256,8 @@ export class EnricherPipeline {
     input: EnrichInput,
     type: 'modify' | 'split',
     payload: ModifyPayload | SplitPayload,
-    reasoning: string
+    reasoning: string,
+    playbookRefs: string[] = []
   ): { proposalId: string; revised: boolean } {
     const summary = reasoning.slice(0, 160)
     const pending = this.deps.proposalStore.listPending({
@@ -243,6 +289,7 @@ export class EnricherPipeline {
         author: 'agent',
         summary: input.newEvidence ? `re-enriched on new evidence: ${summary}` : summary,
       })
+      this.recordPlaybookRefs(sameType.id, playbookRefs)
       return { proposalId: sameType.id, revised: true }
     }
 
@@ -262,7 +309,17 @@ export class EnricherPipeline {
           console.error('[enricher-pipeline] notifier failed:', (err as Error).message)
         )
     }
+    this.recordPlaybookRefs(created.id, playbookRefs)
     return { proposalId: created.id, revised: false }
+  }
+
+  private recordPlaybookRefs(proposalId: string, refs: string[]): void {
+    if (!this.proceduralFeedback || refs.length === 0) return
+    try {
+      this.proceduralFeedback.recordProposalRefs(proposalId, refs)
+    } catch (err) {
+      console.error('[enricher-pipeline] playbook refs record failed:', (err as Error).message)
+    }
   }
 }
 

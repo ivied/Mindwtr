@@ -294,6 +294,22 @@ Quality bar:
 - "Write a draft reply to Allison Walker about Custom Tracking App estimate" → is_ai_routable=TRUE, ai_task_type="draft" (user will review and send).
 - Mixed-language input is fine — keep titles in the source language.
 
+KNOWN_PLAYBOOK (long-term operational rules and recorded procedures):
+The user message MAY include a KNOWN_PLAYBOOK block — excerpts from the user's
+procedural memory: channel rules, conventions, DO-NOT rules, and step-by-step
+procedures the user has recorded for recurring work. Each entry is prefixed
+with its source path and section (e.g. [user:recorded/... ## Title]).
+Use it:
+- When a recorded procedure matches the task, reference it: mention the
+  procedure title in proposed_description ("Playbook: <title>") and align
+  suggested contexts/tags with how the procedure is executed.
+- When splitting a project, prefer sub_actions that follow the recorded
+  procedure's steps over inventing your own.
+- Lines starting with ⚠️ or НЕ / DO NOT are HARD RULES — never propose
+  something they forbid.
+- A matching procedure that an AI agent could execute end-to-end is a strong
+  hint for is_ai_routable=true (mention the playbook in ai_routing_reasoning).
+
 Re-enrichment (NEW_EVIDENCE block):
 The user message MAY include a NEW_EVIDENCE block — information captured AFTER the task was created (a later conversation, screen text, or audio transcript that mentions this task). When present, the card text is an EXISTING task and your job is to UPDATE the enrichment to reflect the new information:
 - Task was delegated / handed to someone ("перепоручил Насте", "asked Bob to handle it") → category=waiting, is_delegation=true, delegate_to=<person>. Keep the title's intent but reframe as waiting-for ("Дождаться от Насти ...").
@@ -322,6 +338,9 @@ export class Enricher {
       /** Fresh capture about an EXISTING task — triggers re-enrichment mode
        *  (rendered as a NEW_EVIDENCE block, see prompt). */
       newEvidence?: string
+      /** Relevant playbook excerpt from procedural memory (rendered as a
+       *  KNOWN_PLAYBOOK block, see prompt). */
+      playbookContext?: string
     } = {}
   ): Promise<EnrichedProposal> {
     const userMessage = this.buildUserMessage(text, options)
@@ -355,7 +374,12 @@ export class Enricher {
 
   private buildUserMessage(
     text: string,
-    options: { sourceMeta?: Record<string, unknown>; priorContext?: string; newEvidence?: string }
+    options: {
+      sourceMeta?: Record<string, unknown>
+      priorContext?: string
+      newEvidence?: string
+      playbookContext?: string
+    }
   ): string {
     const parts: string[] = []
     if (options.sourceMeta && Object.keys(options.sourceMeta).length > 0) {
@@ -363,6 +387,11 @@ export class Enricher {
     }
     if (options.priorContext && options.priorContext.length > 0) {
       parts.push(`Past similar items:\n${options.priorContext}`)
+    }
+    if (options.playbookContext && options.playbookContext.trim().length > 0) {
+      parts.push(
+        `KNOWN_PLAYBOOK (rules and recorded procedures from the user's procedural memory — respect ⚠️ / НЕ entries as hard constraints, reference matching procedures):\n${options.playbookContext.trim()}`
+      )
     }
     if (options.newEvidence && options.newEvidence.trim().length > 0) {
       parts.push(

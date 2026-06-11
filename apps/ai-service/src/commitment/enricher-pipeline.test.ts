@@ -477,6 +477,49 @@ describe('EnricherPipeline.run', () => {
     expect(calls2[0][0].payload.diff.find((d) => d.field === 'status')).toBeUndefined()
   })
 
+  it('passes playbook context to the enricher and records refs (FR89)', async () => {
+    let receivedOptions: { playbookContext?: string } | null = null
+    const enricher = {
+      enrich: mock(async (_text: string, opts: { playbookContext?: string }) => {
+        receivedOptions = opts
+        return makeProposal()
+      }),
+    } as unknown as Enricher
+    const store = makeStore()
+    const pipe = new EnricherPipeline({ enricher, proposalStore: store, retriever: null })
+    pipe.setProceduralContextProvider({
+      getPlaybookContext: mock(async () => ({
+        text: '[user:recorded/upwork.md ## Отклик на Upwork]\n- открыть джобу...',
+        refs: ['chunk-1', 'chunk-2'],
+      })),
+    })
+    const feedback = { recordProposalRefs: mock(() => {}) }
+    pipe.setProceduralFeedback(feedback)
+
+    const outcome = await pipe.run(baseInput())
+
+    expect(outcome.kind).toBe('proposed')
+    expect(receivedOptions!.playbookContext).toContain('Отклик на Upwork')
+    const refCalls = (feedback.recordProposalRefs as unknown as { mock: { calls: [string, string[]][] } }).mock.calls
+    expect(refCalls.length).toBe(1)
+    expect(refCalls[0][0]).toBe('p-1')
+    expect(refCalls[0][1]).toEqual(['chunk-1', 'chunk-2'])
+  })
+
+  it('keeps going when the playbook provider throws', async () => {
+    const enricher = makeEnricher(makeProposal())
+    const store = makeStore()
+    const pipe = new EnricherPipeline({ enricher, proposalStore: store, retriever: null })
+    pipe.setProceduralContextProvider({
+      getPlaybookContext: mock(async () => {
+        throw new Error('procedural store down')
+      }),
+    })
+
+    const outcome = await pipe.run(baseInput())
+    expect(outcome.kind).toBe('proposed')
+  })
+
   it('passes newEvidence through to the enricher options', async () => {
     let receivedOptions: { newEvidence?: string } | null = null
     const enricher = {

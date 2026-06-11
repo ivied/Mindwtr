@@ -98,6 +98,14 @@ describe('ProceduralProposerBlock', () => {
     expect((retrieve as unknown as { mock: { calls: Array<[{ source?: string }]> } }).mock.calls[0]![0].source).toBe('notion')
   })
 
+  it('defaults to NO source filter so user-recorded and mined playbooks surface too', async () => {
+    const retrieve = mock(async () => [])
+    const retriever = { retrieve } as unknown as ProceduralRetriever
+    const block = new ProceduralProposerBlock({ retriever })
+    await block.getPlaybookContext('q')
+    expect((retrieve as unknown as { mock: { calls: Array<[{ source?: string }]> } }).mock.calls[0]![0].source).toBeUndefined()
+  })
+
   it('truncates query text to 1500 chars before passing to retriever', async () => {
     const retrieve = mock(async () => [])
     const retriever = { retrieve } as unknown as ProceduralRetriever
