@@ -65,6 +65,13 @@ export interface SlackConfig {
   historyBudgetPerMin?: number
   /** Delay between paced non-history API calls within a workspace. Default 1500ms. */
   pacingMs?: number
+  /**
+   * When set (non-empty), only these team IDs are polled. The browser
+   * extension pushes every signed-in workspace; this keeps the noise of
+   * inactive ones (and their LLM cost) out without touching the extension.
+   * Empty/undefined = allow all (back-compat).
+   */
+  teamAllowlist?: Set<string>
 }
 
 interface ConversationCursorStore {
@@ -172,6 +179,7 @@ export class SlackChannel implements Channel {
   private readonly cursors: ConversationCursorStore
   private readonly historyBudget: number
   private readonly pacingMs: number
+  private readonly teamAllowlist: Set<string>
 
   constructor(
     config: SlackConfig,
@@ -181,11 +189,17 @@ export class SlackChannel implements Channel {
     this.pollIntervalMs = config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
     this.historyBudget = config.historyBudgetPerMin ?? DEFAULT_HISTORY_BUDGET_PER_MIN
     this.pacingMs = config.pacingMs ?? DEFAULT_PACING_MS
+    this.teamAllowlist = config.teamAllowlist ?? new Set()
     this.sink = sink
     this.cursors = cursors
     this.workspaces = config.workspaces.map(
       (ws) => new SlackWorkspace(ws.token, ws.cookie, sink, cursors, this.historyBudget, this.pacingMs)
     )
+  }
+
+  /** True when the allowlist is empty (allow all) or contains this team. */
+  private isAllowed(teamId: string): boolean {
+    return this.teamAllowlist.size === 0 || this.teamAllowlist.has(teamId)
   }
 
   /**
@@ -196,9 +210,15 @@ export class SlackChannel implements Channel {
    * rather than duplicating it. Returns the resolved team name on success.
    * Throws on auth failure so the caller can surface invalid_auth.
    */
-  async upsertSessionWorkspace(token: string, cookie: string): Promise<{ teamId: string; teamName: string }> {
+  async upsertSessionWorkspace(token: string, cookie: string): Promise<{ teamId: string; teamName: string; allowed: boolean }> {
     const ws = new SlackWorkspace(token, cookie, this.sink, this.cursors, this.historyBudget, this.pacingMs)
     await ws.init() // throws on bad credential — caller maps to 401
+    // Auth succeeded so the caller can persist the (valid) credential, but we
+    // only register non-allowlisted teams' identity — they won't be polled.
+    if (!this.isAllowed(ws.teamId)) {
+      console.log(`[slack] session workspace ignored (not in allowlist): ${ws.teamName} (${ws.teamId})`)
+      return { teamId: ws.teamId, teamName: ws.teamName, allowed: false }
+    }
     const existingIdx = this.workspaces.findIndex((w) => w.teamId === ws.teamId)
     if (existingIdx >= 0) {
       this.workspaces[existingIdx] = ws
@@ -207,7 +227,7 @@ export class SlackChannel implements Channel {
       this.workspaces.push(ws)
       console.log(`[slack] session workspace added: ${ws.teamName} (${ws.teamId})`)
     }
-    return { teamId: ws.teamId, teamName: ws.teamName }
+    return { teamId: ws.teamId, teamName: ws.teamName, allowed: true }
   }
 
   async start(): Promise<void> {
@@ -218,6 +238,10 @@ export class SlackChannel implements Channel {
     for (const ws of this.workspaces) {
       try {
         await ws.init()
+        if (!this.isAllowed(ws.teamId)) {
+          console.log(`[slack] workspace skipped (not in allowlist): ${ws.teamName} (${ws.teamId})`)
+          continue
+        }
         ok.push(ws)
       } catch (err) {
         console.error('[slack] workspace auth failed, skipping:', err)
