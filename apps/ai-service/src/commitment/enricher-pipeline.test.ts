@@ -30,6 +30,7 @@ function makeProposal(overrides: Partial<EnrichedProposal> = {}): EnrichedPropos
     is_ai_routable: false,
     ai_task_type: 'other',
     ai_routing_reasoning: '',
+    ai_target_hint: '',
     confidence: 0.9,
     reasoning: 'Single-step message, 2-min rule',
     ...overrides,
@@ -534,6 +535,45 @@ describe('EnricherPipeline.run', () => {
     await pipe.run({ ...baseInput(), newEvidence: 'перепоручил Насте' })
 
     expect(receivedOptions!.newEvidence).toBe('перепоручил Насте')
+  })
+
+  it('routes the whole task instead of splitting when an AI-routable playbook matches', async () => {
+    // Enricher would normally split this project, but it's AI-routable
+    // (recorded playbook) → must stay one routable modify, not manual steps.
+    const enricher = makeEnricher(
+      makeProposal({
+        is_project: true,
+        project_name: 'Upwork apply',
+        sub_actions: [
+          { title: 'Open job', suggested_category: 'next' },
+          { title: 'Generate reply', suggested_category: 'next' },
+        ],
+        is_ai_routable: true,
+        ai_task_type: 'draft',
+        ai_routing_reasoning: "matches recorded playbook 'Upwork Monitor'",
+        proposed_description: 'Outcome: отклик отправлен.\nAgent plan: open job → generate → send',
+        category: 'next',
+      })
+    )
+    const store = makeStore()
+    const pipe = new EnricherPipeline({ enricher, proposalStore: store, retriever: null })
+
+    const outcome = await pipe.run(baseInput())
+
+    expect(outcome.kind).toBe('proposed')
+    if (outcome.kind !== 'proposed') return
+    expect(outcome.type).toBe('modify')
+
+    const calls = (store.create as unknown as { mock: { calls: [{ payload: ModifyPayload }][] } }).mock.calls
+    const diff = calls[0][0].payload.diff
+    const assignee = diff.find((d) => d.field === 'assignedTo')!
+    expect(assignee.to).toBe('@ai-agent')
+    const tags = diff.find((d) => d.field === 'tags')! as { to: string[] }
+    expect(tags.to.some((t) => t.startsWith('ai-type:'))).toBe(true)
+    expect(tags.to).toContain('ai-stage:queued')
+    expect(tags.to.some((t) => t.startsWith('ai-target:'))).toBe(true)
+    // No manual sub-action steps leaked into the proposal.
+    expect(diff.find((d) => d.field === 'status')?.to).toBe('next')
   })
 
   it('puts SMART fields into the umbrella description on split', async () => {

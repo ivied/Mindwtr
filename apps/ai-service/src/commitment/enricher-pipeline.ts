@@ -178,7 +178,14 @@ export class EnricherPipeline {
 
     const traceback = buildTraceback(input, proposal)
 
-    if (proposal.is_project && proposal.sub_actions.length > 0) {
+    // Playbooks are recipes the user records FOR an AI agent to run end-to-end.
+    // So an AI-routable task must NOT be split into manual next-actions for the
+    // user — route the whole thing instead. is_ai_routable wins over is_project:
+    // we force the modify path (which carries the routing tags), and the
+    // procedure's steps live in the description as the agent's plan.
+    const routeWholeTask = proposal.is_ai_routable
+
+    if (!routeWholeTask && proposal.is_project && proposal.sub_actions.length > 0) {
       const payload = buildSplitPayload(input, proposal, traceback)
       const { proposalId, revised } = this.persist(
         input,
@@ -372,7 +379,8 @@ function buildModifyDiff(input: EnrichInput, p: EnrichedProposal): FieldDiff[] {
     const targetTag = pickRoutingTargetTag(
       p.proposed_title || input.taskTitle,
       p.proposed_description ?? input.taskDescription,
-      input.taskTags
+      input.taskTags,
+      p.ai_target_hint
     )
     routingTagAdditions = [`ai-type:${p.ai_task_type}`, 'ai-stage:queued', targetTag]
   }

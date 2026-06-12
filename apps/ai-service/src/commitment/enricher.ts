@@ -69,6 +69,13 @@ export interface EnrichedProposal {
   is_ai_routable: boolean
   ai_task_type: AiTaskType
   ai_routing_reasoning: string
+  /**
+   * Free-text hint for WHERE an AI-routable task should run, lifted from a
+   * matching KNOWN_PLAYBOOK entry (tool / repo / session it names, e.g.
+   * "Upwork Monitor", "openclaw", a repo slug). The pipeline feeds this into
+   * the deterministic target matcher; empty string when no playbook signal.
+   */
+  ai_target_hint: string
   confidence: number
   reasoning: string
 }
@@ -217,6 +224,11 @@ const ENRICHER_TOOL = {
           description:
             'One short sentence explaining the routing verdict — what about this task lets an agent (or doesn\'t let it) handle it. Shown to the user in the routing badge so they understand the recommendation.',
         },
+        ai_target_hint: {
+          type: 'string',
+          description:
+            'When a KNOWN_PLAYBOOK entry matches and names a specific tool, repository, service, or session to run the procedure in (e.g. "Upwork Monitor", "openclaw", a repo slug), put that name here so the system can route the task there. Empty string when no playbook names a concrete target.',
+        },
         confidence: {
           type: 'number',
           minimum: 0,
@@ -246,6 +258,7 @@ const ENRICHER_TOOL = {
         'is_ai_routable',
         'ai_task_type',
         'ai_routing_reasoning',
+        'ai_target_hint',
         'confidence',
         'reasoning',
       ],
@@ -309,6 +322,23 @@ Use it:
   something they forbid.
 - A matching procedure that an AI agent could execute end-to-end is a strong
   hint for is_ai_routable=true (mention the playbook in ai_routing_reasoning).
+
+⚠️ PLAYBOOKS ARE RECIPES FOR THE AI AGENT, NOT MANUAL CHECKLISTS FOR THE USER.
+The user records playbooks specifically so an AI agent runs them. So when a
+recorded procedure matches the task:
+- Set is_ai_routable=true and pick the ai_task_type that fits the procedure.
+- DO NOT set is_project=true to break the procedure into manual next-actions
+  for the user. The agent executes the whole procedure itself. Keep it a
+  single routable task (is_project=false), put the procedure's outcome in
+  proposed_description (you may list its steps there as the agent's plan, but
+  they are the AGENT's steps, not the user's to-dos).
+- Set ai_target_hint to the tool/repo/service/session the playbook names
+  (e.g. "Upwork Monitor", a repo slug, "openclaw"). Empty string if none.
+- ai_routing_reasoning should cite the playbook ("matches recorded playbook
+  '<title>' — agent can run it end-to-end").
+Only fall back to is_project=true (manual split) when NO agent-executable
+playbook matches AND the task genuinely needs the user to do physical or
+judgment steps.
 
 Re-enrichment (NEW_EVIDENCE block):
 The user message MAY include a NEW_EVIDENCE block — information captured AFTER the task was created (a later conversation, screen text, or audio transcript that mentions this task). When present, the card text is an EXISTING task and your job is to UPDATE the enrichment to reflect the new information:
@@ -465,6 +495,7 @@ function normalize(parsed: Partial<EnrichedProposal>): EnrichedProposal {
     is_ai_routable: parsed.is_ai_routable === true,
     ai_task_type,
     ai_routing_reasoning: asString(parsed.ai_routing_reasoning).slice(0, 280),
+    ai_target_hint: asString(parsed.ai_target_hint).slice(0, 120),
     confidence:
       typeof parsed.confidence === 'number' && parsed.confidence >= 0 && parsed.confidence <= 1
         ? parsed.confidence

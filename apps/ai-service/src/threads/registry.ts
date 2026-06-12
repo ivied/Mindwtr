@@ -43,15 +43,26 @@ export function findThread(sessionId: string): RegistryThread | undefined {
 export function pickRoutingTargetTag(
   title: string,
   description: string | undefined,
-  tags: string[] | undefined
+  tags: string[] | undefined,
+  /**
+   * Optional WHERE-hint from a matching playbook (a tool/repo/session name the
+   * recorded procedure pointed at). Weighted highest — the user wrote it down
+   * on purpose — but still resolved against the live thread registry so it
+   * lands on a real session when one matches.
+   */
+  targetHint?: string
 ): string {
-  const hay = `${title} ${description ?? ''} ${(tags ?? []).join(' ')}`.toLowerCase()
+  const hint = (targetHint ?? '').toLowerCase().trim()
+  const hay = `${title} ${description ?? ''} ${(tags ?? []).join(' ')} ${hint}`.toLowerCase()
   let best: { id: string; score: number } | null = null
   for (const t of getThreadRegistry()) {
     let score = 0
     const alias = t.alias.toLowerCase()
     if (alias.length >= 3 && hay.includes(alias)) score += 3
+    // A playbook that names this thread's alias/repo is the strongest signal.
+    if (hint.length >= 3 && alias.length >= 3 && hint.includes(alias)) score += 5
     if (t.repoLabel.length >= 3 && hay.includes(t.repoLabel.toLowerCase())) score += 2
+    if (hint.length >= 3 && t.repoLabel.length >= 3 && hint.includes(t.repoLabel.toLowerCase())) score += 4
     for (const w of t.summary.toLowerCase().split(/\W+/)) {
       if (w.length >= 4 && hay.includes(w)) score += 1
     }
