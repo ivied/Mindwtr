@@ -576,6 +576,30 @@ describe('EnricherPipeline.run', () => {
     expect(diff.find((d) => d.field === 'status')?.to).toBe('next')
   })
 
+  it('uses the LLM target selector tag for AI-routable tasks when set', async () => {
+    const enricher = makeEnricher(
+      makeProposal({
+        is_ai_routable: true,
+        ai_task_type: 'draft',
+        ai_target_hint: 'Upwork Monitor',
+        category: 'next',
+      })
+    )
+    const store = makeStore()
+    const pipe = new EnricherPipeline({ enricher, proposalStore: store, retriever: null })
+    pipe.setTargetSelector({
+      selectTargetTag: mock(async () => 'ai-target:mac:chosen-session'),
+    } as unknown as import('./thread-target-selector').ThreadTargetSelector)
+
+    const outcome = await pipe.run(baseInput())
+    expect(outcome.kind).toBe('proposed')
+
+    const calls = (store.create as unknown as { mock: { calls: [{ payload: ModifyPayload }][] } }).mock.calls
+    const tags = calls[0][0].payload.diff.find((d) => d.field === 'tags')! as { to: string[] }
+    expect(tags.to).toContain('ai-target:mac:chosen-session')
+    expect(tags.to.filter((t) => t.startsWith('ai-target:')).length).toBe(1)
+  })
+
   it('puts SMART fields into the umbrella description on split', async () => {
     const enricher = makeEnricher(
       makeProposal({

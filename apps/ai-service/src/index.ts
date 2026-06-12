@@ -19,6 +19,7 @@ import { ProposalExpiryJob } from './proposal-store/expiry'
 import { Proposer } from './commitment/proposer'
 import { Enricher } from './commitment/enricher'
 import { EnricherPipeline } from './commitment/enricher-pipeline'
+import { ThreadTargetSelector } from './commitment/thread-target-selector'
 import { Reviser } from './commitment/reviser'
 import { ProposalWriter } from './commitment/writer'
 import { CommitmentPipeline, DEFAULT_PIPELINE_CONFIG } from './commitment/pipeline'
@@ -239,6 +240,10 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     proposalStore,
     retriever,
   })
+  // LLM-based run-target selection for AI-routable tasks: reads the live Mac
+  // thread registry + playbook hint and picks the session/repo/openclaw the
+  // way a human would. Falls back to the deterministic keyword matcher.
+  enricherPipeline.setTargetSelector(new ThreadTargetSelector(llm))
   console.log(`🪄 Enricher enabled (${LLM_MODEL}) — push captures → modify/split proposals`)
 
   const proposer = new Proposer(llm)

@@ -33,6 +33,7 @@ import type { Enricher, EnrichedProposal } from './enricher'
 import type { ProceduralFeedbackSink } from './pipeline'
 import { LlmPublisher } from '../status/llm-publisher'
 import { pickRoutingTargetTag } from '../threads/registry'
+import type { ThreadTargetSelector } from './thread-target-selector'
 
 /** Source-agent identifier used in audit / filters. Keep stable. */
 export const SOURCE_AGENT_ENRICHER = 'enricher'
@@ -88,6 +89,7 @@ export class EnricherPipeline {
   private llmPublisher: LlmPublisher | null = null
   private proceduralContextProvider: ProceduralContextProvider | null = null
   private proceduralFeedback: ProceduralFeedbackSink | null = null
+  private targetSelector: ThreadTargetSelector | null = null
 
   constructor(
     private deps: EnricherPipelineDeps,
@@ -113,6 +115,13 @@ export class EnricherPipeline {
    *  approve/reject can adjust their reliability_score. */
   setProceduralFeedback(sink: ProceduralFeedbackSink | null): void {
     this.proceduralFeedback = sink
+  }
+
+  /** Optional: LLM-based run-target selection for AI-routable tasks. When set,
+   *  it picks the Mac thread / repo / openclaw; otherwise the deterministic
+   *  keyword matcher in buildModifyDiff is used. */
+  setTargetSelector(selector: ThreadTargetSelector | null): void {
+    this.targetSelector = selector
   }
 
   async run(input: EnrichInput): Promise<EnrichOutcome> {
@@ -208,7 +217,19 @@ export class EnricherPipeline {
       return { kind: 'proposed', proposalId, type: 'split' }
     }
 
-    const diff = buildModifyDiff(input, proposal)
+    // Resolve WHERE an AI-routable task runs. Prefer the LLM selector (reads
+    // the live thread list + playbook hint); fall back to the keyword matcher.
+    let routingTargetTag: string | undefined
+    if (proposal.is_ai_routable && this.targetSelector) {
+      routingTargetTag = await this.targetSelector.selectTargetTag({
+        title: proposal.proposed_title || input.taskTitle,
+        description: proposal.proposed_description ?? input.taskDescription,
+        tags: input.taskTags,
+        targetHint: proposal.ai_target_hint,
+      })
+    }
+
+    const diff = buildModifyDiff(input, proposal, routingTargetTag)
     if (diff.length === 0) {
       console.log(
         `[enricher] skip no-changes (task ${input.taskId.slice(0, 8)}): "${input.taskTitle.slice(0, 60)}" already matches enrichment`
@@ -340,7 +361,13 @@ export class EnricherPipeline {
  */
 export const AI_AGENT_ASSIGNEE = '@ai-agent'
 
-function buildModifyDiff(input: EnrichInput, p: EnrichedProposal): FieldDiff[] {
+function buildModifyDiff(
+  input: EnrichInput,
+  p: EnrichedProposal,
+  /** Pre-resolved `ai-target:` tag (from the LLM selector). When omitted, the
+   *  deterministic keyword matcher is used. */
+  resolvedTargetTag?: string
+): FieldDiff[] {
   const diff: FieldDiff[] = []
 
   if (p.proposed_title && p.proposed_title !== input.taskTitle) {
@@ -376,12 +403,14 @@ function buildModifyDiff(input: EnrichInput, p: EnrichedProposal): FieldDiff[] {
     // Pre-fill WHERE it runs (Mac thread vs OpenClaw). Shown in the card chip;
     // the user can override. A wrong guess is one tap to fix, so this stays a
     // best-effort keyword match rather than a model call.
-    const targetTag = pickRoutingTargetTag(
-      p.proposed_title || input.taskTitle,
-      p.proposed_description ?? input.taskDescription,
-      input.taskTags,
-      p.ai_target_hint
-    )
+    const targetTag =
+      resolvedTargetTag ??
+      pickRoutingTargetTag(
+        p.proposed_title || input.taskTitle,
+        p.proposed_description ?? input.taskDescription,
+        input.taskTags,
+        p.ai_target_hint
+      )
     routingTagAdditions = [`ai-type:${p.ai_task_type}`, 'ai-stage:queued', targetTag]
   }
 
