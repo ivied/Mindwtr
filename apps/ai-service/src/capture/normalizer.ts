@@ -24,6 +24,20 @@ export interface CapturedItem {
   sourceMeta?: Record<string, unknown>
 }
 
+/**
+ * Channels that are "pull/passive": they land in the Context Store and reach
+ * the inbox only through the Commitment Detector (never create a task on
+ * arrival). Single source of truth — both ContextStore (is_pull flag) and the
+ * capture sink (push-vs-pull routing) import this. Keeping two copies in sync
+ * silently broke Slack batching once; don't re-fork it.
+ */
+export const PULL_CHANNELS = new Set<CapturedItem['sourceChannel']>([
+  'screen_capture',
+  'audio_capture',
+  'slack_dm',
+  'slack_channel',
+])
+
 export interface TaskSuggestion {
   title: string
   status: 'inbox'

@@ -92,8 +92,13 @@ describe('ContextStore', () => {
     const store = ContextStore.open({ dbPath: join(dir, 'test.db') })
     const push = await store.insert(makeItem({ sourceChannel: 'telegram_dm' }))
     const pull = await store.insert(makeItem({ sourceChannel: 'screen_capture' }))
+    const slackDm = await store.insert(makeItem({ sourceChannel: 'slack_dm' }))
+    const slackCh = await store.insert(makeItem({ sourceChannel: 'slack_channel' }))
     expect(push.capture.isPull).toBe(false)
     expect(pull.capture.isPull).toBe(true)
+    // Slack is pull — it must reach the inbox via Commitment, not on arrival.
+    expect(slackDm.capture.isPull).toBe(true)
+    expect(slackCh.capture.isPull).toBe(true)
     store.close()
   })
 

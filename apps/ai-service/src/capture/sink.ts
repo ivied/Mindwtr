@@ -20,14 +20,7 @@ import type { EnricherPipeline } from '../commitment/enricher-pipeline'
 import type { CaptureRecord } from '../context-store/types'
 import type { IngestService } from '../memory'
 import type { CapturedItem } from './normalizer'
-import { toTaskSuggestion } from './normalizer'
-
-const PULL_CHANNELS = new Set<CapturedItem['sourceChannel']>([
-  'screen_capture',
-  'audio_capture',
-  'slack_dm',
-  'slack_channel',
-])
+import { toTaskSuggestion, PULL_CHANNELS } from './normalizer'
 
 function isPull(item: CapturedItem): boolean {
   return PULL_CHANNELS.has(item.sourceChannel)

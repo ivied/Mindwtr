@@ -11,6 +11,7 @@
 
 import { createHash, randomUUID } from 'node:crypto'
 import type { CapturedItem } from '../capture/normalizer'
+import { PULL_CHANNELS } from '../capture/normalizer'
 import { openDb, type DB } from './db'
 import { cosine, embeddingToBytes, type EmbeddingsProvider } from './embeddings'
 import type {
@@ -21,11 +22,6 @@ import type {
   SearchOptions,
 } from './types'
 import { DEFAULT_CONTEXT_STORE_CONFIG } from './types'
-
-const PULL_CHANNELS = new Set<CapturedItem['sourceChannel']>([
-  'screen_capture',
-  'audio_capture',
-])
 
 const L3_SIMILARITY_THRESHOLD = 0.95
 
