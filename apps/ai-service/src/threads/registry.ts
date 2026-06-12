@@ -54,15 +54,33 @@ export function pickRoutingTargetTag(
 ): string {
   const hint = (targetHint ?? '').toLowerCase().trim()
   const hay = `${title} ${description ?? ''} ${(tags ?? []).join(' ')} ${hint}`.toLowerCase()
+  // Significant words from the playbook hint, so "Upwork Monitor" still hits a
+  // repo labelled "Upwork API" via the shared "upwork" token. Drops generic
+  // filler that would over-match ("the", "task", "monitor", "agent"…).
+  const hintWords = new Set(
+    hint
+      .split(/\W+/)
+      .filter((w) => w.length >= 4 && !TARGET_HINT_STOPWORDS.has(w))
+  )
   let best: { id: string; score: number } | null = null
   for (const t of getThreadRegistry()) {
     let score = 0
     const alias = t.alias.toLowerCase()
+    const repoLabel = t.repoLabel.toLowerCase()
+    const repoSlug = t.repo.toLowerCase()
     if (alias.length >= 3 && hay.includes(alias)) score += 3
     // A playbook that names this thread's alias/repo is the strongest signal.
     if (hint.length >= 3 && alias.length >= 3 && hint.includes(alias)) score += 5
-    if (t.repoLabel.length >= 3 && hay.includes(t.repoLabel.toLowerCase())) score += 2
-    if (hint.length >= 3 && t.repoLabel.length >= 3 && hint.includes(t.repoLabel.toLowerCase())) score += 4
+    if (repoLabel.length >= 3 && hay.includes(repoLabel)) score += 2
+    if (hint.length >= 3 && repoLabel.length >= 3 && hint.includes(repoLabel)) score += 4
+    // Word-overlap between the playbook hint and the thread's repo/label/alias.
+    // Catches naming drift ("Upwork Monitor" playbook ↔ "Upwork API" repo).
+    if (hintWords.size > 0) {
+      const threadWords = `${repoLabel} ${repoSlug} ${alias} ${t.summary.toLowerCase()}`
+      for (const w of hintWords) {
+        if (threadWords.includes(w)) score += 4
+      }
+    }
     for (const w of t.summary.toLowerCase().split(/\W+/)) {
       if (w.length >= 4 && hay.includes(w)) score += 1
     }
@@ -70,3 +88,18 @@ export function pickRoutingTargetTag(
   }
   return best ? `${TARGET_PREFIX}mac:${best.id}` : `${TARGET_PREFIX}openclaw`
 }
+
+/** Generic words that should not drive playbook→thread target matching. */
+const TARGET_HINT_STOPWORDS: ReadonlySet<string> = new Set([
+  'monitor',
+  'agent',
+  'task',
+  'tasks',
+  'playbook',
+  'tool',
+  'tools',
+  'project',
+  'через',
+  'отправить',
+  'сгенерировать',
+])
