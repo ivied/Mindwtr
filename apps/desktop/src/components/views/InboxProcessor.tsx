@@ -3,6 +3,7 @@ import type { AppData, Area, Project, Task } from '@mindwtr/core';
 
 import { InboxProcessingQuickPanel } from '../InboxProcessingQuickPanel';
 import { InboxProcessingWizard } from '../InboxProcessingWizard';
+import { TwoMinuteTimer } from '../TwoMinuteTimer';
 import { useInboxProcessingController } from './inbox/useInboxProcessingController';
 
 type InboxProcessorProps = {
@@ -59,13 +60,18 @@ export function InboxProcessor({
     return (
         <>
             {showStartButton && (
-                <button
-                    onClick={startProcessing}
-                    className="w-full flex items-center justify-center gap-2 bg-primary text-primary-foreground py-3 px-4 rounded-lg font-medium hover:bg-primary/90 transition-colors"
-                >
-                    <Play className="w-4 h-4" />
-                    {t('process.btn')} ({inboxCount})
-                </button>
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={startProcessing}
+                        className="flex-1 flex items-center justify-center gap-2 bg-primary text-primary-foreground py-3 px-4 rounded-lg font-medium hover:bg-primary/90 transition-colors"
+                    >
+                        <Play className="w-4 h-4" />
+                        {t('process.btn')} ({inboxCount})
+                    </button>
+                    <div className="shrink-0 rounded-lg border border-border bg-card px-3 py-2">
+                        <TwoMinuteTimer t={t} resetKey="inbox-standalone" />
+                    </div>
+                </div>
             )}
 
             {quickPanelProps ? (
