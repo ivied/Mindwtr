@@ -9,6 +9,7 @@ import {
 } from './InboxProcessingScheduleFields';
 import { ProjectSelector } from './ui/ProjectSelector';
 import { QuickDateChips } from './QuickDateChips';
+import { TwoMinuteTimer } from './TwoMinuteTimer';
 
 type QuickActionabilityChoice = 'actionable' | 'later' | 'trash' | 'someday' | 'reference';
 type QuickTwoMinuteChoice = 'yes' | 'no';
@@ -190,6 +191,7 @@ export function InboxProcessingQuickPanel({
                     </span>
                 </div>
                 <div className="flex items-center gap-3 shrink-0">
+                    <TwoMinuteTimer t={t} resetKey={processingTask.id} />
                     <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5">
                         <button
                             type="button"
