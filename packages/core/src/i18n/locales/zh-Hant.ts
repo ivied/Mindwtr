@@ -574,6 +574,7 @@ export const zhHant: Record<string, string> = {
         'process.timerStart': '啟動2分鐘計時器',
         'process.timerPause': '暫停計時器',
         'process.timerReset': '重置計時器',
+        'process.timerStopAlarm': '關閉鬧鐘',
         'process.twoMin': '⏱️ 2分鐘內能完成嗎？',
         'process.twoMinDesc': '如果在2分鐘內能完成，請立即去做！',
         'process.doneIt': '已完成！',

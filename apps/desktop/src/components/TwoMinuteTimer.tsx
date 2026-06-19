@@ -1,38 +1,30 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pause, Play, RotateCcw } from 'lucide-react';
+import { BellOff, Pause, Play, RotateCcw } from 'lucide-react';
 import { tFallback } from '@mindwtr/core';
 
 import { cn } from '../lib/utils';
 
 const TIMER_SECONDS = 120;
+const ALARM_BEEP_INTERVAL_MS = 800;
 
 type TwoMinuteTimerProps = {
     t: (key: string) => string;
     resetKey: string;
 };
 
-function playAlarm(): void {
-    const AudioContextCtor = window.AudioContext
-        ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-    if (!AudioContextCtor) return;
-    const ctx = new AudioContextCtor();
-    const now = ctx.currentTime;
-    const beepCount = 3;
-    for (let i = 0; i < beepCount; i += 1) {
-        const start = now + i * 0.35;
-        const oscillator = ctx.createOscillator();
-        const gain = ctx.createGain();
-        oscillator.type = 'square';
-        oscillator.frequency.setValueAtTime(880, start);
-        gain.gain.setValueAtTime(0.0001, start);
-        gain.gain.exponentialRampToValueAtTime(0.25, start + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.25);
-        oscillator.connect(gain);
-        gain.connect(ctx.destination);
-        oscillator.start(start);
-        oscillator.stop(start + 0.3);
-    }
-    setTimeout(() => void ctx.close(), beepCount * 350 + 300);
+function emitBeep(ctx: AudioContext): void {
+    const start = ctx.currentTime;
+    const oscillator = ctx.createOscillator();
+    const gain = ctx.createGain();
+    oscillator.type = 'square';
+    oscillator.frequency.setValueAtTime(880, start);
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.25, start + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.25);
+    oscillator.connect(gain);
+    gain.connect(ctx.destination);
+    oscillator.start(start);
+    oscillator.stop(start + 0.3);
 }
 
 function formatRemaining(seconds: number): string {
@@ -44,7 +36,10 @@ function formatRemaining(seconds: number): string {
 export function TwoMinuteTimer({ t, resetKey }: TwoMinuteTimerProps) {
     const [remaining, setRemaining] = useState(TIMER_SECONDS);
     const [isRunning, setIsRunning] = useState(false);
+    const [isAlarming, setIsAlarming] = useState(false);
     const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const alarmIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const audioCtxRef = useRef<AudioContext | null>(null);
 
     const clearTimer = useCallback(() => {
         if (intervalRef.current !== null) {
@@ -53,13 +48,40 @@ export function TwoMinuteTimer({ t, resetKey }: TwoMinuteTimerProps) {
         }
     }, []);
 
+    const stopAlarm = useCallback(() => {
+        if (alarmIntervalRef.current !== null) {
+            clearInterval(alarmIntervalRef.current);
+            alarmIntervalRef.current = null;
+        }
+        if (audioCtxRef.current !== null) {
+            void audioCtxRef.current.close();
+            audioCtxRef.current = null;
+        }
+        setIsAlarming(false);
+    }, []);
+
+    const startAlarm = useCallback(() => {
+        const AudioContextCtor = window.AudioContext
+            ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!AudioContextCtor) return;
+        const ctx = new AudioContextCtor();
+        audioCtxRef.current = ctx;
+        setIsAlarming(true);
+        emitBeep(ctx);
+        alarmIntervalRef.current = setInterval(() => emitBeep(ctx), ALARM_BEEP_INTERVAL_MS);
+    }, []);
+
     useEffect(() => {
         clearTimer();
+        stopAlarm();
         setIsRunning(false);
         setRemaining(TIMER_SECONDS);
-    }, [resetKey, clearTimer]);
+    }, [resetKey, clearTimer, stopAlarm]);
 
-    useEffect(() => clearTimer, [clearTimer]);
+    useEffect(() => () => {
+        clearTimer();
+        stopAlarm();
+    }, [clearTimer, stopAlarm]);
 
     const start = useCallback(() => {
         if (isRunning) return;
@@ -69,13 +91,13 @@ export function TwoMinuteTimer({ t, resetKey }: TwoMinuteTimerProps) {
                 if (prev <= 1) {
                     clearTimer();
                     setIsRunning(false);
-                    playAlarm();
+                    startAlarm();
                     return 0;
                 }
                 return prev - 1;
             });
         }, 1000);
-    }, [isRunning, clearTimer]);
+    }, [isRunning, clearTimer, startAlarm]);
 
     const pause = useCallback(() => {
         clearTimer();
@@ -84,14 +106,16 @@ export function TwoMinuteTimer({ t, resetKey }: TwoMinuteTimerProps) {
 
     const reset = useCallback(() => {
         clearTimer();
+        stopAlarm();
         setIsRunning(false);
         setRemaining(TIMER_SECONDS);
-    }, [clearTimer]);
+    }, [clearTimer, stopAlarm]);
 
     const isFinished = remaining === 0;
     const startLabel = tFallback(t, 'process.timerStart', 'Start 2-min timer');
     const pauseLabel = tFallback(t, 'process.timerPause', 'Pause timer');
     const resetLabel = tFallback(t, 'process.timerReset', 'Reset timer');
+    const stopAlarmLabel = tFallback(t, 'process.timerStopAlarm', 'Stop alarm');
 
     return (
         <div className="inline-flex items-center gap-1.5">
@@ -107,37 +131,51 @@ export function TwoMinuteTimer({ t, resetKey }: TwoMinuteTimerProps) {
             >
                 {formatRemaining(remaining)}
             </span>
-            {isRunning ? (
+            {isAlarming ? (
                 <button
                     type="button"
-                    onClick={pause}
-                    aria-label={pauseLabel}
-                    title={pauseLabel}
-                    className="text-muted-foreground hover:text-foreground transition-colors"
+                    onClick={stopAlarm}
+                    aria-label={stopAlarmLabel}
+                    title={stopAlarmLabel}
+                    className="text-destructive hover:text-destructive/80 transition-colors"
                 >
-                    <Pause className="w-3.5 h-3.5" />
+                    <BellOff className="w-3.5 h-3.5" />
                 </button>
             ) : (
-                <button
-                    type="button"
-                    onClick={start}
-                    disabled={isFinished}
-                    aria-label={startLabel}
-                    title={startLabel}
-                    className="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
-                >
-                    <Play className="w-3.5 h-3.5" />
-                </button>
+                <>
+                    {isRunning ? (
+                        <button
+                            type="button"
+                            onClick={pause}
+                            aria-label={pauseLabel}
+                            title={pauseLabel}
+                            className="text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                            <Pause className="w-3.5 h-3.5" />
+                        </button>
+                    ) : (
+                        <button
+                            type="button"
+                            onClick={start}
+                            disabled={isFinished}
+                            aria-label={startLabel}
+                            title={startLabel}
+                            className="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
+                        >
+                            <Play className="w-3.5 h-3.5" />
+                        </button>
+                    )}
+                    <button
+                        type="button"
+                        onClick={reset}
+                        aria-label={resetLabel}
+                        title={resetLabel}
+                        className="text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                    </button>
+                </>
             )}
-            <button
-                type="button"
-                onClick={reset}
-                aria-label={resetLabel}
-                title={resetLabel}
-                className="text-muted-foreground hover:text-foreground transition-colors"
-            >
-                <RotateCcw className="w-3.5 h-3.5" />
-            </button>
         </div>
     );
 }

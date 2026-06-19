@@ -574,6 +574,7 @@ export const zhHans: Record<string, string> = {
         'process.timerStart': '启动2分钟计时器',
         'process.timerPause': '暂停计时器',
         'process.timerReset': '重置计时器',
+        'process.timerStopAlarm': '关闭闹钟',
         'process.twoMin': '⏱️ 2分钟内能完成吗？',
         'process.twoMinDesc': '如果在2分钟内能完成，请立即去做！',
         'process.doneIt': '已完成！',

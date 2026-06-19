@@ -635,6 +635,7 @@ export const en: Record<string, string> = {
         'process.timerStart': 'Start 2-min timer',
         'process.timerPause': 'Pause timer',
         'process.timerReset': 'Reset timer',
+        'process.timerStopAlarm': 'Stop alarm',
         'process.twoMin': '⏱️ Will it take less than 2 minutes?',
         'process.twoMinDesc': 'If yes, do it now!',
         'process.doneIt': 'Done it!',

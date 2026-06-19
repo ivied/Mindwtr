@@ -505,6 +505,7 @@ export const ruOverrides: Record<string, string> = {
         'process.timerStart': 'Запустить таймер 2 мин',
         'process.timerPause': 'Пауза',
         'process.timerReset': 'Сбросить таймер',
+        'process.timerStopAlarm': 'Выключить будильник',
         'process.twoMin': '⏱️ Это займет меньше 2 минут?',
         'process.twoMinDesc': 'Если да, сделайте это сейчас!',
         'process.doneIt': 'Готово!',
