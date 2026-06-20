@@ -22,6 +22,7 @@ import {
     AlertTriangle,
     Sparkles,
     Bot,
+    Radar,
     type LucideIcon,
 } from 'lucide-react';
 import { isProceduralAvailable } from '../lib/procedural-client';
@@ -261,6 +262,7 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
         'contexts',
         'obsidian',
         'settings',
+        'control-center',
     ]);
     const isFullWidthView = fullWidthViews.has(currentView);
 
@@ -304,6 +306,7 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
                 ...(isProceduralAvailable()
                     ? [{ id: 'ai-playbook', labelKey: 'nav.aiPlaybook', fallbackLabel: 'AI Playbook', icon: Sparkles }]
                     : []),
+                { id: 'control-center', labelKey: 'nav.controlCenter', fallbackLabel: 'Центр управления', icon: Radar },
                 { id: 'board', labelKey: 'nav.board', icon: Layers },
             ],
         },

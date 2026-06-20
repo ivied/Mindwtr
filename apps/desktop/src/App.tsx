@@ -10,6 +10,9 @@ const ReviewView = lazy(() => import('./components/views/ReviewView').then((m) =
 const ProceduralPlaybookView = lazy(() =>
     import('./components/views/ProceduralPlaybookView').then((m) => ({ default: m.ProceduralPlaybookView }))
 );
+const ControlCenterView = lazy(() =>
+    import('./components/views/ControlCenterView').then((m) => ({ default: m.ControlCenterView }))
+);
 import { ArchiveView } from './components/views/ArchiveView';
 import { TrashView } from './components/views/TrashView';
 import { AgendaView } from './components/views/AgendaView';
@@ -575,6 +578,8 @@ function App() {
                 return <ReviewView />;
             case 'ai-playbook':
                 return <ProceduralPlaybookView />;
+            case 'control-center':
+                return <ControlCenterView />;
             case 'settings':
                 return <SettingsView />;
             case 'archived':
