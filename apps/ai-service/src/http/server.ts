@@ -141,6 +141,48 @@ export function createHttpServer(config: HttpServerConfig) {
     return c.json(report, report.ok ? 200 : 503)
   })
 
+  // Control Center dashboard aggregator (Phase 2). One read-only call that
+  // bundles health + memory + procedural + recording so the web view doesn't
+  // fan out 4 requests. Lives under /v1 so it inherits CORS + bearer auth
+  // (the bare /health route has neither). Every section is null-safe: a
+  // missing dep just yields null, the UI degrades gracefully.
+  app.get('/v1/status/dashboard', async (c) => {
+    const health = config.healthMonitor ? await config.healthMonitor.check() : null
+
+    const mem = config.memory?.store ?? null
+    const startOfDay = new Date()
+    startOfDay.setUTCHours(0, 0, 0, 0)
+    const memory = mem
+      ? {
+          events: mem.countEvents(),
+          facts: mem.countFacts(),
+          activeFacts: mem.allActiveFacts(1000).length,
+          eventsToday: mem.countEventsSince(startOfDay.toISOString()),
+          latestEventAt: mem.latestEventIngestedAt(),
+        }
+      : null
+
+    let procedural: { total: number; visible: number } | null = null
+    if (config.procedural?.store) {
+      const all = config.procedural.store.listChunks({ limit: 500 })
+      let visible = 0
+      for (const r of all.items) if (r.appliesTo === 'universal' || r.appliesTo === 'mindwtr-only') visible++
+      procedural = { total: all.total, visible }
+    }
+
+    const active = config.recordings?.store.getActive() ?? null
+    const recording = { active: Boolean(active), taskTitle: active?.taskTitle ?? null }
+
+    return c.json({
+      ok: health?.ok ?? true,
+      components: health?.components ?? null,
+      memory,
+      procedural,
+      recording,
+      checkedAt: new Date().toISOString(),
+    })
+  })
+
   // CORS must precede bearerAuth: browser preflight OPTIONS arrives without
   // an Authorization header and would otherwise be rejected with 401.
   const corsOrigins = config.corsOrigins ?? ['http://localhost:5173']

@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTaskStore } from '@mindwtr/core';
+import { getDashboardStatus, isControlCenterAvailable, type DashboardStatus } from '../../lib/control-center-client';
 
 /**
  * Control Center — "Night Observatory" design (variant A).
@@ -37,11 +39,18 @@ const SOURCES: Src[] = [
   { name: 'Заметки', asset: 'source-notes-t.png', x: 0.18, y: 0.88, rate: 0, on: false, rateLabel: '—' },
 ];
 
-const STATUS_WORD: Record<DemoState, string> = {
-  '': 'Всё спокойно',
-  paused: 'На паузе',
-  attention: 'Нужно внимание',
-};
+function relTime(iso: string | null): string | null {
+  if (!iso) return null;
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return null;
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} сек назад`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} мин назад`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} ч назад`;
+  return `${Math.round(h / 24)} дн назад`;
+}
 
 export function ControlCenterView() {
   const [tab, setTab] = useState<'dash' | 'caps'>('dash');
@@ -51,6 +60,38 @@ export function ControlCenterView() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const sceneRef = useRef<HTMLDivElement | null>(null);
   const pausedRef = useRef(false);
+
+  // ── live dashboard data (Phase 2) ──
+  const [live, setLive] = useState<DashboardStatus | null>(null);
+  const [, forceTick] = useState(0);
+
+  useEffect(() => {
+    if (!isControlCenterAvailable()) return;
+    let stop = false;
+    let ctl: AbortController | null = null;
+    const poll = async () => {
+      ctl = new AbortController();
+      try {
+        const d = await getDashboardStatus(ctl.signal);
+        if (!stop) setLive(d);
+      } catch { /* keep last good; UI shows placeholders */ }
+    };
+    poll();
+    const id = window.setInterval(poll, 8000);
+    // re-render the relative "N назад" label every 15s without refetching
+    const relId = window.setInterval(() => !stop && forceTick((n) => n + 1), 15000);
+    return () => { stop = true; ctl?.abort(); clearInterval(id); clearInterval(relId); };
+  }, []);
+
+  // @ai-agent tasks live from the local store (delegated work)
+  const allTasks = useTaskStore((s) => (s._allTasks ?? s.tasks ?? []));
+  const agent = useMemo(() => {
+    const mine = allTasks.filter((t) => t.assignedTo === '@ai-agent' && !t.deletedAt);
+    const has = (t: typeof mine[number], stage: string) => (t.tags ?? []).includes(`ai-stage:${stage}`);
+    const inProgress = mine.filter((t) => has(t, 'doing') || has(t, 'queued'));
+    const stuck = mine.filter((t) => has(t, 'error'));
+    return { inProgress: inProgress.length, stuck, total: mine.length };
+  }, [allTasks]);
 
   useEffect(() => { pausedRef.current = demo === 'paused'; }, [demo]);
 
@@ -116,7 +157,20 @@ export function ControlCenterView() {
     return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', resize); };
   }, [tab]);
 
-  const bodyClass = demo ? `cc-${demo}` : '';
+  // ── derive display values: demo state overrides for preview, else live ──
+  const healthOk = live ? live.ok : true;
+  // effective state: explicit demo wins; otherwise live health drives attention
+  const effState: DemoState = demo !== '' ? demo : (!healthOk || agent.stuck.length > 0 ? 'attention' : '');
+  const statusWord = effState === 'paused' ? 'На паузе'
+    : effState === 'attention' ? 'Нужно внимание'
+    : 'Всё спокойно';
+  const heartbeat = relTime(live?.memory?.latestEventAt ?? null);
+  const eventsToday = live?.memory?.eventsToday ?? null;
+  const skillsVisible = live?.procedural?.visible ?? null;
+  const showStuck = effState === 'attention';
+  const stuckTitle = agent.stuck[0]?.title ?? 'Ревью PR #53';
+
+  const bodyClass = effState ? `cc-${effState}` : '';
 
   return (
     <div className={`cc-root ${bodyClass}`}>
@@ -159,8 +213,8 @@ export function ControlCenterView() {
             ))}
             <div className="cc-core">
               <img src={ASSET('core-t.png')} alt="" />
-              <div className="cc-word">{STATUS_WORD[demo]}</div>
-              <div className="cc-sub">наблюдаю и думаю · <span className="cc-mono">12 сек назад</span></div>
+              <div className="cc-word">{statusWord}</div>
+              <div className="cc-sub">наблюдаю и думаю{heartbeat ? <> · <span className="cc-mono">{heartbeat}</span></> : ''}</div>
               <div className="cc-pnote">Наблюдение на паузе — ничего не записывается.</div>
             </div>
             {srcCard && (
@@ -179,15 +233,15 @@ export function ControlCenterView() {
 
           <div className="cc-side">
             <div className="cc-daystrip">
-              <div><div className="cc-n">312</div><div className="cc-l">наблюдений</div></div>
-              <div><div className="cc-n">4</div><div className="cc-l">предложения</div></div>
-              <div><div className="cc-n">2</div><div className="cc-l">в работе</div></div>
-              <div><div className="cc-n">1</div><div className="cc-l">новый навык</div></div>
+              <div><div className="cc-n">{eventsToday ?? '—'}</div><div className="cc-l">наблюдений</div></div>
+              <div><div className="cc-n">{live?.memory?.activeFacts ?? '—'}</div><div className="cc-l">фактов</div></div>
+              <div><div className="cc-n">{agent.inProgress}</div><div className="cc-l">в работе</div></div>
+              <div><div className="cc-n">{skillsVisible ?? '—'}</div><div className="cc-l">навыков</div></div>
             </div>
-            {demo === 'attention' && (
+            {showStuck && (
               <div className="cc-problem">
                 <div className="cc-ttl"><span className="cc-pdot" />Поручение застряло</div>
-                <p>«Ревью PR #53» — исполнитель не отвечает уже 40 минут. Перезапустить или вернуть тебе?</p>
+                <p>«{stuckTitle}» — исполнитель не отвечает. Перезапустить или вернуть тебе?</p>
                 <div className="cc-acts"><button>⟳ Перезапустить</button><button>Забрать себе</button><button>Отменить</button></div>
               </div>
             )}

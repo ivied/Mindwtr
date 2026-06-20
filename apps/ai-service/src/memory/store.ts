@@ -164,6 +164,22 @@ export class MemoryStore {
     return r?.n ?? 0
   }
 
+  /** Newest event ingestion time, for the Control Center capture heartbeat. */
+  latestEventIngestedAt(): string | null {
+    const r = this.db
+      .query<{ ingested_at: string }, []>('SELECT ingested_at FROM events ORDER BY ingested_at DESC LIMIT 1')
+      .get()
+    return r?.ingested_at ?? null
+  }
+
+  /** Count of events ingested today (server-local UTC date), for day-strip. */
+  countEventsSince(sinceIso: string): number {
+    const r = this.db
+      .query<{ n: number }, [string]>('SELECT COUNT(*) AS n FROM events WHERE ingested_at >= ?')
+      .get(sinceIso)
+    return r?.n ?? 0
+  }
+
   /** Date range scan, ts-ascending. */
   eventsBetween(startIso: string, endIso: string, limit = 5000): Event[] {
     const rows = this.db
