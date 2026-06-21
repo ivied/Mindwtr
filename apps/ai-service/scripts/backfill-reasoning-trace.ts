@@ -60,7 +60,7 @@ async function main(): Promise<void> {
   const dataDir = process.env.DATA_DIR ?? '/app/data'
   const llmBaseUrl = process.env.LLM_BASE_URL
   const llmApiKey = process.env.LLM_API_KEY
-  const llmModel = process.env.LLM_MODEL ?? 'cc/claude-opus-4-6'
+  const llmModel = process.env.LLM_MODEL_OPUS ?? process.env.LLM_MODEL ?? 'cx/gpt-5.5'
 
   if (!llmBaseUrl || !llmApiKey) {
     console.error('LLM_BASE_URL and LLM_API_KEY are required')

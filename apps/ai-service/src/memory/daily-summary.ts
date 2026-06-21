@@ -17,6 +17,7 @@ export interface DailySummaryOptions {
   store: MemoryStore
   llm: LLMClient
   embeddings: EmbeddingsProvider | null
+  model?: string
   /** Override clock — for tests. */
   now?: () => Date
 }
@@ -122,6 +123,7 @@ ${eventLines.join('\n')}`
       ],
       max_tokens: 800,
       temperature: 0.2,
+      model: this.opts.model,
     })
     const raw = (res.choices[0]?.message?.content ?? '').trim()
     if (/^SKIP\b/i.test(raw)) return ''

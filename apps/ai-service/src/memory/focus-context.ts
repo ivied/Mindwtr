@@ -22,6 +22,7 @@ export interface FocusContextOptions {
   store: MemoryStore
   retriever: HybridRetriever
   llm?: LLMClient | null
+  model?: string
 }
 
 export interface AssembleArgs {
@@ -108,6 +109,7 @@ ${eventLines.join('\n') || '(none)'}`
       ],
       max_tokens: 400,
       temperature: 0.2,
+      model: this.opts.model,
     })
     return (res.choices[0]?.message?.content ?? '').trim()
   }

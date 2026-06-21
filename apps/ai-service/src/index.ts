@@ -59,7 +59,12 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? ''
 
 const LLM_BASE_URL = process.env.LLM_BASE_URL ?? ''
 const LLM_API_KEY = process.env.LLM_API_KEY ?? ''
-const LLM_MODEL = process.env.LLM_MODEL ?? 'cc/claude-opus-4-6'
+// Two tiers behind one proxy. Heavy reasoning nodes use OPUS; lightweight
+// classify/select/extract/summarize nodes use SONNET. LLM_MODEL stays as the
+// opus alias for backward-compatible deployments. The LLMClient falls one tier
+// back to the other when its primary model errors on the proxy.
+const LLM_MODEL_OPUS = process.env.LLM_MODEL_OPUS ?? process.env.LLM_MODEL ?? 'cx/gpt-5.5'
+const LLM_MODEL_SONNET = process.env.LLM_MODEL_SONNET ?? 'cx/gpt-5.4-mini'
 
 // Comma-separated xoxp- user tokens, one per workspace. "See what I see"
 // across workspaces the user doesn't own (bot tokens can't do this).
@@ -231,10 +236,13 @@ let enricherPipeline: EnricherPipeline | null = null
 let commitmentPipeline: CommitmentPipeline | null = null
 let commentHandler: CommentHandler | null = null
 if (LLM_BASE_URL && LLM_API_KEY) {
-  const llm = new LLMClient(LLM_BASE_URL, LLM_API_KEY, LLM_MODEL)
+  const llm = new LLMClient(LLM_BASE_URL, LLM_API_KEY, {
+    opus: LLM_MODEL_OPUS,
+    sonnet: LLM_MODEL_SONNET,
+  })
   const retriever = new ContextRetriever(contextStore)
 
-  const enricher = new Enricher(llm)
+  const enricher = new Enricher(llm, LLM_MODEL_OPUS)
   enricherPipeline = new EnricherPipeline({
     enricher,
     proposalStore,
@@ -243,10 +251,12 @@ if (LLM_BASE_URL && LLM_API_KEY) {
   // LLM-based run-target selection for AI-routable tasks: reads the live Mac
   // thread registry + playbook hint and picks the session/repo/openclaw the
   // way a human would. Falls back to the deterministic keyword matcher.
-  enricherPipeline.setTargetSelector(new ThreadTargetSelector(llm))
-  console.log(`🪄 Enricher enabled (${LLM_MODEL}) — push captures → modify/split proposals`)
+  enricherPipeline.setTargetSelector(new ThreadTargetSelector(llm, LLM_MODEL_SONNET))
+  console.log(
+    `🪄 Enricher enabled (opus=${LLM_MODEL_OPUS}, sonnet=${LLM_MODEL_SONNET}) — push captures → modify/split proposals`
+  )
 
-  const proposer = new Proposer(llm)
+  const proposer = new Proposer(llm, LLM_MODEL_OPUS)
   const writer = new ProposalWriter(proposalStore)
   const sourceDeny = denyConfigFromEnv()
   commitmentPipeline = new CommitmentPipeline(proposer, writer, {
@@ -339,7 +349,7 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     // Proposer. Heuristic runs at upsert (cheap regex); LLM batches what's
     // left as 'needs-review' each tick — capped at 10 chunks/tick so we
     // don't blow the budget on a fresh import.
-    const procClassifier = new LlmChunkClassifier({ llm, model: LLM_MODEL })
+    const procClassifier = new LlmChunkClassifier({ llm, model: LLM_MODEL_SONNET })
     proceduralReader = new ProceduralReader({
       store: proceduralStore,
       rootDir: SHARED_MEMORY_DIR,
@@ -380,7 +390,7 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     // freshly-stopped session via the hook in HttpServerConfig.recordings.
     recordingDistiller = new RecordingDistiller({
       llm,
-      model: LLM_MODEL,
+      model: LLM_MODEL_OPUS,
       db: contextStore.rawDb,
       sessionStore: recordingStore,
       proceduralStore,
@@ -407,7 +417,7 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     `🎯 Commitment Detector enabled (deny apps:${sourceDeny.apps.length}, deny urls:${sourceDeny.urlPatterns.length}, inbox-dedup on, identity:${USER_IDENTITY_NAME || 'unset'}, persons:${personsProvider ? 'wiki' : 'unset'})`
   )
 
-  const reviser = new Reviser(llm)
+  const reviser = new Reviser(llm, LLM_MODEL_OPUS)
   commentHandler = new CommentHandler({
     store: proposalStore,
     reviser,
@@ -417,7 +427,7 @@ if (LLM_BASE_URL && LLM_API_KEY) {
   console.log('💬 Proposal dialogue enabled (Reviser)')
 
   // Memory module wire-up requires the same LLM client.
-  const memoryExtractor = new UnifiedExtractor(llm)
+  const memoryExtractor = new UnifiedExtractor(llm, LLM_MODEL_SONNET)
   memoryIngest = new IngestService({
     store: memoryStore,
     embeddings,
@@ -428,11 +438,13 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     store: memoryStore,
     retriever: memoryRetriever,
     llm,
+    model: LLM_MODEL_SONNET,
   })
   dailySummaryJob = new DailySummaryJob({
     store: memoryStore,
     llm,
     embeddings,
+    model: LLM_MODEL_SONNET,
   })
   // Proactive runner — surfaces follow-up proposals from stale facts.
   // Source-agent='proactive-runner' on every proposal so UI / audit can
@@ -441,6 +453,7 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     memoryStore,
     proposalStore,
     llm,
+    model: LLM_MODEL_OPUS,
     mindwtrClient: mindwtr,
     retriever: memoryRetriever,
   })

@@ -100,7 +100,10 @@ Fact rules:
 Output ONLY the JSON object. No preamble, no markdown.`
 
 export class UnifiedExtractor {
-  constructor(private readonly llm: LLMClient) {}
+  constructor(
+    private readonly llm: LLMClient,
+    private readonly model?: string
+  ) {}
 
   async extract(input: ExtractInput): Promise<ExtractOutput> {
     const userPrompt = buildUserPrompt(input)
@@ -111,6 +114,7 @@ export class UnifiedExtractor {
       ],
       max_tokens: 1500,
       temperature: 0,
+      model: this.model,
     })
     const raw = res.choices[0]?.message?.content ?? ''
     return parseExtractorOutput(raw)

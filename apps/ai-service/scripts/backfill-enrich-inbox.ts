@@ -12,7 +12,7 @@
  *
  * Env:
  *   MINDWTR_CLOUD_URL, MINDWTR_AUTH_TOKEN — Cloud API (same as service)
- *   LLM_BASE_URL, LLM_API_KEY, LLM_MODEL — LLM (same as service)
+ *   LLM_BASE_URL, LLM_API_KEY, LLM_MODEL_OPUS — LLM (same as service)
  *   DATA_DIR — directory holding context.db (same as service)
  *   BACKFILL_COUNT — how many tasks to process (default 5)
  *
@@ -50,7 +50,7 @@ async function main(): Promise<void> {
   const dataDir = process.env.DATA_DIR ?? '/app/data'
   const llmBaseUrl = process.env.LLM_BASE_URL ?? ''
   const llmApiKey = process.env.LLM_API_KEY ?? ''
-  const llmModel = process.env.LLM_MODEL ?? 'cc/claude-opus-4-6'
+  const llmModel = process.env.LLM_MODEL_OPUS ?? process.env.LLM_MODEL ?? 'cx/gpt-5.5'
 
   if (!authToken) {
     console.error('MINDWTR_AUTH_TOKEN is required')

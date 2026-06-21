@@ -53,19 +53,49 @@ interface ChatCompletionResponse {
 }
 
 export class LLMClient {
+  private readonly defaultModel: string
+  /** Maps a model to the model used when its request fails. */
+  private readonly fallbackOf: Map<string, string>
+
   constructor(
     private baseUrl: string,
     private apiKey: string,
-    private defaultModel: string
+    models: string | { opus: string; sonnet: string }
   ) {
     this.baseUrl = baseUrl.replace(/\/$/, '')
+    if (typeof models === 'string') {
+      this.defaultModel = models
+      this.fallbackOf = new Map()
+    } else {
+      // opus-tier requests fall back to sonnet and vice versa, so a single
+      // model being down on the proxy degrades quality rather than failing.
+      this.defaultModel = models.opus
+      this.fallbackOf = new Map([
+        [models.opus, models.sonnet],
+        [models.sonnet, models.opus],
+      ])
+    }
   }
 
   async chatCompletion(
     request: Omit<ChatCompletionRequest, 'model'> & { model?: string }
   ): Promise<ChatCompletionResponse> {
+    const primary = request.model ?? this.defaultModel
+    try {
+      return await this.send(request, primary)
+    } catch (err) {
+      const fallback = this.fallbackOf.get(primary)
+      if (!fallback) throw err
+      return this.send(request, fallback)
+    }
+  }
+
+  private async send(
+    request: Omit<ChatCompletionRequest, 'model'> & { model?: string },
+    model: string
+  ): Promise<ChatCompletionResponse> {
     const body: ChatCompletionRequest = {
-      model: request.model ?? this.defaultModel,
+      model,
       messages: request.messages,
       tools: request.tools,
       tool_choice: request.tool_choice,

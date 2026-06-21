@@ -59,6 +59,7 @@ export interface ProactiveRunnerOptions {
   mindwtrClient?: MindwtrClient | null
   /** Needed for reverse pass entity-matching via task title. */
   retriever?: HybridRetriever | null
+  model?: string
   /** Defaults DEFAULT_PROACTIVE_CONFIG; overrides merge field-by-field. */
   config?: Partial<ProactiveConfig>
   /** Override wall clock for tests. */
@@ -308,6 +309,7 @@ export class ProactiveRunner {
       ],
       max_tokens: 500,
       temperature: 0.2,
+      model: this.opts.model,
     })
     const raw = res.choices[0]?.message?.content ?? ''
     return parseProactiveOutput(raw)
@@ -769,6 +771,7 @@ export class ProactiveRunner {
       ],
       max_tokens: 500,
       temperature: 0.1,
+      model: this.opts.model,
     })
     const raw = res.choices[0]?.message?.content ?? ''
     return parseCompletionOutput(raw)
