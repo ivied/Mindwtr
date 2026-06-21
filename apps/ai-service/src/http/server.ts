@@ -130,6 +130,12 @@ export interface HttpServerConfig {
   slackSession?: {
     upsert(token: string, cookie: string): Promise<{ teamId: string; teamName: string }>
   } | null
+  /** Optional control-plane config (Phase 3 capture pause). When set, exposes
+   *  GET/POST /v1/agent-config and feeds capturePaused into the dashboard. */
+  agentConfig?: {
+    get(): { capturePaused: boolean; updatedAt: string | null }
+    setCapturePaused(paused: boolean): { capturePaused: boolean; updatedAt: string | null }
+  } | null
 }
 
 export function createHttpServer(config: HttpServerConfig) {
@@ -141,11 +147,33 @@ export function createHttpServer(config: HttpServerConfig) {
     return c.json(report, report.ok ? 200 : 503)
   })
 
+  // CORS must precede bearerAuth: browser preflight OPTIONS arrives without
+  // an Authorization header and would otherwise be rejected with 401.
+  const corsOrigins = config.corsOrigins ?? ['http://localhost:5173']
+  app.use(
+    '/v1/*',
+    cors({
+      // Allow the configured web origins, plus any chrome-extension:// origin
+      // (the Slack token-pusher extension's id isn't known ahead of time; the
+      // bearer token is the real guard).
+      origin: (origin) => {
+        if (!origin) return corsOrigins[0] ?? null
+        if (corsOrigins.includes(origin)) return origin
+        if (origin.startsWith('chrome-extension://')) return origin
+        return null
+      },
+      allowHeaders: ['Authorization', 'Content-Type'],
+      allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+      maxAge: 86400,
+    })
+  )
+
+  app.use('/v1/*', bearerAuth({ token: config.authToken }))
+
   // Control Center dashboard aggregator (Phase 2). One read-only call that
-  // bundles health + memory + procedural + recording so the web view doesn't
-  // fan out 4 requests. Lives under /v1 so it inherits CORS + bearer auth
-  // (the bare /health route has neither). Every section is null-safe: a
-  // missing dep just yields null, the UI degrades gracefully.
+  // bundles health + memory + procedural + recording + per-source arrivals so
+  // the web view doesn't fan out. Registered AFTER cors + bearerAuth so it
+  // inherits both. Every section is null-safe; a missing dep yields null.
   app.get('/v1/status/dashboard', async (c) => {
     const health = config.healthMonitor ? await config.healthMonitor.check() : null
 
@@ -173,38 +201,55 @@ export function createHttpServer(config: HttpServerConfig) {
     const active = config.recordings?.store.getActive() ?? null
     const recording = { active: Boolean(active), taskTitle: active?.taskTitle ?? null }
 
+    // per-source arrivals in the last 10 minutes → drives the honest flow.
+    let sources: Record<string, { recent: number; lastAt: string | null }> | null = null
+    if (mem) {
+      const since = new Date(Date.now() - 10 * 60 * 1000).toISOString()
+      const rows = mem.recentCountsBySource(since)
+      const bucket = (s: string): 'screen' | 'audio' | 'chat' | 'notes' | null => {
+        if (s === 'screen') return 'screen'
+        if (s === 'audio') return 'audio'
+        if (s.startsWith('slack') || s.startsWith('telegram')) return 'chat'
+        if (s.startsWith('notion')) return 'notes'
+        return null
+      }
+      const agg: Record<string, { recent: number; lastAt: string | null }> = {
+        screen: { recent: 0, lastAt: null }, audio: { recent: 0, lastAt: null },
+        chat: { recent: 0, lastAt: null }, notes: { recent: 0, lastAt: null },
+      }
+      for (const r of rows) {
+        const b = bucket(r.source); if (!b) continue
+        agg[b].recent += r.count
+        if (!agg[b].lastAt || r.lastAt > agg[b].lastAt!) agg[b].lastAt = r.lastAt
+      }
+      sources = agg
+    }
+
     return c.json({
       ok: health?.ok ?? true,
       components: health?.components ?? null,
+      capturePaused: config.agentConfig?.get().capturePaused ?? false,
       memory,
       procedural,
       recording,
+      sources,
       checkedAt: new Date().toISOString(),
     })
   })
 
-  // CORS must precede bearerAuth: browser preflight OPTIONS arrives without
-  // an Authorization header and would otherwise be rejected with 401.
-  const corsOrigins = config.corsOrigins ?? ['http://localhost:5173']
-  app.use(
-    '/v1/*',
-    cors({
-      // Allow the configured web origins, plus any chrome-extension:// origin
-      // (the Slack token-pusher extension's id isn't known ahead of time; the
-      // bearer token is the real guard).
-      origin: (origin) => {
-        if (!origin) return corsOrigins[0] ?? null
-        if (corsOrigins.includes(origin)) return origin
-        if (origin.startsWith('chrome-extension://')) return origin
-        return null
-      },
-      allowHeaders: ['Authorization', 'Content-Type'],
-      allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-      maxAge: 86400,
+  // Control-plane: capture pause switch (Phase 3). capture-agent polls GET;
+  // the Control Center toggles via POST { capturePaused }.
+  if (config.agentConfig) {
+    const ac = config.agentConfig
+    app.get('/v1/agent-config', (c) => c.json(ac.get()))
+    app.post('/v1/agent-config', async (c) => {
+      const body = (await c.req.json().catch(() => ({}))) as { capturePaused?: unknown }
+      if (typeof body.capturePaused !== 'boolean') {
+        return c.json({ error: 'capturePaused (boolean) required' }, 400)
+      }
+      return c.json(ac.setCapturePaused(body.capturePaused))
     })
-  )
-
-  app.use('/v1/*', bearerAuth({ token: config.authToken }))
+  }
 
   app.post('/v1/capture', async (c) => {
     let payload: CapturePayload

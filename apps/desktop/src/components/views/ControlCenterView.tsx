@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTaskStore } from '@mindwtr/core';
-import { getDashboardStatus, isControlCenterAvailable, type DashboardStatus } from '../../lib/control-center-client';
+import { getDashboardStatus, setCapturePaused, isControlCenterAvailable, type DashboardStatus, type SourceKey } from '../../lib/control-center-client';
 
 /**
  * Control Center — "Night Observatory" design (variant A).
@@ -22,21 +22,22 @@ type DemoState = '' | 'paused' | 'attention';
 const ASSET = (name: string) => `/control-center/${name}`;
 
 interface Src {
+  key: SourceKey;
   name: string;
+  shortName: string;
   asset: string;
   // position in the scene (fractions of the scene box)
   x: number;
   y: number;
-  rate: number; // particle emission, 0 = off
-  on: boolean;
-  rateLabel: string;
+  // true = source configured/available; notes has no Notion wired yet
+  configured: boolean;
 }
 
 const SOURCES: Src[] = [
-  { name: 'Экран', asset: 'source-screen-t.png', x: 0.07, y: 0.12, rate: 0.34, on: true, rateLabel: 'активен' },
-  { name: 'Звук', asset: 'source-audio-t.png', x: 0.04, y: 0.42, rate: 0.08, on: true, rateLabel: 'тихо' },
-  { name: 'Мессенджеры', asset: 'source-chat-t.png', x: 0.08, y: 0.70, rate: 0.20, on: true, rateLabel: 'активны' },
-  { name: 'Заметки', asset: 'source-notes-t.png', x: 0.18, y: 0.88, rate: 0, on: false, rateLabel: '—' },
+  { key: 'screen', name: 'Экран', shortName: 'Экран', asset: 'source-screen-t.png', x: 0.07, y: 0.12, configured: true },
+  { key: 'audio', name: 'Звук', shortName: 'Звук', asset: 'source-audio-t.png', x: 0.04, y: 0.42, configured: true },
+  { key: 'chat', name: 'Мессенджеры', shortName: 'Чаты', asset: 'source-chat-t.png', x: 0.08, y: 0.70, configured: true },
+  { key: 'notes', name: 'Заметки', shortName: 'Заметки', asset: 'source-notes-t.png', x: 0.18, y: 0.88, configured: false },
 ];
 
 function relTime(iso: string | null): string | null {
@@ -60,10 +61,24 @@ export function ControlCenterView() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const sceneRef = useRef<HTMLDivElement | null>(null);
   const pausedRef = useRef(false);
+  // per-source recent counts the flow animation reads each frame (honest flow)
+  const ratesRef = useRef<Record<SourceKey, number>>({ screen: 0, audio: 0, chat: 0, notes: 0 });
 
   // ── live dashboard data (Phase 2) ──
   const [live, setLive] = useState<DashboardStatus | null>(null);
   const [, forceTick] = useState(0);
+
+  // feed live source activity into the animation ref (no canvas restart)
+  useEffect(() => {
+    if (live?.sources) {
+      ratesRef.current = {
+        screen: live.sources.screen?.recent ?? 0,
+        audio: live.sources.audio?.recent ?? 0,
+        chat: live.sources.chat?.recent ?? 0,
+        notes: live.sources.notes?.recent ?? 0,
+      };
+    }
+  }, [live]);
 
   useEffect(() => {
     if (!isControlCenterAvailable()) return;
@@ -93,7 +108,7 @@ export function ControlCenterView() {
     return { inProgress: inProgress.length, stuck, total: mine.length };
   }, [allTasks]);
 
-  useEffect(() => { pausedRef.current = demo === 'paused'; }, [demo]);
+  useEffect(() => { pausedRef.current = (live?.capturePaused ?? false) || demo === 'paused'; }, [demo, live]);
 
   // ── particle flow on the scene canvas ──
   useEffect(() => {
@@ -125,20 +140,28 @@ export function ControlCenterView() {
       const mx = (sx + ex) / 2 + (Math.random() - 0.5) * 90, my = (sy + ey) / 2 + (Math.random() - 0.5) * 90;
       parts.push({ sx, sy, ex, ey, mx, my, t: 0, sp: 0.0016 + Math.random() * 0.001, r: 1.1 + Math.random() * 1.4, warm: Math.random() < 0.1 });
     };
+    // intensity 0..1 from real recent-10min count (≈30 events = busy)
+    const intensity = (s: Src) => {
+      if (!s.configured) return 0;
+      const recent = ratesRef.current[s.key] ?? 0;
+      return Math.min(1, recent / 30);
+    };
     const drawThreads = () => {
       SOURCES.forEach((s) => {
+        const live = intensity(s) > 0;
         const sx = s.x * W() + 42, sy = s.y * H() + 42, ex = core.x * W(), ey = core.y * H();
         const mx = (sx + ex) / 2, my = (sy + ey) / 2 - 30;
         cx.beginPath(); cx.moveTo(sx, sy); cx.quadraticCurveTo(mx, my, ex, ey);
-        cx.strokeStyle = s.on ? 'rgba(55,211,197,.07)' : 'rgba(93,111,109,.05)';
-        cx.lineWidth = 1; cx.setLineDash(s.on ? [] : [2, 7]); cx.stroke(); cx.setLineDash([]);
+        cx.strokeStyle = live ? 'rgba(55,211,197,.07)' : 'rgba(93,111,109,.05)';
+        cx.lineWidth = 1; cx.setLineDash(live ? [] : [2, 7]); cx.stroke(); cx.setLineDash([]);
       });
     };
     const tick = () => {
       cx.clearRect(0, 0, W(), H());
       drawThreads();
       const paused = pausedRef.current;
-      if (!paused) SOURCES.forEach((s) => { if (s.on && Math.random() < s.rate * 0.04) spawn(s); });
+      // emission probability ∝ real activity; quiet sources emit nothing
+      if (!paused) SOURCES.forEach((s) => { const i = intensity(s); if (i > 0 && Math.random() < i * 0.045) spawn(s); });
       for (let i = parts.length - 1; i >= 0; i--) {
         const p = parts[i]; if (!paused) p.t += p.sp;
         if (p.t >= 1) { parts.splice(i, 1); continue; }
@@ -157,18 +180,40 @@ export function ControlCenterView() {
     return () => { cancelAnimationFrame(raf); window.removeEventListener('resize', resize); };
   }, [tab]);
 
-  // ── derive display values: demo state overrides for preview, else live ──
+  // ── derive display values: real capture-pause + live, demo overrides preview ──
+  const realPaused = live?.capturePaused ?? false;
   const healthOk = live ? live.ok : true;
-  // effective state: explicit demo wins; otherwise live health drives attention
-  const effState: DemoState = demo !== '' ? demo : (!healthOk || agent.stuck.length > 0 ? 'attention' : '');
+  // effective state: real pause OR demo wins; otherwise live health drives attention
+  const effState: DemoState = (realPaused || demo === 'paused') ? 'paused'
+    : demo === 'attention' ? 'attention'
+    : (!healthOk || agent.stuck.length > 0 ? 'attention' : '');
   const statusWord = effState === 'paused' ? 'На паузе'
     : effState === 'attention' ? 'Нужно внимание'
     : 'Всё спокойно';
   const heartbeat = relTime(live?.memory?.latestEventAt ?? null);
   const eventsToday = live?.memory?.eventsToday ?? null;
   const skillsVisible = live?.procedural?.visible ?? null;
-  const showStuck = effState === 'attention';
+  const showStuck = effState === 'attention' && (agent.stuck.length > 0 || demo === 'attention');
   const stuckTitle = agent.stuck[0]?.title ?? 'Ревью PR #53';
+
+  // real pause toggle: hits the backend when available, else demo preview
+  const togglePause = () => {
+    if (isControlCenterAvailable()) {
+      const next = !realPaused;
+      setLive((p) => (p ? { ...p, capturePaused: next } : p)); // optimistic
+      setCapturePaused(next).catch(() => setLive((p) => (p ? { ...p, capturePaused: !next } : p)));
+    } else {
+      setDemo(demo === 'paused' ? '' : 'paused');
+    }
+  };
+
+  // per-source live label + dimming
+  const srcDisplay = (s: Src) => {
+    const a = live?.sources?.[s.key];
+    if (!s.configured) return { off: true, label: '—' };
+    const recent = a?.recent ?? 0;
+    return { off: false, label: recent > 20 ? 'активен' : recent > 0 ? 'тихо' : 'нет данных' };
+  };
 
   const bodyClass = effState ? `cc-${effState}` : '';
 
@@ -191,8 +236,8 @@ export function ControlCenterView() {
             <button className={demo === 'attention' ? 'on' : ''} onClick={() => setDemo('attention')}>внимание</button>
           </div>
         </div>
-        <button className="cc-pause" onClick={() => setDemo(demo === 'paused' ? '' : 'paused')}>
-          <span className="cc-dot" />{demo === 'paused' ? 'На паузе' : 'Наблюдаю'}
+        <button className="cc-pause" onClick={togglePause}>
+          <span className="cc-dot" />{effState === 'paused' ? 'На паузе' : 'Наблюдаю'}
         </button>
       </header>
 
@@ -204,11 +249,11 @@ export function ControlCenterView() {
             <canvas ref={canvasRef} className="cc-canvas" />
             <div className="cc-hint">Источники питают ассистента живым контекстом. Свечение нити = реальная активность. Клик по сущности — детали.</div>
             {SOURCES.map((s) => (
-              <div key={s.name} className={`cc-ent ${s.on ? '' : 'off'}`} style={{ left: `${s.x * 100}%`, top: `${s.y * 100}%` }}
+              <div key={s.name} className={`cc-ent ${srcDisplay(s).off ? 'off' : ''}`} style={{ left: `${s.x * 100}%`, top: `${s.y * 100}%` }}
                    onClick={(e) => { e.stopPropagation(); setSrcCard(s.name); }}>
                 <img src={ASSET(s.asset)} alt="" />
-                <div className="cc-lbl">{s.name.length > 8 ? 'Чаты' : s.name}</div>
-                <div className="cc-rate">{s.rateLabel}</div>
+                <div className="cc-lbl">{s.shortName}</div>
+                <div className="cc-rate">{srcDisplay(s).label}</div>
               </div>
             ))}
             <div className="cc-core">
@@ -253,7 +298,7 @@ export function ControlCenterView() {
               <Evt t="1 ч" body="Записал дневную сводку" sub="312 наблюдений за день" />
               <Evt t="3 ч" body={<>Выучил навык <em>«Выставление счёта»</em></>} sub="записан с твоей демонстрации · ждёт проверки" />
             </div>
-            {demo === 'paused' && <div className="cc-paused-note">Лента остановлена. Возобновлю наблюдение по твоей команде.</div>}
+            {effState === 'paused' && <div className="cc-paused-note">Наблюдение остановлено. Возобновлю по твоей команде.</div>}
           </div>
         </div>
       )}

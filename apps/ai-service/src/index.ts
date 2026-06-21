@@ -52,6 +52,7 @@ import {
   LlmChunkClassifier,
 } from './memory/procedural'
 import { RecordingDistiller, RecordingSessionStore } from './recording'
+import { AgentConfigStore } from './agent-config/store'
 
 const MINDWTR_CLOUD_URL = process.env.MINDWTR_CLOUD_URL ?? 'http://localhost:8787'
 const MINDWTR_AUTH_TOKEN = process.env.MINDWTR_AUTH_TOKEN ?? ''
@@ -224,6 +225,7 @@ let proactiveRunner: ProactiveRunner | null = null
 let proceduralStore: ProceduralStore | null = null
 let proceduralReader: ProceduralReader | null = null
 const recordingStore = new RecordingSessionStore(contextStore.rawDb)
+const agentConfig = new AgentConfigStore(join(DATA_DIR, 'agent-config.json'))
 let recordingDistiller: RecordingDistiller | null = null
 
 // --- AI Enricher (push) + Commitment Detector (pull) + Reviser ---
@@ -800,6 +802,7 @@ async function main() {
             },
           }
         : null,
+      agentConfig,
     })
     http = server.serve()
     console.log(

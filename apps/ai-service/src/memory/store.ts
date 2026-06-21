@@ -180,6 +180,16 @@ export class MemoryStore {
     return r?.n ?? 0
   }
 
+  /** Per-source recent counts + last ingestion, for the Control Center flow
+   *  animation (so particles reflect real arrivals, not a fixed rate). */
+  recentCountsBySource(sinceIso: string): Array<{ source: string; count: number; lastAt: string }> {
+    return this.db
+      .query<{ source: string; count: number; lastAt: string }, [string]>(
+        'SELECT source, COUNT(*) AS count, MAX(ingested_at) AS lastAt FROM events WHERE ingested_at >= ? GROUP BY source'
+      )
+      .all(sinceIso)
+  }
+
   /** Date range scan, ts-ascending. */
   eventsBetween(startIso: string, endIso: string, limit = 5000): Event[] {
     const rows = this.db
