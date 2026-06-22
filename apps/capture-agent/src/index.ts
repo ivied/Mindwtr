@@ -16,6 +16,7 @@ import { startLoop } from './runner'
 import { startAudioLoop } from './audio-runner'
 import { AiServiceClient } from './client/ai-service'
 import { RecordingMonitor } from './recording-monitor'
+import { AgentConfigMonitor } from './agent-config-monitor'
 import { CaptureDeduper } from './filter/dedup'
 import { FfmpegAudioRecorder, type AudioRecorder } from './capture/audio-recorder'
 import { NativeAudioRecorder } from './capture/audio-recorder-native'
@@ -42,6 +43,14 @@ async function main() {
     log: (msg) => console.log(msg),
   })
   recordingMonitor.start()
+  // Remote pause from the web Control Center (Phase 3).
+  const agentConfigMonitor = new AgentConfigMonitor({
+    endpoint: config.endpoint,
+    authToken: config.authToken,
+    pollIntervalMs: 5000,
+    log: (msg) => console.log(msg),
+  })
+  agentConfigMonitor.start()
   const ocr = new TesseractOcrProvider(config.ocrLang)
 
   console.log(`📸 Capture Agent starting`)
@@ -153,6 +162,7 @@ async function main() {
             excludedTitles: config.excludedTitles,
           },
           pauseFlagPath: config.pauseFlagPath,
+          remotePaused: () => agentConfigMonitor.isCapturePaused(),
           diarizer,
           send: (text, ctx) => {
             const vc = detectVoiceChat(ctx.window ?? null)
@@ -311,6 +321,7 @@ async function main() {
   const shutdown = async () => {
     console.log('🛑 Shutting down agent...')
     recordingMonitor.stop()
+    agentConfigMonitor.stop()
     await loop.stop()
     if (audioController) await audioController.stop()
     await ocr.shutdown()

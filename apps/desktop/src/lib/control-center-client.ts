@@ -16,9 +16,13 @@ export function isControlCenterAvailable(): boolean {
 
 export interface HealthComponent { ok: boolean; detail?: string }
 
+export type SourceKey = 'screen' | 'audio' | 'chat' | 'notes';
+export interface SourceActivity { recent: number; lastAt: string | null }
+
 export interface DashboardStatus {
   ok: boolean;
   components: Record<string, HealthComponent> | null;
+  capturePaused: boolean;
   memory: {
     events: number;
     facts: number;
@@ -28,6 +32,7 @@ export interface DashboardStatus {
   } | null;
   procedural: { total: number; visible: number } | null;
   recording: { active: boolean; taskTitle: string | null };
+  sources: Record<SourceKey, SourceActivity> | null;
   checkedAt: string;
 }
 
@@ -41,4 +46,16 @@ export async function getDashboardStatus(signal?: AbortSignal): Promise<Dashboar
   });
   if (!res.ok) throw new Error(`dashboard status ${res.status}`);
   return (await res.json()) as DashboardStatus;
+}
+
+/** Control-plane: flip the capture pause switch (Phase 3). */
+export async function setCapturePaused(paused: boolean): Promise<{ capturePaused: boolean }> {
+  if (!BASE_URL || !TOKEN) throw new Error('AI Service is not configured');
+  const res = await fetch(`${BASE_URL}/v1/agent-config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify({ capturePaused: paused }),
+  });
+  if (!res.ok) throw new Error(`agent-config ${res.status}`);
+  return (await res.json()) as { capturePaused: boolean };
 }

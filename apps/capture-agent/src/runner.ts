@@ -33,6 +33,9 @@ export interface RunnerDeps {
   window: ActiveWindowProvider
   rules: ExclusionRules
   pauseFlagPath: string
+  /** Optional remote pause from the web Control Center (Phase 3). When it
+   *  returns true, the tick is skipped just like the local pause flag. */
+  remotePaused?: () => boolean
   minOcrLength: number
   sink: (capture: DesktopCapture) => Promise<void>
   /** Optional fail-open hook for persistence (wiki MD + optional PNG). */
@@ -60,7 +63,7 @@ export type SkipReason =
  * influence the return value.
  */
 export async function runOnce(deps: RunnerDeps): Promise<SkipReason> {
-  if (await isPaused(deps.pauseFlagPath)) return 'paused'
+  if (deps.remotePaused?.() || (await isPaused(deps.pauseFlagPath))) return 'paused'
 
   const window = await deps.window.current()
   if (!window) return 'no-window'

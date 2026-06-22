@@ -37,6 +37,8 @@ export interface AudioRunnerDeps {
   window: ActiveWindowProvider | null
   rules: ExclusionRules
   pauseFlagPath: string
+  /** Optional remote pause from the web Control Center (Phase 3). */
+  remotePaused?: () => boolean
   /** Optional speaker diarizer — called between transcribe and send. */
   diarizer?: Diarizer | null
   /** Send the transcribed text to AI Service. */
@@ -82,7 +84,7 @@ export async function runAudioOnce(
   deps: AudioRunnerDeps,
   config: AudioRunnerConfig = DEFAULT_AUDIO_RUNNER_CONFIG
 ): Promise<AudioSkipReason> {
-  if (await isPaused(deps.pauseFlagPath)) return 'paused'
+  if (deps.remotePaused?.() || (await isPaused(deps.pauseFlagPath))) return 'paused'
 
   let activeWindow: ActiveWindowInfo | null = null
   if (deps.window) {
