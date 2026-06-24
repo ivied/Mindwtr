@@ -21,6 +21,7 @@ import type {
   RecentItemsProvider,
 } from './inbox-titles'
 import type { PersonsProvider } from '../wiki/persons-reader'
+import type { GlossaryProvider } from '../wiki/glossary-reader'
 import type { ProposerContextProvider } from '../memory/proposer-context'
 import type { ProceduralContextProvider } from '../memory/procedural/proposer-block'
 
@@ -95,6 +96,7 @@ export class CommitmentPipeline {
     | null = null
   private userIdentity: UserIdentity | null = null
   private personsProvider: PersonsProvider | null = null
+  private glossaryProvider: GlossaryProvider | null = null
   private memoryContextProvider: ProposerContextProvider | null = null
   private proceduralContextProvider: ProceduralContextProvider | null = null
   private proceduralFeedback: ProceduralFeedbackSink | null = null
@@ -145,6 +147,13 @@ export class CommitmentPipeline {
    *  to the Proposer so who_to gets normalized to a canonical slug. */
   setPersonsProvider(provider: PersonsProvider | null): void {
     this.personsProvider = provider
+  }
+
+  /** Optional: when set, top glossary terms (project codenames, acronyms,
+   *  internal terms from the capture-wiki + memory facts) are passed to the
+   *  Proposer as a KNOWN_GLOSSARY decoder ring. Fail-open. */
+  setGlossaryProvider(provider: GlossaryProvider | null): void {
+    this.glossaryProvider = provider
   }
 
   /** Optional: when set, a compact RECENT_CONTEXT block (active facts + top
@@ -235,6 +244,19 @@ export class CommitmentPipeline {
       }
     }
 
+    // Best-effort glossary (decoder ring for non-person shorthand). Same
+    // fail-open posture as persons.
+    let knownGlossary: Awaited<ReturnType<GlossaryProvider['recentGlossary']>> | undefined
+    if (this.glossaryProvider) {
+      try {
+        knownGlossary = await this.glossaryProvider.recentGlossary(50)
+      } catch (err) {
+        this.log(
+          `[commitment] glossary fetch failed (${capture.id}): ${(err as Error).message}`
+        )
+      }
+    }
+
     // Optional historical context from the memory module — folds active
     // facts + top related events from the user's history into the Proposer's
     // user-message. Best-effort: failure means no RECENT_CONTEXT block, the
@@ -279,6 +301,7 @@ export class CommitmentPipeline {
         recentItems,
         this.userIdentity,
         knownPersons,
+        knownGlossary,
         recentContext,
         playbookText
       )

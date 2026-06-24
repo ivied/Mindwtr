@@ -31,6 +31,7 @@ import { CommitmentBatcher } from './commitment/batcher'
 import { denyConfigFromEnv } from './commitment/source-deny'
 import { MindwtrInboxTitles } from './commitment/inbox-titles'
 import { WikiPersonsProvider } from './wiki/persons-reader'
+import { WikiGlossaryProvider, MemoryExpansionSource } from './wiki/glossary-reader'
 import { ProposalNotifier } from './bot/proposal-notifier'
 import { createHttpServer } from './http/server'
 import {
@@ -204,6 +205,16 @@ const memoryStore = new MemoryStore({
   vecAvailable: contextStore.hasVectorSearch,
 })
 const memoryRetriever = new HybridRetriever(memoryStore, embeddings)
+// Glossary decoder ring — non-person entities (project codenames, acronyms,
+// internal terms) from the capture-wiki, decoded via the memory module's
+// active facts. Feeds a KNOWN_GLOSSARY block into Proposer + Enricher so
+// shorthand gets spelled out. Same WIKI_DIR gate as persons.
+const glossaryProvider = WIKI_DIR
+  ? new WikiGlossaryProvider({
+      wikiDir: WIKI_DIR,
+      expansions: new MemoryExpansionSource(memoryStore),
+    })
+  : null
 // Slug canonicalizer — folds extractor's free-form slugs (e.g. "sergey",
 // "sergey-kurd") into the wiki's canonical form ("sergey-kurdyuk") via
 // the wiki entity's frontmatter aliases. Best-effort: if WIKI_DIR is
@@ -258,6 +269,10 @@ if (LLM_BASE_URL && LLM_API_KEY) {
   // thread registry + playbook hint and picks the session/repo/openclaw the
   // way a human would. Falls back to the deterministic keyword matcher.
   enricherPipeline.setTargetSelector(new ThreadTargetSelector(llm, LLM_MODEL_SONNET))
+  // Glossary decoder ring — Enricher spells out shorthand in title/description.
+  if (glossaryProvider) {
+    enricherPipeline.setGlossaryProvider(glossaryProvider)
+  }
   console.log(
     `🪄 Enricher enabled (opus=${LLM_MODEL_OPUS}, sonnet=${LLM_MODEL_SONNET}) — push captures → modify/split proposals`
   )
@@ -409,6 +424,11 @@ if (LLM_BASE_URL && LLM_API_KEY) {
   // slugs so waiting-for tasks stay consistent across captures.
   if (personsProvider) {
     commitmentPipeline.setPersonsProvider(personsProvider)
+  }
+  // Glossary decoder ring — Proposer spells out project codenames / acronyms /
+  // internal terms when they appear in a capture.
+  if (glossaryProvider) {
+    commitmentPipeline.setGlossaryProvider(glossaryProvider)
   }
   // Historical context from the memory module — when events are present,
   // top-K related events + active facts are passed to the Proposer as

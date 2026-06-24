@@ -299,6 +299,38 @@ describe('CommitmentPipeline', () => {
     expect(args[4]).toEqual(persons)
   })
 
+  it('passes knownGlossary into proposer.propose when provider is set', async () => {
+    const proposer = { propose: mock(async () => makeProposal()) } as unknown as Proposer
+    const writer = {
+      write: mock(async () => ({ proposalId: 'p', version: 1, title: 'X', proposal: {} as unknown })),
+    } as unknown as ProposalWriter
+    const p = new CommitmentPipeline(proposer, writer, undefined, silent())
+    const glossary = [
+      { slug: 'phoenix', term: 'Phoenix', aliases: ['PHX'], kind: 'project' as const, expansion: 'DB migration', mentionCount: 3 },
+    ]
+    p.setGlossaryProvider({ recentGlossary: mock(async () => glossary) })
+    await p.run(record())
+    const args = (proposer.propose as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]
+    expect(args[5]).toEqual(glossary)
+  })
+
+  it('proceeds with empty glossary when provider throws', async () => {
+    const proposer = { propose: mock(async () => makeProposal()) } as unknown as Proposer
+    const writer = {
+      write: mock(async () => ({ proposalId: 'p', version: 1, title: 'X', proposal: {} as unknown })),
+    } as unknown as ProposalWriter
+    const p = new CommitmentPipeline(proposer, writer, undefined, silent())
+    p.setGlossaryProvider({
+      recentGlossary: mock(async () => {
+        throw new Error('wiki gone')
+      }),
+    })
+    const out = await p.run(record())
+    expect(out.kind).toBe('proposed')
+    const args = (proposer.propose as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]
+    expect(args[5]).toBeUndefined()
+  })
+
   it('proceeds with empty persons list when provider throws', async () => {
     const proposer = { propose: mock(async () => makeProposal()) } as unknown as Proposer
     const writer = {

@@ -15,6 +15,7 @@
 
 import type { LLMClient } from '../ai/client'
 import type { KnownPerson } from '../wiki/persons-reader'
+import type { GlossaryEntry } from '../wiki/glossary-reader'
 import type { RecentItem } from './inbox-titles'
 
 export type WhoOwes = 'user' | 'other' | 'unclear'
@@ -313,6 +314,20 @@ captures. When you set who_to, check if the person matches one of these entries:
 Use this to keep the same person consistent across captures — "Эллисон", "Allison",
 "A. Walker" should all collapse to one canonical entity.
 
+GLOSSARY NORMALIZATION:
+The user message MAY include a KNOWN_GLOSSARY block — a decoder ring for NON-person
+shorthand seen in past captures: project codenames, acronyms, internal terms,
+technologies, organizations. Each line is "term = expansion (kind)" with optional
+aliases.
+When the capture text contains one of these terms (or an alias), use the expansion
+to understand it and write clearer output:
+- title / what / reasoning may spell out the meaning ("Phoenix" → "the Phoenix DB
+  migration") instead of echoing the raw shorthand.
+- a decoded term often makes a capture MORE actionable (you now know what it refers to).
+This block is REFERENCE ONLY — it does not add output fields and never forces
+is_actionable. If a term is NOT in the glossary, leave it as-is; do not invent an
+expansion.
+
 DUPLICATE SUPPRESSION:
 The user message MAY include a RECENT_USER_ITEMS block — items the user has recently
 seen or acted on, each tagged with a label:
@@ -396,6 +411,11 @@ export class Proposer {
     recentItems?: RecentItem[] | string[],
     userIdentity?: UserIdentity | null,
     knownPersons?: KnownPerson[],
+    /** Optional decoder-ring of non-person shorthand (project codenames,
+     *  acronyms, internal terms). Rendered as a KNOWN_GLOSSARY block so the
+     *  Proposer can spell out shorthand in title/what/reasoning. Reference
+     *  only — never adds output fields. */
+    knownGlossary?: GlossaryEntry[],
     /** Optional pre-assembled summary of relevant past context. Goes into
      *  the user-message as a RECENT_CONTEXT block so the Proposer can
      *  factor open threads / waiting-fors / prior decisions into its
@@ -424,6 +444,8 @@ export class Proposer {
         `KNOWN_PERSONS (registry from past captures — normalize who_to to one of these when matched):\n${lines}`
       )
     }
+    const glossaryBlock = renderGlossaryBlock(knownGlossary)
+    if (glossaryBlock) parts.push(glossaryBlock)
     const normalizedItems = normalizeRecentItems(recentItems)
     if (normalizedItems.length > 0) {
       const lines = normalizedItems
@@ -571,6 +593,26 @@ function formatAge(ms: number | undefined): string {
   if (hours < 24) return hours === 1 ? '1 hour ago' : `${hours} hours ago`
   const days = Math.floor(hours / 24)
   return days === 1 ? '1 day ago' : `${days} days ago`
+}
+
+/**
+ * Render the KNOWN_GLOSSARY block from decoder-ring entries. Returns null when
+ * there is nothing to show. Exported for unit testing the rendering shape.
+ */
+export function renderGlossaryBlock(
+  entries: GlossaryEntry[] | undefined
+): string | null {
+  if (!entries || entries.length === 0) return null
+  const lines = entries
+    .slice(0, 50)
+    .map((g) => {
+      const head = g.expansion ? `${g.term} = ${g.expansion}` : g.term
+      const aliasesPart =
+        g.aliases.length > 0 ? `; aliases: ${g.aliases.join(', ')}` : ''
+      return `- ${head} (${g.kind}${aliasesPart})`
+    })
+    .join('\n')
+  return `KNOWN_GLOSSARY (decode shorthand — acronyms, project codenames, internal terms; reference only, use to spell out terms in title/what):\n${lines}`
 }
 
 function buildSystemPrompt(identity: UserIdentity | null | undefined): string {

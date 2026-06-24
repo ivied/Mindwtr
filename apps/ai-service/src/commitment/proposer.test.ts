@@ -1,6 +1,7 @@
 import { describe, it, expect, mock } from 'bun:test'
-import { Proposer } from './proposer'
+import { Proposer, renderGlossaryBlock } from './proposer'
 import type { LLMClient } from '../ai/client'
+import type { GlossaryEntry } from '../wiki/glossary-reader'
 
 function mockLLM(args: Record<string, unknown>): LLMClient {
   return {
@@ -255,5 +256,66 @@ describe('Proposer', () => {
     } as unknown as LLMClient
     const p = new Proposer(llm)
     await expect(p.propose('text')).rejects.toThrow('failed to parse')
+  })
+
+  it('renders KNOWN_GLOSSARY block in the user-message when glossary provided', async () => {
+    const llm = {
+      chatCompletion: mock(async () => ({
+        choices: [
+          {
+            message: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [
+                {
+                  id: 'c1',
+                  type: 'function',
+                  function: {
+                    name: 'propose_inbox_item',
+                    arguments: JSON.stringify({ is_actionable: false, title: '' }),
+                  },
+                },
+              ],
+            },
+            finish_reason: 'tool_calls',
+          },
+        ],
+      })),
+    } as unknown as LLMClient
+    const p = new Proposer(llm)
+    const glossary: GlossaryEntry[] = [
+      {
+        slug: 'phoenix',
+        term: 'Phoenix',
+        aliases: ['PHX'],
+        kind: 'project',
+        expansion: 'миграция БД на PostgreSQL',
+        mentionCount: 3,
+      },
+    ]
+    await p.propose('Phoenix blocked on review', undefined, undefined, null, undefined, glossary)
+    const callArgs = (
+      llm.chatCompletion as unknown as {
+        mock: { calls: Array<Array<{ messages: Array<{ role: string; content: string }> }>> }
+      }
+    ).mock.calls[0][0]
+    const userMsg = callArgs.messages.find((m) => m.role === 'user')!.content
+    expect(userMsg).toContain('KNOWN_GLOSSARY')
+    expect(userMsg).toContain('Phoenix = миграция БД на PostgreSQL (project; aliases: PHX)')
+  })
+})
+
+describe('renderGlossaryBlock', () => {
+  it('returns null for empty / undefined input', () => {
+    expect(renderGlossaryBlock(undefined)).toBeNull()
+    expect(renderGlossaryBlock([])).toBeNull()
+  })
+
+  it('omits the "= expansion" part when expansion is empty', () => {
+    const block = renderGlossaryBlock([
+      { slug: 'sbp', term: 'СБП', aliases: [], kind: 'term', expansion: '', mentionCount: 0 },
+    ])
+    expect(block).toContain('- СБП (term)')
+    expect(block).not.toContain('СБП =')
   })
 })

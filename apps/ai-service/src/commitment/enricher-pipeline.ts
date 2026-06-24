@@ -29,6 +29,8 @@ import type {
 } from '../proposal-store/payloads'
 import type { ProposalStore } from '../proposal-store/store'
 import type { ProceduralContextProvider } from '../memory/procedural/proposer-block'
+import type { GlossaryProvider } from '../wiki/glossary-reader'
+import { renderGlossaryBlock } from './proposer'
 import type { Enricher, EnrichedProposal } from './enricher'
 import type { ProceduralFeedbackSink } from './pipeline'
 import { LlmPublisher } from '../status/llm-publisher'
@@ -90,6 +92,7 @@ export class EnricherPipeline {
   private proceduralContextProvider: ProceduralContextProvider | null = null
   private proceduralFeedback: ProceduralFeedbackSink | null = null
   private targetSelector: ThreadTargetSelector | null = null
+  private glossaryProvider: GlossaryProvider | null = null
 
   constructor(
     private deps: EnricherPipelineDeps,
@@ -122,6 +125,13 @@ export class EnricherPipeline {
    *  keyword matcher in buildModifyDiff is used. */
   setTargetSelector(selector: ThreadTargetSelector | null): void {
     this.targetSelector = selector
+  }
+
+  /** Optional: decoder ring for non-person shorthand (project codenames,
+   *  acronyms, internal terms) surfaced to the Enricher as a KNOWN_GLOSSARY
+   *  block so title/description spell out shorthand. Fail-open. */
+  setGlossaryProvider(provider: GlossaryProvider | null): void {
+    this.glossaryProvider = provider
   }
 
   async run(input: EnrichInput): Promise<EnrichOutcome> {
@@ -165,11 +175,24 @@ export class EnricherPipeline {
       }
     }
 
+    // Glossary decoder ring (project codenames, acronyms, internal terms).
+    // Fail-open: no block on error.
+    let glossaryContext: string | undefined
+    if (this.glossaryProvider) {
+      try {
+        const glossary = await this.glossaryProvider.recentGlossary(50)
+        glossaryContext = renderGlossaryBlock(glossary) ?? undefined
+      } catch (err) {
+        console.error('[enricher-pipeline] glossary fetch failed:', (err as Error).message)
+      }
+    }
+
     const proposal = await this.deps.enricher.enrich(input.text, {
       sourceMeta: input.sourceMeta ?? undefined,
       priorContext,
       newEvidence: input.newEvidence,
       playbookContext,
+      glossaryContext,
     })
 
     if (proposal.is_noise) {

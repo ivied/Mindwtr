@@ -323,6 +323,14 @@ Use it:
 - A matching procedure that an AI agent could execute end-to-end is a strong
   hint for is_ai_routable=true (mention the playbook in ai_routing_reasoning).
 
+KNOWN_GLOSSARY (decode shorthand — acronyms, project codenames, internal terms):
+The user message MAY include a KNOWN_GLOSSARY block — "term = expansion (kind)"
+lines for NON-person shorthand seen in past captures. When the card text uses one
+of these terms (or an alias), use the expansion to write a clearer
+proposed_title / proposed_description (spell out the meaning instead of echoing the
+raw shorthand). Reference only — it never forces a category and adds no fields. If a
+term is not listed, leave it as-is; do not invent an expansion.
+
 ⚠️ PLAYBOOKS ARE RECIPES FOR THE AI AGENT, NOT MANUAL CHECKLISTS FOR THE USER.
 The user records playbooks specifically so an AI agent runs them. So when a
 recorded procedure matches the task:
@@ -371,6 +379,9 @@ export class Enricher {
       /** Relevant playbook excerpt from procedural memory (rendered as a
        *  KNOWN_PLAYBOOK block, see prompt). */
       playbookContext?: string
+      /** Decoder-ring of non-person shorthand (rendered as a KNOWN_GLOSSARY
+       *  block, see prompt). Reference only. */
+      glossaryContext?: string
     } = {}
   ): Promise<EnrichedProposal> {
     const userMessage = this.buildUserMessage(text, options)
@@ -409,6 +420,7 @@ export class Enricher {
       priorContext?: string
       newEvidence?: string
       playbookContext?: string
+      glossaryContext?: string
     }
   ): string {
     const parts: string[] = []
@@ -422,6 +434,9 @@ export class Enricher {
       parts.push(
         `KNOWN_PLAYBOOK (rules and recorded procedures from the user's procedural memory — respect ⚠️ / НЕ entries as hard constraints, reference matching procedures):\n${options.playbookContext.trim()}`
       )
+    }
+    if (options.glossaryContext && options.glossaryContext.trim().length > 0) {
+      parts.push(options.glossaryContext.trim())
     }
     if (options.newEvidence && options.newEvidence.trim().length > 0) {
       parts.push(
