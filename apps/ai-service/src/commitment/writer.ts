@@ -9,10 +9,11 @@
  */
 
 import type { ProposalStore } from '../proposal-store/store'
-import type { CreatePayload, MindwtrTaskBlueprint, ProposalPayload } from '../proposal-store/payloads'
+import type { CreatePayload, MindwtrTaskBlueprint } from '../proposal-store/payloads'
 import type { ProposalRecord } from '../proposal-store/types'
 import type { Proposal } from './proposer'
 import { smartExcerpt } from './smart-excerpt'
+import { buildSignature, signatureForRecord } from './title-signature'
 
 export interface WriteProposalInput {
   proposal: Proposal
@@ -163,41 +164,4 @@ function buildDescription(input: WriteProposalInput): string {
     lines.push(`With/to: ${input.proposal.who_to}`)
   }
   return lines.join('\n')
-}
-
-
-// Stopwords are dropped from title normalization so dedup is robust against
-// the LLM emitting "Send Alice X" vs "Send Alice the X" on consecutive ticks.
-// Bag-of-words + sort makes word order irrelevant ("X to Alice" == "to Alice X").
-const STOPWORDS_EN = new Set([
-  'a', 'an', 'the', 'and', 'or', 'but', 'with', 'for', 'to', 'in', 'on', 'at',
-  'of', 'by', 'from', 'as', 'is', 'are', 'be', 'this', 'that', 'these', 'those',
-])
-const STOPWORDS_RU = new Set([
-  'и', 'или', 'но', 'для', 'на', 'в', 'с', 'к', 'по', 'до', 'от', 'из', 'у', 'о',
-  'об', 'про', 'через', 'над', 'под', 'это', 'эти', 'тот', 'та',
-])
-
-function normalize(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .split(/\s+/)
-    .filter((w) => w.length > 1 && !STOPWORDS_EN.has(w) && !STOPWORDS_RU.has(w))
-    .sort()
-    .join(' ')
-}
-
-function buildSignature(title: string, whoTo: string | null, byWhen: string | null): string {
-  return [normalize(title), normalize(whoTo ?? ''), normalize(byWhen ?? '')].join('|')
-}
-
-/** Build the same signature shape from a stored Proposal, or null when not a create. */
-function signatureForRecord(p: ProposalRecord): string | null {
-  const payload = p.currentPayload as ProposalPayload | null
-  if (!payload || payload.kind !== 'create') return null
-  const meta = payload.task.metadata as Record<string, unknown> | undefined
-  const whoTo = typeof meta?.ai_who_to === 'string' ? meta.ai_who_to : null
-  const byWhen = typeof meta?.ai_by_when === 'string' ? meta.ai_by_when : null
-  return buildSignature(payload.task.title, whoTo, byWhen)
 }

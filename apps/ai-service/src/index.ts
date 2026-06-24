@@ -22,7 +22,11 @@ import { EnricherPipeline } from './commitment/enricher-pipeline'
 import { ThreadTargetSelector } from './commitment/thread-target-selector'
 import { Reviser } from './commitment/reviser'
 import { ProposalWriter } from './commitment/writer'
+import { SuggestionRefresher } from './commitment/suggestion-refresher'
+import { SOURCE_AGENT_ENRICHER } from './commitment/enricher-pipeline'
+import { buildSignature } from './commitment/title-signature'
 import { CommitmentPipeline, DEFAULT_PIPELINE_CONFIG } from './commitment/pipeline'
+import type { DuplicateOfExistingHook } from './commitment/pipeline'
 import { CommitmentBatcher } from './commitment/batcher'
 import { denyConfigFromEnv } from './commitment/source-deny'
 import { MindwtrInboxTitles } from './commitment/inbox-titles'
@@ -276,6 +280,12 @@ if (LLM_BASE_URL && LLM_API_KEY) {
   // re-run the Enricher with the capture as NEW_EVIDENCE — the pending
   // suggestion gets a v2 instead of the signal being dropped.
   const enricherForReEnrich = enricherPipeline
+  const reviser = new Reviser(llm, LLM_MODEL_OPUS)
+  const suggestionRefresher = new SuggestionRefresher({
+    store: proposalStore,
+    reviser,
+    contextStore,
+  })
   commitmentPipeline.setDuplicateOfExistingHook((info) => {
     void (async () => {
       try {
@@ -288,9 +298,10 @@ if (LLM_BASE_URL && LLM_API_KEY) {
           if (match) break
         }
         if (!match) {
-          console.log(
-            `[re-enrich] no open task matched "${info.existingTitle.slice(0, 60)}" — skip`
-          )
+          // No real Mindwtr task — the title may belong to a pending proposal
+          // that hasn't been approved/materialized yet. Refresh it in place
+          // rather than dropping the new evidence.
+          await refreshPendingProposal(info)
           return
         }
         const outcome = await enricherForReEnrich.run({
@@ -317,6 +328,75 @@ if (LLM_BASE_URL && LLM_API_KEY) {
       }
     })()
   })
+
+  // Fallback when no real Mindwtr task matched the duplicate-of-existing title:
+  // the title may belong to a pending proposal. Refresh create-suggestions via
+  // the Reviser; re-enrich pending enricher proposals against their real task.
+  async function refreshPendingProposal(
+    info: Parameters<DuplicateOfExistingHook>[0]
+  ): Promise<void> {
+    const result = await suggestionRefresher.refresh({
+      existingTitle: info.existingTitle,
+      captureText: info.captureText,
+    })
+    if (result.kind !== 'no-match') {
+      console.log(
+        `[refresh] pending suggestion ${result.kind}${'proposalId' in result ? ` ${result.proposalId.slice(0, 8)}` : ''} for "${info.existingTitle.slice(0, 50)}"`
+      )
+      return
+    }
+
+    // No pending create-suggestion — try pending enricher proposals (modify/
+    // split) whose origin-snapshot title matches. Re-run the enricher against
+    // the proposal's real target task so the new evidence lands as a v2.
+    const norm = (s: string) => buildSignature(s, null, null).split('|')[0]
+    const wantedTitle = norm(info.existingTitle)
+    const enricherPending = proposalStore.listPending({
+      sourceAgent: SOURCE_AGENT_ENRICHER,
+      limit: 50,
+    })
+    const enricherMatch = enricherPending.find((p) => {
+      const snap = p.originSnapshot as { title?: unknown } | null
+      const title = typeof snap?.title === 'string' ? snap.title : null
+      return title !== null && norm(title) === wantedTitle
+    })
+    if (!enricherMatch) {
+      console.log(
+        `[refresh] no pending proposal matched "${info.existingTitle.slice(0, 50)}" — skip`
+      )
+      return
+    }
+    const taskId = enricherMatch.targetTaskIds[0]
+    if (!taskId) return
+    let task: Awaited<ReturnType<typeof mindwtr.getTask>>
+    try {
+      task = await mindwtr.getTask(taskId)
+    } catch {
+      console.log(
+        `[refresh] enricher target ${taskId.slice(0, 8)} unreadable — skip`
+      )
+      return
+    }
+    const outcome = await enricherForReEnrich.run({
+      taskId: task.id,
+      taskTitle: task.title,
+      taskTags: task.tags ?? [],
+      taskDescription: task.description ?? '',
+      taskStatus: task.status,
+      text: task.title + (task.description ? '\n' + task.description : ''),
+      newEvidence: info.captureText,
+      sourceChannel: info.sourceChannel,
+      sourceMeta: {
+        ...(info.sourceMeta ?? {}),
+        reenrich_trigger: 'duplicate-of-pending-enricher',
+        proposer_reasoning: info.reasoning,
+      },
+      sourceCaptureId: info.sourceCaptureId,
+    })
+    console.log(
+      `[refresh] re-enriched pending ${enricherMatch.id.slice(0, 8)} task ${task.id.slice(0, 8)} → ${outcome.kind}`
+    )
+  }
   // Identity anchor for role disambiguation. Empty USER_IDENTITY_NAME = no
   // anchor (Proposer reverts to "user = machine owner" heuristic).
   if (USER_IDENTITY_NAME) {
@@ -419,7 +499,6 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     `🎯 Commitment Detector enabled (deny apps:${sourceDeny.apps.length}, deny urls:${sourceDeny.urlPatterns.length}, inbox-dedup on, identity:${USER_IDENTITY_NAME || 'unset'}, persons:${personsProvider ? 'wiki' : 'unset'})`
   )
 
-  const reviser = new Reviser(llm, LLM_MODEL_OPUS)
   commentHandler = new CommentHandler({
     store: proposalStore,
     reviser,

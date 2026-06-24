@@ -31,6 +31,13 @@ export interface ReviseInput {
   targetTaskState: Record<string, unknown>[]
   /** Retrieved Context Store hits relevant to the proposal/thread (free-form text). */
   contextSnippets: string[]
+  /**
+   * New evidence (e.g. a fresh capture the Proposer flagged as a duplicate of
+   * this pending proposal). When set WITHOUT a new user comment, the Reviser
+   * should fold the new facts into the proposal (revise), not treat the silence
+   * as a reason to withdraw.
+   */
+  newEvidence?: string
 }
 
 const REVISER_TOOL = {
@@ -99,6 +106,13 @@ Your job is to decide ONE of three actions for the LATEST user comment:
 1. revise:   the user wants a different version. Output a complete new payload (same kind, refined fields). Always include a thread message explaining what changed.
 2. clarify:  the user's intent isn't clear or you need more info. Output only a thread message with a focused follow-up question.
 3. withdraw: the user clearly does not want this proposal. Status will become rejected. Output a short reason for audit + a thread message acknowledging.
+
+## When there is NEW EVIDENCE and no user comment
+
+Sometimes there is a NEW EVIDENCE block but NO new user message — this is a fresh capture the system flagged as being about the same task as this proposal. In that case:
+- Treat it as new information to FOLD INTO the proposal: \`revise\` the payload to incorporate any genuinely new facts (clearer title, added detail, updated who/when), keeping the same kind. The thread message states what the new evidence added.
+- If the new evidence adds nothing the proposal doesn't already capture, \`revise\` is unnecessary — return \`clarify\` with a brief note that no update was needed (the caller treats clarify as "no version bump").
+- NEVER \`withdraw\` just because there is no user comment. Absence of a comment is not a rejection.
 
 Rules:
 - Stay within the SAME proposal kind. Never switch from modify to create, etc.
@@ -172,7 +186,7 @@ export class Reviser {
 }
 
 function buildUserBlock(input: ReviseInput): string {
-  const { proposal, targetTaskState, contextSnippets } = input
+  const { proposal, targetTaskState, contextSnippets, newEvidence } = input
   const lines: string[] = []
   lines.push(`Proposal id: ${proposal.id}`)
   lines.push(`Type: ${proposal.type}`)
@@ -203,9 +217,17 @@ function buildUserBlock(input: ReviseInput): string {
     for (const m of proposal.messages) lines.push(`  [${m.role}] ${m.text}`)
   }
 
+  const evidence = newEvidence?.trim()
+  if (evidence) {
+    lines.push('', 'NEW EVIDENCE (fresh capture about the same task, no user comment):')
+    lines.push(evidence)
+  }
+
   lines.push(
     '',
-    'Decide what to do with the latest user comment. Call revise_proposal exactly once.'
+    evidence
+      ? 'Fold any genuinely new facts from NEW EVIDENCE into the proposal. Call revise_proposal exactly once (revise to update, clarify if nothing new — never withdraw).'
+      : 'Decide what to do with the latest user comment. Call revise_proposal exactly once.'
   )
   return lines.join('\n')
 }
