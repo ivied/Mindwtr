@@ -18,10 +18,9 @@ const EMPTY_DATA: AppData = { tasks: [], projects: [], sections: [], areas: [], 
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
-const openDb = (): Promise<IDBDatabase> => {
-    if (dbPromise) return dbPromise;
-    dbPromise = new Promise<IDBDatabase>((resolvePromise, rejectPromise) => {
-        const request = indexedDB.open(DB_NAME, DB_VERSION);
+const openDbAtVersion = (version?: number): Promise<IDBDatabase> =>
+    new Promise<IDBDatabase>((resolvePromise, rejectPromise) => {
+        const request = version === undefined ? indexedDB.open(DB_NAME) : indexedDB.open(DB_NAME, version);
         request.onupgradeneeded = () => {
             const db = request.result;
             if (!db.objectStoreNames.contains(STORE_NAME)) {
@@ -32,10 +31,26 @@ const openDb = (): Promise<IDBDatabase> => {
         request.onerror = () => rejectPromise(request.error ?? new Error('IndexedDB open failed'));
         request.onblocked = () => rejectPromise(new Error('IndexedDB open blocked'));
     });
+
+export const openDb = (): Promise<IDBDatabase> => {
+    if (dbPromise) return dbPromise;
+    // Self-heal: a prior bug (or a versionless open from another module) could
+    // leave the DB existing but without the object store, which makes every
+    // transaction fail with "object stores was not found" forever. If the store
+    // is missing, bump the version to force onupgradeneeded and create it.
+    dbPromise = openDbAtVersion(DB_VERSION).then((db) => {
+        if (db.objectStoreNames.contains(STORE_NAME)) return db;
+        const nextVersion = db.version + 1;
+        db.close();
+        return openDbAtVersion(nextVersion);
+    });
+    dbPromise.catch(() => {
+        dbPromise = null;
+    });
     return dbPromise;
 };
 
-const idbGet = async (): Promise<AppData | null> => {
+export const idbGet = async (): Promise<AppData | null> => {
     const db = await openDb();
     return new Promise<AppData | null>((resolvePromise, rejectPromise) => {
         const tx = db.transaction(STORE_NAME, 'readonly');
@@ -46,7 +61,7 @@ const idbGet = async (): Promise<AppData | null> => {
     });
 };
 
-const idbPut = async (data: AppData): Promise<void> => {
+export const idbPut = async (data: AppData): Promise<void> => {
     const db = await openDb();
     return new Promise<void>((resolvePromise, rejectPromise) => {
         const tx = db.transaction(STORE_NAME, 'readwrite');

@@ -22,13 +22,10 @@
  * NOT touched.
  */
 
-import { flushPendingSave, type AppData, type Task } from '@mindwtr/core';
+import { flushPendingSave, type AppData } from '@mindwtr/core';
 import { SyncService } from './sync-service';
 import { cloudDataUrl, cloudToken } from './cloud-target';
-
-const IDB_NAME = 'mindwtr';
-const IDB_STORE = 'app-data';
-const IDB_KEY = 'main';
+import { idbGet, idbPut } from './storage-adapter-web';
 
 export interface SafeReloadOptions {
     /** Called as the operation progresses. Use for toasts / inline messages. */
@@ -111,8 +108,7 @@ async function mergeCloudIntoIndexedDb(): Promise<void> {
         throw new Error('cloud /v1/data: unexpected shape');
     }
 
-    const db = await openIdb();
-    const existing = await idbGet(db);
+    const existing = await idbGet();
     const merged = mergeAppData(existing, {
         tasks: cloud.tasks ?? [],
         projects: cloud.projects ?? [],
@@ -120,39 +116,7 @@ async function mergeCloudIntoIndexedDb(): Promise<void> {
         sections: Array.isArray(cloud.sections) ? cloud.sections : [],
         settings: cloud.settings ?? existing?.settings ?? {},
     });
-    await idbPut(db, merged);
-}
-
-function openIdb(): Promise<IDBDatabase> {
-    return new Promise((resolvePromise, rejectPromise) => {
-        const req = indexedDB.open(IDB_NAME);
-        req.onsuccess = () => resolvePromise(req.result);
-        req.onerror = () => rejectPromise(req.error ?? new Error('IndexedDB open failed'));
-    });
-}
-
-function idbGet(db: IDBDatabase): Promise<AppData | null> {
-    return new Promise((resolvePromise, rejectPromise) => {
-        try {
-            const tx = db.transaction(IDB_STORE, 'readonly');
-            const store = tx.objectStore(IDB_STORE);
-            const req = store.get(IDB_KEY);
-            req.onsuccess = () => resolvePromise((req.result as AppData | undefined) ?? null);
-            req.onerror = () => rejectPromise(req.error ?? new Error('IDB read failed'));
-        } catch (err) {
-            rejectPromise(err);
-        }
-    });
-}
-
-function idbPut(db: IDBDatabase, data: AppData): Promise<void> {
-    return new Promise((resolvePromise, rejectPromise) => {
-        const tx = db.transaction(IDB_STORE, 'readwrite');
-        const store = tx.objectStore(IDB_STORE);
-        store.put(data, IDB_KEY);
-        tx.oncomplete = () => resolvePromise();
-        tx.onerror = () => rejectPromise(tx.error ?? new Error('IDB write failed'));
-    });
+    await idbPut(merged);
 }
 
 function mergeAppData(local: AppData | null, cloud: AppData): AppData {
@@ -190,9 +154,3 @@ function mergeById<T extends { id?: string; updatedAt?: string }>(local: T[], cl
     }
     return Array.from(map.values());
 }
-
-// Re-export AppData types not used here directly so the file stays self-contained
-// at the type level. Task is used through the AppData generic above; the explicit
-// import is kept for symmetry with other helpers and to make future extensions
-// (e.g. per-task hooks) easier to wire in.
-export type { Task };
