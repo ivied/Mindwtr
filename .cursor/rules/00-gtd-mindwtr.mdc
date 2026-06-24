@@ -76,6 +76,9 @@ Public surface via Cloudflare Tunnel from makurdi:
 | ai-service HTTP routes | `apps/ai-service/src/http/server.ts` |
 | ai-service entrypoint / wiring | `apps/ai-service/src/index.ts` |
 | Proposer prompt (convergence node) | `apps/ai-service/src/commitment/` |
+| Reviser (proposal merge LLM) | `apps/ai-service/src/commitment/reviser.ts` |
+| Pending-proposal refresh on new evidence | `apps/ai-service/src/commitment/suggestion-refresher.ts` |
+| Title dedup / signature matching | `apps/ai-service/src/commitment/title-signature.ts` |
 | Enricher pipeline | `apps/ai-service/src/commitment/enricher-pipeline.ts` |
 | Procedural memory pipeline | `apps/ai-service/src/memory/procedural/` |
 | Recording distillation | `apps/ai-service/src/recording/` |
@@ -125,6 +128,13 @@ Public surface via Cloudflare Tunnel from makurdi:
 - **Back up before every ai-service recreate:** `bash docker/predeploy-backup.sh`
   (online `VACUUM INTO` *inside* the container → integrity-checked → `docker cp`
   to `docker/ai-service-backups/`). Restore recipe is printed by the script.
+- **`duplicate_of_title` is also a refresh signal, not just "skip dup".** The
+  `duplicate-of-existing` hook in `index.ts`: (1) match a real Mindwtr task →
+  re-enrich; (2) else match a pending create-suggestion by normalized title
+  (`title-signature.ts`) → `SuggestionRefresher` runs the Reviser with the
+  capture as `newEvidence` → `addVersion` (v2); (3) else match a pending
+  enricher proposal by origin title → re-enrich its real target. A fresh
+  capture NEVER withdraws a pending proposal (absence of a user comment ≠ "no").
 
 ## 6. Worktrees
 
