@@ -10,6 +10,9 @@ const ReviewView = lazy(() => import('./components/views/ReviewView').then((m) =
 const ProceduralPlaybookView = lazy(() =>
     import('./components/views/ProceduralPlaybookView').then((m) => ({ default: m.ProceduralPlaybookView }))
 );
+const GlossaryOnboardingView = lazy(() =>
+    import('./components/views/GlossaryOnboardingView').then((m) => ({ default: m.GlossaryOnboardingView }))
+);
 const ControlCenterView = lazy(() =>
     import('./components/views/ControlCenterView').then((m) => ({ default: m.ControlCenterView }))
 );
@@ -578,6 +581,8 @@ function App() {
                 return <ReviewView />;
             case 'ai-playbook':
                 return <ProceduralPlaybookView />;
+            case 'glossary-onboarding':
+                return <GlossaryOnboardingView />;
             case 'control-center':
                 return <ControlCenterView />;
             case 'settings':

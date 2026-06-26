@@ -100,12 +100,26 @@ export interface GlossaryProvider {
   recentGlossary(limit: number): Promise<GlossaryEntry[]>
 }
 
+/**
+ * Write-side source of user-confirmed (and rejected) decodings. Confirmed
+ * rows are merged into the glossary (highest priority — the user said so);
+ * rejected slugs are filtered out of the wiki-derived entries so the LLM never
+ * sees shorthand the user explicitly dismissed.
+ */
+export interface ConfirmedGlossarySource {
+  confirmedEntries(): GlossaryEntry[]
+  rejectedSlugs(): Set<string>
+}
+
 export interface WikiGlossaryProviderOptions {
   /** Path to the wiki root directory. Entities live under <wikiDir>/entities/. */
   wikiDir: string
   /** Supplies expansions from the memory module. Optional — without it the
    *  glossary still carries term + kind (no decode sentence). */
   expansions?: ExpansionSource | null
+  /** Supplies user-confirmed decodings + rejected slugs (the glossary table).
+   *  Optional — without it the glossary is read-only (wiki + facts). */
+  confirmed?: ConfirmedGlossarySource | null
   /** Cache TTL in ms. Default 60s. */
   ttlMs?: number
 }
@@ -151,28 +165,39 @@ export class WikiGlossaryProvider implements GlossaryProvider {
   }
 
   private async scan(): Promise<GlossaryEntry[]> {
+    // User decisions win: confirmed rows override wiki-derived entries for the
+    // same slug; rejected slugs are filtered out entirely.
+    const confirmed = this.options.confirmed?.confirmedEntries() ?? []
+    const rejected = this.options.confirmed?.rejectedSlugs() ?? new Set<string>()
+    const bySlug = new Map<string, GlossaryEntry>()
+    for (const c of confirmed) bySlug.set(c.slug, c)
+
     const dir = join(this.options.wikiDir, 'entities')
-    if (!existsSync(dir)) return []
-    let files: string[]
-    try {
-      files = await readdir(dir)
-    } catch {
-      return []
-    }
-    const mdFiles = files.filter((f) => f.endsWith('.md') && !f.endsWith('.mentions.jsonl'))
-    const entries: GlossaryEntry[] = []
-    for (const file of mdFiles) {
+    if (existsSync(dir)) {
+      let files: string[] = []
       try {
-        const content = await readFile(join(dir, file), 'utf-8')
-        const entity = parseGlossaryFrontmatter(content)
-        if (!entity) continue
-        // Expansion is best-effort: the memory module may not have a fact yet.
-        const expansion = this.options.expansions?.expansionFor(entity.slug) ?? ''
-        entries.push({ ...entity, expansion })
+        files = await readdir(dir)
       } catch {
-        // Skip unreadable / half-written files — wiki rollup is async.
+        files = []
+      }
+      const mdFiles = files.filter((f) => f.endsWith('.md') && !f.endsWith('.mentions.jsonl'))
+      for (const file of mdFiles) {
+        try {
+          const content = await readFile(join(dir, file), 'utf-8')
+          const entity = parseGlossaryFrontmatter(content)
+          if (!entity) continue
+          if (rejected.has(entity.slug)) continue
+          if (bySlug.has(entity.slug)) continue // confirmed row already wins
+          // Expansion is best-effort: the memory module may not have a fact yet.
+          const expansion = this.options.expansions?.expansionFor(entity.slug) ?? ''
+          bySlug.set(entity.slug, { ...entity, expansion })
+        } catch {
+          // Skip unreadable / half-written files — wiki rollup is async.
+        }
       }
     }
+
+    const entries = [...bySlug.values()]
     entries.sort((a, b) => b.mentionCount - a.mentionCount)
     return entries
   }

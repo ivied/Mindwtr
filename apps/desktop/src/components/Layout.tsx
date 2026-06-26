@@ -21,11 +21,13 @@ import {
     BookOpen,
     AlertTriangle,
     Sparkles,
+    BookMarked,
     Bot,
     Radar,
     type LucideIcon,
 } from 'lucide-react';
 import { isProceduralAvailable } from '../lib/procedural-client';
+import { isGlossaryAvailable } from '../lib/glossary-client';
 import { RecordingBanner } from './RecordingBanner';
 import { SafeReloadButton } from './SafeReloadButton';
 import { cn } from '../lib/utils';
@@ -305,6 +307,9 @@ export function Layout({ children, currentView, onViewChange }: LayoutProps) {
                     : []),
                 ...(isProceduralAvailable()
                     ? [{ id: 'ai-playbook', labelKey: 'nav.aiPlaybook', fallbackLabel: 'AI Playbook', icon: Sparkles }]
+                    : []),
+                ...(isGlossaryAvailable()
+                    ? [{ id: 'glossary-onboarding', labelKey: 'nav.glossaryOnboarding', fallbackLabel: 'Словарь', icon: BookMarked }]
                     : []),
                 { id: 'control-center', labelKey: 'nav.controlCenter', fallbackLabel: 'Центр управления', icon: Radar },
                 { id: 'board', labelKey: 'nav.board', icon: Layers },

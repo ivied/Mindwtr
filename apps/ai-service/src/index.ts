@@ -32,6 +32,8 @@ import { denyConfigFromEnv } from './commitment/source-deny'
 import { MindwtrInboxTitles } from './commitment/inbox-titles'
 import { WikiPersonsProvider } from './wiki/persons-reader'
 import { WikiGlossaryProvider, MemoryExpansionSource } from './wiki/glossary-reader'
+import { GlossaryStore, GlossaryStoreSource } from './wiki/glossary-store'
+import { OnboardingExtractor } from './memory/onboarding-extractor'
 import { ProposalNotifier } from './bot/proposal-notifier'
 import { createHttpServer } from './http/server'
 import {
@@ -209,10 +211,15 @@ const memoryRetriever = new HybridRetriever(memoryStore, embeddings)
 // internal terms) from the capture-wiki, decoded via the memory module's
 // active facts. Feeds a KNOWN_GLOSSARY block into Proposer + Enricher so
 // shorthand gets spelled out. Same WIKI_DIR gate as persons.
+// Writable glossary table (onboarding-confirmed / rejected decodings). Lives
+// in the same SQLite handle. Read by the provider (confirmed wins, rejected
+// suppressed) and written by the onboarding wizard via HTTP.
+const glossaryStore = new GlossaryStore(contextStore.rawDb)
 const glossaryProvider = WIKI_DIR
   ? new WikiGlossaryProvider({
       wikiDir: WIKI_DIR,
       expansions: new MemoryExpansionSource(memoryStore),
+      confirmed: new GlossaryStoreSource(glossaryStore),
     })
   : null
 // Slug canonicalizer — folds extractor's free-form slugs (e.g. "sergey",
@@ -252,12 +259,16 @@ let recordingDistiller: RecordingDistiller | null = null
 let enricherPipeline: EnricherPipeline | null = null
 let commitmentPipeline: CommitmentPipeline | null = null
 let commentHandler: CommentHandler | null = null
+let onboardingExtractor: OnboardingExtractor | null = null
 if (LLM_BASE_URL && LLM_API_KEY) {
   const llm = new LLMClient(LLM_BASE_URL, LLM_API_KEY, {
     opus: LLM_MODEL_OPUS,
     sonnet: LLM_MODEL_SONNET,
   })
   const retriever = new ContextRetriever(contextStore)
+
+  // Onboarding/cold-start glossary seeding — uses the cheaper sonnet tier.
+  onboardingExtractor = new OnboardingExtractor(llm, LLM_MODEL_SONNET)
 
   const enricher = new Enricher(llm, LLM_MODEL_OPUS)
   enricherPipeline = new EnricherPipeline({
@@ -879,6 +890,13 @@ async function main() {
           }
         : null,
       persons: personsProvider,
+      onboarding: onboardingExtractor
+        ? {
+            mindwtr,
+            extractor: onboardingExtractor,
+            glossary: glossaryStore,
+          }
+        : null,
       memory: memoryFocusContext
         ? {
             store: memoryStore,

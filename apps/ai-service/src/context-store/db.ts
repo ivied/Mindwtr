@@ -10,7 +10,7 @@ import { dirname } from 'node:path'
 
 export type DB = Database
 
-const SCHEMA_VERSION = 7
+const SCHEMA_VERSION = 8
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS captures (
@@ -278,6 +278,28 @@ CREATE TABLE IF NOT EXISTS recording_sessions (
 );
 CREATE INDEX IF NOT EXISTS idx_rec_sess_active ON recording_sessions(stopped_at);
 CREATE INDEX IF NOT EXISTS idx_rec_sess_task ON recording_sessions(task_id);
+
+-- v8 (glossary decoder ring, writable): user-confirmed (or rejected)
+-- decodings of non-person shorthand — project codenames, acronyms, internal
+-- terms. Unlike wiki entities / facts (read-only sources the glossary reader
+-- also consults), this table is the WRITE side: the onboarding scan proposes
+-- candidates, the user confirms/edits/rejects, and confirmed rows feed the
+-- KNOWN_GLOSSARY block. rejected rows are remembered so we never re-ask.
+CREATE TABLE IF NOT EXISTS glossary (
+  slug TEXT PRIMARY KEY,                -- canonical kebab id (slugified term)
+  term TEXT NOT NULL,                   -- canonical display form ("Phoenix", "СБП")
+  expansion TEXT NOT NULL DEFAULT '',   -- one-line decode; empty until known
+  kind TEXT NOT NULL,                   -- project|term|technology|organization
+  aliases TEXT NOT NULL DEFAULT '[]',   -- JSON array of alt spellings
+  status TEXT NOT NULL DEFAULT 'candidate', -- candidate|confirmed|rejected
+  source TEXT NOT NULL DEFAULT 'onboarding', -- onboarding|live|user
+  confidence REAL,                      -- extractor confidence for candidates
+  mention_count INTEGER NOT NULL DEFAULT 0,
+  confirmed_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_glossary_status ON glossary(status);
 `
 
 const VEC_SCHEMA_SQL = `
@@ -422,4 +444,24 @@ function applyAdditiveMigrations(db: DB): void {
   )
   db.run('CREATE INDEX IF NOT EXISTS idx_rec_sess_active ON recording_sessions(stopped_at)')
   db.run('CREATE INDEX IF NOT EXISTS idx_rec_sess_task ON recording_sessions(task_id)')
+
+  // v8: writable glossary table. CREATE TABLE IF NOT EXISTS in SCHEMA_SQL only
+  // fires on fresh DBs; run it here too so existing v7 databases get it.
+  db.run(
+    `CREATE TABLE IF NOT EXISTS glossary (
+       slug TEXT PRIMARY KEY,
+       term TEXT NOT NULL,
+       expansion TEXT NOT NULL DEFAULT '',
+       kind TEXT NOT NULL,
+       aliases TEXT NOT NULL DEFAULT '[]',
+       status TEXT NOT NULL DEFAULT 'candidate',
+       source TEXT NOT NULL DEFAULT 'onboarding',
+       confidence REAL,
+       mention_count INTEGER NOT NULL DEFAULT 0,
+       confirmed_at TEXT,
+       created_at TEXT NOT NULL,
+       updated_at TEXT NOT NULL
+     )`
+  )
+  db.run('CREATE INDEX IF NOT EXISTS idx_glossary_status ON glossary(status)')
 }

@@ -167,3 +167,46 @@ describe('WikiGlossaryProvider', () => {
     expect(g.map((e) => e.slug)).toEqual(['good'])
   })
 })
+
+describe('WikiGlossaryProvider with confirmed source (3rd source)', () => {
+  it('confirmed entries override wiki entries for the same slug', async () => {
+    entityFile('phoenix', '---\nslug: phoenix\nname: "Phoenix"\ntype: project\nmention_count: 1\n---')
+    const confirmed = {
+      confirmedEntries: () => [
+        { slug: 'phoenix', term: 'Phoenix', aliases: ['PHX'], kind: 'project' as const, expansion: 'миграция БД', mentionCount: 9 },
+      ],
+      rejectedSlugs: () => new Set<string>(),
+    }
+    const provider = new WikiGlossaryProvider({ wikiDir: root, confirmed })
+    const g = await provider.recentGlossary(10)
+    // single phoenix entry, with the confirmed expansion + mention_count
+    expect(g.filter((e) => e.slug === 'phoenix')).toHaveLength(1)
+    expect(g[0]!.expansion).toBe('миграция БД')
+    expect(g[0]!.mentionCount).toBe(9)
+  })
+
+  it('rejected slugs are excluded from wiki-derived entries', async () => {
+    entityFile('phoenix', '---\nslug: phoenix\nname: "Phoenix"\ntype: project\nmention_count: 5\n---')
+    entityFile('sbp', '---\nslug: sbp\nname: "СБП"\ntype: term\nmention_count: 3\n---')
+    const confirmed = {
+      confirmedEntries: () => [],
+      rejectedSlugs: () => new Set<string>(['sbp']),
+    }
+    const provider = new WikiGlossaryProvider({ wikiDir: root, confirmed })
+    const g = await provider.recentGlossary(10)
+    expect(g.map((e) => e.slug)).toEqual(['phoenix'])
+  })
+
+  it('confirmed entries appear even with no wiki dir', async () => {
+    rmSync(root, { recursive: true, force: true })
+    const confirmed = {
+      confirmedEntries: () => [
+        { slug: 'mr', term: 'MR', aliases: [], kind: 'term' as const, expansion: 'Merge Request', mentionCount: 1 },
+      ],
+      rejectedSlugs: () => new Set<string>(),
+    }
+    const provider = new WikiGlossaryProvider({ wikiDir: root, confirmed })
+    const g = await provider.recentGlossary(10)
+    expect(g.map((e) => e.slug)).toEqual(['mr'])
+  })
+})

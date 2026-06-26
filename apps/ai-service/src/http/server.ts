@@ -30,6 +30,10 @@ import type {
 import type { ProposalRecord, ProposalType } from '../proposal-store/types'
 import type { FieldDiff, ModifyPayload } from '../proposal-store/payloads'
 import type { PersonsProvider } from '../wiki/persons-reader'
+import type { GlossaryStore } from '../wiki/glossary-store'
+import type { GlossaryKind } from '../wiki/glossary-reader'
+import type { OnboardingExtractor } from '../memory/onboarding-extractor'
+import type { MindwtrClient } from '../api/mindwtr-client'
 import { getThreadRegistry } from '../threads/registry'
 import type { RecordingSessionStore } from '../recording/store'
 import type { HealthReport } from '../status/health'
@@ -101,6 +105,15 @@ export interface ProceduralHttpDeps {
   }
 }
 
+export interface OnboardingHttpDeps {
+  /** Used to pull the user's existing tasks (inbox + active) to scan. */
+  mindwtr: MindwtrClient
+  /** Collects glossary candidates from those tasks (no writes). */
+  extractor: OnboardingExtractor
+  /** Write side: candidate upsert + confirm/reject. */
+  glossary: GlossaryStore
+}
+
 export interface HttpServerConfig {
   port: number
   authToken: string
@@ -109,6 +122,9 @@ export interface HttpServerConfig {
   proposals: ProposalsHttpDeps | null
   /** Optional persons registry — when set, exposes GET /v1/persons for UI autocomplete. */
   persons: PersonsProvider | null
+  /** Optional onboarding/glossary deps — when set, exposes /v1/onboarding/* and
+   *  /v1/glossary/* for the cold-start seeding wizard. */
+  onboarding?: OnboardingHttpDeps | null
   /** Optional memory module deps — when set, exposes GET /v1/memory/* routes. */
   memory?: MemoryHttpDeps | null
   /** Optional procedural memory — when set, exposes GET/POST /v1/procedural/* (FR88 review API). */
@@ -320,6 +336,10 @@ export function createHttpServer(config: HttpServerConfig) {
 
   if (config.persons) {
     mountPersonsRoutes(app, config.persons)
+  }
+
+  if (config.onboarding) {
+    mountOnboardingRoutes(app, config.onboarding)
   }
 
   if (config.memory) {
@@ -678,6 +698,131 @@ function mountPersonsRoutes(app: Hono, provider: PersonsProvider): void {
       : threads
     return c.json({ items: filtered.slice(0, limit) })
   })
+}
+
+function mountOnboardingRoutes(app: Hono, deps: OnboardingHttpDeps): void {
+  // POST /v1/onboarding/scan — pull existing tasks, extract glossary candidates
+  // (no writes), upsert them as 'candidate' rows (skipping slugs the user has
+  // already confirmed/rejected), and return the pending list for the wizard.
+  app.post('/v1/onboarding/scan', async (c) => {
+    let tasks
+    try {
+      const inbox = await deps.mindwtr.listTasks({ status: 'inbox', limit: 200 })
+      const next = await deps.mindwtr.listTasks({ status: 'next', limit: 200 })
+      const waiting = await deps.mindwtr.listTasks({ status: 'waiting', limit: 100 })
+      tasks = [...inbox, ...next, ...waiting]
+    } catch (err) {
+      return c.json({ error: `task fetch failed: ${(err as Error).message}` }, 502)
+    }
+
+    let candidates
+    try {
+      candidates = await deps.extractor.collect(
+        tasks.map((t) => ({ title: t.title, description: t.description }))
+      )
+    } catch (err) {
+      return c.json({ error: `extraction failed: ${(err as Error).message}` }, 500)
+    }
+
+    // Persist as candidates, skipping anything the user already decided on.
+    const pending = []
+    for (const cand of candidates) {
+      if (deps.glossary.isKnown(cand.slug)) {
+        const existing = deps.glossary.get(cand.slug)
+        // Re-surface only if it's still an open candidate; confirmed/rejected stay hidden.
+        if (existing && existing.status === 'candidate') pending.push(toCandidateView(existing, cand))
+        continue
+      }
+      const rec = deps.glossary.upsertCandidate({
+        slug: cand.slug,
+        term: cand.term,
+        kind: cand.kind,
+        expansion: cand.expansion,
+        confidence: cand.confidence,
+        source: 'onboarding',
+      })
+      pending.push(toCandidateView(rec, cand))
+    }
+
+    return c.json({
+      scannedTasks: tasks.length,
+      candidates: pending,
+      counts: {
+        candidate: deps.glossary.countByStatus('candidate'),
+        confirmed: deps.glossary.countByStatus('confirmed'),
+        rejected: deps.glossary.countByStatus('rejected'),
+      },
+    })
+  })
+
+  // GET /v1/glossary?status=candidate|confirmed|rejected — list rows by status.
+  app.get('/v1/glossary', (c) => {
+    const status = (c.req.query('status') ?? 'candidate') as 'candidate' | 'confirmed' | 'rejected'
+    if (!['candidate', 'confirmed', 'rejected'].includes(status)) {
+      return c.json({ error: 'invalid status' }, 400)
+    }
+    const limitRaw = Number(c.req.query('limit') ?? 200)
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 500) : 200
+    return c.json({ items: deps.glossary.listByStatus(status, limit) })
+  })
+
+  // POST /v1/glossary/confirm { slug, expansion?, term?, kind?, aliases? }
+  app.post('/v1/glossary/confirm', async (c) => {
+    let body: { slug?: unknown; expansion?: unknown; term?: unknown; kind?: unknown; aliases?: unknown }
+    try {
+      body = (await c.req.json()) as typeof body
+    } catch {
+      return c.json({ error: 'invalid JSON' }, 400)
+    }
+    const slug = typeof body.slug === 'string' ? body.slug : ''
+    if (!slug) return c.json({ error: 'slug is required' }, 400)
+    const rec = deps.glossary.confirm({
+      slug,
+      expansion: typeof body.expansion === 'string' ? body.expansion : undefined,
+      term: typeof body.term === 'string' ? body.term : undefined,
+      kind: isGlossaryKind(body.kind) ? body.kind : undefined,
+      aliases: Array.isArray(body.aliases)
+        ? body.aliases.filter((a): a is string => typeof a === 'string')
+        : undefined,
+    })
+    if (!rec) return c.json({ error: 'not found' }, 404)
+    return c.json({ record: rec })
+  })
+
+  // POST /v1/glossary/reject { slug }
+  app.post('/v1/glossary/reject', async (c) => {
+    let body: { slug?: unknown }
+    try {
+      body = (await c.req.json()) as typeof body
+    } catch {
+      return c.json({ error: 'invalid JSON' }, 400)
+    }
+    const slug = typeof body.slug === 'string' ? body.slug : ''
+    if (!slug) return c.json({ error: 'slug is required' }, 400)
+    const rec = deps.glossary.reject(slug)
+    if (!rec) return c.json({ error: 'not found' }, 404)
+    return c.json({ record: rec })
+  })
+}
+
+function isGlossaryKind(v: unknown): v is GlossaryKind {
+  return v === 'project' || v === 'term' || v === 'technology' || v === 'organization'
+}
+
+function toCandidateView(
+  rec: { slug: string; term: string; expansion: string; kind: GlossaryKind; confidence: number | null; mentionCount: number },
+  cand: { grade: 'high' | 'needs_input'; evidence: string }
+) {
+  return {
+    slug: rec.slug,
+    term: rec.term,
+    expansion: rec.expansion,
+    kind: rec.kind,
+    confidence: rec.confidence,
+    mentionCount: rec.mentionCount,
+    grade: cand.grade,
+    evidence: cand.evidence,
+  }
 }
 
 function mountMemoryRoutes(app: Hono, deps: MemoryHttpDeps): void {
