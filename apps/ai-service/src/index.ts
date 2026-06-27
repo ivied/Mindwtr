@@ -771,11 +771,24 @@ async function main() {
     24 * 60 * 60 * 1000
   )
 
+  // Guard every external-channel call at boot with a timeout. When makurdi's
+  // outbound network blips, Slack/Notion start() can hang indefinitely — and
+  // since this runs before the HTTP server, a hang takes down the capture
+  // endpoint (ai.kurdy.uk 502, dropped captures). The timeout lets boot
+  // proceed; the channel's own poller retries once the network recovers.
+  const withTimeout = <T,>(p: Promise<T>, ms: number, label: string): Promise<T> =>
+    Promise.race([
+      p,
+      new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+      ),
+    ])
+
   // Start additional channels
   const { channels, slack: slackChannel } = buildChannels()
   for (const ch of channels) {
     try {
-      await ch.start()
+      await withTimeout(ch.start(), 15000, `channel ${ch.name} start`)
       console.log(`✅ ${ch.name} channel started`)
     } catch (err) {
       console.error(`Failed to start ${ch.name}:`, err)
@@ -790,7 +803,11 @@ async function main() {
     const saved = await slackSessionStore.load()
     for (const rec of saved) {
       try {
-        await slackChannel.upsertSessionWorkspace(rec.token, rec.cookie)
+        await withTimeout(
+          slackChannel.upsertSessionWorkspace(rec.token, rec.cookie),
+          15000,
+          `slack session restore ${rec.teamName}`
+        )
       } catch (err) {
         const reason = (err as { data?: { error?: string } })?.data?.error ?? (err as Error).message
         console.warn(`[slack] saved session for ${rec.teamName} no longer valid (${reason})`)

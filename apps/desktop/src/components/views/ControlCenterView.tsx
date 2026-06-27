@@ -140,15 +140,17 @@ export function ControlCenterView() {
       const mx = (sx + ex) / 2 + (Math.random() - 0.5) * 90, my = (sy + ey) / 2 + (Math.random() - 0.5) * 90;
       parts.push({ sx, sy, ex, ey, mx, my, t: 0, sp: 0.0016 + Math.random() * 0.001, r: 1.1 + Math.random() * 1.4, warm: Math.random() < 0.1 });
     };
-    // intensity 0..1 from real recent-10min count (≈30 events = busy)
-    const intensity = (s: Src) => {
-      if (!s.configured) return 0;
-      const recent = ratesRef.current[s.key] ?? 0;
-      return Math.min(1, recent / 30);
-    };
+    // Honest emission: one particle per real arrival, scaled for visibility.
+    // recent = events in the last 10 min, so events/min = recent/10. We emit
+    // at that rate × VIS (real arrivals are ~1/min — too sparse to read as a
+    // flow, so we scale up; the RELATIVE frequency between sources stays exact).
+    const VIS = 6;
+    const eventsPerMin = (s: Src) => (s.configured ? (ratesRef.current[s.key] ?? 0) / 10 : 0);
+    const particlesPerSec = (s: Src) => (eventsPerMin(s) / 60) * VIS;
+    const nextSpawnAt: Record<string, number> = {};
     const drawThreads = () => {
       SOURCES.forEach((s) => {
-        const live = intensity(s) > 0;
+        const live = eventsPerMin(s) > 0;
         const sx = s.x * W() + 42, sy = s.y * H() + 42, ex = core.x * W(), ey = core.y * H();
         const mx = (sx + ex) / 2, my = (sy + ey) / 2 - 30;
         cx.beginPath(); cx.moveTo(sx, sy); cx.quadraticCurveTo(mx, my, ex, ey);
@@ -160,8 +162,18 @@ export function ControlCenterView() {
       cx.clearRect(0, 0, W(), H());
       drawThreads();
       const paused = pausedRef.current;
-      // emission probability ∝ real activity; quiet sources emit nothing
-      if (!paused) SOURCES.forEach((s) => { const i = intensity(s); if (i > 0 && Math.random() < i * 0.045) spawn(s); });
+      const now = performance.now();
+      // schedule a particle every (1/rate) seconds with jitter — discrete
+      // arrivals, not a constant per-frame stream; quiet sources never spawn
+      if (!paused) SOURCES.forEach((s) => {
+        const pps = particlesPerSec(s);
+        if (pps <= 0) return;
+        if (nextSpawnAt[s.key] === undefined) nextSpawnAt[s.key] = now + (1000 / pps) * Math.random();
+        if (now >= nextSpawnAt[s.key]) {
+          spawn(s);
+          nextSpawnAt[s.key] = now + (1000 / pps) * (0.6 + 0.8 * Math.random());
+        }
+      });
       for (let i = parts.length - 1; i >= 0; i--) {
         const p = parts[i]; if (!paused) p.t += p.sp;
         if (p.t >= 1) { parts.splice(i, 1); continue; }
