@@ -48,6 +48,23 @@ export async function getDashboardStatus(signal?: AbortSignal): Promise<Dashboar
   return (await res.json()) as DashboardStatus;
 }
 
+export interface SourcePulse {
+  now: string;
+  sources: Record<SourceKey, number>;
+}
+
+/** New events per bucket since `since` — for literal on-arrival flow. */
+export async function getSourcePulse(since: string | null, signal?: AbortSignal): Promise<SourcePulse> {
+  if (!BASE_URL || !TOKEN) throw new Error('AI Service is not configured');
+  const q = since ? `?since=${encodeURIComponent(since)}` : '';
+  const res = await fetch(`${BASE_URL}/v1/status/source-pulse${q}`, {
+    headers: { Authorization: `Bearer ${TOKEN}` },
+    signal,
+  });
+  if (!res.ok) throw new Error(`source-pulse ${res.status}`);
+  return (await res.json()) as SourcePulse;
+}
+
 /** Control-plane: flip the capture pause switch (Phase 3). */
 export async function setCapturePaused(paused: boolean): Promise<{ capturePaused: boolean }> {
   if (!BASE_URL || !TOKEN) throw new Error('AI Service is not configured');

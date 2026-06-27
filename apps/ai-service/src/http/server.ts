@@ -253,6 +253,29 @@ export function createHttpServer(config: HttpServerConfig) {
     })
   })
 
+  // Source pulse — how many events PER bucket arrived since the client's
+  // cursor (?since=ISO). The Control Center polls this fast (~3s) and emits
+  // one particle per real arrival, so the flow is literal, not rate-scaled.
+  // First call (no since) returns zeros + a fresh cursor to start from.
+  app.get('/v1/status/source-pulse', (c) => {
+    const now = new Date().toISOString()
+    const since = c.req.query('since')
+    const buckets: Record<'screen' | 'audio' | 'chat' | 'notes', number> = {
+      screen: 0, audio: 0, chat: 0, notes: 0,
+    }
+    const mem = config.memory?.store ?? null
+    if (mem && since) {
+      for (const r of mem.recentCountsBySource(since)) {
+        const s = r.source
+        if (s === 'screen') buckets.screen += r.count
+        else if (s === 'audio') buckets.audio += r.count
+        else if (s.startsWith('slack') || s.startsWith('telegram')) buckets.chat += r.count
+        else if (s.startsWith('notion')) buckets.notes += r.count
+      }
+    }
+    return c.json({ now, sources: buckets })
+  })
+
   // Control-plane: capture pause switch (Phase 3). capture-agent polls GET;
   // the Control Center toggles via POST { capturePaused }.
   if (config.agentConfig) {
