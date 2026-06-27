@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTaskStore } from '@mindwtr/core';
-import { getDashboardStatus, setCapturePaused, isControlCenterAvailable, type DashboardStatus, type SourceKey } from '../../lib/control-center-client';
+import { getDashboardStatus, getSourcePulse, setCapturePaused, isControlCenterAvailable, type DashboardStatus, type SourceKey } from '../../lib/control-center-client';
 
 /**
  * Control Center — "Night Observatory" design (variant A).
@@ -61,8 +61,10 @@ export function ControlCenterView() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const sceneRef = useRef<HTMLDivElement | null>(null);
   const pausedRef = useRef(false);
-  // per-source recent counts the flow animation reads each frame (honest flow)
+  // per-source recent counts (last 10m) — drives thread brightness/dim only
   const ratesRef = useRef<Record<SourceKey, number>>({ screen: 0, audio: 0, chat: 0, notes: 0 });
+  // particles queued to emit, one per real arrival (drained by the canvas)
+  const pendingRef = useRef<Record<SourceKey, number>>({ screen: 0, audio: 0, chat: 0, notes: 0 });
 
   // ── live dashboard data (Phase 2) ──
   const [live, setLive] = useState<DashboardStatus | null>(null);
@@ -96,6 +98,29 @@ export function ControlCenterView() {
     // re-render the relative "N назад" label every 15s without refetching
     const relId = window.setInterval(() => !stop && forceTick((n) => n + 1), 15000);
     return () => { stop = true; ctl?.abort(); clearInterval(id); clearInterval(relId); };
+  }, []);
+
+  // ── source pulse: queue one particle per REAL arrival since last cursor ──
+  useEffect(() => {
+    if (!isControlCenterAvailable()) return;
+    let stop = false;
+    let cursor: string | null = null; // first call seeds the cursor, emits nothing
+    let ctl: AbortController | null = null;
+    const poll = async () => {
+      ctl = new AbortController();
+      try {
+        const p = await getSourcePulse(cursor, ctl.signal);
+        if (cursor && !stop) {
+          (Object.keys(p.sources) as SourceKey[]).forEach((k) => {
+            pendingRef.current[k] += p.sources[k] ?? 0;
+          });
+        }
+        cursor = p.now;
+      } catch { /* keep cursor; retry next tick */ }
+    };
+    poll();
+    const id = window.setInterval(poll, 3000);
+    return () => { stop = true; ctl?.abort(); clearInterval(id); };
   }, []);
 
   // @ai-agent tasks live from the local store (delegated work)
@@ -140,17 +165,11 @@ export function ControlCenterView() {
       const mx = (sx + ex) / 2 + (Math.random() - 0.5) * 90, my = (sy + ey) / 2 + (Math.random() - 0.5) * 90;
       parts.push({ sx, sy, ex, ey, mx, my, t: 0, sp: 0.0016 + Math.random() * 0.001, r: 1.1 + Math.random() * 1.4, warm: Math.random() < 0.1 });
     };
-    // Honest emission: one particle per real arrival, scaled for visibility.
-    // recent = events in the last 10 min, so events/min = recent/10. We emit
-    // at that rate × VIS (real arrivals are ~1/min — too sparse to read as a
-    // flow, so we scale up; the RELATIVE frequency between sources stays exact).
-    const VIS = 6;
-    const eventsPerMin = (s: Src) => (s.configured ? (ratesRef.current[s.key] ?? 0) / 10 : 0);
-    const particlesPerSec = (s: Src) => (eventsPerMin(s) / 60) * VIS;
-    const nextSpawnAt: Record<string, number> = {};
+    // Thread is "live" if the source saw any event in the last 10 min.
+    const isLive = (s: Src) => s.configured && (ratesRef.current[s.key] ?? 0) > 0;
     const drawThreads = () => {
       SOURCES.forEach((s) => {
-        const live = eventsPerMin(s) > 0;
+        const live = isLive(s);
         const sx = s.x * W() + 42, sy = s.y * H() + 42, ex = core.x * W(), ey = core.y * H();
         const mx = (sx + ex) / 2, my = (sy + ey) / 2 - 30;
         cx.beginPath(); cx.moveTo(sx, sy); cx.quadraticCurveTo(mx, my, ex, ey);
@@ -158,21 +177,23 @@ export function ControlCenterView() {
         cx.lineWidth = 1; cx.setLineDash(live ? [] : [2, 7]); cx.stroke(); cx.setLineDash([]);
       });
     };
+    // throttle emission so a burst (e.g. 24 audio arrivals at once) spreads
+    // over a couple seconds instead of one frame; single arrivals fire at once
+    const lastEmit: Record<string, number> = {};
+    const MIN_GAP_MS = 130;
     const tick = () => {
       cx.clearRect(0, 0, W(), H());
       drawThreads();
       const paused = pausedRef.current;
       const now = performance.now();
-      // schedule a particle every (1/rate) seconds with jitter — discrete
-      // arrivals, not a constant per-frame stream; quiet sources never spawn
+      // drain the pending queue: one particle per real arrival, throttled
       if (!paused) SOURCES.forEach((s) => {
-        const pps = particlesPerSec(s);
-        if (pps <= 0) return;
-        if (nextSpawnAt[s.key] === undefined) nextSpawnAt[s.key] = now + (1000 / pps) * Math.random();
-        if (now >= nextSpawnAt[s.key]) {
-          spawn(s);
-          nextSpawnAt[s.key] = now + (1000 / pps) * (0.6 + 0.8 * Math.random());
-        }
+        const pend = pendingRef.current[s.key] ?? 0;
+        if (pend <= 0) return;
+        if (now - (lastEmit[s.key] ?? 0) < MIN_GAP_MS) return;
+        spawn(s);
+        pendingRef.current[s.key] = pend - 1;
+        lastEmit[s.key] = now;
       });
       for (let i = parts.length - 1; i >= 0; i--) {
         const p = parts[i]; if (!paused) p.t += p.sp;
