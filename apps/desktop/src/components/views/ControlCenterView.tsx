@@ -243,9 +243,11 @@ export function ControlCenterView() {
   // per-source live label + dimming
   const srcDisplay = (s: Src) => {
     const a = live?.sources?.[s.key];
-    if (!s.configured) return { off: true, label: '—' };
+    const lastRel = relTime(a?.lastAt ?? null);
+    if (!s.configured) return { off: true, label: '—', last: null as string | null };
     const recent = a?.recent ?? 0;
-    return { off: false, label: recent > 20 ? 'активен' : recent > 0 ? 'тихо' : 'нет данных' };
+    const label = recent > 20 ? 'активен' : recent > 0 ? 'тихо' : 'нет данных';
+    return { off: false, label, last: lastRel };
   };
 
   const bodyClass = effState ? `cc-${effState}` : '';
@@ -286,7 +288,7 @@ export function ControlCenterView() {
                    onClick={(e) => { e.stopPropagation(); setSrcCard(s.name); }}>
                 <img src={ASSET(s.asset)} alt="" />
                 <div className="cc-lbl">{s.shortName}</div>
-                <div className="cc-rate">{srcDisplay(s).label}</div>
+                <div className="cc-rate">{srcDisplay(s).last ? srcDisplay(s).last : srcDisplay(s).label}</div>
               </div>
             ))}
             <div className="cc-core">
@@ -295,18 +297,21 @@ export function ControlCenterView() {
               <div className="cc-sub">наблюдаю и думаю{heartbeat ? <> · <span className="cc-mono">{heartbeat}</span></> : ''}</div>
               <div className="cc-pnote">Наблюдение на паузе — ничего не записывается.</div>
             </div>
-            {srcCard && (
+            {srcCard && (() => {
+              const cs = SOURCES.find((x) => x.name === srcCard);
+              const ca = cs ? live?.sources?.[cs.key] : undefined;
+              const last = relTime(ca?.lastAt ?? null);
+              return (
               <div className="cc-srccard">
                 <h4>{srcCard}</h4>
-                <div className="cc-ml">последнее наблюдение · 9 сек назад</div>
+                <div className="cc-ml">{last ? `последнее наблюдение · ${last}` : 'наблюдений пока нет'}</div>
                 <div className="cc-nums">
-                  <div><div className="cc-n">96</div><div className="cc-l">за час</div></div>
-                  <div><div className="cc-n">741</div><div className="cc-l">сегодня</div></div>
-                  <div><div className="cc-n">3</div><div className="cc-l">→ задачи</div></div>
+                  <div><div className="cc-n">{ca?.recent ?? 0}</div><div className="cc-l">за ~10 мин</div></div>
                 </div>
                 <button className="cc-soon">⏸ Пауза источника <span>скоро</span></button>
               </div>
-            )}
+              );
+            })()}
           </div>
 
           <div className="cc-side">

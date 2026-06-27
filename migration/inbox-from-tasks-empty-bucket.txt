@@ -1,0 +1,1205 @@
+Tasks DB · Bucket пустой · 293 items
+====================================================================================================
+[2026-04-24] Certificado de antecedentes penales (Argentina) на новый паспорт — 8.500 ARS, 1 час, без турно. Нужна копия паспорта, фамилия + имя родителей как в свидетельстве о рождении
+             proj: Продвинуть дело в миграсьонс
+             notion: https://www.notion.so/Certificado-de-antecedentes-penales-Argentina-8-500-ARS-1-34c8e03c4e3a8050b4dad9a2898851a4
+
+[2026-04-24] Pronto despacho
+             proj: Продвинуть дело в миграсьонс
+             notion: https://www.notion.so/Pronto-despacho-34c8e03c4e3a80599848ccf53e5f6bfd
+
+[2026-04-20] Проверка хуков
+             proj: Nовый ерп системы /Papper clip?
+             notion: https://www.notion.so/3468e03c4e3a80fc9e7cf5bbe149fd86
+
+[2026-04-20] <Untitled Task>
+             proj: Взять кота
+             notion: https://www.notion.so/3488e03c4e3a809b8c01d7cc82ac08f0
+
+[2026-04-18] <Untitled Task>
+             proj: -
+             notion: https://www.notion.so/3468e03c4e3a803b80abcc4558e36e1b
+
+[2026-04-18] (?) вынести в сварм мод
+             proj: Nовый ерп системы /Papper clip?
+             notion: https://www.notion.so/3468e03c4e3a80d2aa21cb570d125168
+
+[2026-04-18] проверить синхронизацию таблиц
+             proj: Nовый ерп системы /Papper clip?
+             notion: https://www.notion.so/3468e03c4e3a801c9018f51245d5a18d
+
+[2026-04-18] работать над пнл
+             proj: Nовый ерп системы /Papper clip?
+             notion: https://www.notion.so/3468e03c4e3a8049a2d5e6b9f4b5e507
+
+[2026-04-06] подключить апи макс\вк
+             proj: Либре чат 
+             notion: https://www.notion.so/3358e03c4e3a80d19448d39e4275af32
+
+[2026-03-26] развернуть удаленно
+             proj: 9router для картинок
+             notion: https://www.notion.so/32f8e03c4e3a802cb80cd9582fa7bbe3
+
+[2026-03-26] сколько жрет оперативки
+             proj: 9router для картинок
+             notion: https://www.notion.so/32f8e03c4e3a8008a59fd7719efc656c
+
+[2026-03-25] подготовить текст для делегирования ассистенту
+             proj: Гипотезы? что дальше
+             notion: https://www.notion.so/32d8e03c4e3a8095a8bfcd3c6a34f9af
+
+[2026-03-24] проблема с токном авторизации
+             proj: Автоматизировать отклики на апворк
+             notion: https://www.notion.so/32d8e03c4e3a8040aa34ceebdfe36f06
+
+[2026-03-24] Протестировать аудит мод локально
+             proj: тестовое окружение для опенклав
+             notion: https://www.notion.so/31b8e03c4e3a801294c2f25705a9ece6
+
+[2026-03-12] <Untitled Task>
+             proj: Сгенерировать отчет
+             notion: https://www.notion.so/3218e03c4e3a807f83a0fce0d3c8fc1b
+
+[2026-03-10] кандела оплата
+             proj: -
+             notion: https://www.notion.so/31f8e03c4e3a80f7b177e728c8e24c25
+
+[2026-03-07] Поставить напоминание через 7 дней: проверить количество оплат. Если <5 — переписать оффер через Claude и повторить п.5-7
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/7-5-Claude-5-7-31c8e03c4e3a8055aa2ee3e348997879
+
+[2026-03-07] Настроить Simple Analytics или Plausible на лендинг (вайбкодить сниппет) — трекать визиты и конверсии
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/Simple-Analytics-Plausible-31c8e03c4e3a80f8b59bfb1ea7e17460
+
+[2026-03-07] Зарегистрировать домен (Namecheap/Cloudflare) и задеплоить лендинг на Vercel/Cloudflare Pages
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/Namecheap-Cloudflare-Vercel-Cloudflare-Pages-31c8e03c4e3a80649585e3afc452d112
+
+[2026-03-07] Написать пост на ProductHunt Discussions / Indie Hackers с тем же оффером на английском
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/ProductHunt-Discussions-Indie-Hackers-31c8e03c4e3a8086a2c2f3c3291443d6
+
+[2026-03-07] Написать пост для r/gtd через Claude: «Я строю AI-агента, который разбирает inbox в GTD-систему — ранний доступ за $49 lifetime, ищу 50 первых пользователей»
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/r-gtd-Claude-AI-inbox-GTD-49-31c8e03c4e3a80b19156f183214d41c9
+
+[2026-03-07] Написать аналогичный пост для 3 Telegram-каналов по продуктивности (русскоязычных)
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/3-Telegram-31c8e03c4e3a80b5b0dbd87f1717ac46
+
+[2026-03-07] Открыть Claude, скормить конкурентный анализ (пустой квадрант deep GTD + high AI), попросить сгенерировать 5 вариантов оффера в формате «результат за срок за цену»
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/Claude-deep-GTD-high-AI-5-31c8e03c4e3a8056a9e1fcda63566a0d
+
+[2026-03-07] Выбрать один оффер и отвайбкодить лендинг на одну страницу (Next.js или просто HTML) с заголовком-оффером, 3 буллетами «что получишь», кнопкой предоплаты
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/Next-js-HTML-3-31c8e03c4e3a80b3acb5d16fd34a095f
+
+[2026-03-05] Бьюти Стайл 24 аква
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/24-31a8e03c4e3a803b9e7ed8e7d59185ca
+
+[2026-02-25] сбор данных в RAG
+             proj: Гипотеза: Руководитель агенства
+             notion: https://www.notion.so/RAG-3128e03c4e3a802fbf8dfb0f77980871
+
+[2026-02-23] купить покрывлки
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/3108e03c4e3a806db9dddbf1513f9b49
+
+[2026-02-18] сделать анализ лидеров
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/30b8e03c4e3a803fbdb0c0cdaae18afd
+
+[2026-02-18] написать лиедрам сообщения
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/30b8e03c4e3a80958d07d5adc729c802
+
+[2026-02-18] найти лидерв в нише
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/30b8e03c4e3a808a9f0ef1639e8f9a89
+
+[2026-02-18] выписать сообщества где можно будет делать публикации о новом контенте
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/30b8e03c4e3a80e68354f7fe4ba8dc16
+
+[2026-02-18] Видео обои для стрима найти
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/30b8e03c4e3a808c8832e69f4c389064
+
+[2026-02-18] делегировать ассистенту Проанализировать запись своего первого стрима: выписать 1 вещь, которая получилась круто, и 1 вещь, которую нужно исправить в подаче.
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/1-1-30b8e03c4e3a8076b40ff764c6e4ba27
+
+[2026-02-18] Найти 3 Telegram-чата или сообщества, где обсуждают нейросети, стартапы или футурологию.
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/3-Telegram-30b8e03c4e3a80be9595c046615d3148
+
+[2026-02-18] Протестировать 1 интрумент для автомтазиации монтажа
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/1-30b8e03c4e3a80e3904fc246902c2637
+
+[2026-02-18] Включить запись экрана и за 5 минут показать, как вы делегируете написание куска кода или скрипта AI-ассистенту.
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/5-AI-30b8e03c4e3a8080bf6bfd434e667adb
+
+[2026-02-18] Открыть реальную рабочую задачу в вашем IT-агентстве (например, настройку интеграции или развертывание ERP-системы).
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/IT-ERP-30b8e03c4e3a8098b376cac69aa76b0e
+
+[2026-02-18] Найти на YouTube или Epidemic Sound плейлист с royalty-free музыкой в стиле Synthwave или Ambient.
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/YouTube-Epidemic-Sound-royalty-free-Synthwave-Ambient-30b8e03c4e3a80a0b1ced48a287b7f90
+
+[2026-02-18] Выставить свет: поставить один мягкий источник теплого или нейтрального света перед собой (кольцевая лампа или софтбокс).
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/30b8e03c4e3a80f7bd2cd35cd6b3dc6e
+
+[2026-02-18] Напротив каждого страха написать по одному контраргументу, опираясь на принципы позитивной психологии и гуманистического подхода.
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/30b8e03c4e3a801099dbc5cbcdbe6854
+
+[2026-02-18] Сформулировать 3 главных страха обывателей перед оцифровкой сознания.
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/3-30b8e03c4e3a8066a96af6d46bd4dcab
+
+[2026-02-18] Выписать списком 3 нейросети или AI-инструмента (например, RooCode, Claude Code, Vertex AI), которые вы уже используете каждый день.
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/3-AI-RooCode-Claude-Code-Vertex-AI-30b8e03c4e3a80a0a339f0d8f9bc8343
+
+[2026-02-18] Написать 5 провокационных, но успокаивающих заголовков для будущих роликов/постов (например: «Почему AGI не заберет твою работу, а сделает тебя супергероем»).
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/5-AGI-30b8e03c4e3a80b0b133dae6b392afe4
+
+[2026-02-18] настроить групировку и автопостинг
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/30b8e03c4e3a80fb84ccd7daf291a537
+
+[2026-02-18] настроить бота на сбор инфы по тому чем я занимаюсь ежденевно
+             proj: Гипотеза:инфленсер-трансгуманист
+             notion: https://www.notion.so/30b8e03c4e3a806dad44f8da7b23af3b
+
+[2026-02-18] Написать черновик из 3 ключевых тезисов для будущей статьи на Хабр или Пикабу про психологию обучения печати (это даст бесплатный целевой трафик).
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/3-30b8e03c4e3a807d8e7bccd1ad95f991
+
+[2026-02-18] Посчитать стоимость привлечения одного лида/контакта (CAC) для лендинга тренажера печати.
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/CAC-30b8e03c4e3a80a5ae60e815dc11c909
+
+[2026-02-18] Дать жене/другу протестировать скрипт перехвата клавиш: попросить набрать 2 предложения и проверить, корректно ли сработала логика ошибок.
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/2-30b8e03c4e3a80288ea2fc431c6d8c53
+
+[2026-02-18] Проанализировать конкурентов: открыть Keybr и Ratatype, выписать 2 вещи, которые у них сделаны плохо с точки зрения психологии обучения.
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/Keybr-Ratatype-2-30b8e03c4e3a803c9451dcd3ba292325
+
+[2026-02-18] Настроить Яндекс.Метрику или Google Analytics на созданный лендинг тренажера.
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/Google-Analytics-30b8e03c4e3a80198dbae03af281c811
+
+[2026-02-18] Выделить $10 на контекстную рекламу по узкому запросу "как быстро научиться печатать вслепую".
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/10-30b8e03c4e3a80ab8981d17db6430582
+
+[2026-02-18] Попросить LLM расписать юридические риски (DMCA) и возможные причины блокировки бота со стороны Telegram.
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/LLM-DMCA-Telegram-30b8e03c4e3a8018b378c5062341f396
+
+[2026-02-18] Посмотреть статистику бота: сколько уникальных ссылок прислали пользователи за время теста.
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/30b8e03c4e3a80988f25dfb578a6a1f7
+
+[2026-02-18] Создать простую HTML-страницу с заголовком: "Освой 10-пальцевый набор за 10 часов без откатов назад" и полем email.
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/HTML-10-10-email-30b8e03c4e3a80e09316f070e900a830
+
+[2026-02-18] Посчитать конверсию: сколько людей из приславших ссылку нажали на фейковую кнопку оплаты.
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/30b8e03c4e3a80829ebcc9ee7c24febb
+
+[2026-02-18] побрейнштормить как бот будет будет работать бот на устройсрстве пользователя
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/30b8e03c4e3a80498fbadb73a6d7788b
+
+[2026-02-18] Закинуть ссылку на бота в 3 студенческих или пиратских чата, чтобы посмотреть, начнут ли люди вообще отправлять ссылки.
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/3-30b8e03c4e3a8097b481f43803b6fcb0
+
+[2026-02-18] Добавить в автоответчик бота фейковую кнопку «Оплатить $3 за премиум-скорость» (Paywall) для замера готовности платить.
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/3-Paywall-30b8e03c4e3a80e196a9cfa21e396cf4
+
+[2026-02-18] Настроить в созданном боте автоответчик (заглушку): «Привет! Отправь ссылку на курс. Пока мы в бете, скачивание может занять время».
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/30b8e03c4e3a808193d1ce9887cacfb1
+
+[2026-02-18] Выписать 5 этапов Гальперина (от материального до умственного) в документ.
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/5-30b8e03c4e3a80ddac39ffd58f5b7ed3
+
+[2026-02-18] . Написать напротив каждого из 5 этапов ровно одну фичу интерфейса, которая будет его реализовывать (например, "внешнеречевой этап" — озвучка клавиш).
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/5-30b8e03c4e3a80fd8579c7e325f229a8
+
+[2026-02-18] Провести 1 интервью (CustDev) с человеком, который не справился с GTD, и зафиксировать, на каком этапе система сломалась.
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/1-CustDev-GTD-30b8e03c4e3a80478f9ed746c9fdceb9
+
+[2026-02-18] Создать в Notion/Google Docs таблицу "Гипотезы" с колонками: Название, Метрика успеха (клики/email), Срок проверки, Статус.
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/Notion-Google-Docs-email-30b8e03c4e3a805f9263f64eb1a24ad8
+
+[2026-02-18] Выделить виртуальную карту с балансом $30-50 исключительно для тестовых закидов на рекламу или сервисы.
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/30-50-30b8e03c4e3a808182eddf11ee248aee
+
+[2026-02-18] Скачать на телефон приложение-таймер (например, Insight Timer) и выбрать мягкий, глубокий звук поющей чаши, чтобы ненавязчиво контролировать время.
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/Insight-Timer-30b8e03c4e3a8047bf65fbf334c2e4f6
+
+[2026-02-18] Протестировать разогрев масла в этой пиале на водяной бане (опустить пиалу в миску с горячей водой на 5 минут).
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/5-30b8e03c4e3a80a985b7e88a3de96d2d
+
+[2026-02-18] Лечь на пол, положить руки себе на живот и сделать 10 осознанных циклов диафрагмального дыхания.
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/10-30b8e03c4e3a808381f6d3f6be3c94cb
+
+[2026-02-18] Изучить технику диафрагмального дыхания (дыхание животом), которая используется для синхронизации с партнером.
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/30b8e03c4e3a80c9a174c7fff9704a51
+
+[2026-02-18] Изучить технику диафрагмального дыхания (дыхание животом), которая используется для синхронизации с партнером.
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/30b8e03c4e3a80dda9d3c97c1686a04f
+
+[2026-02-18] Найти и посмотреть видеоурок по классической технике «эффлераж» (длинные непрерывные поглаживания).
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/30b8e03c4e3a80aeb8b0e311f70614e9
+
+[2026-02-18] Найти и посмотреть видеоурок по классической технике «эффлераж» (длинные непрерывные поглаживания).
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/30b8e03c4e3a80d9b3fcc9e6f0561b50
+
+[2026-02-18] • Посмотреть 15-минутный туториал о правильном переносе веса тела массажиста (работа от ног и таза, а не от кистей).
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/15-30b8e03c4e3a800a9deee04f7d098fe5
+
+[2026-02-18] Найти и посмотреть видеоурок по классической технике «эффлераж» (длинные непрерывные поглаживания).
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/30b8e03c4e3a80598a25fb1e7fb7a50f
+
+[2026-02-18] Встать перед зеркалом и 5 минут потренировать стойку «лучника» (выпад одной ногой вперед), плавно перенося вес с ноги на ногу.
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/5-30b8e03c4e3a80ebb058e6b4878bce27
+
+[2026-02-18] Найти и сохранить карту нервных окончаний в области крестца и поясницы.
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/30b8e03c4e3a8022bfcce0d952441529
+
+[2026-02-18] Найти и скачать 3D-атлас анатомии (например, Essential Anatomy или аналоги) на телефон/планшет.
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/3D-Essential-Anatomy-30b8e03c4e3a805a8a6bfef98792f1bd
+
+[2026-02-18] Найти в Google схему расположения классических триггерных точек на шее и плечах и сохранить картинку в Избранное.
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/Google-30b8e03c4e3a806b8e8dfcdfaef0cc53
+
+[2026-02-18] Посмотреть научно-популярное (не эзотерическое) видео о строении женского таза и мышц тазового дна.
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/30b8e03c4e3a809d9e65ca2cf3077513
+
+[2026-02-18] Найти и сохранить карту нервных окончаний в области крестца и поясницы.
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/30b8e03c4e3a80c28c31fcb864b537b6
+
+[2026-02-18] Найти и скачать 3D-атлас анатомии (например, Essential Anatomy или аналоги) на телефон/планшет.
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/3D-Essential-Anatomy-30b8e03c4e3a80c9abd8e7ae20c1a365
+
+[2026-02-18] Собрать  плейлист на 1–1.5 часа с глубокой, трансовой или эмбиент-музыкой.
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/1-1-5-30b8e03c4e3a80e598a5cc99a0c65d5e
+
+[2026-02-18] Найти и выполнить 5-минутную суставную разминку для кистей и предплечий, чтобы протестировать ее перед будущими сеансами.
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/5-30b8e03c4e3a8016be69fd19a538b96b
+
+[2026-02-18] Найти на YouTube и сохранить 1-2 коротких видео по эргономике массажиста (как правильно стоять, переносить вес тела и беречь спину).
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/YouTube-1-2-30b8e03c4e3a80499db7dec6294972cf
+
+[2026-02-18] одготовить текстиль: выделить или купить тактильно приятные простыни и полотенца в спокойных пастельных или глубоких черных тонах — без ярких принтов и блесток, чтобы визуально не перегружать пространство и сохранить успокаивающий вайб.
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/30b8e03c4e3a805795d8fc04358cb2e5
+
+[2026-02-18] составить план по поиску ментора
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/30b8e03c4e3a80a09ca6f00e208772b2
+
+[2026-02-18] составить план насчет удобного пространства для массажа
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/30b8e03c4e3a80309e32e5bb1e301da3
+
+[2026-02-18] 10 уроков по курсу массажа пройти
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/10-30b8e03c4e3a80c98388fbaf4c2daf22
+
+[2026-02-18] заказать у асситнта пойск местных курсов и практик по массажу
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/30b8e03c4e3a800c92c2ec2b696d6d7f
+
+[2026-02-18] выписать курсы по массажу которые хочу пройти
+             proj: Гипотеза: массажист
+             notion: https://www.notion.so/30b8e03c4e3a80fe9832d86697300feb
+
+[2026-02-18] делаем ТЗ на автоматизацию ГТД
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/30b8e03c4e3a807cb41cdff4ea67f92a
+
+[2026-02-18] делаем репозиторий открытый
+             proj: Гипотеза: Солоэнетрпринер
+             notion: https://www.notion.so/30b8e03c4e3a80baa0bed1c6eb93e4d0
+
+[2026-02-11] баг:скор не подтягивается странцу работу
+             proj: Автоматизировать отклики на апворк
+             notion: https://www.notion.so/3048e03c4e3a80eab159ee0814458070
+
+[2026-02-11] Посмотреть доки которые я отсылал для своего аккаунта для подтвеждения места жительства
+             proj: Перемстить аккаунт риты в Аргентину
+             notion: https://www.notion.so/2f68e03c4e3a80308dbfcdf208c68d3e
+
+[2026-02-07] порешать по SSO
+             proj: Перевести почту на другой домен
+             notion: https://www.notion.so/SSO-3008e03c4e3a809bb12ffd8ae2e5d5e0
+
+[2026-02-03] отсылка приходов на меркадо паго через бота
+             proj: Бухгалетр по Аргентине
+             notion: https://www.notion.so/2fc8e03c4e3a80fb98c1d90e7a45742a
+
+[2026-02-03] наладить выписки
+             proj: Бухгалетр по Аргентине
+             notion: https://www.notion.so/2fc8e03c4e3a8073a9c6fac6e64556ee
+
+[2026-02-03] дать данные по паспортам
+             proj: Бухгалетр по Аргентине
+             notion: https://www.notion.so/2fc8e03c4e3a80de82dedbd201fb9b7e
+
+[2026-01-21] Переделать ссылку на домене
+             proj: перехать на зум
+             notion: https://www.notion.so/2ef8e03c4e3a8000b48bf90628348aa0
+
+[2026-01-21] <Untitled Task>
+             proj: перехать на зум
+             notion: https://www.notion.so/2ef8e03c4e3a80faa2d2c5da0433d4d4
+
+[2026-01-19] Прослушать 2 аудио от Игоря
+             proj: Пройти поток от Кочкина
+             notion: https://www.notion.so/2-28b8e03c4e3a8031a179e782cfb49def
+
+[2026-01-16] <Untitled Task>
+             proj: -
+             assignee: Nastasia
+             notion: https://www.notion.so/2ea8e03c4e3a80eaa6c3dd089e0202cc
+
+[2026-01-05] Подготовить по Галиции
+             proj: -
+             notion: https://www.notion.so/2df8e03c4e3a8091b84fd1eff8429429
+
+[2025-12-30] Киоск мод vs секьюрити апдейтс
+             proj: -
+             notion: https://www.notion.so/vs-2d98e03c4e3a80ae9740e530edbf9625
+
+[2025-12-30] Составить список сотрудников с реквизитами для переводов
+             proj: -
+             assignee: Nastasia
+             notion: https://www.notion.so/2d98e03c4e3a80d4bb09e34cd80517c5
+
+[2025-12-30] 50000 ₽
+Амиржон Одилжонович М.
+             proj: -
+             assignee: Nastasia
+             notion: https://www.notion.so/50000-2d98e03c4e3a80a3bebed7c1709ce136
+
+[2025-12-30] 69680₽ Артур Перепелкин
+             proj: -
+             assignee: Nastasia
+             notion: https://www.notion.so/69680-2d98e03c4e3a80eeb58cc79e3cc02149
+
+[2025-12-30] Уточнить номер карты, а не счета
+             proj: -
+             assignee: Nastasia
+             notion: https://www.notion.so/2d98e03c4e3a8046bf5cfbf9e6dc6eb9
+
+[2025-12-30] Ответить master colege
+             proj: -
+             notion: https://www.notion.so/master-colege-2d98e03c4e3a80809bfbd21d3b0f1e7e
+
+[2025-12-25] проанализировать созвон с Кочкиным
+             proj: Пройти поток от Кочкина
+             notion: https://www.notion.so/28c8e03c4e3a803792a6ce8578c25b0d
+
+[2025-12-25] Заказать подарки детям
+             proj: -
+             notion: https://www.notion.so/2d48e03c4e3a80169807c6f95a3b7e64
+
+[2025-12-24] <Untitled Task>
+             proj: Фин Дир
+             notion: https://www.notion.so/2d38e03c4e3a809ab346cbeb72d8a7d5
+
+[2025-12-21] подарки на новый год заказать
+             proj: -
+             notion: https://www.notion.so/2cf8e03c4e3a8020bdaec40937e1c2c5
+
+[2025-12-19] строки в udeb tracks
+             proj: -
+             notion: https://www.notion.so/udeb-tracks-2ce8e03c4e3a80168cebe13f6f5af0b9
+
+[2025-11-15] (Candela) из чего сделан торт
+             proj: -
+             notion: https://www.notion.so/Candela-2ac8e03c4e3a80e1beecd8b1e827efe9
+
+[2025-10-22] леонид ООО грузии или на физика
+             proj: -
+             notion: https://www.notion.so/2948e03c4e3a80f4a120c32002b6e260
+
+[2025-09-24] Refine knowladge about misinterprete and prepare solution
+             proj: Перевести Дивакара на прямую оплату
+             notion: https://www.notion.so/Refine-knowladge-about-misinterprete-and-prepare-solution-22a8e03c4e3a804d8b9bef20e6221857
+
+[2025-09-15] Исследовать Почему форм мне полезен
+             proj: -
+             notion: https://www.notion.so/26c8e03c4e3a804482a3ea667ccdefcd
+
+[2025-09-10] <Untitled Task>
+             proj: -
+             notion: https://www.notion.so/26a8e03c4e3a8082af96c31da711cff2
+
+[2025-09-08] сделать ТЗ для ассистентов
+             proj: -
+             notion: https://www.notion.so/2688e03c4e3a80fda309fa204beadfac
+
+[2025-09-08] Оплатить маше
+             proj: -
+             notion: https://www.notion.so/2688e03c4e3a808b90c5e0bf816a5c47
+
+[2025-09-08] Выложить @sergey
+• план - перенесла
+• оценки - перенесла
+             proj: -
+             notion: https://www.notion.so/sergey-2688e03c4e3a8000872cc7bc8f203fc4
+
+[2025-08-04] Созвон с потенциальном лидом тг
+             proj: -
+             notion: https://www.notion.so/2458e03c4e3a80eeb3dcd4abdc2c96bc
+
+[2025-08-04] Записаться на стрижку
+             proj: -
+             notion: https://www.notion.so/2458e03c4e3a80f0b53fc204a9cfa6a5
+
+[2025-07-30] Освоить тренажер
+             proj: Пройти диагностику с Павлом Кочкиным
+             notion: https://www.notion.so/2408e03c4e3a80a8b451cfeba28e23f8
+
+[2025-07-13] Разобрать обсидиан
+             proj: Разбор парадигмы Кочкина
+             notion: https://www.notion.so/22f8e03c4e3a802ab34bcdb28c93dd31
+
+[2025-07-08] кастдев
+             proj: Подготовка к миту в четверг
+             notion: https://www.notion.so/22a8e03c4e3a8008a144e9d0e1c6ff4d
+
+[2025-07-03] (candela) Записаться к стоматологу
+             proj: -
+             notion: https://www.notion.so/candela-2248e03c4e3a8004afffc763bc9edc58
+
+[2025-07-02] Добить дерево текущей реальности
+             proj: Разбор дерева текущей реальности
+             notion: https://www.notion.so/2248e03c4e3a80b680b8cf35f13938e4
+
+[2025-06-24] улчшение бота: Добавить подсчет трат раздельно по промптам
+             proj: Автоматизировать отклики на апворк
+             notion: https://www.notion.so/21c8e03c4e3a80c4b6d3cf6063877658
+
+[2025-05-29] <Untitled Task>
+             proj: -
+             notion: https://www.notion.so/2028e03c4e3a806187e0eb11e11d6e78
+
+[2025-01-28] отсмотреть https://docs.google.com/document/d/15TPim4S3-QgxY0WrvMHJMRHHwQZEmJ08aq1CPl8FLTg/edit?tab=t.0
+             proj: Подготовить презентацию AI
+             notion: https://www.notion.so/https-docs-google-com-document-d-15TPim4S3-QgxY0WrvMHJMRHHwQZEmJ08aq1CPl8FLTg-edit-tab-t-0-17b8e03c4e3a80988b48c6fed4ba9415
+
+[2025-01-28] Скинешь фото которое на чашку будет использоваться
+             proj: -
+             notion: https://www.notion.so/1898e03c4e3a8068883dce532c859319
+
+[2025-01-05] подписка дуо лингво
+             proj: -
+             assignee: Маргарита Курдюк
+             notion: https://www.notion.so/1718e03c4e3a80858930ee9ff3ad3bdf
+
+[2025-01-02] Составить инвойсы интригме/tumeke и пингануть всех остальных
+             proj: -
+             notion: https://www.notion.so/tumeke-16f8e03c4e3a80b7869aec57e939a747
+
+[2024-11-05] <Untitled Task>
+             proj: -
+             notion: https://www.notion.so/1358e03c4e3a8042833ae4b1e6da1ad9
+
+[2024-11-05] <Untitled Task>
+             proj: -
+             notion: https://www.notion.so/1358e03c4e3a80bebc9cf23fa98ad267
+
+[2024-11-05] банк
+             proj: -
+             notion: https://www.notion.so/6c7dc7e9346e4ef88f91adda7337d80c
+
+[2024-10-31] Let's have a call. Wanted to remind you that one of the requirements is to complete. before AFCA event which is in January. That is the main reason to do this task this year, since football season is over. Let me know your availability for a call.
+             proj: -
+             notion: https://www.notion.so/Let-s-have-a-call-Wanted-to-remind-you-that-one-of-the-requirements-is-to-complete-before-AFCA-eve-1308e03c4e3a80e0b1bdd114d9c21c88
+
+[2024-10-30] <Untitled Task>
+             proj: -
+             notion: https://www.notion.so/12f8e03c4e3a80bdab12fc894895940e
+
+[2024-10-04] call with robin
+             proj: -
+             notion: https://www.notion.so/call-with-robin-df301d82b3d240a0999da863e98e1f08
+
+[2024-09-15] Набросать контуры системы мотивации
+             proj: система мотивации для работников hiq
+             notion: https://www.notion.so/af5dfb01c63c477bb5cd7224158cdcce
+
+[2024-09-11] <Untitled Task>
+             proj: -
+             notion: https://www.notion.so/f03b501a99cc46bd8df8cb930e291d2e
+
+[2024-09-03] сделать ключевые элементы диаграмы робину
+             proj: делать диаграмму робин и дейв
+             notion: https://www.notion.so/c8d017f1d13941dca86d622745ad8a06
+
+[2024-08-30] <Untitled Task>
+             proj: -
+             notion: https://www.notion.so/7a57243f97b94ec9a20b8c5c315db643
+
+[2024-08-18] попробовать равзернуть Grog
+             proj: Оценки для проекта по LLM
+             notion: https://www.notion.so/Grog-a4599f2d8b274bd1992c92eae16590a6
+
+[2024-08-14] выслать CV
+             proj: Odola
+             notion: https://www.notion.so/CV-b945ba39b59f442c9ca2454e1e7275e2
+
+[2024-08-13] найти специалиста по LLM тематике
+             proj: Оценки для проекта по LLM
+             notion: https://www.notion.so/LLM-e6a5cb9957b14462b002d99cca726db9
+
+[2024-07-31] задачи для ассистента
+             proj: найти нового ассистента в аргентине
+             notion: https://www.notion.so/26a2b75f051b4fc1bf3959e5caca08ac
+
+[2024-07-07] просмотр обучающих материалов по ассистнтам
+             proj: Найм ассистента
+             notion: https://www.notion.so/e448acfb161e478faa02ef13eefdeeaf
+
+[2024-06-30] 69.5 ч ерлану
+             proj: -
+             notion: https://www.notion.so/69-5-d14a70d6732d43698ef4cc0b6d1a3a4f
+
+[2024-06-27] <Untitled Task>
+             proj: -
+             notion: https://www.notion.so/409a587ac4494034bc2a108ce9750fa5
+
+[2024-06-23] Mobile Developer - iOS and Android
+             proj: -
+             notion: https://www.notion.so/Mobile-Developer-iOS-and-Android-04763b8d418d49e5a832f644d3419441
+
+[2024-06-13] prex выслать доки
+             proj: -
+             notion: https://www.notion.so/prex-e7c3527ad1b74683b54478ae304a71c3
+
+[2024-06-03] проанализровать результаты
+             proj: написать андроид конторам
+             notion: https://www.notion.so/fc0f182d2a534b1a9e4fcebbb462d6cb
+
+[2024-06-03] <Untitled Task>
+             proj: -
+             notion: https://www.notion.so/5133869acd9e4eb0902a215bec1450cb
+
+[2024-04-26] (папа)номер телефона
+             proj: -
+             notion: https://www.notion.so/47dc3900371a433e832378cbf0c93def
+
+[2024-04-19] Добавить описание ретро
+             proj: -
+             notion: https://www.notion.so/792799f5f2364cd38b6a51b52de88132
+
+[2024-03-11] ( Тамара) Отправка контейнера из грузии
+             proj: -
+             notion: https://www.notion.so/c5fb49e2a7094d3687401c36fc70ff54
+
+[2024-01-19] перевести деньги Kudrat
+             proj: -
+             notion: https://www.notion.so/Kudrat-88f137bdacc843059717af9979e369f2
+
+[2023-12-20] отписаться от myfit pal
+             proj: -
+             notion: https://www.notion.so/myfit-pal-ebc71d2196044e0285d750cefbea17eb
+
+[2023-11-28] Найти сервис предоставляющий номера США
+             proj: Номер США
+             notion: https://www.notion.so/102c6ff220ad432d8304b49520dea62c
+
+[2023-11-22] Делегироваь покупку в рф и грузию
+             proj: купить дейвайсы для HiQ
+             notion: https://www.notion.so/0ef00e96f7734dbe8afb2548a29a1100
+
+[2023-11-22] Купить девайсы в мексике
+             proj: купить дейвайсы для HiQ
+             notion: https://www.notion.so/c60f2b5f7bf644a79cfd042af8704e6b
+
+[2023-11-20] Сделать скан фото диплома для Андрея
+             proj: -
+             assignee: adaf62f3-4458-4d1e-9a62-85cf031f0c85
+             notion: https://www.notion.so/5ec97783749345a6a7baf29cab5a810f
+
+[2023-09-10] Написать контакту по флайборду
+             proj: покататься на флайборде
+             notion: https://www.notion.so/37f6cfbb78014eb19819688d931f2962
+
+[2023-09-10] выписать идеи
+             proj: представить giftwrap.ai для клиента
+             notion: https://www.notion.so/6233fca62d8e46d7a0666ee8c3cb0f07
+
+[2023-09-10] исследовать ньюансы
+             proj: Поездка в Мехико
+             assignee: Маргарита Курдюк
+             notion: https://www.notion.so/d0b14bb192be494d87a1ca46d67097c5
+
+[2023-09-10] Проанализровать профили других компаний
+             proj: Добавить инфу на clutch
+             notion: https://www.notion.so/b6821da89e6b4c3d971bc901d9397c03
+
+[2023-08-06] посомтреть почему приложение connect+ не работает
+             proj: начать качать нетворк
+             notion: https://www.notion.so/connect-8fd82be8c4d44faf9087e18e8d6b9cec
+
+[2023-08-03] <Untitled Task>
+             proj: -
+             notion: https://www.notion.so/6c48f2af0073467f9fd251897a6c915d
+
+[2023-07-30] (виллиам) Доступ к девайсам
+             proj: LynxField
+             notion: https://www.notion.so/e8aa3c0ffac741bfb15cb62f3c3714d9
+
+[2023-07-19] (Лиза)заказать рите такси
+             proj: -
+             notion: https://www.notion.so/22d28f9a5ad04c8b916a24744c38b4fa
+
+[2023-07-11] оплатить илье
+             proj: -
+             notion: https://www.notion.so/d5d6686ac2c0457aa1068b0039789320
+
+[2023-07-11] (идиома) назначить созвон
+             proj: -
+             notion: https://www.notion.so/784090ac5912476899098ba0a4499297
+
+[2023-07-04] раздавть визитки инфобезнесменам и коучам
+             proj: Продажник 100 левл
+             notion: https://www.notion.so/ca784527a3e44e9abdb8de1e612eece7
+
+[2023-06-17] Амазон список
+             proj: -
+             notion: https://www.notion.so/0ba612c63f7746c1abc7a34e2684cfe3
+
+[2023-06-10] <Untitled Task>
+             proj: отослать по зп казакова
+             notion: https://www.notion.so/eb203ceaf4524ff1bd184be8b2f28c21
+
+[2023-06-06] (внж) инфа
+             proj: -
+             notion: https://www.notion.so/037e2b8b9ca848458fa112bcad750005
+
+[2023-06-06] (михаил енот) резвезиты для счета
+             proj: -
+             notion: https://www.notion.so/e612c4993552410dbc0a602cbbd17439
+
+[2023-05-29] позвонить по контактам стаа
+             proj: -
+             notion: https://www.notion.so/4af02e9ce5444dcd928c3256b29671bb
+
+[2023-05-27] Подготовить инвойс димуско
+             proj: -
+             notion: https://www.notion.so/75c7df77258d41f58d02d9656349da1b
+
+[2023-05-25] (Дима) ответ по покеру
+             proj: Покер на пятницу
+             notion: https://www.notion.so/b29507b82dbf4223bf447c43888bd8a2
+
+[2023-05-19] Состваить список вещей которые рита должна взять
+             proj: -
+             notion: https://www.notion.so/f55878f13c0f485caf6ca262e105e0c5
+
+[2023-05-17] написать про душ
+             proj: -
+             notion: https://www.notion.so/79b7da6a17f947b5a5c81ca5d6254708
+
+[2023-05-16] Составить текст о компании который можно размещать на  clutch и  других площадках
+             proj: Добавить инфу на clutch
+             notion: https://www.notion.so/clutch-1d8c28f02598458a8bd9b1f84f82db8f
+
+[2023-05-16] подготовить презу для Майка
+             proj: чат гпт  стратап
+             notion: https://www.notion.so/019d1142111d4b519cc0d1c281e56a26
+
+[2023-05-14] Посмотреть курсы валют для ФЛ
+             proj: Получение счета Райфайзен
+             notion: https://www.notion.so/817f243429614350a004c65b657ac122
+
+[2023-05-14] Заказать доставку карты
+             proj: Получение счета Райфайзен
+             notion: https://www.notion.so/602345e3dad442858bfdcd2d91ee9599
+
+[2023-05-12] (Администрация)машина допуск
+             proj: -
+             notion: https://www.notion.so/2cdf6f72625c45928d00748b5a62a928
+
+[2023-05-10] (ира) созвонится
+             proj: -
+             notion: https://www.notion.so/c9d84c5d5cc24ed4a0d17696d2277433
+
+[2023-05-10] (идиома) деньги посчитать баланс
+             proj: -
+             notion: https://www.notion.so/656e07c767794c8e892e89f8365a7b8f
+
+[2023-05-03] Описать идеи для инвестиции в Udev
+             proj: Investments from will
+             notion: https://www.notion.so/Udev-dc6e544b314748da902f4aeadeb1d3df
+
+[2023-05-03] роме оплатить
+             proj: -
+             notion: https://www.notion.so/469b522dda6443bf8074c588014dac48
+
+[2023-04-10] Написать парус слов о себе в notion
+             proj: -
+             notion: https://www.notion.so/notion-f55e77de7dbb44feaadf7daa61f43d96
+
+[2023-04-03] (Медког) оплата
+             proj: -
+             notion: https://www.notion.so/6ce72315188c418a9e40526ad57042c3
+
+[2023-04-03] Сделать
+             proj: долг аист
+             notion: https://www.notion.so/b429e8e146994eb4bd961f16f2755a23
+
+[2023-03-06] ( Mijn) Ответ
+             proj: исправление отзыва
+             notion: https://www.notion.so/Mijn-e1acc1449ff3404db7a411bb7a5b48c4
+
+[2023-02-01] (интригма) оплата
+             proj: -
+             notion: https://www.notion.so/051ae44ac3bd454a8f3f015c7e4a206c
+
+[2023-01-30] E/AuthQuickstart AuthProvider error: invalid_client
+             proj: -
+             notion: https://www.notion.so/E-AuthQuickstart-AuthProvider-error-invalid_client-326ad62d4b8844f19b54d73c8775f9e0
+
+[2023-01-30] ios video for maddcog
+             proj: -
+             notion: https://www.notion.so/ios-video-for-maddcog-cdb1470055b74a929a2a14898bc3e134
+
+[2023-01-24] срочно отправить ритины права
+             proj: -
+             assignee: adaf62f3-4458-4d1e-9a62-85cf031f0c85
+             notion: https://www.notion.so/a09b409f021f48a3affc7de3d50af28b
+
+[2023-01-18] Посмотреть группы которых состоят лпр
+             proj: Linkedin leadgen
+             notion: https://www.notion.so/c588744711a04548b83ed0e00a626291
+
+[2023-01-12] уточнить по андроидам для джамили
+             proj: -
+             notion: https://www.notion.so/16e22cef238845a7a070b3450acd29b0
+
+[2023-01-09] Составить план
+             proj: стартап курсы гугла
+             notion: https://www.notion.so/fb009067ea3743088805f4134b400234
+
+[2023-01-09] Составить список
+             proj: выписать то что я узнал о себе на сеансах
+             notion: https://www.notion.so/5d7c448a4768438fa8e41b5dd8beda84
+
+[2023-01-09] Делегировать сохранение бонусов
+             proj: Выплата бонусов
+             notion: https://www.notion.so/66317343940b4b3a9a7b5c846009762f
+
+[2023-01-09] Посмотреть первый урок
+             proj: гугл дев сертификейт
+             notion: https://www.notion.so/fcb039875d7540abaddb7e9e5e1f3b29
+
+[2023-01-09] инвойс медкогщ
+             proj: -
+             notion: https://www.notion.so/28f8e9f3325d42b5b017653a2bbeed8b
+
+[2022-12-21] Подготовить речь
+             proj: Корпоратив
+             notion: https://www.notion.so/723eb00f1c244551868b8938d744a151
+
+[2022-12-21] Сделать анонс
+             proj: Корпоратив
+             notion: https://www.notion.so/aef21244428647ab939ad333eb532e02
+
+[2022-12-05] Делегировать добавить ревью на сайт
+             proj: -
+             notion: https://www.notion.so/e1a2d7f4ee84408fb8a9e6d50315fcfc
+
+[2022-11-28] (херве) Задачи для Ерлана
+             proj: -
+             notion: https://www.notion.so/f5df4d3844b446cfb75fcc2c5f74c7ed
+
+[2022-11-24] (анна) записать детей на пряник
+             proj: -
+             notion: https://www.notion.so/af299c1b99134569a6552a8ab4f2c591
+
+[2022-11-24] Обсудить Налог на продажу машины
+             proj: -
+             notion: https://www.notion.so/d27dd0ba541f47d4919dd624a00a3907
+
+[2022-11-24] (Анна) Гениколог
+             proj: -
+             notion: https://www.notion.so/ec23a4e0f10d492b95b144833d2b4a9f
+
+[2022-11-21] Передать задачи Данилу
+             proj: -
+             assignee: 2a6b06d2-0080-44f7-9612-e1fddefc7221
+             notion: https://www.notion.so/51255e16e67641b6b6ac3b5ef49fd10d
+
+[2022-11-21] (Анна) кулинарные курсы
+             proj: -
+             notion: https://www.notion.so/346c20a185544f5c8b89b95810af45fd
+
+[2022-11-18] (артур)сроки по кредитному договору
+             proj: -
+             notion: https://www.notion.so/7b3491f56b68403a98b758b692cbc81d
+
+[2022-11-15] (Дивакар) ответ по времени Сергея
+             proj: -
+             notion: https://www.notion.so/c28d17ecd39e4e4b94bca0f9afc3c726
+
+[2022-11-14] Написать Давиду по зп
+             proj: -
+             notion: https://www.notion.so/fbb3096582134a26b4c13f0cbed90552
+
+[2022-11-14] (Анна)Купить корм
+             proj: -
+             notion: https://www.notion.so/3f110ba79f55429e8bfb8841289390a0
+
+[2022-11-09] акккунт на империю
+             proj: -
+             assignee: Elizaveta Onischenko
+             notion: https://www.notion.so/08c9bcff626c4e8e8f86b325817c71b9
+
+[2022-11-02] (анна) Записать к стоматологу
+             proj: -
+             notion: https://www.notion.so/5c6a9927fd8b488aacefcf2bc1df493a
+
+[2022-10-19] (Арахнит) оплата по задачам
+             proj: -
+             notion: https://www.notion.so/4d49e58da0ca4afd9e62bb58b6ef6d3a
+
+[2022-10-12] починить трекер intrigma
+             proj: -
+             notion: https://www.notion.so/intrigma-fac0be1a2a90485b8415f975c0e132ac
+
+[2022-10-10] перечислить Деньги даше
+             proj: -
+             notion: https://www.notion.so/182a8abc0e8d4272bfb7e4c04f712058
+
+[2022-10-06] Делегировать найти партитуру
+             proj: Играть на пианино линдихоп
+             notion: https://www.notion.so/94391a60b61d4529b38b5ee4413ad095
+
+[2022-10-05] Поговорить с Артемом
+             proj: -
+             assignee: Маргарита Курдюк
+             notion: https://www.notion.so/ce134ea995ab43918ec1a2a430396d27
+
+[2022-09-23] Усилитель сотовой связи в деревню
+             proj: -
+             assignee: adaf62f3-4458-4d1e-9a62-85cf031f0c85
+             notion: https://www.notion.so/57b0f2adb20b478d95f1a8c345e64eac
+
+[2022-09-16] Созвонится с Таниром
+             proj: Расчитать Танира
+             notion: https://www.notion.so/0ec017f40f664aad876834eab8ac3037
+
+[2022-09-15] Подумать над изменениями которые хотелось бы сделать
+             proj: Доработки сайта
+             notion: https://www.notion.so/b19467029cbf4169a9f5c15280fb6281
+
+[2022-08-24] (Анта) Получить Варианты
+             proj: поездка с семьей на выходные
+             notion: https://www.notion.so/b038e25e27934e8b8d45526541b359c5
+
+[2022-08-24] сделать звездочки для детей
+             proj: -
+             assignee: ce6e2956-9091-4419-8631-2e6fb77c1a10
+             notion: https://www.notion.so/23069af4782949af98c59b54a00b3684
+
+[2022-08-10] Provision profile
+             proj: -
+             notion: https://www.notion.so/Provision-profile-d2b43dcad5db4768bff241099c30046d
+
+[2022-07-28] Отчет по второй главе
+             proj: книга карнеги
+             notion: https://www.notion.so/35b5ff8324b94dcab834dfc88ed241b0
+
+[2022-07-28] Выполнить первую задачу
+             proj: Перестать быть славным парень
+             notion: https://www.notion.so/7144499c5001480191860a438e5ba1cb
+
+[2022-07-28] Диаграмма по Hr составлению резюме
+             proj: настроить HR процессы
+             assignee: Маргарита Курдюк
+             notion: https://www.notion.so/Hr-c136431fed9640d3b84babce9d49fee6
+
+[2022-07-07] купить антиседин
+             proj: -
+             assignee: adaf62f3-4458-4d1e-9a62-85cf031f0c85
+             notion: https://www.notion.so/bf24fa91964f4a9ea127c3bc2ec692cb
+
+[2022-06-17] Составить инвойс для Ирины
+             proj: инвойс для ирины за июнь
+             notion: https://www.notion.so/1ea6c91bd2d847f79fe49b952bc58117
+
+[2022-06-17] ( Джаслин) Получить деньги
+             proj: -
+             notion: https://www.notion.so/e20689cf54c249f198fd845587aaa2ed
+
+[2022-06-09] идиома загрузить ассеты
+             proj: -
+             assignee: d1b9b953-bdbf-40a2-bc6d-f9916cec25b3
+             notion: https://www.notion.so/9a8fbfb315104b6daf719e105813c32b
+
+[2022-06-03] оплатить работу по бекенду vajuto
+             proj: Получить деньги от Vajuto
+             notion: https://www.notion.so/vajuto-b89ef67d9f9b48cf9f16c0375d1fd40b
+
+[2022-05-27] Спросить у ювала можно ли закрыть работы
+             proj: Закрыть работы на апворк  отзывами
+             notion: https://www.notion.so/2c55ca0c877242bb83efd3a383f01e09
+
+[2022-05-06] выбрать где будет сервер
+             proj: настроить свой сервер
+             notion: https://www.notion.so/1855d51f9242412cbd5db1de6ad9066f
+
+[2022-05-06] попробовать создать пользователя на своем маке
+             proj: Привязать все маки корпоративным почтам
+             notion: https://www.notion.so/2c4a31322f7841938109967eccb0dd37
+
+[2022-04-22] move things to trello
+             proj: -
+             notion: https://www.notion.so/move-things-to-trello-3a5afc47533445cc9d861d937b010949
+
+[2022-04-21] Посмотреть подарки мамам на др 28 апреля
+             proj: -
+             notion: https://www.notion.so/28-59219e8712b74b32a7c088f0cd32233e
+
+[2022-04-21] посмотреть кейсы по профилям HR в соцсетях
+             proj: симки для HR
+             assignee: Kornoukhova Irina
+             notion: https://www.notion.so/HR-01480a2c935948019f777137b7440d3d
+
+[2022-04-21] (Данил) правки по code style
+             proj: Единый код style в организации
+             notion: https://www.notion.so/code-style-0996489357a448bbbb3056a29b4025b5
+
+[2022-04-21] Что с проектом?
+             proj: Philipp Uhl Build Android app that bundles ngrok binary
+             assignee: d1b9b953-bdbf-40a2-bc6d-f9916cec25b3
+             notion: https://www.notion.so/13ecf24ea0c94047802b84d97dbe15ea
+
+[2022-04-21] (Богдашкин) добавить сейлсов и аккаунтов в табличку
+             proj: Автоматизация подсчета бонусов для сейлсов и аккаунтов
+             notion: https://www.notion.so/e65eb0a451aa4ee09dfb5e525ff211c0
+
+[2022-04-21] Сделать notion с реферальной программой
+             proj: Реферальная программы
+             notion: https://www.notion.so/notion-1ce72453f0db48929c3ce06c65791d44
+
+[2022-04-19] Отредактировать странички в конфлюенс
+             proj: -
+             assignee: a0e20649-8892-42a0-aebf-877ce9452b6c
+             notion: https://www.notion.so/a64e1759f4b64613aafe6f37847a3128
+
+[2022-04-11] ответить herve
+             proj: -
+             assignee: 2a6b06d2-0080-44f7-9612-e1fddefc7221
+             notion: https://www.notion.so/herve-53eeb4997b6e49fe9add233bc86b56db
+
+[2022-04-09] <Untitled Task>
+             proj: Научиться быть жестким
+             notion: https://www.notion.so/1aed1f3b83d64658bc44a5f2c9c9d16a
+
+[2022-04-09] письмо с идеальным днем для нее
+             proj: Идеальный день для нее
+             assignee: Маргарита Курдюк
+             notion: https://www.notion.so/945991001a8d49338fd833c00d7ce20a
+
+[2022-04-08] спросить про подарок милане
+             proj: Сделать милане подарок
+             notion: https://www.notion.so/44ff843892bb4ca5a71c9efdc74cdd0a
+
+[2022-04-08] Подумать какой бонус лизе за привлечение
+             proj: -
+             notion: https://www.notion.so/3171801330ff494581acc85496db7500
+
+[2022-04-08] пернести данные с гугл драйва
+             proj: настроить свой сервер
+             notion: https://www.notion.so/18c95186b8bb44918eec3eae529bf68a
+
+[2022-04-08] посмотреть что есть в наличии https://www.facebook.com/UgearsGeorgia/shop/?ref_code=mini_shop_page_shop_tab_cta&ref_surface=page
+             proj: Подарить деревянную машину
+             notion: https://www.notion.so/https-www-facebook-com-UgearsGeorgia-shop-ref_code-mini_shop_page_shop_tab_cta-ref_surface-page-e4ebdb8d057c485c81d41b9abb74ff78
+
+[2022-04-07] купить видеокарту
+             proj: Купить видеокарту
+             notion: https://www.notion.so/0280aa627ba0413a8f4880dbacd53b1e
+
+[2022-04-06] настроить приоритеты по вакансиям
+             proj: -
+             notion: https://www.notion.so/394b35c037a6455e998e299b22d3e37e
+
+[2022-04-06] Запустить лидогенерацию по новой
+             proj: HR  лидогенерация
+             notion: https://www.notion.so/72417960c2634375bf8d0d4633ef06b3
+
+[2022-04-04] Подготовить документ о повышении ставок
+             proj: Поднять ставки по e-note и агглаб
+             assignee: Маргарита Курдюк
+             notion: https://www.notion.so/2805399a6c63443fac39383a3800b989
+
+[2022-03-30] Посмотреть на что клеится косяк
+             proj: -
+             notion: https://www.notion.so/308f452a3a744b96a6d420e313a72d76
+
+[2022-03-30] Решить какие портфолио  items мы будем добавлять
+             proj: Настроить  клатч
+             notion: https://www.notion.so/items-e50e83e1b985493b8cd0c8ead4f83c98
+
+[2022-03-30] Чем кормить детей
+             proj: Перевести детей на домашнее обучение 
+             notion: https://www.notion.so/81504e283c314b5eab950f48a1069fb6
+
+[2022-03-30] придумать список занятий
+             proj: занятиматься  с детьми занятиями которыми мне нравится заниматься
+             notion: https://www.notion.so/340bf14545064d89bf5ace202e7a0bab
+
+[2022-03-30] Позвонить в диадок и спросить по поводу возможности участия одного/двух человек
+             proj: Электронный документо оборот ТК 
+             notion: https://www.notion.so/9d0c24a4d4a14586ad9c5fea37b591b8
+
+[2022-03-30] Попробовать приклеить когти
+             proj: Разобраться с когтями
+             notion: https://www.notion.so/b5064de1a0a9447cbb3a633de26d0ac8
+
+[2022-03-30] Ответить на 1 вопрос
+             proj: Пройти тест из книги 5 Следующие пять шагов
+             notion: https://www.notion.so/1-d6a0b476f9ec4ff7a242cb382e37cb6c
+
+[2022-03-30] Проанализировать  подходящие АНГЛОЯЗЫЧНЫЕ сообщества
+             proj: найти бизнес сообщества и вступить в них
+             notion: https://www.notion.so/8ee410165675406ca13055c05129405d
+
+[2022-03-30] Проанализировать подходящие АНГЛОЯЗЫЧНЫЕ сообщества
+             proj: найти бизнес сообщества и вступить в них
+             assignee: adaf62f3-4458-4d1e-9a62-85cf031f0c85
+             notion: https://www.notion.so/b9d9ce666c1944938ee2a27d9c7d6a85
+
+[2022-03-29] сбор дизайнов
+             proj: -
+             assignee: Elizaveta Onischenko
+             notion: https://www.notion.so/dba1e28937c44ecea18d4b5343d2d095
+
+[2022-03-27] купить сушеная курица
+             proj: -
+             assignee: 84421bc3-ec8c-4211-bf05-82d23662cdc5
+             notion: https://www.notion.so/0f7f86a36772443ab5221e3661a32995
+
+[2022-03-27] Купить гель после бритья
+             proj: -
+             assignee: 84421bc3-ec8c-4211-bf05-82d23662cdc5
+             notion: https://www.notion.so/e8c3838bedb94793bb615c0b9f856bf7
+
+[2022-03-23] Онбординг с миланой
+             proj: -
+             assignee: Kornoukhova Irina
+             notion: https://www.notion.so/7acfb2f8cc4d49be8312257cbc54be8e
+
+[2022-03-19] апворк расписать гипотезы в обсидиан
+             proj: Сделать продажу на апворк или  линке
+             notion: https://www.notion.so/21034faaf9144e84aa26e049000cf052
+
+[2022-02-27] Ревью фичей маркдаун и обсидиан
+             proj: -
+             notion: https://www.notion.so/33816663d01c424dbae2cd0e40f85fbf
+
+[2022-02-17] Зарегистрироваться в leader ID
+             proj: найти бизнес сообщества и вступить в них
+             notion: https://www.notion.so/leader-ID-662a390dd6254b1d95b8d44d3b87535e
+
+[2022-02-16] (Женя) Получить  тренировку
+             proj: -
+             notion: https://www.notion.so/3e824ff6b554407fad43a72030352d78
+
+[2022-02-11] Подключить ангелине интернет
+             proj: Пересадить ангелину
+             notion: https://www.notion.so/e03469e4e58641039c4dc6e79c2652af
+
+[2022-02-11] (Аист) получить ответ
+             proj: Пересадить ангелину
+             notion: https://www.notion.so/29686034f7834fae9f510625b13c84c2
+
+[2022-02-10] <Untitled Task>
+             proj: -
+             notion: https://www.notion.so/45ddc6d54c514c57817dbd5d1b3d6923
+
+[2022-02-07] Подтверждение от волны
+             proj: -
+             notion: https://www.notion.so/e1d53a18b0cb450cbfc7a38fb465b6ab
+
+[2022-02-05] Забронировать волну
+             proj: 14 февраля
+             notion: https://www.notion.so/58b94c99a8df442691888025b95b40c7
+
+[2022-02-05] Подумать на какое число мы поедем
+             proj: 14 февраля
+             notion: https://www.notion.so/adbc7d9a5b634e4b961c12538b5ef43f
+
+[2022-02-02] Назначить созвон
+             proj: Новая сделка от мухамада
+             notion: https://www.notion.so/8f01708f446d475caf02cc209ab24f1a
+
+[2022-02-01] Делегироватьподиписать договор с аист
+             proj: -
+             notion: https://www.notion.so/d508ec52dcd34c48af5eb17aabee0cf7
+
+[2022-01-31] инвойсы по апворку
+             proj: -
+             notion: https://www.notion.so/758acac7d8cf43bbb86259b51c01a5b0
+
+[2022-01-31] инвойсы по скайтолку
+             proj: -
+             notion: https://www.notion.so/ea2e33075f7c4ed8a588e2077731fd25
+
+[2022-01-21] Место поесть с детьми
+             proj: -
+             notion: https://www.notion.so/9fe88644aab04f938033e0dfb03ff756
+
+[2022-01-18] Принести кофту на работу
+             proj: Постирать кофту с работы
+             notion: https://www.notion.so/c04efec258fa4f498b7746d1d4ca1c5e
+
