@@ -1,0 +1,152 @@
+Tasks DB · Bucket=Review · 34 items
+====================================================================================================
+[2026-03-19] (Review) внести правки в договор по запросу клиента
+             proj: -
+             from: Nastasia
+             notion: https://www.notion.so/3258e03c4e3a8098ba56f84474e343a0
+
+[2026-03-13] (Review) Произвести финальную оплата
+             proj: -
+             from: Nastasia
+             notion: https://www.notion.so/2f68e03c4e3a805a83f3c573e63a1934
+
+[2026-03-13] (Review) Разобраться с Registered Agent Service
+             proj: -
+             from: Nastasia
+             notion: https://www.notion.so/Registered-Agent-Service-2fe8e03c4e3a801e8182eb965e5ebba1
+
+[2026-03-01] (Review) Ознакомиться в notion страничку Finances UDEV
+             proj: -
+             from: Nastasia
+             notion: https://www.notion.so/notion-Finances-UDEV-30d8e03c4e3a80e38a71d3322d65ab98
+
+[2026-02-27] (Review) Написать письмо с предложениями о правках
+             proj: -
+             from: Nastasia
+             notion: https://www.notion.so/3148e03c4e3a805bb933d81ad20168c8
+
+[2026-02-27] (Review) ознакомиться с замечаниями с дог. и предложить правки
+             proj: -
+             from: Nastasia
+             notion: https://www.notion.so/2ef8e03c4e3a80bdaa12c2f7284d3211
+
+[2026-02-27] (Review) Подписать согласованну декларацию
+             proj: -
+             from: Nastasia
+             notion: https://www.notion.so/3148e03c4e3a8044beece783f767884a
+
+[2026-02-20] (Review) Согласовать представленные документы на платформе
+             proj: -
+             from: Nastasia
+             notion: https://www.notion.so/30d8e03c4e3a80ef8ad5efa8abd6bfe1
+
+[2026-02-02] (Review) Составить список сообществ с условиями
+             proj: -
+             from: Nastasia
+             notion: https://www.notion.so/2ed8e03c4e3a80758360c016367c8a8d
+
+[2026-02-02] (Review) Контроль получения документов P&L и информацию по капиталу
+             proj: -
+             from: Nastasia
+             notion: https://www.notion.so/P-L-2f68e03c4e3a80c9a60bc8c0ed04f83d
+
+[2026-02-02] (Review) Подача Annual Report (Вайоминг)
+             proj: -
+             from: Nastasia
+             notion: https://www.notion.so/Annual-Report-2f68e03c4e3a80d59f23f684de9a6f62
+
+[2026-02-02] (Review) Налоговая анкета
+             proj: -
+             from: Nastasia
+             notion: https://www.notion.so/2f68e03c4e3a80f0b75be24187e2bd8e
+
+[2026-02-02] (Review) Проверить черновик декларации
+             proj: -
+             from: Nastasia
+             notion: https://www.notion.so/2f68e03c4e3a80f991acc91726ccf535
+
+[2025-04-02] (Review) (Tamara) танцы для Василисы
+             proj: -
+             notion: https://www.notion.so/Tamara-1c28e03c4e3a8034a9f0e30a1cb31c06
+
+[2025-04-02] (Review) (Tamara) эрититрол
+             proj: -
+             notion: https://www.notion.so/Tamara-1c58e03c4e3a803ab1e2ee2fd0be48e8
+
+[2025-04-02] (Review) (Tamara) насос для мяча
+             proj: -
+             notion: https://www.notion.so/Tamara-1c58e03c4e3a80918beff92594204948
+
+[2025-03-18] (Review) (Tamara) полка для обуви
+             proj: -
+             notion: https://www.notion.so/Tamara-1b68e03c4e3a80bbacd7f1ae690ecb08
+
+[2025-03-11] (Review) (Tamara) няня с утра
+             proj: -
+             notion: https://www.notion.so/Tamara-1a88e03c4e3a80679b99e2410d8db247
+
+[2025-03-11] (Review) (Tamara) уборщица
+             proj: -
+             notion: https://www.notion.so/Tamara-1998e03c4e3a80589c47da88ca56bed9
+
+[2025-03-11] (Review) (Tamara) няня
+             proj: -
+             notion: https://www.notion.so/Tamara-1998e03c4e3a80d9b910ca61d5f9b25a
+
+[2025-03-11] (Review) (Tamara) ремонт миксер
+             proj: -
+             notion: https://www.notion.so/Tamara-19e8e03c4e3a80ca9e61e7db715ed367
+
+[2025-03-11] (Review) (Tamara) распечатать для португальского 2 класс
+             proj: -
+             notion: https://www.notion.so/Tamara-2-1a88e03c4e3a806b893ed8faf249e750
+
+[2025-03-11] (Review) (Tamara) футбол в вижа креспо
+             proj: -
+             notion: https://www.notion.so/Tamara-b159085be0d045eb8fac5249a8dfcd37
+
+[2025-03-11] (Review) (Tamara) 2 обогревателя бу
+             proj: -
+             notion: https://www.notion.so/Tamara-2-b829ce42a83549829386ecdb16999b92
+
+[2025-03-11] (Review) (Tamara) худож гимнастика
+             proj: -
+             notion: https://www.notion.so/Tamara-e3bafc0bf03b4201b74baff70b79d1f6
+
+[2025-03-11] (Review) (Tamara) пробного занятия по гимнастике
+             proj: -
+             notion: https://www.notion.so/Tamara-f5e3b4eb48594052a9715dfa9c2252bc
+
+[2025-02-21] (Review) (Tamara) стрижка
+             proj: -
+             notion: https://www.notion.so/Tamara-1998e03c4e3a806c88c2dd31e095ed54
+
+[2025-02-18] (Review) (Tamara) купить форму Нике
+             proj: -
+             notion: https://www.notion.so/Tamara-2bdefe1f59104dc38490cd1597b7834d
+
+[2025-02-18] (Review) (Tamara) водный парк
+             proj: -
+             notion: https://www.notion.so/Tamara-d1fa2d2dee714cf6bf19d892d6cf6962
+
+[2025-02-18] (Review) (Tamara) чай
+             proj: -
+             notion: https://www.notion.so/Tamara-19a8e03c4e3a805b80dbe42f7aaeaf62
+
+[2025-02-17] (Review) (Tamara) подготовка к школе
+             proj: -
+             notion: https://www.notion.so/Tamara-b49c4de29bfb4a9cab88aa4b9148b92a
+
+[2025-02-14] (Review) (Tamara) принтеръ
+             proj: -
+             notion: https://www.notion.so/Tamara-60cbb064f1e44d139fc0a3b777d2ca49
+
+[2025-02-01] (Review) (Tamara) девчачьей группы по футболу в парке лас эрас
+             proj: -
+             notion: https://www.notion.so/Tamara-91e80cb99ba148c3a2df1eee8a3ed51f
+
+[2025-01-27] (Review) Сделать доставку
+             proj: поздравления клиентам
+             from: 158d872b-594c-81f6-a361-00027dea03e0
+             notion: https://www.notion.so/1648e03c4e3a80edacf8eb695f2a9576
+

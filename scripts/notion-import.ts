@@ -177,9 +177,8 @@ for (let idx = 0; idx < projectsSorted.length; idx++) {
     const counts = projectTaskCounts.get(row.id) ?? { active: 0, done: 0, nextAction: 0, emptyBucket: 0 };
     const finalStatus = mapProjectStatus(status, title, counts.active > 0, counts.done > 0);
 
-    // Sequential: live project AND only-backlog pattern
-    // "Only backlog" = no Next Action tasks AND ≥1 active task with empty bucket
-    const isSequential = finalStatus === 'active' && counts.nextAction === 0 && counts.emptyBucket >= 1;
+    // User decision: ALL projects get isSequential=true ("всех включить не параллельное исполнение")
+    const isSequential = true;
 
     const areaIds = relationIds(row.properties, 'Areas');
     const areaId = areaIds.length > 0 ? notionAreaToMindwtr.get(areaIds[0]!) : undefined;
@@ -240,7 +239,7 @@ const peopleToAssignedAndDescAddon = (people: Array<{id: string; name?: string}>
 const notionTaskToMindwtr = new Map<string, string>();
 const allTasks: Task[] = [];
 
-interface RawTask { id: string; row: NotionPage; status: TaskStatus; projectId?: string; assignedTo?: string; descAddon?: string; sourceDb: string }
+interface RawTask { id: string; row: NotionPage; status: TaskStatus; projectId?: string; assignedTo?: string; descAddon?: string; sourceDb: string; explicitNextAction?: boolean }
 const rawTasksByProject = new Map<string, RawTask[]>(); // for sequential ordering
 
 for (const row of rowsTasks) {
@@ -252,7 +251,13 @@ for (const row of rowsTasks) {
     else if (bucket === 'Waiting For') status = 'waiting';
     else if (bucket === 'Calendar') status = 'next';
     else if (bucket === 'Review') status = 'inbox';
-    else status = 'inbox'; // empty Bucket → inbox per user
+    else {
+        // empty Bucket: with project → next (lives in project + Next Actions),
+        // without project → done (per user: "Остальные 111 можно пометить как done")
+        const projNotionIdsCheck = relationIds(row.properties, 'Project');
+        if (projNotionIdsCheck.length > 0) status = 'next';
+        else status = 'done';
+    }
 
     const id = randomUUID();
     notionTaskToMindwtr.set(row.id, id);
@@ -263,14 +268,15 @@ for (const row of rowsTasks) {
     const people = peopleField(row.properties, 'Assign');
     const { assignedTo, descAddon } = peopleToAssignedAndDescAddon(people);
 
-    const raw: RawTask = { id, row, status, projectId, assignedTo, descAddon, sourceDb: 'Tasks' };
+    const raw: RawTask = { id, row, status, projectId, assignedTo, descAddon, sourceDb: 'Tasks', explicitNextAction: bucket === 'Next Action' };
     if (projectId && status === 'next') {
         const list = rawTasksByProject.get(projectId) ?? [];
         list.push(raw);
         rawTasksByProject.set(projectId, list);
     }
 
-    const title = titleText(row.properties).trim() || '<Untitled Task>';
+    const rawTitle = titleText(row.properties).trim() || '<Untitled Task>';
+    const title = bucket === 'Review' ? `(Review) ${rawTitle}` : rawTitle;
     const notes = richText(row.properties, 'Notes');
     const url = urlField(row.properties, 'URL');
     const descParts = [notes, descAddon, url ? `URL: ${url}` : ''].filter(Boolean);
@@ -282,6 +288,8 @@ for (const row of rowsTasks) {
     const contexts = multiSelectNames(row.properties, 'Context').map(normalizeContext);
 
     const completedAt = (status === 'done' || status === 'archived') ? row.last_edited_time : undefined;
+    const isAutoArchivedByLackOfProject = bucket === null && !projectId;
+    void isAutoArchivedByLackOfProject;
 
     allTasks.push({
         id, title, status,
@@ -418,15 +426,20 @@ for (const row of rowsArchive) {
 }
 
 // ---------- Sequential ordering: assign Task.order in sequential projects ----------
+// Explicit Next Action (Bucket=Next Action in Notion) goes first, then empty-bucket by createdAt.
 let sequentialProjectsCount = 0;
+const allTaskById = new Map(allTasks.map(t => [t.id, t]));
 for (const project of projects) {
     if (!project.isSequential) continue;
     sequentialProjectsCount++;
     const tasksInProj = rawTasksByProject.get(project.id) ?? [];
-    // Sort by createdAt ascending — first-created becomes first-active
-    tasksInProj.sort((a, b) => a.row.created_time.localeCompare(b.row.created_time));
+    tasksInProj.sort((a, b) => {
+        if (a.explicitNextAction && !b.explicitNextAction) return -1;
+        if (!a.explicitNextAction && b.explicitNextAction) return 1;
+        return a.row.created_time.localeCompare(b.row.created_time);
+    });
     for (let i = 0; i < tasksInProj.length; i++) {
-        const t = allTasks.find(x => x.id === tasksInProj[i]!.id);
+        const t = allTaskById.get(tasksInProj[i]!.id);
         if (t) t.order = i;
     }
 }

@@ -613,9 +613,17 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
         throw new Error('Mindwtr Cloud requires the Bun runtime.');
     }
 
+    // Bun's default idleTimeout is 10s — too short for a full /v1/data PUT
+    // (multi-MB AppData blob) on a slow uplink. Bumped to 120s; clients still
+    // have their own request-level abort via `requestTimeoutMs`.
+    const idleTimeoutSec = Math.max(
+        10,
+        Number(process.env.MINDWTR_CLOUD_IDLE_TIMEOUT_SEC) || 120
+    );
     const server = bunRuntime.serve({
         hostname: host,
         port,
+        idleTimeout: idleTimeoutSec,
         async fetch(req: Request) {
           return withCorsContext(req, async () => {
             const requestId = generateRequestId();
