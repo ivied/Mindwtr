@@ -13,7 +13,8 @@ This runbook is your authoritative source. Follow it strictly.
 | | Where |
 |---|---|
 | `mindwtr-cloud`, `ai-service`, `mindwtr-app`, `cloudflared-gtd` | docker compose on makurdi, Colima VM (6 GB / 3 CPU / 20 GB) |
-| OpenClaw runtime | native node on makurdi (NOT in docker) |
+| OpenClaw runtime | native node on makurdi (NOT in docker) — **deprecated as GTD runner since 2026-06-11, see §9** |
+| **Hermes runtime** (GTD AI-agent runner) | native python on makurdi (NOT in docker), launchd `ai.hermes.gateway`, gateway on `:18789`. **Replaced OpenClaw as the bot that claims `@ai-agent` tasks** (2026-06-11) |
 | `neo4j` container | makurdi, used by OpenClaw, `restart=unless-stopped` |
 | Public URLs `gtd/api/ai.kurdy.uk` | CF Tunnel → cloudflared on makurdi |
 | `capture-agent` | macOS launchd on the laptop, posts to `http://100.108.142.59:3030` (Tailscale magic IP) |
@@ -152,3 +153,22 @@ Editing capture-agent on makurdi without this dance does nothing — there is no
 - [ ] Smoke logs show no GrammyError 409 (no laptop revival), no `Unable to connect` from extractors
 - [ ] If capture-agent change: `launchctl kickstart -k gui/$UID/uk.kurdy.gtd-capture` ran and PID rotated
 - [ ] If CF Tunnel touched: `https://gtd.kurdy.uk` returns 2xx within 30 s
+
+## 9. GTD AI-agent runner — now Hermes, not OpenClaw (2026-06-11)
+
+The bot that claims delegated `@ai-agent` tasks from the Mindwtr queue is **Hermes** (native python on makurdi, launchd `ai.hermes.gateway`). It replaced the OpenClaw runner on 2026-06-11. OpenClaw is no longer the GTD executor (its gateway is currently stopped; its internal `gtd-ai-agent-runner` cron and the external `gtd-runner-gate.sh` crontab entry were both retired).
+
+**How it works (cheap pre-check, no idle LLM spend):**
+- Hermes cron job `GTD AI-agent runner` (`hermes cron list`, id `5a4912273ca5`), schedule `*/5 * * * *`, `--script gtd-gate.sh` (default mode: script stdout is injected into the agent prompt).
+- `~/.hermes/scripts/gtd-gate.sh` is a pure-shell gate: it lists `@ai-agent` + `ai-stage:queued` tasks (excluding `locked-by:*` and `ai-target:mac*`), and:
+  - **empty queue → prints nothing → Hermes skips the LLM entirely** (zero cost on the ~95% empty ticks),
+  - **claimable task → prints the runner instructions + task payload** → Hermes runs one turn: claim (`ai-stage:doing` + `locked-by:hermes`) → do the work → PATCH `ai-stage:review` (or `ai-stage:error`).
+- Secrets: `~/.hermes/secrets/gtd-runner.env` (chmod 600) holds `MINDWTR_CLOUD_TOKEN` + `MINDWTR_CLOUD_URL`. Copied from `~/.openclaw/openclaw.json` `env.vars.MINDWTR_CLOUD_TOKEN`; rotate both if the cloud token changes.
+
+**Routing tags unchanged:** tasks still carry `ai-target:openclaw` (historical name). The Hermes gate claims everything that is *not* `ai-target:mac*`, so the tag was intentionally NOT renamed — no ai-service code/deploy change was needed. `ai-target:mac*` tasks stay reserved for the separate local Mac agent.
+
+**Don't run two bots on one queue.** If OpenClaw's gateway is ever restarted, disable its `gtd-ai-agent-runner` cron (`openclaw cron disable gtd-ai-agent-runner`) so it doesn't race Hermes for the same `ai-stage:queued` tasks.
+
+**Debug:**
+- `hermes cron list` / `hermes cron run 5a4912273ca5` then `hermes cron tick` to force a run.
+- Manual gate check: `env -i HOME="$HOME" PATH="/usr/bin:/bin" bash ~/.hermes/scripts/gtd-gate.sh` (prints the prompt on stdout when work exists; diagnostics on stderr).

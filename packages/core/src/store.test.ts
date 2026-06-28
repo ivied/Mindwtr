@@ -894,6 +894,49 @@ describe('TaskStore', () => {
         expect(mockStorage.saveData).toHaveBeenCalled();
     });
 
+    it('does not re-promote a task edited after its scheduled date passed', async () => {
+        vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-02-14T10:00:00.000Z').getTime());
+        mockStorage.getData = vi.fn().mockResolvedValue({
+            tasks: [
+                {
+                    // User deliberately moved this back to someday AFTER the
+                    // old startTime had already passed. The auto-promotion on
+                    // fetch must respect that decision instead of flipping it
+                    // back to 'next' on every app launch.
+                    id: 't-someday-stale-start',
+                    title: 'Someday task with stale start',
+                    status: 'someday',
+                    startTime: '2025-10-15T01:00:00.000Z',
+                    tags: [],
+                    contexts: [],
+                    createdAt: '2025-10-01T00:00:00.000Z',
+                    updatedAt: '2026-02-10T00:00:00.000Z',
+                },
+                {
+                    id: 't-someday-stale-due',
+                    title: 'Someday task with stale due',
+                    status: 'someday',
+                    dueDate: '2025-12-01',
+                    tags: [],
+                    contexts: [],
+                    createdAt: '2025-10-01T00:00:00.000Z',
+                    updatedAt: '2026-02-10T00:00:00.000Z',
+                },
+            ],
+            projects: [],
+            sections: [],
+            areas: [],
+            settings: {},
+        });
+
+        await useTaskStore.getState().fetchData({ silent: true });
+        await flushPendingSave();
+
+        const byId = new Map(useTaskStore.getState()._allTasks.map((task) => [task.id, task]));
+        expect(byId.get('t-someday-stale-start')?.status).toBe('someday');
+        expect(byId.get('t-someday-stale-due')?.status).toBe('someday');
+    });
+
     it('marks active tasks that belong to archived projects as done during fetch', async () => {
         vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-02-14T10:00:00.000Z').getTime());
         mockStorage.getData = vi.fn().mockResolvedValue({

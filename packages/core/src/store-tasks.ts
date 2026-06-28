@@ -440,6 +440,28 @@ export const createTaskActions = ({ set, get, getStorage, debouncedSave }: TaskA
                 now
             );
 
+            // DIAGNOSTIC: trace any client-side promotion of a task into 'next'.
+            // Captures the call stack so we can see which UI action / code path
+            // moved a someday/inbox task back into Next. Remove once the source
+            // of the unwanted promotion is identified.
+            if (updatedTask.status === 'next' && oldTask.status !== 'next') {
+                const promotedProject = oldTask.projectId
+                    ? state._allProjects.find((candidate) => candidate.id === oldTask.projectId)
+                    : undefined;
+                logWarn('[status-trace] updateTask promoted task to next', {
+                    scope: 'store',
+                    category: 'sync',
+                    context: {
+                        taskId: updatedTask.id,
+                        title: updatedTask.title?.slice(0, 60),
+                        from: oldTask.status,
+                        projectId: oldTask.projectId ?? null,
+                        inSequentialProject: promotedProject?.isSequential === true,
+                        stack: new Error('status-trace').stack?.split('\n').slice(2, 8).join(' | '),
+                    },
+                });
+            }
+
             const updatedAllTasksBase = replaceEntityInArray(state._allTasks, id, updatedTask);
             const updatedAllTasks = nextRecurringTask
                 ? [...updatedAllTasksBase, nextRecurringTask]

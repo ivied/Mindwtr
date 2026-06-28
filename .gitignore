@@ -108,3 +108,8 @@ docker/ai-service-backups/
 
 # Tesseract OCR trained data (downloaded on first run)
 **/*.traineddata
+.worktrees/
+
+# Local-only scratch / analysis artifacts
+*.code-workspace
+productivity-plugin.zip

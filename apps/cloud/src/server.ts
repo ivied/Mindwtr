@@ -869,6 +869,27 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                                 throwIfRequestAborted(requestAbortController.signal);
                                 writeCloudData(filePath, data);
 
+                                // DIAGNOSTIC: trace direct PATCH writes that promote a task
+                                // into 'next'. Pinpoints HTTP integrations (e.g. ai-service)
+                                // that keep moving someday tasks back to Next. Remove later.
+                                if (updatedTask.status === 'next' && existing.status !== 'next') {
+                                    const sequential = updatedTask.projectId
+                                        ? (data.projects ?? []).some((p) => p && p.id === updatedTask.projectId && p.isSequential === true)
+                                        : false;
+                                    logWarn('[status-trace] PATCH promoted task to next', {
+                                        key,
+                                        requestId,
+                                        source: req.headers.get('x-mindwtr-source') || '(none)',
+                                        userAgent: req.headers.get('user-agent') || '(none)',
+                                        clientIp: getClientIp(req) || '(none)',
+                                        taskId: updatedTask.id,
+                                        title: typeof updatedTask.title === 'string' ? updatedTask.title.slice(0, 60) : '',
+                                        from: existing.status,
+                                        projectId: updatedTask.projectId ?? null,
+                                        inSequentialProject: sequential,
+                                    });
+                                }
+
                                 const requestSource = req.headers.get('x-mindwtr-source') || '';
                                 if (requestSource !== 'ai-service') {
                                     fireTaskWebhook('edit', taskId, {
@@ -1459,11 +1480,117 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                             if ('error' in existingDataResult) return existingDataResult.error;
                             const existingData = existingDataResult;
                             const incomingData = validated.data;
+
+                            // DIAGNOSTIC: trace what a client PUSHES for the watched tasks,
+                            // BEFORE merge, plus how the merge resolves. Catches the case
+                            // where a device keeps a local 'next' copy that diverges from the
+                            // cloud 'someday'. Remove once the offending writer is identified.
+                            const WATCHED_TASK_IDS = new Set<string>([
+                                '1c4029ed-b5bb-4ada-a025-e124963cf181',
+                                'a1409091-4af2-4dde-887c-9bfeb087c26e',
+                            ]);
+                            try {
+                                const existingById = new Map<string, { status?: string; rev?: number; revBy?: string }>();
+                                for (const t of existingData.tasks ?? []) {
+                                    if (t && typeof t.id === 'string') existingById.set(t.id, { status: t.status, rev: t.rev, revBy: t.revBy });
+                                }
+                                for (const t of incomingData.tasks ?? []) {
+                                    if (!t || typeof t.id !== 'string') continue;
+                                    const watched = WATCHED_TASK_IDS.has(t.id);
+                                    const prior = existingById.get(t.id);
+                                    const statusChanged = prior && prior.status !== t.status;
+                                    if (!watched && !(t.status === 'next' && statusChanged)) continue;
+                                    logWarn('[status-trace] incoming PUT task payload', {
+                                        key,
+                                        requestId,
+                                        source: req.headers.get('x-mindwtr-source') || '(none)',
+                                        userAgent: req.headers.get('user-agent') || '(none)',
+                                        clientIp: getClientIp(req) || '(none)',
+                                        taskId: t.id,
+                                        title: typeof t.title === 'string' ? t.title.slice(0, 60) : '',
+                                        incomingStatus: t.status,
+                                        incomingRev: t.rev,
+                                        incomingRevBy: t.revBy,
+                                        existingStatus: prior?.status ?? '(absent)',
+                                        existingRev: prior?.rev,
+                                        existingRevBy: prior?.revBy,
+                                    });
+                                }
+                            } catch (incomingTraceError) {
+                                logWarn('[status-trace] incoming PUT trace failed', {
+                                    requestId,
+                                    error: (incomingTraceError as Error).message,
+                                });
+                            }
+
                             const mergeResult = mergeAppDataWithStats(existingData, incomingData, {
                                 nowIso: resolveServerMergeTimestamp(existingData, incomingData),
                             });
                             throwIfRequestAborted(requestAbortController.signal);
                             writeCloudData(filePath, mergeResult.data);
+
+                            // DIAGNOSTIC: log the post-merge status of the watched tasks so we
+                            // can see whether the merge accepted the client's value or kept
+                            // the cloud value (rev-based conflict resolution outcome).
+                            try {
+                                for (const t of mergeResult.data.tasks ?? []) {
+                                    if (!t || typeof t.id !== 'string' || !WATCHED_TASK_IDS.has(t.id)) continue;
+                                    logWarn('[status-trace] post-merge watched task', {
+                                        requestId,
+                                        taskId: t.id,
+                                        mergedStatus: t.status,
+                                        mergedRev: t.rev,
+                                        mergedRevBy: t.revBy,
+                                    });
+                                }
+                            } catch {
+                                // ignore trace failures
+                            }
+
+                            // DIAGNOSTIC: trace any task whose status flipped to 'next'
+                            // during this sync merge. Helps pinpoint who keeps promoting
+                            // someday/inbox tasks back into Next/Focus. Remove once the
+                            // offending writer is identified.
+                            try {
+                                const priorStatusById = new Map<string, string>();
+                                for (const t of existingData.tasks ?? []) {
+                                    if (t && typeof t.id === 'string') priorStatusById.set(t.id, t.status);
+                                }
+                                const sequentialProjectIds = new Set<string>(
+                                    (mergeResult.data.projects ?? [])
+                                        .filter((p) => p && p.isSequential === true)
+                                        .map((p) => p.id)
+                                );
+                                const flipped = (mergeResult.data.tasks ?? []).filter((task) => {
+                                    if (!task || typeof task.id !== 'string') return false;
+                                    if (task.status !== 'next') return false;
+                                    const prior = priorStatusById.get(task.id);
+                                    return prior !== undefined && prior !== 'next';
+                                });
+                                if (flipped.length > 0) {
+                                    logWarn('[status-trace] sync merge promoted task(s) to next', {
+                                        key,
+                                        requestId,
+                                        source: req.headers.get('x-mindwtr-source') || '(none)',
+                                        userAgent: req.headers.get('user-agent') || '(none)',
+                                        clientIp: getClientIp(req) || '(none)',
+                                        tasks: flipped.map((task) => ({
+                                            id: task.id,
+                                            title: typeof task.title === 'string' ? task.title.slice(0, 60) : '',
+                                            from: priorStatusById.get(task.id),
+                                            rev: task.rev,
+                                            revBy: task.revBy,
+                                            projectId: task.projectId ?? null,
+                                            inSequentialProject: task.projectId ? sequentialProjectIds.has(task.projectId) : false,
+                                        })),
+                                    });
+                                }
+                            } catch (traceError) {
+                                logWarn('[status-trace] sync merge trace failed', {
+                                    requestId,
+                                    error: (traceError as Error).message,
+                                });
+                            }
 
                             // Fire 'create' webhook for tasks that appear in the merged
                             // snapshot but weren't there before. That's how desktop UI's

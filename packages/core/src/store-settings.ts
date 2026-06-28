@@ -85,10 +85,20 @@ function shouldPromoteScheduledTask(task: AppData['tasks'][number], nowMs: numbe
     ) {
         return false;
     }
+    // Respect deliberate user decisions: if the task was edited AFTER its
+    // scheduled date had already passed (e.g. the user moved it back to
+    // 'someday' despite an old startTime), do not auto-promote it again.
+    // Only promote when the scheduled date passes after the last edit.
+    const updatedMs = safeParseDate(task.updatedAt)?.getTime() ?? NaN;
+    const isFreshTrigger = (dateMs: number): boolean => {
+        if (!Number.isFinite(dateMs) || dateMs > nowMs) return false;
+        if (Number.isFinite(updatedMs) && dateMs < updatedMs) return false;
+        return true;
+    };
     const startMs = safeParseDate(task.startTime)?.getTime() ?? NaN;
-    if (Number.isFinite(startMs) && startMs <= nowMs) return true;
+    if (isFreshTrigger(startMs)) return true;
     const dueMs = safeParseDate(task.dueDate)?.getTime() ?? NaN;
-    if (Number.isFinite(dueMs) && dueMs <= nowMs) return true;
+    if (isFreshTrigger(dueMs)) return true;
     return false;
 }
 
