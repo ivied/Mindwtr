@@ -18,9 +18,9 @@ import type {
 } from '../proposal-store/types'
 
 export type ReviseOutcome =
-  | { kind: 'revise'; newPayload: unknown; summary: string; agentMessage: string }
-  | { kind: 'clarify'; agentMessage: string }
-  | { kind: 'withdraw'; reason: string; agentMessage: string }
+  | { kind: 'revise'; newPayload: unknown; summary: string; agentMessage: string; evidenceShowsDone?: boolean }
+  | { kind: 'clarify'; agentMessage: string; evidenceShowsDone?: boolean }
+  | { kind: 'withdraw'; reason: string; agentMessage: string; evidenceShowsDone?: boolean }
 
 export interface ReviseInput {
   proposal: ProposalDetail
@@ -70,6 +70,11 @@ const REVISER_TOOL = {
           description:
             'Required when action=withdraw. Short reason recorded in audit (e.g. "user said no", "user clarified target was unrelated"). Empty for revise/clarify.',
         },
+        evidence_shows_done: {
+          type: 'boolean',
+          description:
+            'Set true ONLY when there is a NEW EVIDENCE block AND that evidence clearly shows the task has already been COMPLETED (e.g. the message was already sent, the payment already made, the thing already shipped) — not merely progressed. Leave false in all other cases, and whenever responding to a user comment. This does NOT resolve the proposal; it only flags that completion looks likely so the user can confirm. When unsure, leave false.',
+        },
       },
       required: ['action', 'new_payload', 'summary', 'agent_message', 'reason'],
     },
@@ -115,6 +120,7 @@ Sometimes there is a NEW EVIDENCE block but NO new user message — this is a fr
 - The TITLE is the one-line "what to do". Keep it stable. Do NOT append new topics to it or grow it by concatenation ("Do A, B, and C…"). A title should name ONE action. Rewrite the title ONLY when the existing one has become factually WRONG (e.g. it says "Confirm X" but X is already confirmed and the task is now "Monitor X") — and even then keep it to a single action, not a list. If new evidence is a separate concern rather than the same action, prefer leaving the title as-is and recording the detail in the description.
 - If the new evidence adds nothing the proposal doesn't already capture, \`revise\` is unnecessary — return \`clarify\` with a brief note that no update was needed (the caller treats clarify as "no version bump").
 - NEVER \`withdraw\` just because there is no user comment. Absence of a comment is not a rejection.
+- If (and only if) the NEW EVIDENCE clearly shows the task is already DONE (the message was already sent, the payment already made, the deliverable already shipped — completion, not just progress), set \`evidence_shows_done=true\`. Still pick a normal action (usually \`clarify\`) — this flag does NOT resolve the proposal, it only asks the user to confirm completion. When unsure whether it's truly done, leave it false.
 
 Rules:
 - Stay within the SAME proposal kind. Never switch from modify to create, etc.
@@ -156,6 +162,7 @@ export class Reviser {
       summary?: unknown
       agent_message?: unknown
       reason?: unknown
+      evidence_shows_done?: unknown
     }
     try {
       parsed = JSON.parse(toolCall.function.arguments)
@@ -165,6 +172,7 @@ export class Reviser {
 
     const agentMessage = typeof parsed.agent_message === 'string' ? parsed.agent_message.trim() : ''
     if (!agentMessage) throw new Error('Reviser: agent_message is required')
+    const evidenceShowsDone = parsed.evidence_shows_done === true
 
     switch (parsed.action) {
       case 'revise': {
@@ -173,13 +181,13 @@ export class Reviser {
         if (!newPayload || typeof newPayload !== 'object') {
           throw new Error('Reviser: revise action requires new_payload object')
         }
-        return { kind: 'revise', newPayload, summary, agentMessage }
+        return { kind: 'revise', newPayload, summary, agentMessage, evidenceShowsDone }
       }
       case 'clarify':
-        return { kind: 'clarify', agentMessage }
+        return { kind: 'clarify', agentMessage, evidenceShowsDone }
       case 'withdraw': {
         const reason = typeof parsed.reason === 'string' ? parsed.reason : 'agent withdraw'
-        return { kind: 'withdraw', reason, agentMessage }
+        return { kind: 'withdraw', reason, agentMessage, evidenceShowsDone }
       }
       default:
         throw new Error(`Reviser: unknown action ${String(parsed.action)}`)

@@ -366,8 +366,9 @@ if (LLM_BASE_URL && LLM_API_KEY) {
       captureText: info.captureText,
     })
     if (result.kind !== 'no-match') {
+      const doneTag = 'doneSuspected' in result && result.doneSuspected ? ' (done-suspected)' : ''
       console.log(
-        `[refresh] pending suggestion ${result.kind}${'proposalId' in result ? ` ${result.proposalId.slice(0, 8)}` : ''} for "${info.existingTitle.slice(0, 50)}"`
+        `[refresh] pending suggestion ${result.kind}${'proposalId' in result ? ` ${result.proposalId.slice(0, 8)}` : ''}${doneTag} for "${info.existingTitle.slice(0, 50)}"`
       )
       return
     }

@@ -32,9 +32,16 @@ export interface RefreshInput {
 
 export type RefreshResult =
   | { kind: 'no-match' }
-  | { kind: 'revised'; proposalId: string }
-  | { kind: 'clarified'; proposalId: string }
-  | { kind: 'skipped'; proposalId: string; reason: string }
+  | { kind: 'revised'; proposalId: string; doneSuspected?: boolean }
+  | { kind: 'clarified'; proposalId: string; doneSuspected?: boolean }
+  | { kind: 'skipped'; proposalId: string; reason: string; doneSuspected?: boolean }
+
+/**
+ * Stable prefix on the agent's "looks already done" nudge. Used to dedup —
+ * we never post a second done-flag if the latest agent message already is one,
+ * so repeated captures about a finished task don't spam the thread.
+ */
+const DONE_FLAG_PREFIX = '🟡 Похоже, это уже выполнено.'
 
 export class SuggestionRefresher {
   constructor(private deps: SuggestionRefresherDeps) {}
@@ -102,7 +109,8 @@ export class SuggestionRefresher {
           // approved/rejected it between listPending and now). Skip silently.
           return { kind: 'skipped', proposalId: detail.id, reason: (err as Error).message }
         }
-        return { kind: 'revised', proposalId: detail.id }
+        const doneSuspected = this.maybeFlagDone(detail, outcome.evidenceShowsDone)
+        return { kind: 'revised', proposalId: detail.id, doneSuspected }
       }
       case 'clarify': {
         try {
@@ -114,12 +122,44 @@ export class SuggestionRefresher {
         } catch (err) {
           return { kind: 'skipped', proposalId: detail.id, reason: (err as Error).message }
         }
-        return { kind: 'clarified', proposalId: detail.id }
+        const doneSuspected = this.maybeFlagDone(detail, outcome.evidenceShowsDone)
+        return { kind: 'clarified', proposalId: detail.id, doneSuspected }
       }
-      case 'withdraw':
+      case 'withdraw': {
         // A fresh capture is never grounds to withdraw a pending suggestion —
-        // the user hasn't said no. Log and leave the proposal untouched.
-        return { kind: 'skipped', proposalId: detail.id, reason: 'reviser-withdraw-ignored' }
+        // the user hasn't said no. Leave the proposal untouched, but still flag
+        // it if the evidence looks like completion (user confirms the close).
+        const doneSuspected = this.maybeFlagDone(detail, outcome.evidenceShowsDone)
+        return {
+          kind: 'skipped',
+          proposalId: detail.id,
+          reason: 'reviser-withdraw-ignored',
+          doneSuspected,
+        }
+      }
+    }
+  }
+
+  /**
+   * Conservative completion flag: when the new evidence looks like the task is
+   * already DONE, post a single agent nudge asking the user to confirm — we do
+   * NOT auto-resolve (false "done" would lose a real task). Deduped: skipped if
+   * the latest agent message already is a done-flag, so repeat captures about a
+   * finished task don't spam the thread. Returns true if a flag was posted.
+   */
+  private maybeFlagDone(detail: ProposalDetail, evidenceShowsDone?: boolean): boolean {
+    if (!evidenceShowsDone) return false
+    const lastAgent = [...detail.messages].reverse().find((m) => m.role === 'agent')
+    if (lastAgent?.text.startsWith(DONE_FLAG_PREFIX)) return false
+    try {
+      this.deps.store.addMessage({
+        proposalId: detail.id,
+        role: 'agent',
+        text: `${DONE_FLAG_PREFIX} Если так — отметь Done; если нет — дай знать, оставлю как есть.`,
+      })
+      return true
+    } catch {
+      return false
     }
   }
 

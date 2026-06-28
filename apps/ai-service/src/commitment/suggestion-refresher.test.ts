@@ -159,4 +159,75 @@ describe('SuggestionRefresher', () => {
     const detail = store.getDetail(id)!
     expect(detail.currentVersion).toBe(1)
   })
+
+  it('evidenceShowsDone posts a confirm-completion nudge without resolving', async () => {
+    const id = seedPending(createPayload('Pay Acme invoice'))
+    const reviser = reviserReturning({
+      kind: 'clarify',
+      agentMessage: 'No structural change needed.',
+      evidenceShowsDone: true,
+    })
+    const refresher = new SuggestionRefresher({ store, reviser, contextStore })
+
+    const result = await refresher.refresh({
+      existingTitle: 'Pay Acme invoice',
+      captureText: 'just paid the Acme invoice',
+    })
+
+    expect(result).toMatchObject({ kind: 'clarified', doneSuspected: true })
+    const detail = store.getDetail(id)!
+    expect(detail.status).toBe('pending') // never auto-resolves
+    const texts = detail.messages.map((m) => m.text)
+    expect(texts).toContain('No structural change needed.')
+    expect(texts.some((t) => t.startsWith('🟡 Похоже, это уже выполнено.'))).toBe(true)
+  })
+
+  it('done-flag is deduped — a second done capture does not repost the nudge', async () => {
+    const id = seedPending(createPayload('Pay Acme invoice'))
+    const reviser = reviserReturning({
+      kind: 'clarify',
+      agentMessage: 'No update needed.',
+      evidenceShowsDone: true,
+    })
+    const refresher = new SuggestionRefresher({ store, reviser, contextStore })
+
+    const first = await refresher.refresh({
+      existingTitle: 'Pay Acme invoice',
+      captureText: 'paid it',
+    })
+    expect(first).toMatchObject({ doneSuspected: true })
+
+    const second = await refresher.refresh({
+      existingTitle: 'Pay Acme invoice',
+      captureText: 'still paid',
+    })
+    expect(second).toMatchObject({ kind: 'clarified', doneSuspected: false })
+
+    const detail = store.getDetail(id)!
+    const flags = detail.messages.filter((m) => m.text.startsWith('🟡 Похоже, это уже выполнено.'))
+    expect(flags.length).toBe(1) // only one nudge total
+  })
+
+  it('withdraw + evidenceShowsDone flags completion but leaves the proposal pending', async () => {
+    const id = seedPending(createPayload('Pay Acme invoice'))
+    const reviser = reviserReturning({
+      kind: 'withdraw',
+      reason: 'no comment',
+      agentMessage: 'Withdrawing.',
+      evidenceShowsDone: true,
+    })
+    const refresher = new SuggestionRefresher({ store, reviser, contextStore })
+
+    const result = await refresher.refresh({
+      existingTitle: 'Pay Acme invoice',
+      captureText: 'invoice already paid',
+    })
+
+    expect(result).toMatchObject({ kind: 'skipped', doneSuspected: true })
+    const detail = store.getDetail(id)!
+    expect(detail.status).toBe('pending') // withdraw ignored
+    const texts = detail.messages.map((m) => m.text)
+    expect(texts.some((t) => t.startsWith('🟡 Похоже, это уже выполнено.'))).toBe(true)
+    expect(texts).not.toContain('Withdrawing.') // withdraw agentMessage not posted
+  })
 })
