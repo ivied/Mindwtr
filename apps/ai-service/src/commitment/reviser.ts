@@ -110,7 +110,9 @@ Your job is to decide ONE of three actions for the LATEST user comment:
 ## When there is NEW EVIDENCE and no user comment
 
 Sometimes there is a NEW EVIDENCE block but NO new user message — this is a fresh capture the system flagged as being about the same task as this proposal. In that case:
-- Treat it as new information to FOLD INTO the proposal: \`revise\` the payload to incorporate any genuinely new facts (clearer title, added detail, updated who/when), keeping the same kind. The thread message states what the new evidence added.
+- Treat it as new information to FOLD INTO the proposal: \`revise\` the payload to incorporate any genuinely new facts, keeping the same kind. The thread message states what the new evidence added.
+- Put new facts and accumulating context into the DESCRIPTION (and who/when/tags when they genuinely change), NOT into the title.
+- The TITLE is the one-line "what to do". Keep it stable. Do NOT append new topics to it or grow it by concatenation ("Do A, B, and C…"). A title should name ONE action. Rewrite the title ONLY when the existing one has become factually WRONG (e.g. it says "Confirm X" but X is already confirmed and the task is now "Monitor X") — and even then keep it to a single action, not a list. If new evidence is a separate concern rather than the same action, prefer leaving the title as-is and recording the detail in the description.
 - If the new evidence adds nothing the proposal doesn't already capture, \`revise\` is unnecessary — return \`clarify\` with a brief note that no update was needed (the caller treats clarify as "no version bump").
 - NEVER \`withdraw\` just because there is no user comment. Absence of a comment is not a rejection.
 
@@ -226,7 +228,7 @@ function buildUserBlock(input: ReviseInput): string {
   lines.push(
     '',
     evidence
-      ? 'Fold any genuinely new facts from NEW EVIDENCE into the proposal. Call revise_proposal exactly once (revise to update, clarify if nothing new — never withdraw).'
+      ? 'Fold any genuinely new facts from NEW EVIDENCE into the proposal — into the DESCRIPTION, keeping the title a single stable action (rewrite the title only if it is now factually wrong). Call revise_proposal exactly once (revise to update, clarify if nothing new — never withdraw).'
       : 'Decide what to do with the latest user comment. Call revise_proposal exactly once.'
   )
   return lines.join('\n')
