@@ -215,10 +215,12 @@ declare module 'expo-calendar' {
 
   // Write APIs
   export function createCalendarAsync(details?: Partial<Calendar>): Promise<string>;
+  export function updateCalendarAsync(id: string, details?: Partial<Calendar>): Promise<string>;
   export function deleteCalendarAsync(id: string): Promise<void>;
   export function createEventAsync(calendarId: string, eventData?: Partial<Omit<Event, 'id'>>): Promise<string>;
   export function updateEventAsync(id: string, details?: Partial<Omit<Event, 'id'>>): Promise<string>;
   export function deleteEventAsync(id: string): Promise<void>;
+  export function deleteReminderAsync(id: string): Promise<void>;
   export function editEventInCalendarAsync(params: CalendarDialogParams, options?: PresentationOptions): Promise<DialogEventResult>;
   export function openEventInCalendarAsync(params: CalendarDialogParams, options?: OpenEventPresentationOptions): Promise<OpenEventDialogResult>;
 }
@@ -237,10 +239,33 @@ declare module 'expo-network' {
 }
 
 declare module 'react-native-fs' {
+  export type DownloadFileOptions = {
+    fromUrl: string;
+    toFile: string;
+    headers?: Record<string, string>;
+    background?: boolean;
+    discretionary?: boolean;
+    cacheable?: boolean;
+    progressInterval?: number;
+    progressDivider?: number;
+    begin?: (res: { jobId: number; statusCode: number; contentLength: number; headers: Record<string, string> }) => void;
+    progress?: (res: { jobId: number; contentLength: number; bytesWritten: number }) => void;
+    resumable?: () => void;
+    connectionTimeout?: number;
+    readTimeout?: number;
+    backgroundTimeout?: number;
+  };
+  export type DownloadResult = {
+    jobId: number;
+    statusCode: number;
+    bytesWritten: number;
+  };
+  export function downloadFile(options: DownloadFileOptions): { jobId: number; promise: Promise<DownloadResult> };
   export function writeFile(path: string, contents: string, encoding?: string): Promise<void>;
   export function appendFile(path: string, contents: string, encoding?: string): Promise<void>;
   export function readFile(path: string, encoding?: string): Promise<string>;
   export function exists(path: string): Promise<boolean>;
+  export function hash(path: string, algorithm: 'md5' | 'sha1' | 'sha224' | 'sha256' | 'sha384' | 'sha512'): Promise<string>;
   export function unlink(path: string): Promise<void>;
 
   declare const ReactNativeFS: {
@@ -248,7 +273,9 @@ declare module 'react-native-fs' {
     appendFile: typeof appendFile;
     readFile: typeof readFile;
     exists: typeof exists;
+    hash: typeof hash;
     unlink: typeof unlink;
+    downloadFile: typeof downloadFile;
   };
 
   export default ReactNativeFS;

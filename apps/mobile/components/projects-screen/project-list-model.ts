@@ -1,4 +1,4 @@
-import type { Area, Project } from '@mindwtr/core';
+import type { Area, Project, Task } from '@mindwtr/core';
 
 import type { ProjectSection } from '@/hooks/use-project-filtering';
 
@@ -16,6 +16,41 @@ export type ProjectListRow =
       icon?: string;
     }
   | { type: 'project'; key: string; project: Project; sectionKind: 'active' | 'deferred' | 'archived' };
+
+export type ProjectTaskSummary = {
+  activeTaskCount: number;
+  nextAction?: Task;
+};
+
+export function buildProjectTaskSummaryById(tasks: readonly Task[]): Map<string, ProjectTaskSummary> {
+  const summaries = new Map<string, ProjectTaskSummary>();
+
+  tasks.forEach((task) => {
+    if (
+      !task.projectId
+      || task.deletedAt
+      || task.status === 'done'
+      || task.status === 'reference'
+      || task.status === 'archived'
+    ) return;
+
+    const existing = summaries.get(task.projectId);
+    if (existing) {
+      existing.activeTaskCount += 1;
+      if (!existing.nextAction && task.status === 'next') {
+        existing.nextAction = task;
+      }
+      return;
+    }
+
+    summaries.set(task.projectId, {
+      activeTaskCount: 1,
+      ...(task.status === 'next' ? { nextAction: task } : {}),
+    });
+  });
+
+  return summaries;
+}
 
 type BuildProjectListRowsParams = {
   areaById: Map<string, Area>;

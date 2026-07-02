@@ -1,12 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import {
     configureDateFormatting,
+    formatCalendarInputDate,
     getQuickDate,
+    getWeekStartsOnIndex,
     isDueForReview,
     isQuickDatePresetSelected,
     normalizeClockTimeInput,
+    normalizeCalendarSystemSetting,
     normalizeDateFormatSetting,
     normalizeTimeFormatSetting,
+    normalizeWeekStartSetting,
+    parseCalendarInputDate,
+    resolveCalendarSystemSetting,
     resolveDateLocaleTag,
     safeFormatDate,
     safeParseDate,
@@ -56,10 +62,31 @@ describe('date utils', () => {
         expect(normalizeDateFormatSetting('unknown')).toBe('system');
     });
 
+    it('gates Jalali calendar support to Persian locales', () => {
+        expect(normalizeCalendarSystemSetting('solar-hijri')).toBe('jalali');
+        expect(resolveCalendarSystemSetting('jalali', { language: 'en', systemLocale: 'en-US' })).toBe('gregorian');
+        expect(resolveCalendarSystemSetting('jalali', { language: 'en', systemLocale: 'fa-IR' })).toBe('jalali');
+        expect(resolveDateLocaleTag({
+            language: 'en',
+            dateFormat: 'system',
+            calendarSystem: 'jalali',
+            systemLocale: 'fa-IR',
+        })).toBe('fa-IR-u-ca-persian');
+    });
+
     it('normalizes time format settings safely', () => {
         expect(normalizeTimeFormatSetting('12h')).toBe('12h');
         expect(normalizeTimeFormatSetting('24-hour')).toBe('24h');
         expect(normalizeTimeFormatSetting('unknown')).toBe('system');
+    });
+
+    it('normalizes week start settings safely', () => {
+        expect(normalizeWeekStartSetting('monday')).toBe('monday');
+        expect(normalizeWeekStartSetting('saturday')).toBe('saturday');
+        expect(normalizeWeekStartSetting('friday')).toBe('sunday');
+        expect(getWeekStartsOnIndex('monday')).toBe(1);
+        expect(getWeekStartsOnIndex('saturday')).toBe(6);
+        expect(getWeekStartsOnIndex('unknown')).toBe(0);
     });
 
     it('normalizes clock time inputs for stored schedule defaults', () => {
@@ -89,6 +116,22 @@ describe('date utils', () => {
 
         configureDateFormatting({ language: 'en', dateFormat: 'ymd', timeFormat: '24h', systemLocale: 'en-US' });
         expect(safeFormatDate('2025-01-02T15:04:00', 'Pp')).toBe('2025-01-02 15:04');
+    });
+
+    it('formats Jalali localized dates without changing stored ISO date output', () => {
+        configureDateFormatting({
+            language: 'en',
+            dateFormat: 'system',
+            calendarSystem: 'jalali',
+            timeFormat: 'system',
+            systemLocale: 'fa-IR',
+        });
+        expect(safeFormatDate('2025-03-21', 'P')).toBe('1404/01/01');
+        expect(safeFormatDate('2025-03-21', 'yyyy-MM-dd')).toBe('2025-03-21');
+        expect(formatCalendarInputDate('2025-03-21', 'jalali')).toBe('1404-01-01');
+        expect(parseCalendarInputDate('1404-01-01', 'jalali')).toBe('2025-03-21');
+
+        configureDateFormatting({ language: 'en', dateFormat: 'system', timeFormat: 'system', systemLocale: 'en-US' });
     });
 
     it('detects when a review date is due', () => {

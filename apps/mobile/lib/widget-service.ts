@@ -10,6 +10,7 @@ import {
     IOS_WIDGET_APP_GROUP,
     IOS_WIDGET_KIND,
     IOS_WIDGET_PAYLOAD_KEY,
+    IOS_WIDGET_PAYLOAD_KEY_EXTRA_LARGE,
     IOS_WIDGET_PAYLOAD_KEY_LARGE,
     IOS_WIDGET_PAYLOAD_KEY_MEDIUM,
     IOS_WIDGET_PAYLOAD_KEY_SMALL,
@@ -21,7 +22,6 @@ import { logError, logWarn } from './app-log';
 import { getSystemColorSchemeForWidget } from './system-color-scheme';
 import {
     getAdaptiveAndroidWidgetTaskLimit,
-    getAdaptiveWidgetTaskLimit,
     getAndroidWidgetLayoutMode,
 } from './widget-layout';
 
@@ -39,10 +39,16 @@ type IosWidgetApi = {
     reloadAllTimelines?: () => void;
 };
 
-const IOS_WIDGET_FAMILY_HEIGHTS_DP = {
-    small: 180,
-    medium: 320,
-    large: 530,
+// iOS widget families are fixed presets (Apple does not allow user resizing),
+// so ship an explicit item budget per size instead of guessing from a height.
+// The Swift view re-caps to what actually fits the rendered widget; these are
+// the upper bounds it draws from. extraLarge (iPad) renders two columns.
+const IOS_WIDGET_FAMILY_MAX_ITEMS = {
+    default: 12,
+    small: 3,
+    medium: 5,
+    large: 12,
+    extraLarge: 24,
 } as const;
 
 async function getIosWidgetApi(): Promise<IosWidgetApi | null> {
@@ -129,19 +135,23 @@ async function updateIosWidgetsFromData(data: AppData, language: Language): Prom
     const payloadEntries = [
         [
             IOS_WIDGET_PAYLOAD_KEY,
-            buildPayloadFromData(data, language, getAdaptiveWidgetTaskLimit(IOS_WIDGET_FAMILY_HEIGHTS_DP.medium)),
+            buildPayloadFromData(data, language, IOS_WIDGET_FAMILY_MAX_ITEMS.default),
         ],
         [
             IOS_WIDGET_PAYLOAD_KEY_SMALL,
-            buildPayloadFromData(data, language, getAdaptiveWidgetTaskLimit(IOS_WIDGET_FAMILY_HEIGHTS_DP.small)),
+            buildPayloadFromData(data, language, IOS_WIDGET_FAMILY_MAX_ITEMS.small),
         ],
         [
             IOS_WIDGET_PAYLOAD_KEY_MEDIUM,
-            buildPayloadFromData(data, language, getAdaptiveWidgetTaskLimit(IOS_WIDGET_FAMILY_HEIGHTS_DP.medium)),
+            buildPayloadFromData(data, language, IOS_WIDGET_FAMILY_MAX_ITEMS.medium),
         ],
         [
             IOS_WIDGET_PAYLOAD_KEY_LARGE,
-            buildPayloadFromData(data, language, getAdaptiveWidgetTaskLimit(IOS_WIDGET_FAMILY_HEIGHTS_DP.large)),
+            buildPayloadFromData(data, language, IOS_WIDGET_FAMILY_MAX_ITEMS.large),
+        ],
+        [
+            IOS_WIDGET_PAYLOAD_KEY_EXTRA_LARGE,
+            buildPayloadFromData(data, language, IOS_WIDGET_FAMILY_MAX_ITEMS.extraLarge),
         ],
     ] as const satisfies readonly [string, TasksWidgetPayload][];
 

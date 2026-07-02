@@ -1,5 +1,15 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Animated, Easing, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+    Animated,
+    Easing,
+    PanResponder,
+    Pressable,
+    StyleSheet,
+    Text,
+    View,
+    type GestureResponderEvent,
+    type PanResponderGestureState,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useThemeColors } from '@/hooks/use-theme-colors';
@@ -28,8 +38,30 @@ type ToastContextValue = {
 const TOAST_DEFAULT_DURATION_MS = 3200;
 const TOAST_ACTION_DURATION_MS = 5200;
 const TOAST_QUEUE_GAP_MS = 120;
+const TOAST_SWIPE_ACTIVATION_DISTANCE = 12;
+const TOAST_SWIPE_DISMISS_DISTANCE = 72;
+const TOAST_SWIPE_DISMISS_VELOCITY = 0.55;
+const TOAST_SWIPE_EXIT_DISTANCE = 420;
+const TOAST_SWIPE_TARGET_TEST_ID = 'toast-swipe-dismiss-target';
 
 const ToastContext = createContext<ToastContextValue | null>(null);
+
+const shouldStartToastSwipe = (_event: GestureResponderEvent, gestureState: PanResponderGestureState): boolean => {
+    const horizontalDistance = Math.abs(gestureState.dx);
+    const verticalDistance = Math.abs(gestureState.dy);
+    return horizontalDistance > TOAST_SWIPE_ACTIVATION_DISTANCE && horizontalDistance > verticalDistance * 1.4;
+};
+
+const getToastSwipeExitTranslateX = (gestureState: PanResponderGestureState): number | null => {
+    const horizontalDistance = Math.abs(gestureState.dx);
+    const horizontalVelocity = Math.abs(gestureState.vx);
+    if (horizontalDistance < TOAST_SWIPE_DISMISS_DISTANCE && horizontalVelocity < TOAST_SWIPE_DISMISS_VELOCITY) {
+        return null;
+    }
+
+    const direction = gestureState.dx !== 0 ? Math.sign(gestureState.dx) : Math.sign(gestureState.vx || 1);
+    return direction * TOAST_SWIPE_EXIT_DISTANCE;
+};
 
 export function ToastProvider({ children }: { children: ReactNode }) {
     const insets = useSafeAreaInsets();
@@ -38,6 +70,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const queueAdvanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const opacity = useRef(new Animated.Value(0)).current;
+    const translateX = useRef(new Animated.Value(0)).current;
     const translateY = useRef(new Animated.Value(18)).current;
     const nextToastId = useRef(1);
     const isDismissingRef = useRef(false);
@@ -62,7 +95,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         queueAdvanceTimerRef.current = null;
     }, []);
 
-    const dismissToast = useCallback(() => {
+    const dismissToast = useCallback((exitTranslateX = 0) => {
         clearTimer();
         clearQueueAdvanceTimer();
         if (!activeToastRef.current || isDismissingRef.current) return;
@@ -80,9 +113,16 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 easing: Easing.out(Easing.quad),
                 useNativeDriver: true,
             }),
+            Animated.timing(translateX, {
+                toValue: exitTranslateX,
+                duration: 180,
+                easing: Easing.out(Easing.quad),
+                useNativeDriver: true,
+            }),
         ]).start(() => {
             const advanceQueue = () => {
                 isDismissingRef.current = false;
+                translateX.setValue(0);
                 setQueue((current) => current.slice(1));
             };
             if (queueRef.current.length > 1) {
@@ -94,7 +134,33 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             }
             advanceQueue();
         });
-    }, [clearQueueAdvanceTimer, clearTimer, opacity, translateY]);
+    }, [clearQueueAdvanceTimer, clearTimer, opacity, translateX, translateY]);
+
+    const resetToastSwipeOffset = useCallback(() => {
+        Animated.timing(translateX, {
+            toValue: 0,
+            duration: 140,
+            easing: Easing.out(Easing.quad),
+            useNativeDriver: true,
+        }).start();
+    }, [translateX]);
+
+    const panResponder = useMemo(() => PanResponder.create({
+        onMoveShouldSetPanResponder: shouldStartToastSwipe,
+        onMoveShouldSetPanResponderCapture: shouldStartToastSwipe,
+        onPanResponderMove: (_event, gestureState) => {
+            translateX.setValue(gestureState.dx);
+        },
+        onPanResponderRelease: (_event, gestureState) => {
+            const exitTranslateX = getToastSwipeExitTranslateX(gestureState);
+            if (exitTranslateX !== null) {
+                dismissToast(exitTranslateX);
+                return;
+            }
+            resetToastSwipeOffset();
+        },
+        onPanResponderTerminate: resetToastSwipeOffset,
+    }), [dismissToast, resetToastSwipeOffset, translateX]);
 
     const showToast = useCallback((options: ToastOptions) => {
         setQueue((current) => [
@@ -113,8 +179,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         isDismissingRef.current = false;
 
         opacity.stopAnimation();
+        translateX.stopAnimation();
         translateY.stopAnimation();
         opacity.setValue(0);
+        translateX.setValue(0);
         translateY.setValue(18);
 
         Animated.parallel([
@@ -137,7 +205,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         }, toast.durationMs ?? TOAST_DEFAULT_DURATION_MS);
 
         return clearTimer;
-    }, [clearTimer, dismissToast, opacity, toast, translateY]);
+    }, [clearTimer, dismissToast, opacity, toast, translateX, translateY]);
 
     useEffect(() => () => {
         clearTimer();
@@ -170,13 +238,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                         ]}
                     >
                         <Animated.View
+                            testID={TOAST_SWIPE_TARGET_TEST_ID}
+                            {...panResponder.panHandlers}
                             style={[
                                 styles.toast,
                                 {
                                     backgroundColor: tc.cardBg,
                                     borderColor: tc.border,
                                     opacity,
-                                    transform: [{ translateY }],
+                                    transform: [{ translateX }, { translateY }],
                                 },
                             ]}
                         >

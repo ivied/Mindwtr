@@ -1,27 +1,103 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { ErrorBoundary } from '../ErrorBoundary';
-import { shallow, useTaskStore, TaskPriority, TimeEstimate, applyFilter, buildAdvancedFilterCriteriaChips, removeAdvancedFilterCriteriaChip, formatFocusTaskLimitText, generateUUID, getUsedTaskTokens, getFocusSequentialFirstTaskIds, hasActiveFilterCriteria, markSavedFilterDeleted, normalizeFocusTaskLimit, safeParseDate, safeParseDueDate, isDueForReview, isTaskInActiveProject, SAVED_FILTER_NO_PROJECT_ID, shouldShowTaskForStart, sortFocusNextActions, translateWithFallback } from '@mindwtr/core';
-import type { FilterCriteria, SavedFilter, Task, TaskEnergyLevel } from '@mindwtr/core';
+import { shallow, useTaskStore, TaskPriority, TimeEstimate, applyFilter, buildAdvancedFilterCriteriaChips, removeAdvancedFilterCriteriaChip, formatFocusTaskLimitText, formatTimeEstimateLabel, generateUUID, getUsedTaskTokens, getFocusSequentialFirstTaskIds, getProjectDeadlineBoosts, getTaskMetadataFilterVisibility, hasActiveFilterCriteria, markSavedFilterDeleted, normalizeFocusTaskLimit, safeParseDate, safeParseDueDate, isDueForReview, isTaskInActiveProject, SAVED_FILTER_NO_PROJECT_ID, shouldShowTaskForStart, sortFocusNextActions, sortTasksBySavedPreference, translateWithFallback } from '@mindwtr/core';
+import type { FilterCriteria, FocusGroupBy, MultiValueFilterMatchMode, ProjectDeadlineBoost, SavedFilter, SortField, Task, TaskEnergyLevel } from '@mindwtr/core';
 import { useLanguage } from '../../contexts/language-context';
 import { cn } from '../../lib/utils';
 import { useUiStore } from '../../store/ui-store';
-import { AlertCircle, Clock, Star, ArrowRight, Folder, CheckCircle2, Plus, X } from 'lucide-react';
+import { AlertCircle, Clock, ArrowRight, Folder, CheckCircle2, X, ChevronDown, ChevronRight } from 'lucide-react';
 import { usePerformanceMonitor } from '../../hooks/usePerformanceMonitor';
 import { checkBudget } from '../../config/performanceBudgets';
-import { projectMatchesAreaFilter, resolveAreaFilter, taskMatchesAreaFilter } from '../../lib/area-filter';
+import { projectMatchesAreaFilter, resolveAreaFilter, taskMatchesAreaFilter } from '@mindwtr/core';
+import { usePersistedViewState } from '../../hooks/usePersistedViewState';
 import { PomodoroPanel } from './PomodoroPanel';
 import { AgendaFiltersPanel, type AgendaActiveFilterChip, type AgendaProjectFilterOption } from './agenda/AgendaFiltersPanel';
 import { AgendaHeader } from './agenda/AgendaHeader';
 import { AgendaCollapsibleSection, AgendaProjectSection } from './agenda/AgendaSections';
 import { StoreTaskItem } from './list/StoreTaskItem';
-import { groupTasksByArea, groupTasksByContext, groupTasksByProject, type TaskGroup } from './list/next-grouping';
+import { groupTasksByArea, groupTasksByContext, groupTasksByEnergy, groupTasksByPerson, groupTasksByPriority, groupTasksByProject, groupTasksByTag, type NextGroupBy, type TaskGroup } from './list/next-grouping';
 import { PromptModal } from '../PromptModal';
 import { ConfirmModal } from '../ConfirmModal';
+import { dispatchNavigateEvent } from '../../lib/navigation-events';
+import { FocusStarIcon } from '../FocusStarIcon';
 
 const AGENDA_VIRTUALIZATION_THRESHOLD = 25;
 const NO_PROJECT_FILTER_ID = SAVED_FILTER_NO_PROJECT_ID;
 const AGENDA_ACTIVE_STATUSES: Task['status'][] = ['inbox', 'next', 'waiting', 'someday'];
+const DEFAULT_FOCUS_SORT_BY: SortField = 'default';
+const FOCUS_GROUP_BY_VALUES = new Set<FocusGroupBy>(['none', 'context', 'project', 'area', 'energy', 'priority', 'person', 'tag']);
+const FOCUS_VIEW_STATE_STORAGE_KEY = 'mindwtr:view:focus:v1';
+
+type FocusSectionKey = 'schedule' | 'nextActions' | 'reviewDue';
+type FocusGroupCollapseKey = Exclude<NextGroupBy, 'none'>;
+
+type FocusPersistedViewState = {
+    expandedSections: Record<FocusSectionKey, boolean>;
+    collapsedGroups: Partial<Record<FocusGroupCollapseKey, string[]>>;
+};
+
+const DEFAULT_FOCUS_VIEW_STATE: FocusPersistedViewState = {
+    expandedSections: {
+        schedule: true,
+        nextActions: true,
+        reviewDue: true,
+    },
+    collapsedGroups: {
+        context: [],
+        area: [],
+        project: [],
+        energy: [],
+        priority: [],
+        person: [],
+        tag: [],
+    },
+};
+
+function sanitizeFocusViewState(value: unknown, fallback: FocusPersistedViewState): FocusPersistedViewState {
+    const parsed = value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Partial<FocusPersistedViewState>
+        : {};
+    const expandedSections = parsed.expandedSections && typeof parsed.expandedSections === 'object' && !Array.isArray(parsed.expandedSections)
+        ? parsed.expandedSections as Partial<Record<FocusSectionKey, boolean>>
+        : {};
+    const collapsedGroups = parsed.collapsedGroups && typeof parsed.collapsedGroups === 'object' && !Array.isArray(parsed.collapsedGroups)
+        ? parsed.collapsedGroups as Partial<Record<FocusGroupCollapseKey, unknown>>
+        : {};
+    const sanitizeGroupIds = (ids: unknown, fallbackIds: string[] | undefined = []) => (
+        Array.isArray(ids)
+            ? Array.from(new Set(ids.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)))
+            : fallbackIds ?? []
+    );
+    return {
+        expandedSections: {
+            schedule: typeof expandedSections.schedule === 'boolean' ? expandedSections.schedule : fallback.expandedSections.schedule,
+            nextActions: typeof expandedSections.nextActions === 'boolean' ? expandedSections.nextActions : fallback.expandedSections.nextActions,
+            reviewDue: typeof expandedSections.reviewDue === 'boolean' ? expandedSections.reviewDue : fallback.expandedSections.reviewDue,
+        },
+        collapsedGroups: {
+            context: sanitizeGroupIds(collapsedGroups.context, fallback.collapsedGroups.context),
+            area: sanitizeGroupIds(collapsedGroups.area, fallback.collapsedGroups.area),
+            project: sanitizeGroupIds(collapsedGroups.project, fallback.collapsedGroups.project),
+            energy: sanitizeGroupIds(collapsedGroups.energy, fallback.collapsedGroups.energy),
+            priority: sanitizeGroupIds(collapsedGroups.priority, fallback.collapsedGroups.priority),
+            person: sanitizeGroupIds(collapsedGroups.person, fallback.collapsedGroups.person),
+            tag: sanitizeGroupIds(collapsedGroups.tag, fallback.collapsedGroups.tag),
+        },
+    };
+}
+
+function normalizeAgendaGroupBy(value: unknown): NextGroupBy {
+    return FOCUS_GROUP_BY_VALUES.has(value as FocusGroupBy) ? value as NextGroupBy : 'none';
+}
+
+function getFocusGroupCollapseKey(value: NextGroupBy): FocusGroupCollapseKey | null {
+    return value === 'none' ? null : value;
+}
+
+function getDomIdSegment(value: string): string {
+    return value.trim().replace(/[^a-zA-Z0-9_-]+/g, '-') || 'group';
+}
 
 function getAgendaScrollElement(containerElement: HTMLDivElement | null): HTMLElement | null {
     if (containerElement) {
@@ -38,14 +114,28 @@ function getAgendaScrollMargin(containerElement: HTMLDivElement, scrollElement: 
     return containerRect.top - scrollRect.top + scrollElement.scrollTop;
 }
 
+function getProjectDeadlineBoostLabel(
+    boost: ProjectDeadlineBoost | undefined,
+    resolveText: (key: string, fallback: string) => string,
+): string | undefined {
+    if (!boost) return undefined;
+    return boost.isOverdue
+        ? resolveText('focus.projectOverdue', 'Project overdue')
+        : resolveText('focus.projectDueToday', 'Project due today');
+}
+
 function buildFocusFilterCriteria({
+    locations,
     priorities,
     energyLevels,
     projects,
+    contextMatchMode,
     timeEstimates,
     tokens,
 }: {
+    contextMatchMode: MultiValueFilterMatchMode;
     energyLevels: TaskEnergyLevel[];
+    locations: string[];
     priorities: TaskPriority[];
     projects: string[];
     timeEstimates: TimeEstimate[];
@@ -55,8 +145,10 @@ function buildFocusFilterCriteria({
     const tags = tokens.filter((token) => token.trim().startsWith('#'));
     return {
         ...(contexts.length > 0 ? { contexts } : {}),
+        ...(contexts.length > 1 ? { contextMatchMode } : {}),
         ...(tags.length > 0 ? { tags } : {}),
         ...(projects.length > 0 ? { projects } : {}),
+        ...(locations.length > 0 ? { locations } : {}),
         ...(priorities.length > 0 ? { priority: priorities } : {}),
         ...(energyLevels.length > 0 ? { energy: energyLevels } : {}),
         ...(timeEstimates.length > 0 ? { timeEstimates } : {}),
@@ -71,6 +163,7 @@ function getSavedFilterDefaultName(chips: AgendaActiveFilterChip[], fallback: st
 function AgendaTaskList({
     tasks,
     buildFocusToggle,
+    getProjectDeadlineLabel,
     showListDetails,
     highlightTaskId,
 }: {
@@ -83,16 +176,14 @@ function AgendaTaskList({
         ariaLabel: string;
         alwaysVisible?: boolean;
     };
+    getProjectDeadlineLabel?: (taskId: string) => string | undefined;
     showListDetails: boolean;
     highlightTaskId: string | null;
 }) {
     const [containerElement, setContainerElement] = useState<HTMLDivElement | null>(null);
     const [scrollMargin, setScrollMargin] = useState(0);
     // Desktop views scroll inside the shared main content pane, not the window.
-    const scrollElement = useMemo(
-        () => getAgendaScrollElement(containerElement),
-        [containerElement]
-    );
+    const scrollElement = getAgendaScrollElement(containerElement);
     const shouldVirtualize = Boolean(scrollElement) && !highlightTaskId && tasks.length > AGENDA_VIRTUALIZATION_THRESHOLD;
     const rowVirtualizer = useVirtualizer({
         count: shouldVirtualize ? tasks.length : 0,
@@ -138,6 +229,7 @@ function AgendaTaskList({
                         showProjectBadgeInActions={false}
                         compactMetaEnabled={showListDetails}
                         enableDoubleClickEdit
+                        projectDeadlineLabel={getProjectDeadlineLabel?.(task.id)}
                     />
                 ))}
             </div>
@@ -175,6 +267,7 @@ function AgendaTaskList({
                             showProjectBadgeInActions={false}
                             compactMetaEnabled={showListDetails}
                             enableDoubleClickEdit
+                            projectDeadlineLabel={getProjectDeadlineLabel?.(task.id)}
                         />
                     </div>
                 );
@@ -185,7 +278,7 @@ function AgendaTaskList({
 
 export function AgendaView() {
     const perf = usePerformanceMonitor('AgendaView');
-    const { projects, areas, updateTask, updateSettings, settings, error, highlightTaskId, setHighlightTask } = useTaskStore(
+    const { projects, areas, updateTask, updateSettings, settings, error, highlightTaskId, setHighlightTask, taskChangeToken } = useTaskStore(
         (state) => ({
             projects: state.projects,
             areas: state.areas,
@@ -195,46 +288,48 @@ export function AgendaView() {
             error: state.error,
             highlightTaskId: state.highlightTaskId,
             setHighlightTask: state.setHighlightTask,
+            taskChangeToken: state.lastDataChangeAt,
         }),
         shallow
     );
     const getDerivedState = useTaskStore((state) => state.getDerivedState);
-    const { activeTasksByStatus, projectMap, sequentialProjectIds, tasksById } = getDerivedState();
+    const { activeTasksByStatus, projectMap, sequentialProjectIds, sequentialWithinSectionProjectIds, tasksById } = getDerivedState();
     const { t } = useLanguage();
-    const { showListDetails, nextGroupBy, top3Only, setListOptions, collapseAllTaskDetails } = useUiStore((state) => ({
+    const { showListDetails, nextGroupBy, top3Only, setListOptions, collapseAllTaskDetails, setProjectView } = useUiStore((state) => ({
         showListDetails: state.listOptions.showDetails,
         nextGroupBy: state.listOptions.nextGroupBy,
         top3Only: state.listOptions.focusTop3Only,
         setListOptions: state.setListOptions,
         collapseAllTaskDetails: state.collapseAllTaskDetails,
+        setProjectView: state.setProjectView,
     }));
     const [selectedTokens, setSelectedTokens] = useState<string[]>([]);
     const [selectedPriorities, setSelectedPriorities] = useState<TaskPriority[]>([]);
     const [selectedEnergyLevels, setSelectedEnergyLevels] = useState<TaskEnergyLevel[]>([]);
     const [selectedTimeEstimates, setSelectedTimeEstimates] = useState<TimeEstimate[]>([]);
     const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
+    const [contextMatchMode, setContextMatchMode] = useState<MultiValueFilterMatchMode>('all');
+    const [locationFilter, setLocationFilter] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
     const [filtersOpen, setFiltersOpen] = useState(false);
     const [activeSavedFilterId, setActiveSavedFilterId] = useState<string | null>(null);
+    const [focusSortBy, setFocusSortBy] = useState<SortField>(DEFAULT_FOCUS_SORT_BY);
     const [saveFilterPromptOpen, setSaveFilterPromptOpen] = useState(false);
     const [filterPendingDelete, setFilterPendingDelete] = useState<SavedFilter | null>(null);
+    const filterInputRef = useRef<HTMLInputElement | null>(null);
     const showFutureStarts = settings?.appearance?.showFutureStarts === true;
-    const [expandedSections, setExpandedSections] = useState({
-        schedule: true,
-        nextActions: true,
-        reviewDue: true,
-    });
+    const [persistedViewState, setPersistedViewState] = usePersistedViewState(
+        FOCUS_VIEW_STATE_STORAGE_KEY,
+        DEFAULT_FOCUS_VIEW_STATE,
+        sanitizeFocusViewState
+    );
+    const expandedSections = persistedViewState.expandedSections;
     const prioritiesEnabled = settings?.features?.priorities !== false;
     const timeEstimatesEnabled = settings?.features?.timeEstimates !== false;
     const pomodoroEnabled = settings?.features?.pomodoro === true;
     const focusTaskLimit = normalizeFocusTaskLimit(settings?.gtd?.focusTaskLimit);
-    const activePriorities = prioritiesEnabled ? selectedPriorities : [];
-    const activeTimeEstimates = timeEstimatesEnabled ? selectedTimeEstimates : [];
     const areaById = useMemo(() => new Map(areas.map((area) => [area.id, area])), [areas]);
-    const resolvedAreaFilter = useMemo(
-        () => resolveAreaFilter(settings?.filters?.areaId, areas),
-        [settings?.filters?.areaId, areas],
-    );
+    const resolvedAreaFilter = resolveAreaFilter(settings?.filters?.areaId, areas);
 
     useEffect(() => {
         if (!perf.enabled) return;
@@ -246,14 +341,12 @@ export function AgendaView() {
 
     const derivedActiveTasks = useMemo(() => (
         AGENDA_ACTIVE_STATUSES.flatMap((status) => activeTasksByStatus.get(status) ?? [])
-    ), [activeTasksByStatus]);
+    ), [activeTasksByStatus, taskChangeToken]);
 
     // Filter active tasks
     const baseActiveTasks = useMemo(() => (
         derivedActiveTasks.filter(t =>
-            // Agent-owned tasks live only in their @ai-agent lane — keep them out of Focus.
-            t.assignedTo !== '@ai-agent'
-            && isTaskInActiveProject(t, projectMap)
+            isTaskInActiveProject(t, projectMap)
             && taskMatchesAreaFilter(t, resolvedAreaFilter, projectMap, areaById)
         )
     ), [derivedActiveTasks, projectMap, resolvedAreaFilter, areaById]);
@@ -270,6 +363,16 @@ export function AgendaView() {
     const priorityOptions: TaskPriority[] = ['low', 'medium', 'high', 'urgent'];
     const energyLevelOptions: TaskEnergyLevel[] = ['low', 'medium', 'high'];
     const timeEstimateOptions: TimeEstimate[] = ['5min', '10min', '15min', '30min', '1hr', '2hr', '3hr', '4hr', '4hr+'];
+    const metadataFilterVisibility = useMemo(() => getTaskMetadataFilterVisibility(activeTasks, {
+        prioritiesEnabled,
+        timeEstimatesEnabled,
+    }), [activeTasks, prioritiesEnabled, timeEstimatesEnabled]);
+    const showPriorityFilters = metadataFilterVisibility.priority;
+    const showEnergyLevelFilters = metadataFilterVisibility.energyLevel;
+    const showTimeEstimateFilters = metadataFilterVisibility.timeEstimate;
+    const showLocationFilter = metadataFilterVisibility.location;
+    const activePriorities = showPriorityFilters ? selectedPriorities : [];
+    const activeTimeEstimates = showTimeEstimateFilters ? selectedTimeEstimates : [];
     const projectOptions = useMemo<AgendaProjectFilterOption[]>(() => {
         const activeProjectIds = new Set(
             activeTasks
@@ -290,39 +393,38 @@ export function AgendaView() {
                 dotColor: (project.areaId ? areaById.get(project.areaId)?.color : undefined) || project.color || undefined,
             }));
     }, [activeTasks, areaById, projects]);
-    const showNoProjectOption = useMemo(
-        () => activeTasks.some((task) => !task.projectId),
-        [activeTasks]
-    );
-    const formatEstimate = (estimate: TimeEstimate) => {
-        if (estimate.endsWith('min')) return estimate.replace('min', 'm');
-        if (estimate.endsWith('hr+')) return estimate.replace('hr+', 'h+');
-        if (estimate.endsWith('hr')) return estimate.replace('hr', 'h');
-        return estimate;
-    };
-    const savedFocusFilters = useMemo(
-        () => (settings?.savedFilters ?? []).filter((filter) => filter.view === 'focus' && !filter.deletedAt),
-        [settings?.savedFilters],
-    );
-    const activeSavedFilter = useMemo(
-        () => savedFocusFilters.find((filter) => filter.id === activeSavedFilterId) ?? null,
-        [activeSavedFilterId, savedFocusFilters],
-    );
-    const currentFilterCriteria = useMemo(() => buildFocusFilterCriteria({
+    const showNoProjectOption = activeTasks.some((task) => !task.projectId);
+    const formatEstimate = formatTimeEstimateLabel;
+    const savedFocusFilters = (settings?.savedFilters ?? []).filter((filter) => filter.view === 'focus' && !filter.deletedAt);
+    const activeSavedFilter = savedFocusFilters.find((filter) => filter.id === activeSavedFilterId) ?? null;
+    const effectiveFocusSortBy = activeSavedFilter?.sortBy ?? focusSortBy;
+    const effectiveNextGroupBy = normalizeAgendaGroupBy(activeSavedFilter?.groupBy ?? nextGroupBy);
+    const currentFilterCriteria = buildFocusFilterCriteria({
         tokens: selectedTokens,
+        contextMatchMode,
         projects: selectedProjects,
+        locations: showLocationFilter && locationFilter.trim() ? [locationFilter.trim()] : [],
         priorities: activePriorities,
-        energyLevels: selectedEnergyLevels,
+        energyLevels: showEnergyLevelFilters ? selectedEnergyLevels : [],
         timeEstimates: activeTimeEstimates,
-    }), [activePriorities, activeTimeEstimates, selectedEnergyLevels, selectedProjects, selectedTokens]);
+    });
     const rawEffectiveFilterCriteria = activeSavedFilter?.criteria ?? currentFilterCriteria;
-    const effectiveFilterCriteria = useMemo<FilterCriteria>(() => ({
+    const effectiveContextMatchMode = rawEffectiveFilterCriteria.contextMatchMode ?? 'all';
+    const effectiveFilterCriteria: FilterCriteria = {
         ...rawEffectiveFilterCriteria,
-        ...(prioritiesEnabled ? {} : { priority: undefined }),
-        ...(timeEstimatesEnabled ? {} : { timeEstimates: undefined, timeEstimateRange: undefined }),
-    }), [prioritiesEnabled, rawEffectiveFilterCriteria, timeEstimatesEnabled]);
+        ...(showPriorityFilters ? {} : { priority: undefined }),
+        ...(showEnergyLevelFilters ? {} : { energy: undefined }),
+        ...(showLocationFilter ? {} : { locations: undefined }),
+        ...(showTimeEstimateFilters ? {} : { timeEstimates: undefined, timeEstimateRange: undefined }),
+    };
     const hasCurrentFilterCriteria = hasActiveFilterCriteria(currentFilterCriteria);
     const hasFilters = hasActiveFilterCriteria(effectiveFilterCriteria);
+    const canSaveFocusPerspective = activeSavedFilterId === null
+        && (
+            hasCurrentFilterCriteria
+            || focusSortBy !== DEFAULT_FOCUS_SORT_BY
+            || effectiveNextGroupBy !== 'none'
+        );
     const normalizedSearchQuery = searchQuery.trim().toLowerCase();
     const matchesSearchQuery = useCallback((title: string) => {
         if (!normalizedSearchQuery) return true;
@@ -386,24 +488,31 @@ export function AgendaView() {
                 dotColor: (project.areaId ? areaById.get(project.areaId)?.color : undefined) || project.color || undefined,
             });
         });
-        activePriorities.forEach((priority) => {
+        (showPriorityFilters ? activePriorities : []).forEach((priority) => {
             chips.push({
                 id: `priority:${priority}`,
                 label: t(`priority.${priority}`),
             });
         });
-        selectedEnergyLevels.forEach((energyLevel) => {
+        (showEnergyLevelFilters ? selectedEnergyLevels : []).forEach((energyLevel) => {
             chips.push({
                 id: `energy:${energyLevel}`,
                 label: t(`energyLevel.${energyLevel}`),
             });
         });
-        activeTimeEstimates.forEach((estimate) => {
+        (showTimeEstimateFilters ? activeTimeEstimates : []).forEach((estimate) => {
             chips.push({
                 id: `time:${estimate}`,
                 label: formatEstimate(estimate),
             });
         });
+        const normalizedLocationFilter = locationFilter.trim();
+        if (showLocationFilter && normalizedLocationFilter && !activeSavedFilter) {
+            chips.push({
+                id: `location:${normalizedLocationFilter}`,
+                label: `${resolveText('taskEdit.locationLabel', 'Location')}: ${normalizedLocationFilter}`,
+            });
+        }
         if (activeSavedFilter) {
             chips.push(...buildAdvancedFilterCriteriaChips(effectiveFilterCriteria, {
                 getAreaColor: (areaId) => areaById.get(areaId)?.color,
@@ -429,14 +538,16 @@ export function AgendaView() {
         removeAdvancedSavedFilterCriterion,
         resolveText,
         selectedEnergyLevels,
+        locationFilter,
         selectedProjects,
         selectedTokens,
         t,
     ]);
-    const saveFilterDefaultName = useMemo(
-        () => getSavedFilterDefaultName(activeFilterChips, resolveText('savedFilters.defaultName', 'Focus filter')),
-        [activeFilterChips, resolveText],
-    );
+    const activeFilterCount = activeFilterChips.length
+        + (normalizedSearchQuery ? 1 : 0)
+        + (effectiveFocusSortBy !== DEFAULT_FOCUS_SORT_BY ? 1 : 0)
+        + (activeSavedFilterId && activeFilterChips.length === 0 && effectiveFocusSortBy === DEFAULT_FOCUS_SORT_BY ? 1 : 0);
+    const saveFilterDefaultName = getSavedFilterDefaultName(activeFilterChips, resolveText('savedFilters.defaultName', 'Focus filter'));
 
     const { filteredActiveTasks, reviewDueCandidates } = useMemo(() => {
         const now = new Date();
@@ -470,13 +581,25 @@ export function AgendaView() {
                 return a.title.localeCompare(b.title);
             });
     }, [projects, matchesSearchQuery, resolvedAreaFilter, areaById]);
+    const handleOpenReviewProject = useCallback((projectId: string) => {
+        setProjectView({ selectedProjectId: projectId });
+        dispatchNavigateEvent('projects');
+    }, [setProjectView]);
     const hasTaskFilters = hasFilters || Boolean(normalizedSearchQuery);
     const showFiltersPanel = filtersOpen;
+    const shouldRenderFiltersPanel = filtersOpen
+        || hasTaskFilters
+        || focusSortBy !== DEFAULT_FOCUS_SORT_BY
+        || Boolean(activeSavedFilterId);
     useEffect(() => {
         if (activeSavedFilterId && !activeSavedFilter) {
             setActiveSavedFilterId(null);
         }
     }, [activeSavedFilter, activeSavedFilterId]);
+    useEffect(() => {
+        if (!filtersOpen) return;
+        filterInputRef.current?.focus();
+    }, [filtersOpen]);
     const toggleTokenFilter = (token: string) => {
         setActiveSavedFilterId(null);
         setSelectedTokens((prev) =>
@@ -507,13 +630,32 @@ export function AgendaView() {
             prev.includes(estimate) ? prev.filter((item) => item !== estimate) : [...prev, estimate]
         );
     };
+    const updateContextMatchMode = useCallback((mode: MultiValueFilterMatchMode) => {
+        setActiveSavedFilterId(null);
+        setContextMatchMode(mode);
+    }, []);
+    const updateLocationFilter = (value: string) => {
+        setActiveSavedFilterId(null);
+        setLocationFilter(value);
+    };
+    const updateFocusSortBy = useCallback((value: SortField) => {
+        setActiveSavedFilterId(null);
+        setFocusSortBy(value);
+    }, []);
+    const updateFocusGroupBy = useCallback((value: NextGroupBy) => {
+        setActiveSavedFilterId(null);
+        setListOptions({ nextGroupBy: value });
+    }, [setListOptions]);
     const clearFilters = () => {
         setActiveSavedFilterId(null);
+        setFocusSortBy(DEFAULT_FOCUS_SORT_BY);
         setSelectedTokens([]);
         setSelectedProjects([]);
+        setLocationFilter('');
         setSelectedPriorities([]);
         setSelectedEnergyLevels([]);
         setSelectedTimeEstimates([]);
+        setContextMatchMode('all');
     };
     const clearAllFilters = () => {
         clearFilters();
@@ -526,23 +668,28 @@ export function AgendaView() {
         const estimateSet = new Set<TimeEstimate>(timeEstimateOptions);
         setSelectedTokens([...(criteria.contexts ?? []), ...(criteria.tags ?? [])]);
         setSelectedProjects(criteria.projects ?? []);
+        setLocationFilter((criteria.locations ?? [])[0] ?? '');
         setSelectedPriorities((criteria.priority ?? []).filter((priority): priority is TaskPriority => (
             priority !== 'none' && prioritySet.has(priority)
         )));
         setSelectedEnergyLevels((criteria.energy ?? []).filter((energy): energy is TaskEnergyLevel => energySet.has(energy)));
         setSelectedTimeEstimates((criteria.timeEstimates ?? []).filter((estimate): estimate is TimeEstimate => estimateSet.has(estimate)));
+        setContextMatchMode(criteria.contextMatchMode ?? 'all');
+        setFocusSortBy(filter.sortBy ?? DEFAULT_FOCUS_SORT_BY);
         setActiveSavedFilterId(filter.id);
         setFiltersOpen(false);
     }, [energyLevelOptions, priorityOptions, timeEstimateOptions]);
     const handleSaveFilterConfirm = useCallback((name: string) => {
         const trimmedName = name.trim();
-        if (!trimmedName || !hasCurrentFilterCriteria) return;
+        if (!trimmedName || !canSaveFocusPerspective) return;
         const nowIso = new Date().toISOString();
         const nextFilter: SavedFilter = {
             id: generateUUID(),
             name: trimmedName,
             view: 'focus',
             criteria: currentFilterCriteria,
+            ...(focusSortBy !== DEFAULT_FOCUS_SORT_BY ? { sortBy: focusSortBy } : {}),
+            ...(effectiveNextGroupBy !== 'none' ? { groupBy: effectiveNextGroupBy } : {}),
             createdAt: nowIso,
             updatedAt: nowIso,
         };
@@ -552,7 +699,7 @@ export function AgendaView() {
             setSaveFilterPromptOpen(false);
             setActiveSavedFilterId(nextFilter.id);
         }).catch(() => undefined);
-    }, [currentFilterCriteria, hasCurrentFilterCriteria, settings?.savedFilters, updateSettings]);
+    }, [canSaveFocusPerspective, currentFilterCriteria, effectiveNextGroupBy, focusSortBy, settings?.savedFilters, updateSettings]);
     const handleDeleteSavedFilterConfirm = useCallback(() => {
         if (!filterPendingDelete) return;
         const deleteId = filterPendingDelete.id;
@@ -565,13 +712,19 @@ export function AgendaView() {
         }).catch(() => undefined);
     }, [activeSavedFilterId, filterPendingDelete, settings?.savedFilters, updateSettings]);
     useEffect(() => {
-        if (!prioritiesEnabled && selectedPriorities.length > 0) {
+        if (!showPriorityFilters && selectedPriorities.length > 0) {
             setSelectedPriorities([]);
         }
-        if (!timeEstimatesEnabled && selectedTimeEstimates.length > 0) {
+        if (!showEnergyLevelFilters && selectedEnergyLevels.length > 0) {
+            setSelectedEnergyLevels([]);
+        }
+        if (!showLocationFilter && locationFilter.trim().length > 0) {
+            setLocationFilter('');
+        }
+        if (!showTimeEstimateFilters && selectedTimeEstimates.length > 0) {
             setSelectedTimeEstimates([]);
         }
-    }, [prioritiesEnabled, timeEstimatesEnabled, selectedPriorities.length, selectedTimeEstimates.length]);
+    }, [locationFilter, selectedEnergyLevels.length, selectedPriorities.length, selectedTimeEstimates.length, showEnergyLevelFilters, showLocationFilter, showPriorityFilters, showTimeEstimateFilters]);
 
     useEffect(() => {
         if (!highlightTaskId) return;
@@ -583,10 +736,18 @@ export function AgendaView() {
         return () => window.clearTimeout(timer);
     }, [highlightTaskId, setHighlightTask]);
     // Today's Focus: tasks marked as isFocusedToday.
-    const focusedTasks = useMemo(() =>
-        filteredActiveTasks.filter(t => t.isFocusedToday),
-        [filteredActiveTasks]
-    );
+    const sortBySavedPerspective = useCallback((items: Task[]) => {
+        if (effectiveFocusSortBy === DEFAULT_FOCUS_SORT_BY) return items;
+        return sortTasksBySavedPreference(items, effectiveFocusSortBy, {
+            projects,
+            prioritizeByPriority: prioritiesEnabled,
+            sortOrder: activeSavedFilter?.sortOrder,
+        });
+    }, [activeSavedFilter?.sortOrder, effectiveFocusSortBy, prioritiesEnabled, projects]);
+
+    const focusedTasks = useMemo(() => (
+        sortBySavedPerspective(filteredActiveTasks.filter(t => t.isFocusedToday))
+    ), [filteredActiveTasks, sortBySavedPerspective]);
 
     // Categorize tasks
     const sections = useMemo(() => {
@@ -612,7 +773,10 @@ export function AgendaView() {
                 return aCreated - bCreated;
             });
         };
-        const sequentialFirstTasks = getFocusSequentialFirstTaskIds(baseActiveTasks, sequentialProjectIds, { now });
+        const sequentialFirstTasks = getFocusSequentialFirstTaskIds(baseActiveTasks, sequentialProjectIds, {
+            now,
+            sectionScopedProjectIds: sequentialWithinSectionProjectIds,
+        });
         const isSequentialBlocked = (task: Task) => {
             if (!task.projectId) return false;
             if (!sequentialProjectIds.has(task.projectId)) return false;
@@ -638,6 +802,9 @@ export function AgendaView() {
             if (isSequentialBlocked(task)) return false;
             return !scheduleIds.has(task.id);
         });
+        const projectDeadlineBoosts = effectiveFocusSortBy === DEFAULT_FOCUS_SORT_BY
+            ? getProjectDeadlineBoosts(nextActions, projects, { now })
+            : new Map<string, ProjectDeadlineBoost>();
         const reviewDue = reviewDueCandidates.filter(t => !t.isFocusedToday);
         const scheduleSortTime = (task: Task) => {
             const due = safeParseDueDate(task.dueDate)?.getTime();
@@ -648,18 +815,46 @@ export function AgendaView() {
             return Number.POSITIVE_INFINITY;
         };
 
+        const sortSchedule = (items: Task[]) => (
+            effectiveFocusSortBy === DEFAULT_FOCUS_SORT_BY
+                ? sortWith(items, scheduleSortTime)
+                : sortBySavedPerspective(items)
+        );
+        const sortNextActions = (items: Task[]) => (
+            effectiveFocusSortBy === DEFAULT_FOCUS_SORT_BY
+                ? sortFocusNextActions(items, {
+                    now,
+                    prioritizeByPriority: prioritiesEnabled,
+                    projectDeadlineBoosts,
+                })
+                : sortBySavedPerspective(items)
+        );
+        const sortReviewDue = (items: Task[]) => (
+            effectiveFocusSortBy === DEFAULT_FOCUS_SORT_BY
+                ? sortWith(items, (task) => safeParseDate(task.reviewAt)?.getTime() ?? Number.POSITIVE_INFINITY)
+                : sortBySavedPerspective(items)
+        );
+
         return {
-            schedule: sortWith(schedule, scheduleSortTime),
-            nextActions: sortFocusNextActions(nextActions, {
-                now,
-                prioritizeByPriority: prioritiesEnabled,
-            }),
-            reviewDue: sortWith(reviewDue, (task) => safeParseDate(task.reviewAt)?.getTime() ?? Number.POSITIVE_INFINITY),
+            schedule: sortSchedule(schedule),
+            nextActions: sortNextActions(nextActions),
+            reviewDue: sortReviewDue(reviewDue),
+            projectDeadlineBoosts,
         };
-    }, [baseActiveTasks, filteredActiveTasks, reviewDueCandidates, prioritiesEnabled, sequentialProjectIds]);
+    }, [
+        baseActiveTasks,
+        effectiveFocusSortBy,
+        filteredActiveTasks,
+        prioritiesEnabled,
+        projects,
+        reviewDueCandidates,
+        sequentialProjectIds,
+        sequentialWithinSectionProjectIds,
+        sortBySavedPerspective,
+    ]);
     const nextActionGroups = useMemo(() => {
-        if (nextGroupBy === 'none') return [] as TaskGroup[];
-        if (nextGroupBy === 'area') {
+        if (effectiveNextGroupBy === 'none') return [] as TaskGroup[];
+        if (effectiveNextGroupBy === 'area') {
             return groupTasksByArea({
                 areas,
                 tasks: sections.nextActions,
@@ -667,53 +862,66 @@ export function AgendaView() {
                 generalLabel: resolveText('settings.general', 'General'),
             });
         }
-        if (nextGroupBy === 'project') {
+        if (effectiveNextGroupBy === 'project') {
             return groupTasksByProject({
                 tasks: sections.nextActions,
                 projectMap,
                 noProjectLabel: resolveText('taskEdit.noProjectOption', 'No project'),
             });
         }
+        if (effectiveNextGroupBy === 'priority') {
+            return groupTasksByPriority({
+                tasks: sections.nextActions,
+                getPriorityLabel: (priority) => t(`priority.${priority}`),
+                noPriorityLabel: resolveText('focus.group.noPriority', 'No priority'),
+            });
+        }
+        if (effectiveNextGroupBy === 'energy') {
+            return groupTasksByEnergy({
+                tasks: sections.nextActions,
+                getEnergyLabel: (energy) => t(`energyLevel.${energy}`),
+                noEnergyLabel: resolveText('focus.group.noEnergy', 'No energy'),
+            });
+        }
+        if (effectiveNextGroupBy === 'person') {
+            return groupTasksByPerson({
+                tasks: sections.nextActions,
+                unassignedLabel: resolveText('people.unassigned', 'Unassigned'),
+            });
+        }
+        if (effectiveNextGroupBy === 'tag') {
+            return groupTasksByTag({
+                tasks: sections.nextActions,
+                noTagLabel: resolveText('projects.noTags', 'No tags'),
+            });
+        }
         return groupTasksByContext({
             tasks: sections.nextActions,
             noContextLabel: resolveText('contexts.none', 'No context'),
         });
-    }, [areas, nextGroupBy, projectMap, resolveText, sections.nextActions]);
+    }, [areas, effectiveNextGroupBy, projectMap, resolveText, sections.nextActions, t]);
+    const activeGroupCollapseKey = getFocusGroupCollapseKey(effectiveNextGroupBy);
+    const collapsedNextActionGroupIds = useMemo(() => new Set(
+        activeGroupCollapseKey ? persistedViewState.collapsedGroups[activeGroupCollapseKey] ?? [] : []
+    ), [activeGroupCollapseKey, persistedViewState.collapsedGroups]);
+    const getProjectDeadlineLabel = useCallback((taskId: string) => (
+        getProjectDeadlineBoostLabel(sections.projectDeadlineBoosts.get(taskId), resolveText)
+    ), [resolveText, sections.projectDeadlineBoosts]);
     const focusedCount = focusedTasks.length;
     const { top3Tasks, remainingCount } = useMemo(() => {
         const byId = new Map<string, Task>();
         [...sections.schedule, ...sections.nextActions, ...sections.reviewDue].forEach((task) => {
-            byId.set(task.id, task);
+            if (!byId.has(task.id)) {
+                byId.set(task.id, task);
+            }
         });
         const candidates = Array.from(byId.values());
-        const priorityRank: Record<TaskPriority, number> = {
-            low: 1,
-            medium: 2,
-            high: 3,
-            urgent: 4,
-        };
-        const parseDue = (value?: string) => {
-            if (!value) return Number.POSITIVE_INFINITY;
-            const parsed = safeParseDueDate(value);
-            return parsed ? parsed.getTime() : Number.POSITIVE_INFINITY;
-        };
-        const sorted = [...candidates].sort((a, b) => {
-            if (prioritiesEnabled) {
-                const priorityDiff = (priorityRank[b.priority as TaskPriority] || 0) - (priorityRank[a.priority as TaskPriority] || 0);
-                if (priorityDiff !== 0) return priorityDiff;
-            }
-            const dueDiff = parseDue(a.dueDate) - parseDue(b.dueDate);
-            if (dueDiff !== 0) return dueDiff;
-            const aCreated = safeParseDate(a.createdAt)?.getTime() ?? 0;
-            const bCreated = safeParseDate(b.createdAt)?.getTime() ?? 0;
-            return aCreated - bCreated;
-        });
-        const top3 = sorted.slice(0, 3);
+        const top3 = candidates.slice(0, 3);
         return {
             top3Tasks: top3,
             remainingCount: Math.max(candidates.length - top3.length, 0),
         };
-    }, [sections, prioritiesEnabled]);
+    }, [sections]);
 
     const handleToggleFocus = useCallback((taskId: string) => {
         const task = tasksById.get(taskId);
@@ -747,12 +955,32 @@ export function AgendaView() {
         };
     }, [focusTaskLimit, focusedCount, handleToggleFocus, t]);
 
-    const toggleSection = useCallback((sectionKey: keyof typeof expandedSections) => {
-        setExpandedSections((current) => ({
+    const toggleSection = useCallback((sectionKey: FocusSectionKey) => {
+        setPersistedViewState((current) => ({
             ...current,
-            [sectionKey]: !current[sectionKey],
+            expandedSections: {
+                ...current.expandedSections,
+                [sectionKey]: !current.expandedSections[sectionKey],
+            },
         }));
-    }, []);
+    }, [setPersistedViewState]);
+    const toggleNextActionGroup = useCallback((groupId: string) => {
+        const collapseKey = getFocusGroupCollapseKey(effectiveNextGroupBy);
+        if (!collapseKey) return;
+        setPersistedViewState((current) => {
+            const currentIds = current.collapsedGroups[collapseKey] ?? [];
+            const nextIds = currentIds.includes(groupId)
+                ? currentIds.filter((id) => id !== groupId)
+                : [...currentIds, groupId];
+            return {
+                ...current,
+                collapsedGroups: {
+                    ...current.collapsedGroups,
+                    [collapseKey]: nextIds,
+                },
+            };
+        });
+    }, [effectiveNextGroupBy, setPersistedViewState]);
 
     const nextActionsCount = sections.nextActions.length;
     const hasAgendaContent = focusedTasks.length > 0
@@ -760,7 +988,7 @@ export function AgendaView() {
         || sections.nextActions.length > 0
         || sections.reviewDue.length > 0
         || reviewDueProjects.length > 0;
-    const pomodoroTasks = useMemo(() => {
+    const pomodoroTasks = (() => {
         const ordered = [
             ...focusedTasks,
             ...sections.schedule,
@@ -773,7 +1001,7 @@ export function AgendaView() {
             byId.set(task.id, task);
         });
         return Array.from(byId.values());
-    }, [focusedTasks, sections]);
+    })();
     const handleToggleDetails = useCallback(() => {
         if (showListDetails) {
             collapseAllTaskDetails();
@@ -782,14 +1010,44 @@ export function AgendaView() {
         }
         setListOptions({ showDetails: true });
     }, [collapseAllTaskDetails, setListOptions, showListDetails]);
+    const todaysFocusSection = focusedTasks.length > 0 ? (
+        <div
+            data-testid="todays-focus-section"
+            className="rounded-xl border border-border/70 border-l-4 border-l-amber-400 bg-card/70 p-6 shadow-sm dark:border-border/60 dark:border-l-amber-400/80 dark:bg-card/60"
+        >
+            <h3 className="font-bold text-lg flex items-center gap-2 mb-4 text-foreground">
+                <FocusStarIcon className="w-5 h-5 text-yellow-500 dark:text-amber-300" filled />
+                {t('agenda.todaysFocus')}
+                <span className="text-sm font-normal text-muted-foreground">
+                    ({focusedCount}/{focusTaskLimit})
+                </span>
+            </h3>
+
+            <div className="divide-y divide-border/30">
+                {focusedTasks.map(task => (
+                    <StoreTaskItem
+                        key={task.id}
+                        taskId={task.id}
+                        buildFocusToggle={buildFocusToggle}
+                        showProjectBadgeInActions={false}
+                        compactMetaEnabled={showListDetails}
+                        enableDoubleClickEdit
+                    />
+                ))}
+            </div>
+        </div>
+    ) : null;
 
     return (
         <ErrorBoundary>
             <div className="space-y-6 w-full">
             <AgendaHeader
+                filterCount={activeFilterCount}
+                filtersOpen={filtersOpen}
                 nextActionsCount={nextActionsCount}
-                nextGroupBy={nextGroupBy}
-                onChangeGroupBy={(value) => setListOptions({ nextGroupBy: value })}
+                nextGroupBy={effectiveNextGroupBy}
+                onChangeGroupBy={updateFocusGroupBy}
+                onToggleFilters={() => setFiltersOpen((prev) => !prev)}
                 onToggleDetails={handleToggleDetails}
                 onToggleTop3={() => setListOptions({ focusTop3Only: !top3Only })}
                 resolveText={resolveText}
@@ -798,101 +1056,107 @@ export function AgendaView() {
                 top3Only={top3Only}
             />
 
-            <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                <button
-                    type="button"
-                    onClick={clearAllFilters}
-                    aria-pressed={!hasTaskFilters}
-                    className={cn(
-                        'shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
-                        !hasTaskFilters
-                            ? 'border-primary bg-primary text-primary-foreground'
-                            : 'border-border bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground',
-                    )}
-                >
-                    {resolveText('common.all', 'All')}
-                </button>
-                {savedFocusFilters.map((filter) => {
-                    const isActive = activeSavedFilterId === filter.id;
-                    return (
-                        <div key={filter.id} className="inline-flex shrink-0 items-center">
-                            <button
-                                type="button"
-                                onClick={() => applySavedFocusFilter(filter)}
-                                aria-pressed={isActive}
-                                className={cn(
-                                    'inline-flex max-w-[220px] shrink-0 items-center gap-1.5 border px-3 py-1.5 text-xs font-medium transition-colors',
-                                    isActive ? 'rounded-l-full rounded-r-none' : 'rounded-full',
-                                    isActive
-                                        ? 'border-primary bg-primary text-primary-foreground'
-                                        : 'border-border bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground',
-                                )}
-                            >
-                                {filter.icon && <span aria-hidden="true">{filter.icon}</span>}
-                                <span className="truncate">{filter.name}</span>
-                            </button>
-                            {isActive && (
+            {savedFocusFilters.length > 0 && (
+                <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                    <button
+                        type="button"
+                        onClick={clearAllFilters}
+                        aria-pressed={!hasTaskFilters && !activeSavedFilterId && focusSortBy === DEFAULT_FOCUS_SORT_BY}
+                        className={cn(
+                            'shrink-0 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+                            !hasTaskFilters && !activeSavedFilterId && focusSortBy === DEFAULT_FOCUS_SORT_BY
+                                ? 'border-primary bg-primary text-primary-foreground'
+                                : 'border-border bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground',
+                        )}
+                    >
+                        {resolveText('common.all', 'All')}
+                    </button>
+                    {savedFocusFilters.map((filter) => {
+                        const isActive = activeSavedFilterId === filter.id;
+                        return (
+                            <div key={filter.id} className="inline-flex shrink-0 items-center">
                                 <button
                                     type="button"
-                                    onClick={() => setFilterPendingDelete(filter)}
-                                    aria-label={`${resolveText('common.delete', 'Delete')} ${resolveText('savedFilters.label', 'saved filter')} ${filter.name}`}
-                                    title={`${resolveText('common.delete', 'Delete')} ${filter.name}`}
-                                    className="inline-flex h-[30px] w-7 shrink-0 items-center justify-center rounded-l-none rounded-r-full border border-l-0 border-primary bg-primary text-primary-foreground transition-colors hover:bg-primary/90"
+                                    onClick={() => applySavedFocusFilter(filter)}
+                                    aria-pressed={isActive}
+                                    className={cn(
+                                        'inline-flex max-w-[220px] shrink-0 items-center gap-1.5 border px-3 py-1.5 text-xs font-medium transition-colors',
+                                        isActive ? 'rounded-l-full rounded-r-none' : 'rounded-full',
+                                        isActive
+                                            ? 'border-primary bg-primary text-primary-foreground'
+                                            : 'border-border bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground',
+                                    )}
                                 >
-                                    <X className="h-3.5 w-3.5" aria-hidden="true" />
+                                    {filter.icon && <span aria-hidden="true">{filter.icon}</span>}
+                                    <span className="truncate">{filter.name}</span>
                                 </button>
-                            )}
-                        </div>
-                    );
-                })}
-                <button
-                    type="button"
-                    onClick={() => {
-                        setActiveSavedFilterId(null);
-                        setFiltersOpen(true);
-                    }}
-                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border bg-muted/50 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                    aria-label={resolveText('savedFilters.new', 'New saved filter')}
-                    title={resolveText('savedFilters.new', 'New saved filter')}
-                >
-                    <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                </button>
-            </div>
+                                {isActive && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setFilterPendingDelete(filter)}
+                                        aria-label={`${resolveText('common.delete', 'Delete')} ${resolveText('savedFilters.label', 'saved filter')} ${filter.name}`}
+                                        title={`${resolveText('common.delete', 'Delete')} ${filter.name}`}
+                                        className="inline-flex h-[30px] w-7 shrink-0 items-center justify-center rounded-l-none rounded-r-full border border-l-0 border-primary bg-primary text-primary-foreground transition-colors hover:bg-primary/90"
+                                    >
+                                        <X className="h-3.5 w-3.5" aria-hidden="true" />
+                                    </button>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+            )}
 
             {pomodoroEnabled && <PomodoroPanel tasks={pomodoroTasks} />}
 
-            <AgendaFiltersPanel
-                allTokens={allTokens}
-                activeFilterChips={activeFilterChips}
-                canSaveFilter={hasCurrentFilterCriteria && activeSavedFilterId === null}
-                energyLevelOptions={energyLevelOptions}
-                formatEstimate={formatEstimate}
-                hasFilters={hasFilters}
-                onClearFilters={clearFilters}
-                onSaveFilter={() => setSaveFilterPromptOpen(true)}
-                onSearchChange={setSearchQuery}
-                onToggleEnergy={toggleEnergyFilter}
-                onToggleFiltersOpen={() => setFiltersOpen((prev) => !prev)}
-                onToggleProject={toggleProjectFilter}
-                onTogglePriority={togglePriorityFilter}
-                onToggleTime={toggleTimeFilter}
-                onToggleToken={toggleTokenFilter}
-                prioritiesEnabled={prioritiesEnabled}
-                projectOptions={projectOptions}
-                priorityOptions={priorityOptions}
-                searchQuery={searchQuery}
-                saveFilterLabel={resolveText('savedFilters.save', 'Save')}
-                selectedEnergyLevels={selectedEnergyLevels}
-                selectedProjects={selectedProjects}
-                selectedPriorities={selectedPriorities}
-                selectedTimeEstimates={selectedTimeEstimates}
-                selectedTokens={selectedTokens}
-                showNoProjectOption={showNoProjectOption}
-                showFiltersPanel={showFiltersPanel}
-                t={t}
-                timeEstimateOptions={timeEstimateOptions}
-                timeEstimatesEnabled={timeEstimatesEnabled}
-            />
+            {shouldRenderFiltersPanel && (
+                <AgendaFiltersPanel
+                    allTokens={allTokens}
+                    activeFilterChips={activeFilterChips}
+                    canSaveFilter={canSaveFocusPerspective}
+                    contextMatchMode={effectiveContextMatchMode}
+                    contextMatchModeLabels={{
+                        title: resolveText('filters.contextMatchMode', 'Context match'),
+                        any: resolveText('filters.matchAny', 'Any'),
+                        all: resolveText('common.all', 'All'),
+                    }}
+                    energyLevelOptions={energyLevelOptions}
+                    focusSortBy={effectiveFocusSortBy}
+                    formatEstimate={formatEstimate}
+                    hasFilters={activeFilterCount > 0}
+                    locationFilter={locationFilter}
+                    showEnergyLevelFilters={showEnergyLevelFilters}
+                    showLocationFilter={showLocationFilter}
+                    onClearFilters={clearAllFilters}
+                    onLocationChange={updateLocationFilter}
+                    onSaveFilter={() => setSaveFilterPromptOpen(true)}
+                    onContextMatchModeChange={updateContextMatchMode}
+                    onSearchChange={setSearchQuery}
+                    onSortChange={updateFocusSortBy}
+                    onToggleEnergy={toggleEnergyFilter}
+                    onToggleFiltersOpen={() => setFiltersOpen((prev) => !prev)}
+                    onToggleProject={toggleProjectFilter}
+                    onTogglePriority={togglePriorityFilter}
+                    onToggleTime={toggleTimeFilter}
+                    onToggleToken={toggleTokenFilter}
+                    showPriorityFilters={showPriorityFilters}
+                    projectOptions={projectOptions}
+                    priorityOptions={priorityOptions}
+                    searchInputRef={filterInputRef}
+                    searchQuery={searchQuery}
+                    saveFilterLabel={resolveText('savedFilters.save', 'Save')}
+                    selectedEnergyLevels={selectedEnergyLevels}
+                    selectedProjects={selectedProjects}
+                    selectedPriorities={selectedPriorities}
+                    selectedTimeEstimates={selectedTimeEstimates}
+                    selectedTokens={selectedTokens}
+                    showNoProjectOption={showNoProjectOption}
+                    showFiltersPanel={showFiltersPanel}
+                    t={t}
+                    timeEstimateOptions={timeEstimateOptions}
+                    showTimeEstimateFilters={showTimeEstimateFilters}
+                />
+            )}
 
             {error && (
                 <div
@@ -926,17 +1190,20 @@ export function AgendaView() {
 
             {top3Only ? (
                 <div className="space-y-4">
+                    {todaysFocusSection}
                     <div className="space-y-2">
                         <h3 className="font-semibold">{t('agenda.top3Title')}</h3>
-                                {top3Tasks.length > 0 ? (
+                        {top3Tasks.length > 0 ? (
                             <div className="divide-y divide-border/30">
                                 {top3Tasks.map(task => (
                                     <StoreTaskItem
                                         key={task.id}
                                         taskId={task.id}
+                                        buildFocusToggle={buildFocusToggle}
                                         showProjectBadgeInActions={false}
                                         compactMetaEnabled={showListDetails}
                                         enableDoubleClickEdit
+                                        projectDeadlineLabel={getProjectDeadlineLabel(task.id)}
                                     />
                                 ))}
                             </div>
@@ -956,30 +1223,7 @@ export function AgendaView() {
                 </div>
             ) : (
                 <>
-                    {focusedTasks.length > 0 && (
-                        <div className="bg-gradient-to-r from-yellow-50 to-orange-50 dark:from-yellow-900/40 dark:to-amber-900/25 border border-yellow-200 dark:border-amber-500/30 rounded-xl p-6">
-                            <h3 className="font-bold text-lg flex items-center gap-2 mb-4 text-slate-900 dark:text-amber-100">
-                                <Star className="w-5 h-5 text-yellow-500 fill-yellow-500 dark:text-amber-300 dark:fill-amber-300" />
-                                {t('agenda.todaysFocus')}
-                                <span className="text-sm font-normal text-slate-600 dark:text-amber-200">
-                                    ({focusedCount}/{focusTaskLimit})
-                                </span>
-                            </h3>
-
-                            <div className="divide-y divide-border/30">
-                                {focusedTasks.map(task => (
-                                    <StoreTaskItem
-                                        key={task.id}
-                                        taskId={task.id}
-                                        buildFocusToggle={buildFocusToggle}
-                                        showProjectBadgeInActions={false}
-                                        compactMetaEnabled={showListDetails}
-                                        enableDoubleClickEdit
-                                    />
-                                ))}
-                            </div>
-                        </div>
-                    )}
+                    {todaysFocusSection}
 
                     {/* Other Sections */}
                     <div className="space-y-6">
@@ -1002,7 +1246,7 @@ export function AgendaView() {
                             </AgendaCollapsibleSection>
                         )}
 
-                        {nextGroupBy === 'none' ? (
+                        {effectiveNextGroupBy === 'none' ? (
                             sections.nextActions.length > 0 && (
                                 <AgendaCollapsibleSection
                                     title={t('agenda.nextActions')}
@@ -1016,6 +1260,7 @@ export function AgendaView() {
                                     <AgendaTaskList
                                         tasks={sections.nextActions}
                                         buildFocusToggle={buildFocusToggle}
+                                        getProjectDeadlineLabel={getProjectDeadlineLabel}
                                         showListDetails={showListDetails}
                                         highlightTaskId={highlightTaskId}
                                     />
@@ -1033,28 +1278,54 @@ export function AgendaView() {
                                     controlsId="agenda-section-nextActions"
                                 >
                                     <div className="space-y-2">
-                                        {nextActionGroups.map((group) => (
-                                            <div key={group.id} className="rounded-md border border-border/40 bg-card/30">
-                                                <div className={cn(
-                                                    'border-b border-border/30 px-3 py-2 text-xs font-semibold uppercase tracking-wide',
-                                                    group.muted ? 'text-muted-foreground' : 'text-foreground/90',
-                                                )}>
-                                                    <span className="inline-flex items-center gap-1.5">
-                                                        {group.dotColor && (
-                                                            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: group.dotColor }} aria-hidden="true" />
+                                        {nextActionGroups.map((group, index) => {
+                                            const collapsed = collapsedNextActionGroupIds.has(group.id);
+                                            const controlsId = `agenda-next-group-${getDomIdSegment(effectiveNextGroupBy)}-${index}-${getDomIdSegment(group.id)}`;
+                                            return (
+                                                <div key={group.id} className="overflow-hidden rounded-lg border border-border/50 bg-card/40">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => toggleNextActionGroup(group.id)}
+                                                        aria-expanded={!collapsed}
+                                                        aria-controls={controlsId}
+                                                        className={cn(
+                                                            'flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/30',
+                                                            'focus:outline-none focus:ring-2 focus:ring-primary/30',
+                                                            !collapsed && 'border-b border-border/30',
                                                         )}
-                                                        <span>{group.title}</span>
-                                                    </span>
-                                                    <span className="ml-2 text-muted-foreground">{group.tasks.length}</span>
+                                                    >
+                                                        <span className={cn(
+                                                            'inline-flex min-w-0 items-center gap-2 text-sm font-semibold',
+                                                            group.muted ? 'text-muted-foreground' : 'text-foreground',
+                                                        )}>
+                                                            {collapsed ? (
+                                                                <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                                                            ) : (
+                                                                <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                                                            )}
+                                                            {group.dotColor && (
+                                                                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: group.dotColor }} aria-hidden="true" />
+                                                            )}
+                                                            <span className="truncate">{group.title}</span>
+                                                        </span>
+                                                        <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                                                            {group.tasks.length}
+                                                        </span>
+                                                    </button>
+                                                    {!collapsed && (
+                                                        <div id={controlsId} className="ml-4 border-l border-border/40 pl-3">
+                                                            <AgendaTaskList
+                                                                tasks={group.tasks}
+                                                                buildFocusToggle={buildFocusToggle}
+                                                                getProjectDeadlineLabel={getProjectDeadlineLabel}
+                                                                showListDetails={showListDetails}
+                                                                highlightTaskId={highlightTaskId}
+                                                            />
+                                                        </div>
+                                                    )}
                                                 </div>
-                                                <AgendaTaskList
-                                                    tasks={group.tasks}
-                                                    buildFocusToggle={buildFocusToggle}
-                                                    showListDetails={showListDetails}
-                                                    highlightTaskId={highlightTaskId}
-                                                />
-                                            </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 </AgendaCollapsibleSection>
                             )
@@ -1082,6 +1353,7 @@ export function AgendaView() {
                         <AgendaProjectSection
                             title={t('agenda.reviewDueProjects') || 'Projects to review'}
                             icon={Folder}
+                            onProjectPress={handleOpenReviewProject}
                             projects={reviewDueProjects}
                             color="text-indigo-600"
                             t={t}

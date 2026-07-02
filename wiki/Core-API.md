@@ -35,6 +35,7 @@ interface Task {
     startTime?: string;            // ISO date string
     dueDate?: string;              // ISO date string
     recurrence?: Recurrence | RecurrenceRule;
+    showFutureRecurrence?: boolean; // Calendar-only preview of the next recurring occurrence
     tags: string[];                // e.g., ['#focused']
     contexts: string[];            // e.g., ['@home', '@work']
     checklist?: ChecklistItem[];   // Sub-items
@@ -97,6 +98,7 @@ interface Recurrence {
 - `count` stops the series after the total number of occurrences has been created.
 - `until` stops the series when the next generated task would land after the given date/time.
 - `completedOccurrences` is internal sync-safe metadata; clients should preserve it when round-tripping recurrence objects.
+- `showFutureRecurrence` belongs to the task, not the recurrence object. It asks Calendar to show one planning-only next occurrence; clients should preserve the boolean when round-tripping tasks.
 
 ### Project
 
@@ -157,6 +159,22 @@ interface Area {
 }
 ```
 
+### Person
+
+```typescript
+interface Person {
+    id: string;
+    name: string;
+    note?: string;
+    referenceLink?: string;
+    rev?: number;                  // Monotonic revision counter for sync
+    revBy?: string;                // Device ID that issued `rev`
+    createdAt: string;
+    updatedAt: string;
+    deletedAt?: string;            // Soft-delete tombstone for sync
+}
+```
+
 ### Attachment
 
 ```typescript
@@ -181,9 +199,10 @@ interface AppData {
     projects: Project[];
     sections: Section[];
     areas: Area[];
+    people?: Person[];
     settings: {
         theme?: 'light' | 'dark' | 'system';
-        language?: 'en' | 'zh' | 'zh-Hant' | 'es' | 'hi' | 'ar' | 'de' | 'ru' | 'ja' | 'fr' | 'pt' | 'pl' | 'ko' | 'it' | 'tr' | 'nl' | 'system';
+        language?: 'en' | 'vi' | 'zh' | 'zh-Hant' | 'es' | 'hi' | 'ar' | 'de' | 'ru' | 'ja' | 'fr' | 'pt' | 'pl' | 'ko' | 'cs' | 'it' | 'tr' | 'nl' | 'system';
         weekStart?: 'monday' | 'sunday';
         dateFormat?: string;
         timeFormat?: string;
@@ -237,6 +256,7 @@ function MyComponent() {
 | `tasks`     | `Task[]`              | All visible (non-deleted) tasks |
 | `projects`  | `Project[]`           | All visible projects            |
 | `areas`     | `Area[]`              | All areas                       |
+| `people`    | `Person[]`            | All visible managed people      |
 | `settings`  | `AppData['settings']` | App settings                    |
 | `isLoading` | `boolean`             | Loading state                   |
 | `error`     | `string \| null`      | Error message                   |
@@ -315,17 +335,33 @@ addArea(name: string, initialProps?: Partial<Area>): Promise<Area | null>;
 // Update
 updateArea(id: string, updates: Partial<Area>): Promise<StoreActionResult>;
 
-// Delete (soft, cascades to child projects/sections/tasks)
+// Delete (soft, detaches linked projects/tasks)
 deleteArea(id: string): Promise<StoreActionResult>;
 
-// Restore (restores children deleted by the same cascade)
+// Restore (restores the area tombstone only)
 restoreArea(id: string): Promise<StoreActionResult>;
 
 // Reorder
 reorderAreas(orderedIds: string[]): Promise<void>;
 ```
 
-Area delete/restore is intentionally cascading. A child project, section, or task that was deleted separately keeps its own tombstone when the area is restored.
+Area delete/restore intentionally avoids cascading tombstones. Deleting an area clears `areaId` and `areaTitle` from linked projects and clears direct task `areaId` values; sections and project tasks remain attached to their projects. Restoring an area does not reassign children that were detached while it was deleted.
+
+#### Person Operations
+
+```typescript
+// Create
+addPerson(name: string, initialProps?: Partial<Person>): Promise<Person | null>;
+
+// Update metadata
+updatePerson(id: string, updates: Partial<Person>): Promise<StoreActionResult>;
+
+// Rename and optionally update exact task assignments
+renamePerson(id: string, name: string, options?: { updateTasks?: boolean }): Promise<StoreActionResult>;
+
+// Delete (soft, does not clear task assignments)
+deletePerson(id: string): Promise<StoreActionResult>;
+```
 
 #### Section Operations
 

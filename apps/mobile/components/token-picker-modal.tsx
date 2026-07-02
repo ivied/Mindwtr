@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Modal,
   Pressable,
@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useLanguage } from '../contexts/language-context';
 import { useThemeColors } from '../hooks/use-theme-colors';
+import { useAndroidKeyboardInset } from '../lib/use-android-keyboard-inset';
 
 type TokenPickerModalProps = {
   visible: boolean;
@@ -35,6 +36,7 @@ export function TokenPickerModal({
 }: TokenPickerModalProps) {
   const { t } = useLanguage();
   const tc = useThemeColors();
+  const keyboardInset = useAndroidKeyboardInset(visible);
   const [query, setQuery] = useState('');
   const [selectedToken, setSelectedToken] = useState<string | null>(null);
 
@@ -60,7 +62,10 @@ export function TokenPickerModal({
       animationType="fade"
       onRequestClose={onClose}
     >
-      <Pressable style={styles.overlay} onPress={onClose}>
+      <Pressable
+        style={keyboardInset > 0 ? [styles.overlay, { paddingBottom: keyboardInset }] : styles.overlay}
+        onPress={onClose}
+      >
         <Pressable
           style={[styles.card, { backgroundColor: tc.cardBg, borderColor: tc.border }]}
           onPress={(event) => event.stopPropagation()}

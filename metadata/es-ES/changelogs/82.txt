@@ -1,0 +1,4 @@
+- Recordatorios repetidos para tareas con hora explicita.
+- Bulk Quick Add e importaciones TickTick y Obsidian mas seguras.
+- Filtros de tablero/proyecto, modelos locales de dictado e inicios relativos.
+- Mejor WebDAV, visibilidad de completadas, teclado, busqueda y titulos largos.

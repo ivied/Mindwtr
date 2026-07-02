@@ -18,14 +18,18 @@ import {
   ListChecks,
   Monitor,
   RefreshCw,
+  SlidersHorizontal,
   Sparkles,
+  X,
 } from "lucide-react";
 import {
   resolveDateLocaleTag,
   DEFAULT_ANTHROPIC_THINKING_BUDGET,
   safeFormatDate,
+  summarizeMergeStats,
   translateText,
   translateWithFallback,
+  submitFeedbackSubmission,
   useTaskStore,
   type AppData,
 } from "@mindwtr/core";
@@ -40,12 +44,14 @@ import {
 } from "../../lib/external-calendar-source";
 import { reportError } from "../../lib/report-error";
 import { SyncService } from "../../lib/sync-service";
-import { clearLog } from "../../lib/app-log";
+import { isSupportedProxyUrl, normalizeProxyUrl } from "../../lib/tauri-http";
+import { clearLog, readRecentLogText } from "../../lib/app-log";
 import {
   markSettingsOpenTrace,
   wrapSettingsOpenImport,
 } from "../../lib/settings-open-diagnostics";
 import {
+  getSettingsLabelFallback,
   labelFallback,
   labelKeyOverrides,
   type SettingsLabels,
@@ -66,8 +72,27 @@ import { useSyncSettings } from "./settings/useSyncSettings";
 import { useConfirmDialog } from "../../hooks/useConfirmDialog";
 import { usePerformanceMonitor } from "../../hooks/usePerformanceMonitor";
 import { checkBudget } from "../../config/performanceBudgets";
+import { useUiStore } from "../../store/ui-store";
+import {
+  DEFAULT_LOCAL_API_PORT,
+  getLocalApiServerStatus,
+  normalizeLocalApiPortInput,
+  setLocalApiServerConfig,
+  type LocalApiServerStatus,
+} from "../../lib/local-api-server";
+import {
+  getDesktopRenderingConfig,
+  setDesktopRenderingConfig,
+  type DesktopRenderingConfig,
+} from "../../lib/desktop-rendering";
+import {
+  dismissDesktopOnboardingHandoffHint,
+  isDesktopOnboardingHandoffHintDismissed,
+  type DesktopOnboardingHandoffPage,
+} from "../../lib/desktop-onboarding-events";
+import type { FeedbackSubmitInput } from "./settings/SettingsFeedbackModal";
 
-type SettingsPage =
+export type SettingsPage =
   | "main"
   | "gtd"
   | "manage"
@@ -76,7 +101,12 @@ type SettingsPage =
   | "data"
   | "integrations"
   | "ai"
+  | "advanced"
   | "about";
+
+export type SettingsOnboardingHintPage = DesktopOnboardingHandoffPage;
+
+const FEEDBACK_ENDPOINT_URL = String(import.meta.env.VITE_FEEDBACK_ENDPOINT_URL || '').trim();
 
 const SettingsMainPage = lazy(
   wrapSettingsOpenImport("page-chunk:main", () =>
@@ -134,6 +164,13 @@ const SettingsDataPage = lazy(
     })),
   ),
 );
+const SettingsAdvancedPage = lazy(
+  wrapSettingsOpenImport("page-chunk:advanced", () =>
+    import("./settings/SettingsAdvancedPage").then((m) => ({
+      default: m.SettingsAdvancedPage,
+    })),
+  ),
+);
 const SettingsAboutPage = lazy(
   wrapSettingsOpenImport("page-chunk:about", () =>
     import("./settings/SettingsAboutPage").then((m) => ({
@@ -144,6 +181,7 @@ const SettingsAboutPage = lazy(
 
 const LANGUAGES: { id: Language; label: string; native: string }[] = [
   { id: "en", label: "English", native: "English" },
+  { id: "vi", label: "Vietnamese", native: "Tiếng Việt" },
   { id: "zh", label: "Chinese (Simplified)", native: "中文（简体）" },
   { id: "zh-Hant", label: "Chinese (Traditional)", native: "中文（繁體）" },
   { id: "es", label: "Spanish", native: "Español" },
@@ -155,9 +193,11 @@ const LANGUAGES: { id: Language; label: string; native: string }[] = [
   { id: "fr", label: "French", native: "Français" },
   { id: "pt", label: "Portuguese", native: "Português" },
   { id: "pl", label: "Polish", native: "Polski" },
+  { id: "cs", label: "Czech", native: "Čeština" },
   { id: "ko", label: "Korean", native: "한국어" },
   { id: "it", label: "Italian", native: "Italiano" },
   { id: "tr", label: "Turkish", native: "Türkçe" },
+  { id: "nl", label: "Dutch", native: "Nederlands" },
 ];
 
 const maskCalendarUrl = (url: string): string => {
@@ -182,9 +222,26 @@ const maskCalendarUrl = (url: string): string => {
   return `${protocol}${host}/${suffix}`;
 };
 
-export function SettingsView() {
+type SettingsViewProps = {
+  initialPage?: SettingsPage;
+  onboardingHintPage?: SettingsOnboardingHintPage;
+  onResumeOnboarding?: () => void;
+};
+
+export function SettingsView({ initialPage, onboardingHintPage, onResumeOnboarding }: SettingsViewProps = {}) {
   const perf = usePerformanceMonitor("SettingsView");
-  const [page, setPage] = useState<SettingsPage>("main");
+  const [page, setPage] = useState<SettingsPage>(initialPage ?? "main");
+  const [dismissedOnboardingHintPages, setDismissedOnboardingHintPages] = useState<
+    Set<SettingsOnboardingHintPage>
+  >(() => {
+    const dismissed = new Set<SettingsOnboardingHintPage>();
+    (["sync", "data"] as SettingsOnboardingHintPage[]).forEach((hintPage) => {
+      if (isDesktopOnboardingHandoffHintDismissed(hintPage)) {
+        dismissed.add(hintPage);
+      }
+    });
+    return dismissed;
+  });
   const { language, setLanguage, t: translate } = useLanguage();
   const {
     style: keybindingStyle,
@@ -195,7 +252,13 @@ export function SettingsView() {
   } = useKeybindings();
   const settings =
     useTaskStore((state) => state.settings) ?? ({} as AppData["settings"]);
+  const areas = useTaskStore((state) => state.areas);
   const updateSettings = useTaskStore((state) => state.updateSettings);
+  const seedGettingStarted = useTaskStore((state) => state.seedGettingStarted);
+  const visibleDataCount = useTaskStore((state) => (
+    state.tasks.length + state.projects.length + state.sections.length + state.areas.length
+  ));
+  const showToast = useUiStore((state) => state.showToast);
   const isTauri = isTauriRuntime();
   const isFlatpak = isFlatpakRuntime();
   const isLinux = useMemo(() => {
@@ -215,6 +278,25 @@ export function SettingsView() {
     }
   }, [isTauri]);
   const [saved, setSaved] = useState(false);
+  const [localApiStatus, setLocalApiStatus] = useState<LocalApiServerStatus>({
+    enabled: false,
+    running: false,
+    port: DEFAULT_LOCAL_API_PORT,
+    url: null,
+    error: null,
+  });
+  const [localApiPortInput, setLocalApiPortInput] = useState(
+    String(DEFAULT_LOCAL_API_PORT),
+  );
+  const [localApiBusy, setLocalApiBusy] = useState(false);
+  const [localApiPortError, setLocalApiPortError] = useState("");
+  const [networkProxyUrl, setNetworkProxyUrl] = useState(() =>
+    normalizeProxyUrl(settings?.network?.proxyUrl),
+  );
+  const [desktopRenderingConfig, setDesktopRenderingConfigState] = useState<DesktopRenderingConfig>({
+    disableHardwareAcceleration: false,
+  });
+  const [desktopRenderingBusy, setDesktopRenderingBusy] = useState(false);
   const notificationsEnabled = settings?.notificationsEnabled !== false;
   const startDateNotificationsEnabled =
     settings?.startDateNotificationsEnabled !== false;
@@ -245,11 +327,59 @@ export function SettingsView() {
     setTimeout(() => setSaved(false), 2000);
   }, []);
 
+  useEffect(() => {
+    if (!initialPage) return;
+    setPage(initialPage);
+  }, [initialPage]);
+
+  useEffect(() => {
+    setNetworkProxyUrl(normalizeProxyUrl(settings?.network?.proxyUrl));
+  }, [settings?.network?.proxyUrl]);
+
+  const applyLocalApiStatus = useCallback((status: LocalApiServerStatus) => {
+    setLocalApiStatus(status);
+    setLocalApiPortInput(String(status.port || DEFAULT_LOCAL_API_PORT));
+    setLocalApiPortError("");
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    let cancelled = false;
+    getDesktopRenderingConfig()
+      .then((config) => {
+        if (!cancelled) setDesktopRenderingConfigState(config);
+      })
+      .catch((error) => {
+        if (!cancelled) reportError("Failed to read desktop rendering setting", error);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isTauri]);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    let cancelled = false;
+    getLocalApiServerStatus()
+      .then((status) => {
+        if (!cancelled) applyLocalApiStatus(status);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setLocalApiPortError(error instanceof Error ? error.message : String(error));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [applyLocalApiStatus, isTauri]);
+
   const {
     aiEnabled,
     aiProvider,
     aiModel,
     aiBaseUrl,
+    aiOpenAIExtraBodyParams,
     aiModelOptions,
     aiCopilotModel,
     aiCopilotOptions,
@@ -266,9 +396,12 @@ export function SettingsView() {
     speechFieldStrategy,
     speechApiKey,
     speechOfflineReady,
+    speechOfflineModelPath,
+    speechOfflineEstimatedSize,
     speechOfflineSize,
     speechDownloadState,
     speechDownloadError,
+    speechDownloadProgress,
     onUpdateAISettings,
     onUpdateSpeechSettings,
     onProviderChange,
@@ -299,10 +432,7 @@ export function SettingsView() {
   const [isCleaningAttachments, setIsCleaningAttachments] = useState(false);
 
   const t = useMemo(() => {
-    const labelsFallback =
-      language === "zh" || language === "zh-Hant"
-        ? labelFallback.zh
-        : labelFallback.en;
+    const labelsFallback = getSettingsLabelFallback(language);
     const result = {} as SettingsLabels;
     (Object.keys(labelFallback.en) as Array<keyof SettingsLabels>).forEach(
       (key) => {
@@ -313,6 +443,111 @@ export function SettingsView() {
     );
     return result;
   }, [language, translate]);
+
+  const handleDesktopRenderingToggle = useCallback(async (disableHardwareAcceleration: boolean) => {
+    if (!isTauri || desktopRenderingBusy) return;
+    setDesktopRenderingBusy(true);
+    try {
+      const config = await setDesktopRenderingConfig({ disableHardwareAcceleration });
+      setDesktopRenderingConfigState(config);
+      showSaved();
+    } catch (error) {
+      reportError("Failed to update desktop rendering setting", error);
+      showToast(error instanceof Error ? error.message : String(error), "error");
+    } finally {
+      setDesktopRenderingBusy(false);
+    }
+  }, [desktopRenderingBusy, isTauri, showSaved, showToast]);
+
+  const handleSaveNetworkProxy = useCallback(async () => {
+    const trimmedProxyUrl = normalizeProxyUrl(networkProxyUrl);
+    if (!isSupportedProxyUrl(trimmedProxyUrl)) {
+      showToast(t.networkProxyInvalid, "error");
+      return;
+    }
+    await updateSettings({
+      network: {
+        proxyUrl: trimmedProxyUrl || undefined,
+      },
+    });
+    setNetworkProxyUrl(trimmedProxyUrl);
+    showSaved();
+  }, [networkProxyUrl, showSaved, showToast, t.networkProxyInvalid, updateSettings]);
+
+  const handleLocalApiToggle = useCallback(
+    async (enabled: boolean) => {
+      if (!isTauri || localApiBusy) return;
+      const port = normalizeLocalApiPortInput(localApiPortInput);
+      if (!port) {
+        setLocalApiPortError(t.localApiPortInvalid);
+        return;
+      }
+      setLocalApiBusy(true);
+      try {
+        const status = await setLocalApiServerConfig({ enabled, port });
+        applyLocalApiStatus(status);
+        if (enabled && !status.running && status.error) {
+          setLocalApiPortError(status.error);
+          return;
+        }
+        showSaved();
+      } catch (error) {
+        setLocalApiPortError(error instanceof Error ? error.message : String(error));
+        reportError("Failed to update local API server", error);
+      } finally {
+        setLocalApiBusy(false);
+      }
+    },
+    [
+      applyLocalApiStatus,
+      isTauri,
+      localApiBusy,
+      localApiPortInput,
+      showSaved,
+      t.localApiPortInvalid,
+    ],
+  );
+
+  const handleLocalApiPortCommit = useCallback(async () => {
+    if (!isTauri || localApiBusy) return;
+    const port = normalizeLocalApiPortInput(localApiPortInput);
+    if (!port) {
+      setLocalApiPortError(t.localApiPortInvalid);
+      return;
+    }
+    if (port === localApiStatus.port) {
+      setLocalApiPortError("");
+      return;
+    }
+    setLocalApiBusy(true);
+    try {
+      const status = await setLocalApiServerConfig({
+        enabled: localApiStatus.enabled,
+        port,
+      });
+      applyLocalApiStatus(status);
+      if (localApiStatus.enabled && !status.running && status.error) {
+        setLocalApiPortError(status.error);
+        return;
+      }
+      showSaved();
+    } catch (error) {
+      setLocalApiPortError(error instanceof Error ? error.message : String(error));
+      reportError("Failed to update local API server port", error);
+    } finally {
+      setLocalApiBusy(false);
+    }
+  }, [
+    applyLocalApiStatus,
+    isTauri,
+    localApiBusy,
+    localApiPortInput,
+    localApiStatus.enabled,
+    localApiStatus.port,
+    showSaved,
+    t.localApiPortInvalid,
+  ]);
+
   const requestSettingsConfirmation = useCallback(
     ({ title, message }: { title: string; message: string }) =>
       requestConfirmation({
@@ -340,6 +575,24 @@ export function SettingsView() {
   });
   const { aboutPageProps, hasUpdateBadge, logPath, updateModalProps } =
     useSettingsAboutPage({ t });
+  const handleSubmitFeedback = useCallback(async (input: FeedbackSubmitInput) => {
+    const diagnosticsLogs = input.includeDiagnostics && input.category === 'bug'
+      ? await readRecentLogText()
+      : null;
+    await submitFeedbackSubmission(FEEDBACK_ENDPOINT_URL, {
+      category: input.category,
+      email: input.email,
+      message: input.message,
+      metadata: {
+        appVersion: aboutPageProps.appVersion,
+        installChannel: aboutPageProps.installChannel ?? undefined,
+        locale: language,
+        os: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
+        platform: 'desktop',
+      },
+      ...(diagnosticsLogs ? { diagnostics: { logs: diagnosticsLogs } } : {}),
+    });
+  }, [aboutPageProps.appVersion, aboutPageProps.installChannel, language]);
 
   useLayoutEffect(() => {
     markSettingsOpenTrace("settings-view-layout-effect", { page });
@@ -460,6 +713,31 @@ export function SettingsView() {
     showSaved();
   };
 
+  const handleAddGettingStartedContent = useCallback(async () => {
+    if (visibleDataCount > 0) {
+      const confirmed = await requestConfirmation({
+        title: "Add Getting Started content?",
+        description: "This adds a guided Getting Started project and sample inbox items to your current data. Existing Getting Started content will not be duplicated.",
+        confirmLabel: "Add content",
+        cancelLabel,
+      });
+      if (!confirmed) return;
+    }
+
+    try {
+      const result = await seedGettingStarted();
+      if (result.id) {
+        useUiStore.getState().setProjectView({ selectedProjectId: result.id });
+        showToast("Getting Started content is ready in Projects.", "success");
+        return;
+      }
+      showToast("Getting Started content was not created.", "info");
+    } catch (error) {
+      showToast("Failed to add Getting Started content.", "error");
+      reportError("Failed to add Getting Started content", error);
+    }
+  }, [cancelLabel, requestConfirmation, seedGettingStarted, showToast, visibleDataCount]);
+
   const attachmentsLastCleanupDisplay = useMemo(() => {
     if (!attachmentsLastCleanupAt) return "";
     return safeFormatDate(attachmentsLastCleanupAt, "Pp");
@@ -480,9 +758,7 @@ export function SettingsView() {
   const lastSyncDisplay = lastSyncAt
     ? safeFormatDate(lastSyncAt, "PPpp", lastSyncAt)
     : t.lastSyncNever;
-  const conflictCount =
-    (lastSyncStats?.tasks.conflicts || 0) +
-    (lastSyncStats?.projects.conflicts || 0);
+  const conflictCount = summarizeMergeStats(lastSyncStats).conflicts;
   const weeklyReviewEnabled = settings?.weeklyReviewEnabled === true;
   const weeklyReviewTime = settings?.weeklyReviewTime || "18:00";
   const weeklyReviewDay = Number.isFinite(settings?.weeklyReviewDay)
@@ -495,6 +771,7 @@ export function SettingsView() {
   const locale = resolveDateLocaleTag({
     language,
     dateFormat: mainPageProps.dateFormat,
+    calendarSystem: mainPageProps.calendarSystem,
     systemLocale,
   });
   const weekdayOptions = useMemo(
@@ -519,6 +796,8 @@ export function SettingsView() {
         return t.notifications;
       case "ai":
         return t.ai;
+      case "advanced":
+        return t.advanced;
       case "sync":
         return t.sync;
       case "data":
@@ -533,6 +812,35 @@ export function SettingsView() {
         return t.general;
     }
   }, [language, page, t]);
+  const activeOnboardingHintPage =
+    onboardingHintPage === page && !dismissedOnboardingHintPages.has(onboardingHintPage)
+      ? onboardingHintPage
+      : undefined;
+  const onboardingHintContent = useMemo(() => {
+    if (activeOnboardingHintPage === "sync") {
+      return {
+        title: "Recommended sync path",
+        body: "Dropbox is easiest for most cross-platform setups. Apple-only users can use iCloud. Use WebDAV or self-hosted if you already know you need custom storage.",
+      };
+    }
+    if (activeOnboardingHintPage === "data") {
+      return {
+        title: "Import before organizing",
+        body: "Pick the app you exported from, then use the Import guide for file formats and mappings. Imports add data; sync is configured separately.",
+      };
+    }
+    return null;
+  }, [activeOnboardingHintPage]);
+  const dismissOnboardingHint = useCallback(() => {
+    if (!activeOnboardingHintPage) return;
+    dismissDesktopOnboardingHandoffHint(activeOnboardingHintPage);
+    setDismissedOnboardingHintPages((current) => {
+      if (current.has(activeOnboardingHintPage)) return current;
+      const next = new Set(current);
+      next.add(activeOnboardingHintPage);
+      return next;
+    });
+  }, [activeOnboardingHintPage]);
 
   const navItems = useMemo<
     Array<{
@@ -672,6 +980,20 @@ export function SettingsView() {
         ],
       },
       {
+        id: "advanced",
+        icon: SlidersHorizontal,
+        label: t.advanced,
+        keywords: [
+          "automation",
+          "local api",
+          "localhost",
+          "port",
+          "mcp",
+          "Claude",
+          "LLM",
+        ],
+      },
+      {
         id: "about",
         icon: Info,
         label: t.about,
@@ -708,6 +1030,8 @@ export function SettingsView() {
     setCloudUrl,
     cloudToken,
     setCloudToken,
+    cloudRememberToken,
+    setCloudRememberToken,
     cloudAllowInsecureHttp,
     setCloudAllowInsecureHttp,
     cloudProvider,
@@ -737,6 +1061,7 @@ export function SettingsView() {
     handleExportBackup,
     handleRestoreBackup,
     handleImportTodoist,
+    handleImportTickTick,
     handleImportDgt,
     handleImportOmniFocus,
   } = useSyncSettings({
@@ -757,6 +1082,8 @@ export function SettingsView() {
     setObsidianInboxFile,
     obsidianTaskNotesIncludeArchived,
     setObsidianTaskNotesIncludeArchived,
+    obsidianDataviewMetadataEnabled,
+    setObsidianDataviewMetadataEnabled,
     obsidianNewTaskFormat,
     setObsidianNewTaskFormat,
     obsidianLastScannedAt,
@@ -790,13 +1117,21 @@ export function SettingsView() {
     newCalendarUrl,
     calendarError,
     systemCalendarPermission,
+    calendarPushEnabled,
+    calendarPushTargetCalendarId,
+    calendarPushTargets,
+    calendarPushLoading,
     setNewCalendarName,
     setNewCalendarUrl,
     handleAddCalendar,
     handleChooseLocalCalendarFile,
     handleToggleCalendar,
+    handleCalendarColorChange,
     handleRemoveCalendar,
     handleRequestSystemCalendarPermission,
+    handleToggleCalendarPush,
+    handleCalendarPushTargetChange,
+    handleRefreshCalendarPushTargets,
   } = useCalendarSettings({ showSaved, settings, updateSettings, isMac });
   const syncPreferences = settings?.syncPreferences ?? {};
   const handleUpdateSyncPreferences = useCallback(
@@ -824,12 +1159,13 @@ export function SettingsView() {
           updateSettings={updateSettings}
           showSaved={showSaved}
           autoArchiveDays={autoArchiveDays}
+          areas={areas}
         />
       );
     }
 
     if (page === "manage") {
-      return <SettingsManagePage t={t} translate={translate} />;
+      return <SettingsManagePage t={t} translate={translate} requestConfirmation={requestConfirmation} />;
     }
 
     if (page === "ai") {
@@ -840,6 +1176,7 @@ export function SettingsView() {
           aiProvider={aiProvider}
           aiModel={aiModel}
           aiBaseUrl={aiBaseUrl}
+          aiOpenAIExtraBodyParams={aiOpenAIExtraBodyParams}
           aiModelOptions={aiModelOptions}
           aiCopilotModel={aiCopilotModel}
           aiCopilotOptions={aiCopilotOptions}
@@ -857,9 +1194,12 @@ export function SettingsView() {
           speechFieldStrategy={speechFieldStrategy}
           speechApiKey={speechApiKey}
           speechOfflineReady={speechOfflineReady}
+          speechOfflineModelPath={speechOfflineModelPath}
+          speechOfflineEstimatedSize={speechOfflineEstimatedSize}
           speechOfflineSize={speechOfflineSize}
           speechDownloadState={speechDownloadState}
           speechDownloadError={speechDownloadError}
+          speechDownloadProgress={speechDownloadProgress}
           onUpdateAISettings={onUpdateAISettings}
           onUpdateSpeechSettings={onUpdateSpeechSettings}
           onProviderChange={onProviderChange}
@@ -906,21 +1246,30 @@ export function SettingsView() {
           externalCalendars={externalCalendars}
           showSystemCalendarSection={isMac}
           systemCalendarPermission={systemCalendarPermission}
+          calendarPushEnabled={calendarPushEnabled}
+          calendarPushTargetCalendarId={calendarPushTargetCalendarId}
+          calendarPushTargets={calendarPushTargets}
+          calendarPushLoading={calendarPushLoading}
           onCalendarNameChange={setNewCalendarName}
           onCalendarUrlChange={setNewCalendarUrl}
           onAddCalendar={handleAddCalendar}
           onChooseLocalCalendarFile={handleChooseLocalCalendarFile}
           onToggleCalendar={handleToggleCalendar}
+          onCalendarColorChange={handleCalendarColorChange}
           onRemoveCalendar={handleRemoveCalendar}
           onRequestSystemCalendarPermission={
             handleRequestSystemCalendarPermission
           }
+          onToggleCalendarPush={handleToggleCalendarPush}
+          onCalendarPushTargetChange={handleCalendarPushTargetChange}
+          onRefreshCalendarPushTargets={handleRefreshCalendarPushTargets}
           maskCalendarUrl={maskCalendarUrl}
           obsidianVaultPath={obsidianVaultPath}
           obsidianEnabled={obsidianEnabled}
           obsidianScanFoldersText={obsidianScanFoldersText}
           obsidianInboxFile={obsidianInboxFile}
           obsidianTaskNotesIncludeArchived={obsidianTaskNotesIncludeArchived}
+          obsidianDataviewMetadataEnabled={obsidianDataviewMetadataEnabled}
           obsidianNewTaskFormat={obsidianNewTaskFormat}
           obsidianLastScannedAt={obsidianLastScannedAt}
           obsidianHasVaultMarker={obsidianHasVaultMarker}
@@ -935,6 +1284,9 @@ export function SettingsView() {
           onObsidianInboxFileChange={setObsidianInboxFile}
           onObsidianTaskNotesIncludeArchivedChange={
             setObsidianTaskNotesIncludeArchived
+          }
+          onObsidianDataviewMetadataEnabledChange={
+            setObsidianDataviewMetadataEnabled
           }
           onObsidianNewTaskFormatChange={setObsidianNewTaskFormat}
           onBrowseObsidianVault={onBrowseObsidianVault}
@@ -979,6 +1331,7 @@ export function SettingsView() {
           onTestWebDavConnection={handleTestWebDavConnection}
           cloudUrl={cloudUrl}
           cloudToken={cloudToken}
+          cloudRememberToken={cloudRememberToken}
           cloudAllowInsecureHttp={cloudAllowInsecureHttp}
           cloudProvider={cloudProvider}
           dropboxAppKey={dropboxAppKey}
@@ -990,6 +1343,7 @@ export function SettingsView() {
           dropboxTestState={dropboxTestState}
           onCloudUrlChange={setCloudUrl}
           onCloudTokenChange={setCloudToken}
+          onCloudRememberTokenChange={setCloudRememberToken}
           onCloudAllowInsecureHttpChange={setCloudAllowInsecureHttp}
           onCloudProviderChange={handleSetCloudProvider}
           onSaveCloud={handleSaveCloud}
@@ -1023,6 +1377,7 @@ export function SettingsView() {
           onExportBackup={handleExportBackup}
           onRestoreBackup={handleRestoreBackup}
           onImportTodoist={handleImportTodoist}
+          onImportTickTick={handleImportTickTick}
           onImportDgt={handleImportDgt}
           onImportOmniFocus={handleImportOmniFocus}
         />
@@ -1045,8 +1400,10 @@ export function SettingsView() {
           onExportBackup={handleExportBackup}
           onRestoreBackup={handleRestoreBackup}
           onImportTodoist={handleImportTodoist}
+          onImportTickTick={handleImportTickTick}
           onImportDgt={handleImportDgt}
           onImportOmniFocus={handleImportOmniFocus}
+          onAddGettingStartedContent={handleAddGettingStartedContent}
           attachmentsLastCleanupDisplay={attachmentsLastCleanupDisplay}
           pendingRemoteDeleteCount={pendingRemoteDeleteCount}
           onClearPendingRemoteDeletes={handleClearPendingRemoteDeletes}
@@ -1056,8 +1413,37 @@ export function SettingsView() {
       );
     }
 
+    if (page === "advanced") {
+      return (
+        <SettingsAdvancedPage
+          t={t}
+          isTauri={isTauri}
+          localApiStatus={localApiStatus}
+          localApiPortInput={localApiPortInput}
+          localApiBusy={localApiBusy}
+          localApiPortError={localApiPortError}
+          networkProxyUrl={networkProxyUrl}
+          desktopRenderingConfig={desktopRenderingConfig}
+          desktopRenderingBusy={desktopRenderingBusy}
+          onLocalApiToggle={handleLocalApiToggle}
+          onLocalApiPortInputChange={setLocalApiPortInput}
+          onLocalApiPortCommit={handleLocalApiPortCommit}
+          onNetworkProxyUrlChange={setNetworkProxyUrl}
+          onSaveNetworkProxy={handleSaveNetworkProxy}
+          onDesktopRenderingToggle={handleDesktopRenderingToggle}
+        />
+      );
+    }
+
     if (page === "about") {
-      return <SettingsAboutPage t={t} {...aboutPageProps} />;
+      return (
+        <SettingsAboutPage
+          t={t}
+          {...aboutPageProps}
+          feedbackConfigured={Boolean(FEEDBACK_ENDPOINT_URL)}
+          onSubmitFeedback={handleSubmitFeedback}
+        />
+      );
     }
 
     return null;
@@ -1100,6 +1486,37 @@ export function SettingsView() {
                     </h2>
                   </div>
                 </header>
+                {onboardingHintContent ? (
+                  <div
+                    className="flex items-start gap-3 rounded-lg border border-primary/30 bg-primary/10 px-4 py-3 text-sm text-foreground"
+                    role="note"
+                  >
+                    <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium">{onboardingHintContent.title}</div>
+                      <div className="mt-0.5 text-xs leading-5 text-muted-foreground">
+                        {onboardingHintContent.body}
+                      </div>
+                    </div>
+                    {onResumeOnboarding ? (
+                      <button
+                        type="button"
+                        onClick={onResumeOnboarding}
+                        className="shrink-0 rounded-md border border-primary/30 bg-background/50 px-3 py-1.5 text-xs font-medium text-primary hover:bg-primary/10"
+                      >
+                        Continue setup
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={dismissOnboardingHint}
+                      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                      aria-label="Dismiss onboarding hint"
+                    >
+                      <X className="h-4 w-4" aria-hidden="true" />
+                    </button>
+                  </div>
+                ) : null}
                 <Suspense fallback={<PageFallback currentPage={page} />}>
                   {renderPage()}
                 </Suspense>

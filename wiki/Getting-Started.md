@@ -30,7 +30,7 @@ See [[Mobile Installation]] for detailed instructions.
 
 ## First Launch
 
-When you first open Mindwtr, you'll see the **Inbox** view. This is your capture zone.
+On a fresh install, Mindwtr asks whether you want to start fresh, import a backup, or connect sync. After setup, it opens the **Focus** view by default so today's calendar items and next actions are visible first. Capture new work into the **Inbox** whenever you need to park an idea quickly.
 
 ### The Basic Workflow
 

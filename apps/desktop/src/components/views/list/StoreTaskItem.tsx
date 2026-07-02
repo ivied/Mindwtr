@@ -1,5 +1,5 @@
 import { memo, useCallback, type ComponentProps } from 'react';
-import { type Task, useProjectById, useTaskById } from '@mindwtr/core';
+import { type RangeSelectionOptions, type Task, useProjectById, useTaskById } from '@mindwtr/core';
 import { TaskItem } from '../../TaskItem';
 
 type TaskItemProps = ComponentProps<typeof TaskItem>;
@@ -9,8 +9,9 @@ export type StoreTaskItemProps = Omit<TaskItemProps, 'task' | 'project' | 'focus
     taskId: string;
     index?: number;
     onSelectIndex?: (index: number) => void;
-    onToggleSelectId?: (id: string) => void;
+    onToggleSelectId?: (id: string, options?: RangeSelectionOptions) => void;
     buildFocusToggle?: (task: Task) => FocusToggle;
+    projectDeadlineLabel?: string;
 };
 
 export const StoreTaskItem = memo(function StoreTaskItem({
@@ -28,8 +29,8 @@ export const StoreTaskItem = memo(function StoreTaskItem({
             onSelectIndex?.(index);
         }
     }, [index, onSelectIndex]);
-    const handleToggleSelect = useCallback(() => {
-        onToggleSelectId?.(taskId);
+    const handleToggleSelect = useCallback((options?: RangeSelectionOptions) => {
+        onToggleSelectId?.(taskId, options);
     }, [onToggleSelectId, taskId]);
 
     if (!task) return null;

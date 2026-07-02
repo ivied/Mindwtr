@@ -5,6 +5,7 @@ import { WEEKDAY_ORDER } from './recurrence-constants';
 
 type UseTaskItemRecurrenceProps = {
     task: Task;
+    editStartTime: string;
     editDueDate: string;
     editRecurrence: RecurrenceRule | '';
     editRecurrenceRRule: string;
@@ -14,13 +15,14 @@ type UseTaskItemRecurrenceProps = {
 
 export function useTaskItemRecurrence({
     task,
+    editStartTime,
     editDueDate,
     editRecurrence,
     editRecurrenceRRule,
     setEditRecurrence,
     setEditRecurrenceRRule,
 }: UseTaskItemRecurrenceProps) {
-    const monthlyAnchorDate = safeParseDate(editDueDate) ?? safeParseDate(task.dueDate) ?? new Date();
+    const monthlyAnchorDate = safeParseDate(editDueDate || editStartTime || task.dueDate || task.startTime) ?? new Date();
     const monthlyWeekdayCode = WEEKDAY_ORDER[monthlyAnchorDate.getDay()];
 
     const monthlyRecurrence = useMemo(() => {

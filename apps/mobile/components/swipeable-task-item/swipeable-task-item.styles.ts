@@ -28,11 +28,15 @@ export const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,
+        minWidth: 0,
     },
     taskContent: {
         flex: 1,
+        minWidth: 0,
     },
     taskTitle: {
+        flex: 1,
+        minWidth: 0,
         fontSize: 15,
         fontWeight: '500',
         lineHeight: 20,
@@ -41,17 +45,10 @@ export const styles = StyleSheet.create({
         flex: 1,
     },
     focusButton: {
-        minWidth: 44,
-        minHeight: 44,
-        paddingHorizontal: 8,
-        paddingVertical: 8,
-        borderRadius: 10,
+        width: 44,
+        height: 44,
         justifyContent: 'center',
         alignItems: 'center',
-    },
-    focusButtonText: {
-        fontSize: 16,
-        fontWeight: '600',
     },
     taskDescription: {
         fontSize: 12,
@@ -74,8 +71,11 @@ export const styles = StyleSheet.create({
         maxWidth: '100%',
     },
     metaText: {
+        flexShrink: 1,
         fontSize: 12,
         fontWeight: '500',
+        lineHeight: 16,
+        minWidth: 0,
     },
     metaSeparator: {
         fontSize: 12,
@@ -89,7 +89,14 @@ export const styles = StyleSheet.create({
         color: '#7C3AED',
     },
     dueText: {
-        color: '#EF4444',
+        fontWeight: '600',
+    },
+    projectDeadlineText: {
+        color: '#F59E0B',
+        fontWeight: '600',
+    },
+    dateIssueText: {
+        color: '#F59E0B',
         fontWeight: '600',
     },
     projectDot: {
@@ -148,6 +155,13 @@ export const styles = StyleSheet.create({
         fontSize: 10,
         fontWeight: '600',
         textTransform: 'capitalize',
+    },
+    statusIconButton: {
+        minWidth: 44,
+        minHeight: 44,
+        marginLeft: 8,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     swipeActionLeft: {
         backgroundColor: '#10B981',

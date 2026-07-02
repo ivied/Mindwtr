@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { type Area, getUsedTaskTokens, type Project, type Task } from '@mindwtr/core';
 
-import { projectMatchesAreaFilter, type AreaFilterValue } from '@/lib/area-filter';
+import { projectMatchesAreaFilter, type AreaFilterValue } from '@mindwtr/core';
 
 export type ProjectSectionItem = { type: 'project'; data: Project };
 

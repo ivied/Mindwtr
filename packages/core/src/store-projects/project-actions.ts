@@ -13,8 +13,150 @@ import {
 import { logWarn } from '../logger';
 import { clearDerivedCache } from '../store-settings';
 import { generateUUID as uuidv4 } from '../uuid';
+import { DEFAULT_PROJECT_COLOR } from '../color-constants';
+import { findSelectableProjectByTitleAndArea } from '../project-utils';
 import type { Project, ProjectCoreActions, ProjectActionContext, Task, TaskStatus } from './shared';
+import type { TaskStore } from '../store-types';
+import type { PendingRemoteAttachmentDelete } from '../types';
 import { actionFail, actionOk } from './shared';
+
+const duplicateProjectAttachmentCopy = (attachment: NonNullable<Project['attachments']>[number], now: string) => ({
+    ...attachment,
+    id: uuidv4(),
+    createdAt: now,
+    updatedAt: now,
+    deletedAt: undefined,
+    cloudKey: undefined,
+    fileHash: undefined,
+    localStatus: undefined,
+});
+
+const stripProjectAttachmentRemoteMetadata = (attachments: Project['attachments']): Project['attachments'] =>
+    attachments?.map((attachment) => (
+        attachment.kind === 'file'
+            ? {
+                ...attachment,
+                cloudKey: undefined,
+                localStatus: undefined,
+            }
+            : attachment
+    ));
+
+const collectRetainedAttachmentCloudKeys = (
+    projects: readonly Project[],
+    tasks: readonly Task[],
+): Set<string> => {
+    const cloudKeys = new Set<string>();
+    for (const project of projects) {
+        if (project.purgedAt) continue;
+        for (const attachment of project.attachments || []) {
+            if (attachment.kind === 'file' && attachment.cloudKey) {
+                cloudKeys.add(attachment.cloudKey);
+            }
+        }
+    }
+    for (const task of tasks) {
+        if (task.purgedAt) continue;
+        for (const attachment of task.attachments || []) {
+            if (attachment.kind === 'file' && attachment.cloudKey) {
+                cloudKeys.add(attachment.cloudKey);
+            }
+        }
+    }
+    return cloudKeys;
+};
+
+const collectPendingRemoteDeletesForProjects = (
+    projects: readonly Project[],
+    remainingProjects: readonly Project[],
+    tasks: readonly Task[],
+): PendingRemoteAttachmentDelete[] => {
+    const byCloudKey = new Map<string, PendingRemoteAttachmentDelete>();
+    const retainedCloudKeys = collectRetainedAttachmentCloudKeys(remainingProjects, tasks);
+    for (const project of projects) {
+        for (const attachment of project.attachments || []) {
+            if (attachment.kind !== 'file' || !attachment.cloudKey) continue;
+            if (retainedCloudKeys.has(attachment.cloudKey)) continue;
+            if (byCloudKey.has(attachment.cloudKey)) continue;
+            byCloudKey.set(attachment.cloudKey, {
+                cloudKey: attachment.cloudKey,
+                title: attachment.title || attachment.cloudKey,
+            });
+        }
+    }
+    return Array.from(byCloudKey.values());
+};
+
+const appendPendingRemoteDeletes = (
+    settings: TaskStore['settings'],
+    pendingDeletes: readonly PendingRemoteAttachmentDelete[],
+): TaskStore['settings'] => {
+    if (pendingDeletes.length === 0) return settings;
+    const byCloudKey = new Map<string, PendingRemoteAttachmentDelete>();
+    for (const existing of settings.attachments?.pendingRemoteDeletes || []) {
+        byCloudKey.set(existing.cloudKey, existing);
+    }
+    for (const pending of pendingDeletes) {
+        if (byCloudKey.has(pending.cloudKey)) continue;
+        byCloudKey.set(pending.cloudKey, pending);
+    }
+    return {
+        ...settings,
+        attachments: {
+            ...settings.attachments,
+            pendingRemoteDeletes: Array.from(byCloudKey.values()),
+        },
+    };
+};
+
+type BuildNewProjectParams = {
+    title: string;
+    color?: string;
+    initialProps?: Partial<Project>;
+    existingProjects: readonly Project[];
+    settings: TaskStore['settings'];
+    deviceId: string;
+    now: string;
+    id?: string;
+};
+
+export const buildNewProject = ({
+    title,
+    color,
+    initialProps,
+    existingProjects,
+    settings,
+    deviceId,
+    now,
+    id,
+}: BuildNewProjectParams): Project => {
+    const trimmedTitle = typeof title === 'string' ? title.trim() : '';
+    const targetAreaId = initialProps?.areaId;
+    const maxOrder = existingProjects
+        .filter((project) => (project.areaId ?? undefined) === (targetAreaId ?? undefined))
+        .reduce((max, project) => Math.max(max, Number.isFinite(project.order) ? project.order : -1), -1);
+    const baseOrder = Number.isFinite(initialProps?.order) ? (initialProps?.order as number) : maxOrder + 1;
+    const hasExplicitFlowMode = Boolean(
+        initialProps && Object.prototype.hasOwnProperty.call(initialProps, 'isSequential')
+    );
+    const useSequentialDefault = !hasExplicitFlowMode
+        && settings.gtd?.defaultProjectFlowMode === 'sequential';
+
+    return {
+        id: id ?? uuidv4(),
+        title: trimmedTitle,
+        color: color ?? DEFAULT_PROJECT_COLOR,
+        order: baseOrder,
+        status: 'active',
+        rev: 1,
+        revBy: deviceId,
+        createdAt: now,
+        updatedAt: now,
+        ...(useSequentialDefault ? { isSequential: true } : {}),
+        ...initialProps,
+        tagIds: initialProps?.tagIds ?? [],
+    };
+};
 
 export const createProjectCoreActions = ({
     set,
@@ -28,41 +170,27 @@ export const createProjectCoreActions = ({
             set({ error: 'Project title is required' });
             return null;
         }
-        const normalizedTitle = trimmedTitle.toLowerCase();
+        const targetAreaId = typeof initialProps?.areaId === 'string' ? initialProps.areaId : undefined;
         let snapshot = null;
         let createdProject: Project | null = null;
         let existingProject: Project | null = null;
         set((state) => {
-            const duplicate = state._allProjects.find(
-                (project) =>
-                    !project.deletedAt &&
-                    typeof project.title === 'string' &&
-                    project.title.trim().toLowerCase() === normalizedTitle
-            );
+            const duplicate = findSelectableProjectByTitleAndArea(state._allProjects, trimmedTitle, targetAreaId);
             if (duplicate) {
                 existingProject = duplicate;
                 return state;
             }
             const deviceState = ensureDeviceId(state.settings);
-            const targetAreaId = initialProps?.areaId;
-            const maxOrder = state._allProjects
-                .filter((project) => (project.areaId ?? undefined) === (targetAreaId ?? undefined))
-                .reduce((max, project) => Math.max(max, Number.isFinite(project.order) ? project.order : -1), -1);
-            const baseOrder = Number.isFinite(initialProps?.order) ? (initialProps?.order as number) : maxOrder + 1;
             const now = new Date().toISOString();
-            const newProject: Project = {
-                id: uuidv4(),
+            const newProject = buildNewProject({
                 title: trimmedTitle,
                 color,
-                order: baseOrder,
-                status: 'active',
-                rev: 1,
-                revBy: deviceState.deviceId,
-                createdAt: now,
-                updatedAt: now,
-                ...initialProps,
-                tagIds: initialProps?.tagIds ?? [],
-            };
+                initialProps,
+                existingProjects: state._allProjects,
+                settings: state.settings,
+                deviceId: deviceState.deviceId,
+                now,
+            });
             createdProject = newProject;
             const newAllProjects = [...state._allProjects, newProject];
             const newVisibleProjects = [...state.projects, newProject];
@@ -227,8 +355,13 @@ export const createProjectCoreActions = ({
                     }
                     : project
             );
+            const sectionIdsForProject = new Set(
+                state._allSections
+                    .filter((section) => section.projectId === id)
+                    .map((section) => section.id)
+            );
             const newAllSections = state._allSections.map((section) =>
-                section.projectId === id && !section.deletedAt
+                sectionIdsForProject.has(section.id) && !section.deletedAt
                     ? {
                         ...section,
                         deletedAt: now,
@@ -239,10 +372,11 @@ export const createProjectCoreActions = ({
                     : section
             );
             const newAllTasks = state._allTasks.map(task =>
-                task.projectId === id && !task.deletedAt
+                !task.deletedAt && (task.projectId === id || (task.sectionId && sectionIdsForProject.has(task.sectionId)))
                     ? {
                         ...task,
-                        deletedAt: now,
+                        projectId: undefined,
+                        sectionId: undefined,
                         updatedAt: now,
                         rev: nextRevision(task.rev),
                         revBy: deviceState.deviceId,
@@ -308,6 +442,7 @@ export const createProjectCoreActions = ({
             const restoredProject: Project = {
                 ...target,
                 deletedAt: undefined,
+                purgedAt: undefined,
                 areaId: restoredArea ? target.areaId : undefined,
                 areaTitle: restoredArea
                     ? (typeof target.areaTitle === 'string' && target.areaTitle.trim().length > 0
@@ -379,6 +514,188 @@ export const createProjectCoreActions = ({
         return missingProject ? actionFail('Project not found') : actionOk();
     },
 
+    purgeProject: async (id: string) => {
+        const changeAt = Date.now();
+        const now = new Date().toISOString();
+        let snapshot = null;
+        let missingProject = false;
+        set((state) => {
+            const target = state._allProjects.find((project) => project.id === id && !project.purgedAt);
+            if (!target) {
+                missingProject = true;
+                return state;
+            }
+            const deviceState = ensureDeviceId(state.settings);
+            const sectionIdsForProject = new Set(
+                state._allSections
+                    .filter((section) => section.projectId === id)
+                    .map((section) => section.id)
+            );
+            const remainingProjects = state._allProjects.filter((project) => project.id !== id);
+            const pendingDeletes = collectPendingRemoteDeletesForProjects([target], remainingProjects, state._allTasks);
+            const nextSettings = pendingDeletes.length > 0
+                ? appendPendingRemoteDeletes(deviceState.settings, pendingDeletes)
+                : deviceState.settings;
+            const settingsChanged = deviceState.updated || pendingDeletes.length > 0;
+
+            const newAllProjects = state._allProjects.map((project) =>
+                project.id === id
+                    ? {
+                        ...project,
+                        deletedAt: project.deletedAt ?? now,
+                        purgedAt: now,
+                        attachments: stripProjectAttachmentRemoteMetadata(project.attachments),
+                        updatedAt: now,
+                        rev: nextRevision(project.rev),
+                        revBy: deviceState.deviceId,
+                    }
+                    : project
+            );
+            const newAllSections = state._allSections.map((section) =>
+                sectionIdsForProject.has(section.id) && !section.deletedAt
+                    ? {
+                        ...section,
+                        deletedAt: now,
+                        updatedAt: now,
+                        rev: nextRevision(section.rev),
+                        revBy: deviceState.deviceId,
+                    }
+                    : section
+            );
+            const newAllTasks = state._allTasks.map(task =>
+                !task.deletedAt && (task.projectId === id || (task.sectionId && sectionIdsForProject.has(task.sectionId)))
+                    ? {
+                        ...task,
+                        projectId: undefined,
+                        sectionId: undefined,
+                        updatedAt: now,
+                        rev: nextRevision(task.rev),
+                        revBy: deviceState.deviceId,
+                    }
+                    : task
+            );
+            const newVisibleProjects = newAllProjects.filter((project) => !project.deletedAt);
+            const newVisibleSections = newAllSections.filter((section) => !section.deletedAt);
+            const newVisibleTasks = selectVisibleTasks(newAllTasks);
+            clearDerivedCache();
+            snapshot = buildSaveSnapshot(state, {
+                tasks: newAllTasks,
+                projects: newAllProjects,
+                sections: newAllSections,
+                ...(settingsChanged ? { settings: nextSettings } : {}),
+            });
+            return {
+                projects: newVisibleProjects,
+                sections: newVisibleSections,
+                tasks: newVisibleTasks,
+                _allProjects: newAllProjects,
+                _allSections: newAllSections,
+                _allTasks: newAllTasks,
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
+                ...(settingsChanged ? { settings: nextSettings } : {}),
+            };
+        });
+        if (missingProject) {
+            const message = 'Project not found';
+            logWarn('purgeProject skipped: project not found', {
+                scope: 'store',
+                category: 'validation',
+                context: { id },
+            });
+            set({ error: message });
+            return actionFail(message);
+        }
+        if (snapshot) {
+            debouncedSave(snapshot, (msg) => set({ error: msg }));
+        }
+        return actionOk();
+    },
+
+    purgeDeletedProjects: async () => {
+        const changeAt = Date.now();
+        const now = new Date().toISOString();
+        let snapshot = null;
+        set((state) => {
+            const selectedProjects = state._allProjects.filter((project) => project.deletedAt && !project.purgedAt);
+            if (selectedProjects.length === 0) return state;
+            const selectedIds = new Set(selectedProjects.map((project) => project.id));
+            const deviceState = ensureDeviceId(state.settings);
+            const sectionIdsForProjects = new Set(
+                state._allSections
+                    .filter((section) => selectedIds.has(section.projectId))
+                    .map((section) => section.id)
+            );
+            const remainingProjects = state._allProjects.filter((project) => !selectedIds.has(project.id));
+            const pendingDeletes = collectPendingRemoteDeletesForProjects(selectedProjects, remainingProjects, state._allTasks);
+            const nextSettings = pendingDeletes.length > 0
+                ? appendPendingRemoteDeletes(deviceState.settings, pendingDeletes)
+                : deviceState.settings;
+            const settingsChanged = deviceState.updated || pendingDeletes.length > 0;
+
+            const newAllProjects = state._allProjects.map((project) =>
+                selectedIds.has(project.id)
+                    ? {
+                        ...project,
+                        deletedAt: project.deletedAt ?? now,
+                        purgedAt: now,
+                        attachments: stripProjectAttachmentRemoteMetadata(project.attachments),
+                        updatedAt: now,
+                        rev: nextRevision(project.rev),
+                        revBy: deviceState.deviceId,
+                    }
+                    : project
+            );
+            const newAllSections = state._allSections.map((section) =>
+                sectionIdsForProjects.has(section.id) && !section.deletedAt
+                    ? {
+                        ...section,
+                        deletedAt: now,
+                        updatedAt: now,
+                        rev: nextRevision(section.rev),
+                        revBy: deviceState.deviceId,
+                    }
+                    : section
+            );
+            const newAllTasks = state._allTasks.map(task =>
+                !task.deletedAt && (task.projectId && selectedIds.has(task.projectId)
+                    || task.sectionId && sectionIdsForProjects.has(task.sectionId))
+                    ? {
+                        ...task,
+                        projectId: undefined,
+                        sectionId: undefined,
+                        updatedAt: now,
+                        rev: nextRevision(task.rev),
+                        revBy: deviceState.deviceId,
+                    }
+                    : task
+            );
+            const newVisibleProjects = newAllProjects.filter((project) => !project.deletedAt);
+            const newVisibleSections = newAllSections.filter((section) => !section.deletedAt);
+            const newVisibleTasks = selectVisibleTasks(newAllTasks);
+            clearDerivedCache();
+            snapshot = buildSaveSnapshot(state, {
+                tasks: newAllTasks,
+                projects: newAllProjects,
+                sections: newAllSections,
+                ...(settingsChanged ? { settings: nextSettings } : {}),
+            });
+            return {
+                projects: newVisibleProjects,
+                sections: newVisibleSections,
+                tasks: newVisibleTasks,
+                _allProjects: newAllProjects,
+                _allSections: newAllSections,
+                _allTasks: newAllTasks,
+                lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),
+                ...(settingsChanged ? { settings: nextSettings } : {}),
+            };
+        });
+        if (snapshot) {
+            debouncedSave(snapshot, (msg) => set({ error: msg }));
+        }
+        return actionOk();
+    },
+
     duplicateProject: async (id: string) => {
         const changeAt = Date.now();
         const now = new Date().toISOString();
@@ -396,13 +713,7 @@ export const createProjectCoreActions = ({
 
             const projectAttachments = (sourceProject.attachments || [])
                 .filter((attachment) => !attachment.deletedAt)
-                .map((attachment) => ({
-                    ...attachment,
-                    id: uuidv4(),
-                    createdAt: now,
-                    updatedAt: now,
-                    deletedAt: undefined,
-                }));
+                .map((attachment) => duplicateProjectAttachmentCopy(attachment, now));
 
             const newProject: Project = {
                 ...sourceProject,
@@ -449,13 +760,7 @@ export const createProjectCoreActions = ({
                 }));
                 const attachments = (task.attachments || [])
                     .filter((attachment) => !attachment.deletedAt)
-                    .map((attachment) => ({
-                        ...attachment,
-                        id: uuidv4(),
-                        createdAt: now,
-                        updatedAt: now,
-                        deletedAt: undefined,
-                    }));
+                    .map((attachment) => duplicateProjectAttachmentCopy(attachment, now));
                 const nextSectionId = task.sectionId ? sectionIdMap.get(task.sectionId) : undefined;
                 const newTask: Task = {
                     ...task,

@@ -1,0 +1,4 @@
+- Added optional mobile app lock with device authentication.
+- Shared text imports as task notes, with clearer share sheet guidance.
+- Quick capture, project row counts, keyboard handling, reminder channels, scheduled times, checklist sync, and large libraries are steadier.
+- Search finds checklist item text.

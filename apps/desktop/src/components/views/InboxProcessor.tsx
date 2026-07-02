@@ -3,7 +3,7 @@ import type { AppData, Area, Project, Task } from '@mindwtr/core';
 
 import { InboxProcessingQuickPanel } from '../InboxProcessingQuickPanel';
 import { InboxProcessingWizard } from '../InboxProcessingWizard';
-import { TwoMinuteTimer } from '../TwoMinuteTimer';
+import { MindSweepLauncher } from '../MindSweepModal';
 import { useInboxProcessingController } from './inbox/useInboxProcessingController';
 
 type InboxProcessorProps = {
@@ -13,10 +13,12 @@ type InboxProcessorProps = {
     projects: Project[];
     areas: Area[];
     settings?: AppData['settings'];
-    addProject: (title: string, color: string) => Promise<Project | null>;
+    addTask: (title: string, initialProps?: Partial<Task>) => Promise<unknown>;
+    addProject: (title: string, color: string, initialProps?: Partial<Project>) => Promise<Project | null>;
     updateTask: (id: string, updates: Partial<Task>) => Promise<unknown>;
     deleteTask: (id: string) => Promise<unknown>;
     allContexts: string[];
+    allTags: string[];
     isProcessing: boolean;
     setIsProcessing: (value: boolean) => void;
 };
@@ -28,10 +30,12 @@ export function InboxProcessor({
     projects,
     areas,
     settings,
+    addTask,
     addProject,
     updateTask,
     deleteTask,
     allContexts,
+    allTags,
     isProcessing,
     setIsProcessing,
 }: InboxProcessorProps) {
@@ -51,6 +55,7 @@ export function InboxProcessor({
         updateTask,
         deleteTask,
         allContexts,
+        allTags,
         isProcessing,
         setIsProcessing,
     });
@@ -60,7 +65,7 @@ export function InboxProcessor({
     return (
         <>
             {showStartButton && (
-                <div className="flex items-center gap-3">
+                <div className="flex items-stretch gap-2">
                     <button
                         onClick={startProcessing}
                         className="flex-1 flex items-center justify-center gap-2 bg-primary text-primary-foreground py-3 px-4 rounded-lg font-medium hover:bg-primary/90 transition-colors"
@@ -68,9 +73,7 @@ export function InboxProcessor({
                         <Play className="w-4 h-4" />
                         {t('process.btn')} ({inboxCount})
                     </button>
-                    <div className="shrink-0 rounded-lg border border-border bg-card px-3 py-2">
-                        <TwoMinuteTimer t={t} resetKey="inbox-standalone" />
-                    </div>
+                    <MindSweepLauncher t={t} addTask={addTask} variant="secondary" />
                 </div>
             )}
 

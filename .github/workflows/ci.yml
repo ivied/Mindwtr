@@ -38,16 +38,28 @@ jobs:
       - name: Install dependencies
         run: |
           set -e
-          bun install || (echo "bun install failed, clearing cache and retrying..." && (bun pm cache rm || bun pm cache clean || true) && bun install)
+          bun install --frozen-lockfile || (echo "bun install failed, clearing cache and retrying..." && (bun pm cache rm || bun pm cache clean || true) && bun install --frozen-lockfile)
 
       - name: TypeScript check
         run: cd packages/core && bun run tsc --noEmit
 
+      - name: Large-store performance budgets
+        run: bun run test:perf
+
       - name: Locale parity check
         run: bun run i18n:check
 
+      - name: Synced field parity check
+        run: bun run schema:check
+
+      - name: README heading parity check
+        run: bun run docs:check-readme
+
       - name: Store image asset check
         run: bash scripts/ci/validate-store-image-assets.sh
+
+      - name: Workflow JSON newline check
+        run: node scripts/ci/validate-workflow-json-newlines.js
 
       - name: Google Play listing metadata check
         run: |
@@ -60,6 +72,9 @@ jobs:
         run: |
           python3 scripts/ci/validate-fastlane-metadata.test.py
           FASTLANE_METADATA_DIR=/tmp/mindwtr-fastlane-metadata scripts/ci/prepare-fastlane-metadata.sh
+
+      - name: iOS App Intents availability check
+        run: node scripts/ci/validate-ios-app-intents-availability.js
 
       - name: Run unit tests
         run: bun run --filter @mindwtr/core test -- --coverage --coverage.thresholds.lines=70 --coverage.thresholds.statements=70 --coverage.thresholds.functions=50 --coverage.thresholds.branches=50
@@ -81,6 +96,8 @@ jobs:
     runs-on: ubuntu-latest
     name: Desktop App (Tauri)
     timeout-minutes: 45
+    env:
+      TAURI_CLI_VERSION: "2.11.3"
     steps:
       - name: Checkout code
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -90,16 +107,47 @@ jobs:
           set -euo pipefail
 
           # GitHub-hosted Ubuntu runners sometimes point apt at a flaky Azure
-          # mirror. Prefer the canonical Ubuntu archive when that mirror list
-          # is present, then retry the whole apt transaction for transient
-          # DNS/connection failures.
+          # mirror, but the canonical Ubuntu archive can also stall. Try the
+          # runner's default mirror first, then alternate with the archive
+          # fallback on retry.
+          APT_MIRROR_BACKUP=""
           if [ -f /etc/apt/apt-mirrors.txt ]; then
-            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+            APT_MIRROR_BACKUP="$(mktemp)"
+            sudo cp /etc/apt/apt-mirrors.txt "$APT_MIRROR_BACKUP"
           fi
 
+          # The runner image also carries optional Microsoft apt feeds that are
+          # unrelated to Tauri. If those feeds return 403, apt-get update fails
+          # before the Ubuntu packages below can install.
+          mapfile -t MICROSOFT_APT_SOURCES < <(grep -rl 'packages.microsoft.com' /etc/apt/sources.list /etc/apt/sources.list.d 2>/dev/null || true)
+          for source_file in "${MICROSOFT_APT_SOURCES[@]}"; do
+            sudo mv "$source_file" "$source_file.disabled"
+          done
+
+          APT_OPTIONS=(
+            -o Acquire::Retries=3
+            -o Acquire::http::Timeout=30
+            -o Acquire::https::Timeout=30
+          )
+          APT_PACKAGES=(
+            libwebkit2gtk-4.1-dev
+            libappindicator3-dev
+            librsvg2-dev
+            patchelf
+            libasound2-dev
+            libssl-dev
+          )
+
           for attempt in 1 2 3; do
-            if sudo apt-get -o Acquire::Retries=3 update && \
-              sudo apt-get -o Acquire::Retries=3 install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev; then
+            if [ -n "$APT_MIRROR_BACKUP" ]; then
+              sudo cp "$APT_MIRROR_BACKUP" /etc/apt/apt-mirrors.txt
+              if [ "$attempt" -eq 2 ]; then
+                sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+              fi
+            fi
+
+            if timeout 8m sudo apt-get "${APT_OPTIONS[@]}" update && \
+              timeout 8m sudo apt-get "${APT_OPTIONS[@]}" install -y "${APT_PACKAGES[@]}"; then
               exit 0
             fi
 
@@ -137,8 +185,19 @@ jobs:
         with:
           workspaces: apps/desktop/src-tauri
 
+      - name: Cache Tauri CLI
+        id: cache-tauri-cli
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        with:
+          path: ~/.cargo/bin/cargo-tauri
+          key: ${{ runner.os }}-cargo-tauri-${{ env.TAURI_CLI_VERSION }}
+
       - name: Install Tauri CLI
-        run: cargo install tauri-cli --version "^2.0"
+        if: steps.cache-tauri-cli.outputs.cache-hit != 'true'
+        run: cargo install tauri-cli --version "=${TAURI_CLI_VERSION}"
+
+      - name: Verify Tauri CLI
+        run: cargo tauri --version
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -154,7 +213,7 @@ jobs:
             ${{ runner.os }}-bun-
 
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: TypeScript check
         run: cd apps/desktop && bun run tsc --noEmit
@@ -174,18 +233,15 @@ jobs:
           path: apps/desktop/coverage
           if-no-files-found: ignore
 
-      - name: Build Vite frontend
-        run: cd apps/desktop && bun run build:vite
-
       - name: Build Tauri app (debug, no bundle)
         timeout-minutes: 20
         run: cd apps/desktop && cargo tauri build --debug --no-bundle
 
-  # AI Service tests
-  ai-service:
+  # Mobile app validation
+  mobile:
     runs-on: ubuntu-latest
-    name: AI Service
-    timeout-minutes: 20
+    name: Mobile App
+    timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -204,20 +260,27 @@ jobs:
             ${{ runner.os }}-bun-
 
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: TypeScript check
-        run: cd apps/ai-service && bun run typecheck
+        run: cd apps/mobile && bunx tsc --noEmit
 
-      - name: Run unit tests
-        run: bun run --filter ai-service test
+      - name: Expo Doctor check
+        run: cd apps/mobile && bunx expo-doctor
 
-      - name: Upload AI Service coverage artifact
+      - name: Mobile tests
+        run: bun run --filter mobile test:coverage
+
+      - name: Mobile coverage summary
+        if: always()
+        run: node scripts/ci/write-coverage-summary.js "Mobile Coverage" apps/mobile/coverage/coverage-summary.json --min-lines=38 --min-statements=38 --min-functions=50 --min-branches=50
+
+      - name: Upload mobile coverage artifact
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: ai-service-coverage
-          path: apps/ai-service/coverage
+          name: mobile-coverage
+          path: apps/mobile/coverage
           if-no-files-found: ignore
 
   cloud-mcp:
@@ -242,13 +305,13 @@ jobs:
             ${{ runner.os }}-bun-
 
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Cloud TypeScript check
         run: bun run --filter mindwtr-cloud typecheck
 
       - name: MCP TypeScript check
-        run: bun run --filter mindwtr-mcp-server typecheck
+        run: bun run --filter mindwtr-mcp typecheck
 
       - name: Cloud tests
         run: bun run --filter mindwtr-cloud test:coverage
@@ -268,7 +331,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: MCP tests
-        run: bun run --filter mindwtr-mcp-server test:coverage
+        run: bun run --filter mindwtr-mcp test:coverage
 
       - name: MCP coverage summary
         if: always()
@@ -314,7 +377,7 @@ jobs:
             ${{ runner.os }}-bun-
 
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Install Playwright browsers
         run: bunx playwright install --with-deps chromium
@@ -361,7 +424,7 @@ jobs:
             ${{ runner.os }}-bun-
 
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Performance audit
         run: bun run scripts/audit-performance.ts --fail-under 60
@@ -372,11 +435,11 @@ jobs:
       - name: Check for lint errors (desktop)
         run: cd apps/desktop && bun run lint
 
-      - name: Check for lint errors (ai-service)
-        run: cd apps/ai-service && bun run lint
+      - name: Check for lint errors (mobile)
+        run: cd apps/mobile && bun run lint
 
       - name: Check for lint errors (cloud)
         run: bun run --filter mindwtr-cloud lint
 
       - name: Check for lint errors (mcp)
-        run: bun run --filter mindwtr-mcp-server lint
+        run: bun run --filter mindwtr-mcp lint

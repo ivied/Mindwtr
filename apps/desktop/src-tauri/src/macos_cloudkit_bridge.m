@@ -122,8 +122,10 @@ static const MWFieldSpec kTaskFields[] = {
     {"assignedTo",     "assignedTo",      MWFieldKindString},
     {"taskMode",       "taskMode",        MWFieldKindString},
     {"startTime",      "startTime",       MWFieldKindDate},
+    {"relativeStartOffset", "relativeStartOffset", MWFieldKindJsonString},
     {"dueDate",        "dueDate",         MWFieldKindDate},
     {"recurrence",     "recurrence",      MWFieldKindJsonString},
+    {"showFutureRecurrence", "showFutureRecurrence", MWFieldKindBool},
     {"pushCount",      "pushCount",       MWFieldKindInt},
     {"tags",           "tags",            MWFieldKindStringArray},
     {"contexts",       "contexts",        MWFieldKindStringArray},
@@ -137,8 +139,14 @@ static const MWFieldSpec kTaskFields[] = {
     {"areaId",         "areaId",          MWFieldKindString},
     {"isFocusedToday", "isFocusedToday",  MWFieldKindBool},
     {"timeEstimate",   "timeEstimate",    MWFieldKindString},
+    {"suppressMindwtrReminders", "suppressMindwtrReminders", MWFieldKindBool},
+    {"repeatReminderMinutes", "repeatReminderMinutes", MWFieldKindInt},
     {"reviewAt",       "reviewAt",        MWFieldKindDate},
     {"completedAt",    "completedAt",     MWFieldKindDate},
+    {"statusBeforeProjectArchive", "statusBeforeProjectArchive", MWFieldKindString},
+    {"completedAtBeforeProjectArchive", "completedAtBeforeProjectArchive", MWFieldKindDate},
+    {"isFocusedTodayBeforeProjectArchive", "isFocusedTodayBeforeProjectArchive", MWFieldKindBool},
+    {"projectArchivedAt", "projectArchivedAt", MWFieldKindDate},
     {"rev",            "rev",             MWFieldKindInt},
     {"revBy",          "revBy",           MWFieldKindString},
     {"createdAt",      "createdAt",       MWFieldKindDate},
@@ -157,6 +165,7 @@ static const MWFieldSpec kProjectFields[] = {
     {"order",        "sortOrder",    MWFieldKindInt},
     {"tagIds",       "tagIds",       MWFieldKindStringArray},
     {"isSequential", "isSequential", MWFieldKindBool},
+    {"sequentialScope", "sequentialScope", MWFieldKindString},
     {"isFocused",    "isFocused",    MWFieldKindBool},
     {"supportNotes", "supportNotes", MWFieldKindString},
     {"attachments",  "attachments",  MWFieldKindJsonString},
@@ -169,6 +178,7 @@ static const MWFieldSpec kProjectFields[] = {
     {"createdAt",    "createdAt",    MWFieldKindDate},
     {"updatedAt",    "updatedAt",    MWFieldKindDate},
     {"deletedAt",    "deletedAt",    MWFieldKindDate},
+    {"purgedAt",     "purgedAt",     MWFieldKindDate},
 };
 static const size_t kProjectFieldsCount = sizeof(kProjectFields) / sizeof(kProjectFields[0]);
 
@@ -183,6 +193,8 @@ static const MWFieldSpec kSectionFields[] = {
     {"createdAt",   "createdAt",          MWFieldKindDate},
     {"updatedAt",   "updatedAt",          MWFieldKindDate},
     {"deletedAt",   "deletedAt",          MWFieldKindDate},
+    {"deletedAtBeforeProjectArchive", "deletedAtBeforeProjectArchive", MWFieldKindDate},
+    {"projectArchivedAt", "projectArchivedAt", MWFieldKindDate},
 };
 static const size_t kSectionFieldsCount = sizeof(kSectionFields) / sizeof(kSectionFields[0]);
 
@@ -198,6 +210,18 @@ static const MWFieldSpec kAreaFields[] = {
     {"deletedAt", "deletedAt", MWFieldKindDate},
 };
 static const size_t kAreaFieldsCount = sizeof(kAreaFields) / sizeof(kAreaFields[0]);
+
+static const MWFieldSpec kPersonFields[] = {
+    {"name",          "name",          MWFieldKindString},
+    {"note",          "note",          MWFieldKindString},
+    {"referenceLink", "referenceLink", MWFieldKindString},
+    {"rev",           "rev",           MWFieldKindInt},
+    {"revBy",         "revBy",         MWFieldKindString},
+    {"createdAt",     "createdAt",     MWFieldKindDate},
+    {"updatedAt",     "updatedAt",     MWFieldKindDate},
+    {"deletedAt",     "deletedAt",     MWFieldKindDate},
+};
+static const size_t kPersonFieldsCount = sizeof(kPersonFields) / sizeof(kPersonFields[0]);
 
 static const MWFieldSpec kSettingsFields[] = {
     {"payload",   "payload",   MWFieldKindJsonString},
@@ -216,6 +240,8 @@ static void ck_get_field_specs(NSString *recordType,
         *outSpecs = kSectionFields; *outCount = kSectionFieldsCount;
     } else if ([recordType isEqualToString:@"MindwtrArea"]) {
         *outSpecs = kAreaFields; *outCount = kAreaFieldsCount;
+    } else if ([recordType isEqualToString:@"MindwtrPerson"]) {
+        *outSpecs = kPersonFields; *outCount = kPersonFieldsCount;
     } else if ([recordType isEqualToString:@"MindwtrSettings"]) {
         *outSpecs = kSettingsFields; *outCount = kSettingsFieldsCount;
     } else {
@@ -658,6 +684,158 @@ ck_fetch_records_by_id(NSArray<CKRecordID *> *ids, NSError **outError) {
         return nil;
     }
     return results;
+}
+
+static NSString * const kMindwtrAttachmentRecordType = @"MindwtrAttachment";
+static NSString * const kMindwtrAttachmentAssetField = @"asset";
+
+static NSURL *ck_file_url_from_path(NSString *path) {
+    if (!path || path.length == 0) return nil;
+    NSURL *url = [NSURL URLWithString:path];
+    if (url && url.isFileURL) return url;
+    return [NSURL fileURLWithPath:path];
+}
+
+static NSDictionary *ck_attachment_metadata_from_record(CKRecord *record) {
+    NSMutableDictionary *result = [NSMutableDictionary dictionary];
+    result[@"recordName"] = record.recordID.recordName;
+    NSArray<NSString *> *stringFields = @[
+        @"attachmentId",
+        @"ownerType",
+        @"ownerId",
+        @"title",
+        @"mimeType",
+        @"fileHash",
+        @"updatedAt",
+        @"deletedAt",
+    ];
+    for (NSString *field in stringFields) {
+        id value = record[field];
+        if ([value isKindOfClass:[NSString class]]) result[field] = value;
+    }
+    id size = record[@"size"];
+    if ([size isKindOfClass:[NSNumber class]]) result[@"size"] = size;
+    return result;
+}
+
+static void ck_apply_attachment_metadata(NSDictionary *metadata, CKRecord *record) {
+    NSArray<NSString *> *stringFields = @[
+        @"attachmentId",
+        @"ownerType",
+        @"ownerId",
+        @"title",
+        @"mimeType",
+        @"fileHash",
+        @"updatedAt",
+        @"deletedAt",
+    ];
+    for (NSString *field in stringFields) {
+        id value = metadata[field];
+        if ([value isKindOfClass:[NSString class]] && [value length] > 0) record[field] = value;
+        else record[field] = nil;
+    }
+    id size = metadata[@"size"];
+    if ([size isKindOfClass:[NSNumber class]]) record[@"size"] = size;
+    else record[@"size"] = nil;
+}
+
+static char *ck_save_single_record(CKRecord *record, NSString *timeoutName) {
+    CKModifyRecordsOperation *op =
+        [[CKModifyRecordsOperation alloc] initWithRecordsToSave:@[record] recordIDsToDelete:nil];
+    op.savePolicy = CKRecordSaveChangedKeys;
+    op.qualityOfService = NSQualityOfServiceUserInitiated;
+    __block NSError *saveError = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    op.modifyRecordsCompletionBlock = ^(NSArray<CKRecord *> *saved __unused,
+                                        NSArray<CKRecordID *> *deleted __unused,
+                                        NSError *error) {
+        saveError = error;
+        dispatch_semaphore_signal(sem);
+    };
+    [_ckPrivateDB addOperation:op];
+    long waited = dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, kTimeoutSec * NSEC_PER_SEC));
+    if (waited != 0) return ck_copy_json(@{@"error": timeoutName ?: @"save-timeout"});
+    if (saveError) return ck_error_json(saveError);
+    return NULL;
+}
+
+char *mindwtr_cloudkit_save_attachment_asset(const char *record_name_cstr,
+                                             const char *file_path_cstr,
+                                             const char *metadata_json_cstr) {
+    @autoreleasepool {
+        if (!record_name_cstr || !file_path_cstr || !metadata_json_cstr) {
+            return ck_copy_json(@{@"error": @"invalid-attachment-input"});
+        }
+        mindwtr_ck_ensure_container();
+        NSString *recordName = [NSString stringWithUTF8String:record_name_cstr];
+        NSString *filePath = [NSString stringWithUTF8String:file_path_cstr];
+        NSData *jsonData = [[NSString stringWithUTF8String:metadata_json_cstr] dataUsingEncoding:NSUTF8StringEncoding];
+        if (!jsonData) return ck_copy_json(@{@"error": @"invalid-attachment-metadata"});
+        NSDictionary *metadata = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
+        if (![metadata isKindOfClass:[NSDictionary class]]) {
+            return ck_copy_json(@{@"error": @"invalid-attachment-metadata"});
+        }
+        NSURL *fileURL = ck_file_url_from_path(filePath);
+        if (!fileURL) return ck_copy_json(@{@"error": @"invalid-attachment-file"});
+
+        CKRecordID *recordID = [[CKRecordID alloc] initWithRecordName:recordName zoneID:_ckZoneID];
+        NSError *fetchError = nil;
+        NSDictionary *fetched = ck_fetch_records_by_id(@[recordID], &fetchError);
+        if (!fetched && fetchError) {
+            return ck_copy_json(@{@"error": fetchError.localizedDescription ?: @"fetch-existing-attachment-failed"});
+        }
+        CKRecord *record = fetched[recordID] ?: [[CKRecord alloc] initWithRecordType:kMindwtrAttachmentRecordType recordID:recordID];
+        ck_apply_attachment_metadata(metadata, record);
+        record[kMindwtrAttachmentAssetField] = [[CKAsset alloc] initWithFileURL:fileURL];
+
+        char *saveError = ck_save_single_record(record, @"attachment-save-timeout");
+        if (saveError) return saveError;
+        return ck_copy_json(ck_attachment_metadata_from_record(record));
+    }
+}
+
+char *mindwtr_cloudkit_fetch_attachment_asset(const char *record_name_cstr,
+                                              const char *target_path_cstr) {
+    @autoreleasepool {
+        if (!record_name_cstr || !target_path_cstr) {
+            return ck_copy_json(@{@"error": @"invalid-attachment-input"});
+        }
+        mindwtr_ck_ensure_container();
+        NSString *recordName = [NSString stringWithUTF8String:record_name_cstr];
+        NSString *targetPath = [NSString stringWithUTF8String:target_path_cstr];
+        CKRecordID *recordID = [[CKRecordID alloc] initWithRecordName:recordName zoneID:_ckZoneID];
+        NSError *fetchError = nil;
+        NSDictionary *fetched = ck_fetch_records_by_id(@[recordID], &fetchError);
+        if (!fetched) {
+            return ck_copy_json(@{@"error": fetchError.localizedDescription ?: @"fetch-attachment-failed"});
+        }
+        CKRecord *record = fetched[recordID];
+        if (!record) return ck_copy_json(@{@"error": @"attachment-record-not-found"});
+        CKAsset *asset = record[kMindwtrAttachmentAssetField];
+        if (![asset isKindOfClass:[CKAsset class]] || !asset.fileURL) {
+            return ck_copy_json(@{@"error": @"attachment-asset-missing"});
+        }
+        NSURL *targetURL = ck_file_url_from_path(targetPath);
+        if (!targetURL) return ck_copy_json(@{@"error": @"invalid-attachment-target"});
+
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSError *fileError = nil;
+        [fm createDirectoryAtURL:[targetURL URLByDeletingLastPathComponent]
+      withIntermediateDirectories:YES
+                       attributes:nil
+                            error:&fileError];
+        if (fileError) return ck_copy_json(@{@"error": fileError.localizedDescription ?: @"attachment-target-directory-failed"});
+        if ([fm fileExistsAtPath:targetURL.path]) {
+            [fm removeItemAtURL:targetURL error:nil];
+        }
+        if (![fm copyItemAtURL:asset.fileURL toURL:targetURL error:&fileError]) {
+            return ck_copy_json(@{@"error": fileError.localizedDescription ?: @"attachment-copy-failed"});
+        }
+
+        NSMutableDictionary *metadata = [ck_attachment_metadata_from_record(record) mutableCopy];
+        metadata[@"filePath"] = targetURL.path;
+        return ck_copy_json(metadata);
+    }
 }
 
 char *mindwtr_cloudkit_save_records(const char *record_type_cstr, const char *records_json_cstr) {

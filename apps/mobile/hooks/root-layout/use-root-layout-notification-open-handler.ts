@@ -37,23 +37,28 @@ export function useRootLayoutNotificationOpenHandler({
         actionIdentifier?: string;
         taskId?: string;
         projectId?: string;
+        context?: string;
         kind?: string;
     } | null>(null);
     const handledCompleteActionsRef = useRef(new Set<string>());
+    const taskOpenSequenceRef = useRef(0);
     const normalizedPathname = useMemo(() => String(pathname || '').trim(), [pathname]);
-    const canNavigate = appReady && normalizedPathname.length > 0 && normalizedPathname !== '/';
+    const canNavigate = appReady && normalizedPathname.length > 0;
 
     const routeNotificationOpen = useCallback((payload: {
         notificationId?: string;
         actionIdentifier?: string;
         taskId?: string;
         projectId?: string;
+        context?: string;
         kind?: string;
     }) => {
-        const openToken = typeof payload?.notificationId === 'string' ? payload.notificationId : String(Date.now());
+        const notificationId = typeof payload?.notificationId === 'string' ? payload.notificationId.trim() : undefined;
+        const openToken = notificationId || String(Date.now());
         const actionIdentifier = typeof payload?.actionIdentifier === 'string' ? payload.actionIdentifier : undefined;
         const taskId = typeof payload?.taskId === 'string' ? payload.taskId : undefined;
         const projectId = typeof payload?.projectId === 'string' ? payload.projectId : undefined;
+        const context = typeof payload?.context === 'string' ? payload.context : undefined;
         const kind = typeof payload?.kind === 'string' ? payload.kind : undefined;
         const normalizedAction = String(actionIdentifier || '').trim().toLowerCase();
         if (normalizedAction === 'dismiss' || normalizedAction === 'dismiss_action' || normalizedAction === 'snooze' || normalizedAction === 'snooze_action') {
@@ -82,12 +87,18 @@ export function useRootLayoutNotificationOpenHandler({
             return;
         }
         if (taskId) {
+            taskOpenSequenceRef.current += 1;
+            const taskOpenToken = `${notificationId || 'notification'}:${Date.now()}:${taskOpenSequenceRef.current}`;
             useTaskStore.getState().setHighlightTask(taskId);
-            router.push({ pathname: '/focus', params: { taskId, openToken } });
+            router.push({ pathname: '/focus', params: { taskId, openToken: taskOpenToken, taskTab: 'view' } });
             return;
         }
         if (projectId) {
             router.push({ pathname: '/projects-screen', params: { projectId } });
+            return;
+        }
+        if (kind === 'context-automation' && context) {
+            router.push({ pathname: '/contexts', params: { token: context } });
             return;
         }
         if (isDailyReviewOpen(kind, openToken)) {
@@ -104,6 +115,7 @@ export function useRootLayoutNotificationOpenHandler({
         actionIdentifier?: string;
         taskId?: string;
         projectId?: string;
+        context?: string;
         kind?: string;
     }) => {
         if (!canNavigate) {

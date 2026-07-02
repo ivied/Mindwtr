@@ -8,6 +8,7 @@ describe('saved filter labels', () => {
             areas: ['area-1'],
             statuses: ['waiting'],
             assignedTo: ['Alex'],
+            locations: ['Office'],
             dueDateRange: { preset: 'this_week' },
             startDateRange: { from: '2026-05-10', to: '2026-05-12' },
             timeEstimateRange: { min: 30, max: 90 },
@@ -24,6 +25,7 @@ describe('saved filter labels', () => {
             { id: 'area:area-1', label: 'Area: Work', color: '#ff8800' },
             { id: 'status:waiting', label: 'Status: Waiting' },
             { id: 'assigned:Alex', label: 'Assigned To: Alex' },
+            { id: 'location:Office', label: 'Location: Office' },
             { id: 'dueDateRange', label: 'Due Date: This week' },
             { id: 'startDateRange', label: 'Start Date: date:2026-05-10 - date:2026-05-12' },
             { id: 'timeEstimateRange', label: 'Time estimate: 30m - 1h 30m' },
@@ -55,6 +57,7 @@ describe('saved filter labels', () => {
             areas: ['area-1', 'area-2'],
             statuses: ['waiting' as const, 'next' as const],
             assignedTo: ['Alex', 'Sam'],
+            locations: ['Office', 'Home'],
             dueDateRange: { preset: 'this_week' as const },
             startDateRange: { from: '2026-05-11' },
             timeEstimateRange: { min: 30 },
@@ -74,11 +77,16 @@ describe('saved filter labels', () => {
             ...criteria,
             assignedTo: ['Sam'],
         });
+        expect(removeAdvancedFilterCriteriaChip(criteria, 'location:Office')).toEqual({
+            ...criteria,
+            locations: ['Home'],
+        });
         expect(removeAdvancedFilterCriteriaChip(criteria, 'dueDateRange')).toEqual({
             contexts: ['@desk'],
             areas: ['area-1', 'area-2'],
             statuses: ['waiting', 'next'],
             assignedTo: ['Alex', 'Sam'],
+            locations: ['Office', 'Home'],
             startDateRange: { from: '2026-05-11' },
             timeEstimateRange: { min: 30 },
             hasDescription: true,
@@ -90,8 +98,8 @@ describe('saved filter labels', () => {
     it('drops advanced list criteria when the last list item is removed', () => {
         expect(removeAdvancedFilterCriteriaChip({
             contexts: ['@desk'],
-            areas: ['area-1'],
-        }, 'area:area-1')).toEqual({
+            locations: ['Office'],
+        }, 'location:Office')).toEqual({
             contexts: ['@desk'],
         });
     });

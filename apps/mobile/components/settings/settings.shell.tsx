@@ -1,7 +1,7 @@
 import React from 'react';
-import { Pressable, Text, TouchableOpacity, View } from 'react-native';
+import { Linking, Pressable, Text, TouchableOpacity, View, type StyleProp, type ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { ChevronRight, type LucideIcon } from 'lucide-react-native';
+import { ChevronRight, ExternalLink as ExternalLinkIcon, type LucideIcon } from 'lucide-react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -70,11 +70,11 @@ export function MenuItem({
                     </View>
                 )}
                 <View style={styles.menuTextBlock}>
-                    <Text style={[styles.menuLabel, { color: tc.text }]} numberOfLines={1}>
+                    <Text style={[styles.menuLabel, { color: tc.text }]} numberOfLines={2}>
                         {title}
                     </Text>
                     {description && (
-                        <Text style={[styles.menuDescription, { color: tc.secondaryText }]} numberOfLines={1}>
+                        <Text style={[styles.menuDescription, { color: tc.secondaryText }]} numberOfLines={2}>
                             {description}
                         </Text>
                     )}
@@ -94,6 +94,42 @@ export function MenuItem({
     );
 }
 
+export function SettingsGuideLink({
+    description = 'Opens the guide in your browser.',
+    style,
+    testID,
+    title,
+    url,
+}: {
+    description?: string;
+    style?: StyleProp<ViewStyle>;
+    testID?: string;
+    title: string;
+    url: string;
+}) {
+    const tc = useThemeColors();
+
+    return (
+        <TouchableOpacity
+            accessibilityHint="Opens an external guide in your browser."
+            accessibilityLabel={`${title}. ${description}`}
+            accessibilityRole="link"
+            activeOpacity={0.72}
+            onPress={() => {
+                void Linking.openURL(url);
+            }}
+            style={[
+                styles.guideLinkInline,
+                style,
+            ]}
+            testID={testID}
+        >
+            <Text style={[styles.guideLinkLabel, { color: tc.tint }]}>{title}</Text>
+            <ExternalLinkIcon color={tc.tint} size={15} strokeWidth={2.2} />
+        </TouchableOpacity>
+    );
+}
+
 export function SettingsTopBar({ title }: { title?: string } = {}) {
     const router = useRouter();
     const { t } = useLanguage();
@@ -109,7 +145,7 @@ export function SettingsTopBar({ title }: { title?: string } = {}) {
                 {
                     backgroundColor: tc.cardBg,
                     borderBottomColor: tc.border,
-                    height: 52 + insets.top,
+                    minHeight: 52 + insets.top,
                     paddingTop: insets.top,
                 },
             ]}
@@ -126,7 +162,7 @@ export function SettingsTopBar({ title }: { title?: string } = {}) {
             >
                 <Ionicons color={tc.text} name="chevron-back" size={24} />
             </Pressable>
-            <Text style={[styles.topBarTitle, { color: tc.text }]} numberOfLines={1}>
+            <Text style={[styles.topBarTitle, { color: tc.text }]} numberOfLines={2}>
                 {title ?? t('settings.title')}
             </Text>
             <View style={styles.topBarBackButton} />

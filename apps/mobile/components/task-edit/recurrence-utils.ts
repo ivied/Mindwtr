@@ -34,6 +34,7 @@ export const buildRecurrenceValue = (
     strategy: RecurrenceStrategy,
     options: {
         byDay?: RecurrenceByDay[];
+        byMonthDay?: number[];
         count?: number;
         until?: string;
         completedOccurrences?: number;
@@ -44,6 +45,9 @@ export const buildRecurrenceValue = (
     const recurrence: Recurrence = { rule, strategy };
     if (options.byDay?.length) {
         recurrence.byDay = options.byDay;
+    }
+    if (options.byMonthDay?.length) {
+        recurrence.byMonthDay = options.byMonthDay;
     }
     if (options.count) {
         recurrence.count = options.count;
@@ -79,6 +83,9 @@ export const getRecurrenceRRuleValue = (recurrence: Task['recurrence']): string 
     if (recurrence.rrule) return recurrence.rrule;
     if (recurrence.byDay?.length) {
         return buildRRuleString(recurrence.rule, recurrence.byDay, undefined, { count, until });
+    }
+    if (recurrence.byMonthDay?.length) {
+        return buildRRuleString(recurrence.rule, undefined, undefined, { byMonthDay: recurrence.byMonthDay, count, until });
     }
     return buildRRuleString(recurrence.rule, undefined, undefined, { count, until });
 };

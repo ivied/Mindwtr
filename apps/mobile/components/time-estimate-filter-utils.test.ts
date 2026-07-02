@@ -20,4 +20,9 @@ describe('time-estimate-filter-utils', () => {
         expect(matchesSelectedTimeEstimates({ timeEstimate: '30min' }, ['5min', '15min'])).toBe(false);
         expect(matchesSelectedTimeEstimates({}, ['5min', '15min'])).toBe(false);
     });
+
+    it('matches custom estimates by their filter bucket', () => {
+        expect(matchesSelectedTimeEstimates({ timeEstimate: 'custom:150' }, ['3hr'])).toBe(true);
+        expect(matchesSelectedTimeEstimates({ timeEstimate: 'custom:150' }, ['2hr'])).toBe(false);
+    });
 });

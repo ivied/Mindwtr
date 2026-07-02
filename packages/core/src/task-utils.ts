@@ -2,10 +2,29 @@
  * Utility functions for task operations
  */
 
-import { Task, TaskStatus, TaskSortBy, TaskPriority, Project, AppData } from './types';
+import { Task, TaskStatus, TaskSortBy, TaskPriority, Project, AppData, SortField } from './types';
 import { isDueForReview, safeParseDate, safeParseDueDate } from './date';
+import { timeEstimateToMinutes } from './calendar-scheduling';
 import { TASK_STATUS_ORDER } from './task-status';
+import { isTaskInActiveProject } from './project-utils';
 import type { Language } from './i18n/i18n-types';
+
+export function buildTasksByProjectId(tasks: readonly Task[]): Map<string, Task[]> {
+    const tasksByProjectId = new Map<string, Task[]>();
+
+    tasks.forEach((task) => {
+        if (!task.projectId || task.deletedAt) return;
+
+        const projectTasks = tasksByProjectId.get(task.projectId);
+        if (projectTasks) {
+            projectTasks.push(task);
+        } else {
+            tasksByProjectId.set(task.projectId, [task]);
+        }
+    });
+
+    return tasksByProjectId;
+}
 
 /**
  * Status sorting order for task list display
@@ -31,6 +50,18 @@ const TASK_PRIORITY_SORT_RANK: Record<TaskPriority, number> = {
     urgent: 4,
 };
 
+const TASK_ENERGY_SORT_RANK: Record<NonNullable<Task['energyLevel']>, number> = {
+    low: 1,
+    medium: 2,
+    high: 3,
+};
+
+const timeEstimateSortRank = (estimate: Task['timeEstimate']): number => {
+    if (!estimate) return Number.POSITIVE_INFINITY;
+    if (estimate === '4hr+') return 241;
+    return timeEstimateToMinutes(estimate);
+};
+
 export const FOCUS_NEXT_DUE_SOON_WINDOW_DAYS = 30;
 
 type TaskStartVisibilityOptions = {
@@ -40,7 +71,35 @@ type TaskStartVisibilityOptions = {
 
 type FocusSequentialOptions = {
     now?: Date;
+    sectionScopedProjectIds?: ReadonlySet<string>;
 };
+
+export type TaskFocusEligibilityReason = 'eligible' | 'deferred' | 'sequential' | 'clarify';
+
+export type TaskFocusEligibilityResult = {
+    eligible: boolean;
+    reason: TaskFocusEligibilityReason;
+};
+
+export type TaskFocusEligibilityOptions = {
+    tasks: readonly Task[];
+    projects: readonly Project[] | Map<string, Project>;
+    now?: Date;
+    showFutureStarts?: boolean;
+    sequentialProjectIds?: ReadonlySet<string>;
+    sectionScopedProjectIds?: ReadonlySet<string>;
+};
+
+type SequentialTaskOrderFields = Pick<Task, 'createdAt' | 'order' | 'orderNum'>;
+type SequentialGroupingFields = Pick<Task, 'projectId'> & Partial<Pick<Task, 'sectionId'>>;
+
+type SequentialFirstTaskOptions = {
+    sectionScopedProjectIds?: ReadonlySet<string>;
+};
+
+const NO_SECTION_GROUP = '__no_section__';
+export const FOCUS_ELIGIBILITY_ACTIVE_STATUSES: readonly TaskStatus[] = ['inbox', 'next', 'waiting', 'someday'];
+const FOCUS_ELIGIBILITY_ACTIVE_STATUS_SET = new Set<TaskStatus>(FOCUS_ELIGIBILITY_ACTIVE_STATUSES);
 
 const safeTime = (value: string | undefined, fallback: number): number => {
     if (!value) return fallback;
@@ -68,6 +127,14 @@ type SortFocusNextActionsOptions = {
     now?: Date;
     dueSoonWindowDays?: number;
     prioritizeByPriority?: boolean;
+    projectDeadlineBoosts?: ReadonlyMap<string, ProjectDeadlineBoost>;
+    projects?: readonly Project[];
+};
+
+type SortTasksBySavedPreferenceOptions = {
+    projects?: readonly Project[];
+    prioritizeByPriority?: boolean;
+    sortOrder?: 'asc' | 'desc';
 };
 
 function getFocusNextActionBucket(
@@ -79,6 +146,143 @@ function getFocusNextActionBucket(
     if (!Number.isFinite(dueMs)) return 1;
     if (dueMs <= nowMs + dueSoonWindowMs) return 0;
     return 2;
+}
+
+export type ProjectDeadlineBoost = {
+    projectDueDate: string;
+    projectDueTime: number;
+    projectId: string;
+    projectOrder: number;
+    projectTitle: string;
+    isOverdue: boolean;
+};
+
+type ProjectDeadlineBoostProjectInfo = ProjectDeadlineBoost;
+
+const getProjectOrder = (project: Pick<Project, 'order'>): number => (
+    Number.isFinite(project.order) ? project.order : Number.POSITIVE_INFINITY
+);
+
+const getTaskOrder = (task: Pick<Task, 'order' | 'orderNum'>): number => (
+    Number.isFinite(task.order)
+        ? task.order as number
+        : Number.isFinite(task.orderNum)
+            ? task.orderNum as number
+            : Number.POSITIVE_INFINITY
+);
+
+const compareProjectDeadlineBoostTasks = (
+    a: Pick<Task, 'createdAt' | 'id' | 'order' | 'orderNum' | 'title'>,
+    b: Pick<Task, 'createdAt' | 'id' | 'order' | 'orderNum' | 'title'>,
+): number => {
+    const orderA = getTaskOrder(a);
+    const orderB = getTaskOrder(b);
+    if (orderA !== orderB) return orderA - orderB;
+
+    const createdDiff = safeTime(a.createdAt, Number.POSITIVE_INFINITY) - safeTime(b.createdAt, Number.POSITIVE_INFINITY);
+    if (createdDiff !== 0) return createdDiff;
+
+    const titleDiff = a.title.localeCompare(b.title);
+    if (titleDiff !== 0) return titleDiff;
+
+    return a.id.localeCompare(b.id);
+};
+
+const compareProjectDeadlineBoosts = (
+    boostA: ProjectDeadlineBoost | undefined,
+    boostB: ProjectDeadlineBoost | undefined,
+    taskA: Pick<Task, 'createdAt' | 'id' | 'order' | 'orderNum' | 'title'>,
+    taskB: Pick<Task, 'createdAt' | 'id' | 'order' | 'orderNum' | 'title'>,
+): number => {
+    if (boostA && !boostB) return -1;
+    if (!boostA && boostB) return 1;
+    if (!boostA || !boostB) return 0;
+
+    if (boostA.projectDueTime !== boostB.projectDueTime) {
+        return boostA.projectDueTime - boostB.projectDueTime;
+    }
+    if (boostA.projectOrder !== boostB.projectOrder) {
+        return boostA.projectOrder - boostB.projectOrder;
+    }
+
+    const projectTitleDiff = boostA.projectTitle.localeCompare(boostB.projectTitle);
+    if (projectTitleDiff !== 0) return projectTitleDiff;
+
+    return compareProjectDeadlineBoostTasks(taskA, taskB);
+};
+
+export function getProjectDeadlineBoosts(
+    tasks: readonly Task[],
+    projects: readonly Project[],
+    options: { now?: Date } = {},
+): Map<string, ProjectDeadlineBoost> {
+    const now = options.now ?? new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    const projectInfoById = new Map<string, ProjectDeadlineBoostProjectInfo>();
+
+    projects.forEach((project) => {
+        if (project.deletedAt) return;
+        if (project.status !== 'active' && project.isFocused !== true) return;
+        const projectDue = safeParseDueDate(project.dueDate);
+        if (!projectDue) return;
+        const projectDueTime = projectDue.getTime();
+        if (projectDueTime > endOfToday.getTime()) return;
+        projectInfoById.set(project.id, {
+            projectDueDate: project.dueDate as string,
+            projectDueTime,
+            projectId: project.id,
+            projectOrder: getProjectOrder(project),
+            projectTitle: project.title,
+            isOverdue: projectDueTime < startOfToday.getTime(),
+        });
+    });
+
+    if (projectInfoById.size === 0) return new Map();
+
+    const selectedTaskByProjectId = new Map<string, Task>();
+    tasks.forEach((task) => {
+        if (task.status !== 'next') return;
+        if (task.deletedAt) return;
+        if (!task.projectId) return;
+        if (task.dueDate || task.startTime) return;
+        if (!projectInfoById.has(task.projectId)) return;
+
+        const selectedTask = selectedTaskByProjectId.get(task.projectId);
+        if (!selectedTask || compareProjectDeadlineBoostTasks(task, selectedTask) < 0) {
+            selectedTaskByProjectId.set(task.projectId, task);
+        }
+    });
+
+    const boosts = new Map<string, ProjectDeadlineBoost>();
+    selectedTaskByProjectId.forEach((task, projectId) => {
+        const info = projectInfoById.get(projectId);
+        if (!info) return;
+        boosts.set(task.id, info);
+    });
+    return boosts;
+}
+
+function getSequentialTaskOrderKey<T extends SequentialTaskOrderFields>(task: T, hasOrder: boolean): number {
+    const taskOrder = Number.isFinite(task.order)
+        ? (task.order as number)
+        : Number.isFinite(task.orderNum)
+            ? (task.orderNum as number)
+            : Number.POSITIVE_INFINITY;
+    return hasOrder
+        ? taskOrder
+        : (safeParseDate(task.createdAt)?.getTime() ?? Number.POSITIVE_INFINITY);
+}
+
+function getSequentialTaskGroupKey<T extends SequentialGroupingFields>(
+    task: T,
+    sectionScopedProjectIds?: ReadonlySet<string>,
+): string | null {
+    if (!task.projectId) return null;
+    if (sectionScopedProjectIds?.has(task.projectId)) {
+        return `${task.projectId}:${task.sectionId || NO_SECTION_GROUP}`;
+    }
+    return task.projectId;
 }
 
 export function rescheduleTask(task: Task, newDueDate?: string): Task {
@@ -133,34 +337,29 @@ export function shouldShowTaskForStart(
     return !isTaskFutureStart(task, options.now);
 }
 
-export function getSequentialFirstTaskIds<T extends Pick<Task, 'createdAt' | 'id' | 'order' | 'orderNum' | 'projectId'>>(
+export function getSequentialFirstTaskIds<T extends Pick<Task, 'createdAt' | 'id' | 'order' | 'orderNum' | 'projectId'> & Partial<Pick<Task, 'sectionId'>>>(
     tasks: T[],
     sequentialProjectIds: ReadonlySet<string>,
+    options: SequentialFirstTaskOptions = {},
 ): Set<string> {
-    const tasksByProject = new Map<string, T[]>();
+    const tasksByGroup = new Map<string, T[]>();
     for (const task of tasks) {
-        if (!task.projectId) continue;
+        const groupKey = getSequentialTaskGroupKey(task, options.sectionScopedProjectIds);
+        if (!groupKey || !task.projectId) continue;
         if (!sequentialProjectIds.has(task.projectId)) continue;
-        const list = tasksByProject.get(task.projectId) ?? [];
+        const list = tasksByGroup.get(groupKey) ?? [];
         list.push(task);
-        tasksByProject.set(task.projectId, list);
+        tasksByGroup.set(groupKey, list);
     }
 
     const firstTaskIds = new Set<string>();
-    tasksByProject.forEach((tasksForProject) => {
+    tasksByGroup.forEach((tasksForProject) => {
         const hasOrder = tasksForProject.some((task) => Number.isFinite(task.order) || Number.isFinite(task.orderNum));
         let firstTaskId: string | null = null;
         let bestKey = Number.POSITIVE_INFINITY;
 
         tasksForProject.forEach((task) => {
-            const taskOrder = Number.isFinite(task.order)
-                ? (task.order as number)
-                : Number.isFinite(task.orderNum)
-                    ? (task.orderNum as number)
-                    : Number.POSITIVE_INFINITY;
-            const key = hasOrder
-                ? taskOrder
-                : (safeParseDate(task.createdAt)?.getTime() ?? Number.POSITIVE_INFINITY);
+            const key = getSequentialTaskOrderKey(task, hasOrder);
             if (!firstTaskId || key < bestKey) {
                 firstTaskId = task.id;
                 bestKey = key;
@@ -182,18 +381,167 @@ export function isFocusSequentialCandidate(
     return isDueForReview(task.reviewAt, options.now);
 }
 
+function getFocusSequentialScheduleKey(
+    task: Pick<Task, 'dueDate' | 'isFocusedToday' | 'reviewAt' | 'startTime'>,
+    now: Date,
+): { rank: number; time: number } {
+    if (task.isFocusedToday === true) {
+        return { rank: 0, time: 0 };
+    }
+
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    const startOfTodayMs = startOfToday.getTime();
+    const endOfTodayMs = endOfToday.getTime();
+    const dueMs = safeDueTime(task.dueDate, Number.NaN);
+    const startMs = safeParseDate(task.startTime)?.getTime() ?? Number.NaN;
+    const reviewMs = safeParseDate(task.reviewAt)?.getTime() ?? Number.NaN;
+    let scheduledTime = Number.POSITIVE_INFINITY;
+
+    if (Number.isFinite(dueMs) && dueMs <= endOfTodayMs) {
+        scheduledTime = Math.min(scheduledTime, dueMs);
+    }
+    if (Number.isFinite(startMs) && startMs >= startOfTodayMs && startMs <= endOfTodayMs) {
+        scheduledTime = Math.min(scheduledTime, startMs);
+    }
+    if (isDueForReview(task.reviewAt, now) && Number.isFinite(reviewMs)) {
+        scheduledTime = Math.min(scheduledTime, reviewMs);
+    }
+
+    return Number.isFinite(scheduledTime)
+        ? { rank: 1, time: scheduledTime }
+        : { rank: 2, time: Number.POSITIVE_INFINITY };
+}
+
 export function getFocusSequentialFirstTaskIds<
-    T extends Pick<Task, 'createdAt' | 'id' | 'isFocusedToday' | 'order' | 'orderNum' | 'projectId' | 'reviewAt' | 'status'>
+    T extends Pick<Task, 'createdAt' | 'dueDate' | 'id' | 'isFocusedToday' | 'order' | 'orderNum' | 'projectId' | 'reviewAt' | 'startTime' | 'status'> & Partial<Pick<Task, 'sectionId'>>
 >(
     tasks: T[],
     sequentialProjectIds: ReadonlySet<string>,
     options: FocusSequentialOptions = {},
 ): Set<string> {
     const now = options.now ?? new Date();
-    return getSequentialFirstTaskIds(
-        tasks.filter((task) => isFocusSequentialCandidate(task, { now })),
+    const tasksByGroup = new Map<string, T[]>();
+    for (const task of tasks) {
+        const groupKey = getSequentialTaskGroupKey(task, options.sectionScopedProjectIds);
+        if (!groupKey || !task.projectId) continue;
+        if (!sequentialProjectIds.has(task.projectId)) continue;
+        if (!isFocusSequentialCandidate(task, { now })) continue;
+        const list = tasksByGroup.get(groupKey) ?? [];
+        list.push(task);
+        tasksByGroup.set(groupKey, list);
+    }
+
+    const firstTaskIds = new Set<string>();
+    tasksByGroup.forEach((tasksForProject) => {
+        const hasOrder = tasksForProject.some((task) => Number.isFinite(task.order) || Number.isFinite(task.orderNum));
+        let firstTaskId: string | null = null;
+        let bestScheduleRank = Number.POSITIVE_INFINITY;
+        let bestScheduleTime = Number.POSITIVE_INFINITY;
+        let bestOrderKey = Number.POSITIVE_INFINITY;
+
+        tasksForProject.forEach((task) => {
+            const scheduleKey = getFocusSequentialScheduleKey(task, now);
+            const orderKey = getSequentialTaskOrderKey(task, hasOrder);
+            const isBetter = !firstTaskId
+                || scheduleKey.rank < bestScheduleRank
+                || (
+                    scheduleKey.rank === bestScheduleRank
+                    && (
+                        scheduleKey.time < bestScheduleTime
+                        || (
+                            scheduleKey.time === bestScheduleTime
+                            && orderKey < bestOrderKey
+                        )
+                    )
+                );
+
+            if (isBetter) {
+                firstTaskId = task.id;
+                bestScheduleRank = scheduleKey.rank;
+                bestScheduleTime = scheduleKey.time;
+                bestOrderKey = orderKey;
+            }
+        });
+
+        if (firstTaskId) firstTaskIds.add(firstTaskId);
+    });
+
+    return firstTaskIds;
+}
+
+const getFocusEligibilityProjectMap = (
+    projects: readonly Project[] | Map<string, Project>,
+): Map<string, Project> => {
+    if (Array.isArray(projects)) {
+        return new Map(projects.map((project) => [project.id, project]));
+    }
+    return projects as Map<string, Project>;
+};
+
+const getFocusEligibilitySequentialProjectIds = (
+    projectMap: ReadonlyMap<string, Project>,
+): { sequentialProjectIds: Set<string>; sectionScopedProjectIds: Set<string> } => {
+    const sequentialProjectIds = new Set<string>();
+    const sectionScopedProjectIds = new Set<string>();
+    projectMap.forEach((project) => {
+        if (!project.isSequential) return;
+        sequentialProjectIds.add(project.id);
+        if (project.sequentialScope === 'section') {
+            sectionScopedProjectIds.add(project.id);
+        }
+    });
+    return { sequentialProjectIds, sectionScopedProjectIds };
+};
+
+export function getTaskFocusEligibility(
+    task: Task,
+    options: TaskFocusEligibilityOptions,
+): TaskFocusEligibilityResult {
+    const now = options.now ?? new Date();
+    const projectMap = getFocusEligibilityProjectMap(options.projects);
+    const derivedSequential = options.sequentialProjectIds && options.sectionScopedProjectIds
+        ? null
+        : getFocusEligibilitySequentialProjectIds(projectMap);
+    const sequentialProjectIds = options.sequentialProjectIds ?? derivedSequential?.sequentialProjectIds ?? new Set<string>();
+    const sectionScopedProjectIds = options.sectionScopedProjectIds
+        ?? derivedSequential?.sectionScopedProjectIds
+        ?? new Set<string>();
+    const activeFocusBaseTasks = options.tasks.filter((candidate) => (
+        !candidate.deletedAt
+        && FOCUS_ELIGIBILITY_ACTIVE_STATUS_SET.has(candidate.status)
+        && isTaskInActiveProject(candidate, projectMap)
+    ));
+    const sequentialFirstTaskIds = getFocusSequentialFirstTaskIds(
+        activeFocusBaseTasks,
         sequentialProjectIds,
+        { now, sectionScopedProjectIds },
     );
+    const isSequentialBlocked = Boolean(
+        task.projectId
+        && sequentialProjectIds.has(task.projectId)
+        && !sequentialFirstTaskIds.has(task.id),
+    );
+    const isVisibleForStart = shouldShowTaskForStart(task, {
+        now,
+        showFutureStarts: options.showFutureStarts,
+    });
+    const isVisibleActiveTask = isTaskInActiveProject(task, projectMap) && isVisibleForStart;
+    const isReviewDueEligible = task.status !== 'inbox' && isDueForReview(task.reviewAt, now);
+    const eligible = isVisibleActiveTask
+        && !isSequentialBlocked
+        && (task.status === 'next' || isReviewDueEligible);
+
+    if (eligible) {
+        return { eligible: true, reason: 'eligible' };
+    }
+    if (!isVisibleForStart) {
+        return { eligible: false, reason: 'deferred' };
+    }
+    if (isSequentialBlocked) {
+        return { eligible: false, reason: 'sequential' };
+    }
+    return { eligible: false, reason: 'clarify' };
 }
 
 /**
@@ -277,6 +625,146 @@ export function sortTasksBy(tasks: Task[], sortBy: TaskSortBy = 'default'): Task
     }
 }
 
+/**
+ * Stable sort for Board columns: tasks with a manual boardOrder come first
+ * in ascending order; tasks without one keep their incoming relative order.
+ */
+export function sortTasksByBoardOrder<T extends Pick<Task, 'boardOrder'>>(tasks: T[]): T[] {
+    return [...tasks].sort((a, b) => {
+        const aOrder = Number.isFinite(a.boardOrder) ? (a.boardOrder as number) : Number.POSITIVE_INFINITY;
+        const bOrder = Number.isFinite(b.boardOrder) ? (b.boardOrder as number) : Number.POSITIVE_INFINITY;
+        if (aOrder === bOrder) return 0;
+        return aOrder - bOrder;
+    });
+}
+
+export function splitCompletedTasks<T extends Pick<Task, 'status'>>(tasks: T[]): {
+    activeTasks: T[];
+    completedTasks: T[];
+} {
+    const activeTasks: T[] = [];
+    const completedTasks: T[] = [];
+
+    tasks.forEach((task) => {
+        if (task.status === 'done') {
+            completedTasks.push(task);
+        } else {
+            activeTasks.push(task);
+        }
+    });
+
+    return { activeTasks, completedTasks };
+}
+
+function getCompletionListTime(task: Pick<Task, 'completedAt' | 'updatedAt' | 'createdAt'>): number {
+    const completedAt = safeParseDate(task.completedAt)?.getTime();
+    if (Number.isFinite(completedAt)) return completedAt as number;
+    const updatedAt = safeParseDate(task.updatedAt)?.getTime();
+    if (Number.isFinite(updatedAt)) return updatedAt as number;
+    return safeParseDate(task.createdAt)?.getTime() ?? 0;
+}
+
+export function sortDoneTasksForListView<T extends Pick<Task, 'completedAt' | 'updatedAt' | 'createdAt' | 'title'>>(tasks: T[]): T[] {
+    return [...tasks].sort((a, b) => {
+        const completionDiff = getCompletionListTime(b) - getCompletionListTime(a);
+        if (completionDiff !== 0) return completionDiff;
+        return a.title.localeCompare(b.title);
+    });
+}
+
+export function groupCompletedTasksLast<T extends Pick<Task, 'status'>>(tasks: T[]): T[] {
+    const { activeTasks, completedTasks } = splitCompletedTasks(tasks);
+    return [...activeTasks, ...completedTasks];
+}
+
+export function sortTasksBySavedPreference<T extends Task>(
+    tasks: T[],
+    sortBy: SortField | undefined,
+    options: SortTasksBySavedPreferenceOptions = {},
+): T[] {
+    if (!sortBy || sortBy === 'default') {
+        return [...tasks];
+    }
+
+    const projectOrder = new Map<string, number>();
+    const projectTitle = new Map<string, string>();
+    [...(options.projects ?? [])]
+        .filter((project) => !project.deletedAt)
+        .sort((a, b) => {
+            const aOrder = Number.isFinite(a.order) ? (a.order as number) : Number.POSITIVE_INFINITY;
+            const bOrder = Number.isFinite(b.order) ? (b.order as number) : Number.POSITIVE_INFINITY;
+            if (aOrder !== bOrder) return aOrder - bOrder;
+            return a.title.localeCompare(b.title);
+        })
+        .forEach((project, index) => {
+            projectOrder.set(project.id, index);
+            projectTitle.set(project.id, project.title);
+        });
+
+    const direction = options.sortOrder === 'desc' ? -1 : 1;
+    const compare = (a: T, b: T): number => {
+        const byCreatedAsc = () => safeTime(a.createdAt, 0) - safeTime(b.createdAt, 0);
+        const byCreatedDesc = () => safeTime(b.createdAt, 0) - safeTime(a.createdAt, 0);
+        const byTitle = () => a.title.localeCompare(b.title);
+        const byId = () => a.id.localeCompare(b.id);
+        const byDue = () => safeDueTime(a.dueDate, Number.POSITIVE_INFINITY) - safeDueTime(b.dueDate, Number.POSITIVE_INFINITY);
+        const byStart = () => safeTime(a.startTime, Number.POSITIVE_INFINITY) - safeTime(b.startTime, Number.POSITIVE_INFINITY);
+        const byReview = () => safeTime(a.reviewAt, Number.POSITIVE_INFINITY) - safeTime(b.reviewAt, Number.POSITIVE_INFINITY);
+        const byUpdated = () => safeTime(b.updatedAt, 0) - safeTime(a.updatedAt, 0);
+        const byPriority = () => (TASK_PRIORITY_SORT_RANK[b.priority as TaskPriority] || 0)
+            - (TASK_PRIORITY_SORT_RANK[a.priority as TaskPriority] || 0);
+        const byEnergy = () => (TASK_ENERGY_SORT_RANK[b.energyLevel as NonNullable<Task['energyLevel']>] || 0)
+            - (TASK_ENERGY_SORT_RANK[a.energyLevel as NonNullable<Task['energyLevel']>] || 0);
+        const byTimeEstimate = () => timeEstimateSortRank(a.timeEstimate) - timeEstimateSortRank(b.timeEstimate);
+        const byProject = () => {
+            const orderA = a.projectId ? (projectOrder.get(a.projectId) ?? Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY;
+            const orderB = b.projectId ? (projectOrder.get(b.projectId) ?? Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY;
+            if (orderA !== orderB) return orderA - orderB;
+            const titleA = a.projectId ? (projectTitle.get(a.projectId) ?? '') : '';
+            const titleB = b.projectId ? (projectTitle.get(b.projectId) ?? '') : '';
+            return titleA.localeCompare(titleB);
+        };
+        const withFallbacks = (...comparers: Array<() => number>) => {
+            for (const comparer of comparers) {
+                const result = comparer();
+                if (result !== 0) return result;
+            }
+            return byId();
+        };
+
+        switch (sortBy) {
+            case 'due':
+                return withFallbacks(byDue, byCreatedAsc);
+            case 'start':
+                return options.prioritizeByPriority
+                    ? withFallbacks(byStart, byPriority, byCreatedAsc)
+                    : withFallbacks(byStart, byCreatedAsc);
+            case 'review':
+                return withFallbacks(byReview, byCreatedAsc);
+            case 'title':
+                return withFallbacks(byTitle, byCreatedAsc);
+            case 'created':
+                return withFallbacks(byCreatedAsc);
+            case 'created-desc':
+                return withFallbacks(byCreatedDesc);
+            case 'priority':
+                return withFallbacks(byPriority, byDue, byStart, byCreatedAsc);
+            case 'energy':
+                return withFallbacks(byEnergy, byDue, byStart, byCreatedAsc);
+            case 'timeEstimate':
+                return withFallbacks(byTimeEstimate, byDue, byStart, byCreatedAsc);
+            case 'project':
+                return withFallbacks(byProject, byCreatedAsc);
+            case 'updated':
+                return withFallbacks(byUpdated, byCreatedAsc);
+            default:
+                return withFallbacks(byCreatedAsc);
+        }
+    };
+
+    return [...tasks].sort((a, b) => direction * compare(a, b));
+}
+
 export function sortFocusNextActions(tasks: Task[], options: SortFocusNextActionsOptions = {}): Task[] {
     const nowMs = (options.now ?? new Date()).getTime();
     const dueSoonWindowDays = Number.isFinite(options.dueSoonWindowDays)
@@ -284,6 +772,8 @@ export function sortFocusNextActions(tasks: Task[], options: SortFocusNextAction
         : FOCUS_NEXT_DUE_SOON_WINDOW_DAYS;
     const dueSoonWindowMs = dueSoonWindowDays * 24 * 60 * 60 * 1000;
     const prioritizeByPriority = options.prioritizeByPriority === true;
+    const projectDeadlineBoosts = options.projectDeadlineBoosts
+        ?? (options.projects ? getProjectDeadlineBoosts(tasks, options.projects, { now: options.now }) : new Map());
 
     return [...tasks].sort((a, b) => {
         const bucketA = getFocusNextActionBucket(a, nowMs, dueSoonWindowMs);
@@ -294,6 +784,16 @@ export function sortFocusNextActions(tasks: Task[], options: SortFocusNextAction
             const dueA = safeDueTime(a.dueDate, Number.POSITIVE_INFINITY);
             const dueB = safeDueTime(b.dueDate, Number.POSITIVE_INFINITY);
             if (dueA !== dueB) return dueA - dueB;
+        }
+
+        if (bucketA === 1) {
+            const projectBoostDiff = compareProjectDeadlineBoosts(
+                projectDeadlineBoosts.get(a.id),
+                projectDeadlineBoosts.get(b.id),
+                a,
+                b,
+            );
+            if (projectBoostDiff !== 0) return projectBoostDiff;
         }
 
         if (prioritizeByPriority) {
@@ -314,6 +814,62 @@ export function sortFocusNextActions(tasks: Task[], options: SortFocusNextAction
 
         return a.id.localeCompare(b.id);
     });
+}
+
+export type CalendarPlanningCandidateOptions = {
+    limit?: number;
+    now?: Date;
+    prioritizeByPriority?: boolean;
+    projects?: readonly Project[] | Map<string, Project>;
+    sectionScopedProjectIds?: ReadonlySet<string>;
+    sequentialProjectIds?: ReadonlySet<string>;
+};
+
+export function getCalendarPlanningCandidates<T extends Task>(
+    tasks: readonly T[],
+    options: CalendarPlanningCandidateOptions = {},
+): T[] {
+    const now = options.now ?? new Date();
+    const projectMap = options.projects ? getFocusEligibilityProjectMap(options.projects) : null;
+    const derivedSequential = projectMap && (!options.sequentialProjectIds || !options.sectionScopedProjectIds)
+        ? getFocusEligibilitySequentialProjectIds(projectMap)
+        : null;
+    const sequentialProjectIds = options.sequentialProjectIds
+        ?? derivedSequential?.sequentialProjectIds
+        ?? new Set<string>();
+    const sectionScopedProjectIds = options.sectionScopedProjectIds
+        ?? derivedSequential?.sectionScopedProjectIds
+        ?? new Set<string>();
+
+    const activeFocusTasks = tasks.filter((task) => (
+        !task.deletedAt
+        && FOCUS_ELIGIBILITY_ACTIVE_STATUS_SET.has(task.status)
+        && (!projectMap || isTaskInActiveProject(task, projectMap))
+    ));
+    const sequentialFirstTaskIds = getFocusSequentialFirstTaskIds(
+        activeFocusTasks,
+        sequentialProjectIds,
+        { now, sectionScopedProjectIds },
+    );
+
+    const candidates = tasks.filter((task) => {
+        if (task.deletedAt) return false;
+        if (task.status !== 'next') return false;
+        if (task.isFocusedToday) return false;
+        if (task.startTime) return false;
+        if (projectMap && !isTaskInActiveProject(task, projectMap)) return false;
+        if (task.projectId && sequentialProjectIds.has(task.projectId) && !sequentialFirstTaskIds.has(task.id)) return false;
+        return true;
+    });
+
+    const sortProjects = Array.isArray(options.projects) ? options.projects : undefined;
+    const sorted = sortFocusNextActions(candidates as Task[], {
+        now,
+        prioritizeByPriority: options.prioritizeByPriority,
+        projects: sortProjects,
+    }) as T[];
+    const limit = Number.isFinite(options.limit) ? Math.max(0, Math.floor(options.limit as number)) : sorted.length;
+    return sorted.slice(0, limit);
 }
 
 /**
@@ -418,6 +974,41 @@ export type SpeechUpdatePlan = {
     suggestedProjectTitle?: string;
 };
 
+const normalizeSpeechTranscriptForTask = (transcript: string | null | undefined): string | undefined => {
+    const trimmed = transcript?.trim();
+    if (!trimmed) return undefined;
+
+    const parseStructuredTranscript = (candidate: string): string | undefined | null => {
+        try {
+            const parsed = JSON.parse(candidate) as unknown;
+            if (!parsed || typeof parsed !== 'object') return null;
+            const text = (parsed as { text?: unknown; transcript?: unknown }).text
+                ?? (parsed as { transcript?: unknown }).transcript;
+            if (typeof text !== 'string') return null;
+            const normalized = text.trim();
+            return normalized || undefined;
+        } catch {
+            return null;
+        }
+    };
+
+    const direct = parseStructuredTranscript(trimmed);
+    if (direct !== null) return direct;
+
+    const objectStart = trimmed.indexOf('{');
+    const objectEnd = trimmed.lastIndexOf('}');
+    if (objectStart >= 0 && objectEnd > objectStart) {
+        const embedded = parseStructuredTranscript(trimmed.slice(objectStart, objectEnd + 1));
+        if (embedded !== null) return embedded;
+    }
+
+    if (/^(?:\[\s*[^\]]+?\s*\]\s*)+$/.test(trimmed)) {
+        return undefined;
+    }
+
+    return trimmed;
+};
+
 export function buildTaskUpdatesFromSpeechResult(
     existing: Pick<Task, 'title' | 'description' | 'dueDate' | 'startTime' | 'tags' | 'contexts' | 'projectId'>,
     result: SpeechResultLike,
@@ -426,7 +1017,7 @@ export function buildTaskUpdatesFromSpeechResult(
     const updates: Partial<Task> = {};
     const mode = settings?.ai?.speechToText?.mode ?? 'smart_parse';
     const fieldStrategy = settings?.ai?.speechToText?.fieldStrategy ?? 'smart';
-    const transcript = result.transcript?.trim();
+    const transcript = normalizeSpeechTranscriptForTask(result.transcript);
 
     if (mode === 'transcribe_only') {
         if (transcript) {

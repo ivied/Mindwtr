@@ -14,6 +14,7 @@ export type ObsidianConfig = {
     scanFolders: string[];
     inboxFile: string;
     taskNotesIncludeArchived: boolean;
+    dataviewMetadataEnabled: boolean;
     newTaskFormat: ObsidianNewTaskFormat;
     lastScannedAt: string | null;
     enabled: boolean;
@@ -187,6 +188,7 @@ export const normalizeObsidianConfig = (config: Partial<ObsidianConfig> | null |
         scanFolders,
         inboxFile: sanitizeObsidianInboxFile(config?.inboxFile),
         taskNotesIncludeArchived: config?.taskNotesIncludeArchived === true,
+        dataviewMetadataEnabled: config?.dataviewMetadataEnabled === true,
         newTaskFormat: sanitizeObsidianNewTaskFormat(config?.newTaskFormat),
         lastScannedAt,
         enabled,
@@ -361,6 +363,7 @@ const readAndParseObsidianMarkdownFile = async (
         vaultPath,
         relativeFilePath: normalizedRelativePath,
         fileModifiedAt,
+        dataviewMetadataEnabled: config.dataviewMetadataEnabled,
     });
     return {
         tasks: parsed.tasks,

@@ -63,7 +63,7 @@ Tauri v2 desktop app for the Mindwtr productivity system.
 
 ### Security Note
 
-- CSP is disabled for the trusted local UI (`src-tauri/tauri.conf.json`). Avoid loading untrusted remote content in the webview.
+- Tauri (`src-tauri/tauri.conf.json`) and static PWA builds (`public/_headers`) ship a restrictive CSP. Avoid loading untrusted remote content in the webview.
 
 ## Prerequisites
 
@@ -122,9 +122,10 @@ Portable mode stores secrets in the local `profile/config/secrets.toml` file ins
 
 Configure sync in Settings:
 
-- **File Sync** - Dropbox, Google Drive, Syncthing, etc.
+- **File Sync** - iCloud Drive, Dropbox folders, Google Drive, Syncthing, network shares, etc.
 - **WebDAV** - Nextcloud, ownCloud, self-hosted servers
-- **Cloud** - Self-hosted cloud backend (see `../../wiki/Cloud-Sync.md`)
+- **Dropbox** - Direct Dropbox App Folder sync in supported builds
+- **Cloud** - Self-hosted cloud backend (see https://docs.mindwtr.app/data-sync/ and https://docs.mindwtr.app/data-sync/cloud-deployment)
 - **External Calendars (ICS)** - View-only calendar overlay
 
 Sync recommendation:

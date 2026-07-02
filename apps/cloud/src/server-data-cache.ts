@@ -1,7 +1,7 @@
 import { lstatSync, type Stats } from 'fs';
 import type { AppData } from '@mindwtr/core';
 
-import { resolveAllowedOrigin, logWarn } from './server-config';
+import { corsOrigin, logWarn } from './server-config';
 import {
     loadAppData as loadAppDataFromStorage,
     writeData,
@@ -15,6 +15,12 @@ type DataMetadataCacheEntry = {
     ino: number;
     lastModified: string;
     mtimeMs: number;
+    size: number;
+};
+
+export type DataFileMetadata = {
+    etag: string;
+    lastModified: string;
     size: number;
 };
 
@@ -191,14 +197,23 @@ const getDataMetadata = (filePath: string, stat: Stats): DataMetadataCacheEntry 
     return entry;
 };
 
-export const dataMetadataResponse = (filePath: string): Response => {
+export const getDataFileMetadata = (filePath: string): DataFileMetadata => {
     const stat = lstatSync(filePath);
     const metadata = getDataMetadata(filePath, stat);
+    return {
+        etag: metadata.etag,
+        lastModified: metadata.lastModified,
+        size: metadata.size,
+    };
+};
+
+export const dataMetadataResponse = (filePath: string): Response => {
+    const metadata = getDataFileMetadata(filePath);
     const headers = new Headers({
-        'Access-Control-Allow-Origin': resolveAllowedOrigin(),
-        'Vary': 'Origin',
+        'Access-Control-Allow-Origin': corsOrigin,
         'Access-Control-Allow-Headers': 'Authorization, Content-Type',
         'Access-Control-Allow-Methods': 'GET,HEAD,PUT,POST,PATCH,DELETE,OPTIONS',
+        'Access-Control-Expose-Headers': 'ETag, Last-Modified, Content-Length',
         'Content-Length': String(metadata.size),
         'ETag': metadata.etag,
         'Last-Modified': metadata.lastModified,
@@ -214,8 +229,7 @@ export const jsonFileResponse = (body: string | Uint8Array): Response => {
         ? body
         : body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) as ArrayBuffer;
     const headers = new Headers({
-        'Access-Control-Allow-Origin': resolveAllowedOrigin(),
-        'Vary': 'Origin',
+        'Access-Control-Allow-Origin': corsOrigin,
         'Access-Control-Allow-Headers': 'Authorization, Content-Type',
         'Access-Control-Allow-Methods': 'GET,HEAD,PUT,POST,PATCH,DELETE,OPTIONS',
         'Content-Length': String(contentLength),
@@ -232,6 +246,7 @@ export const __serverDataCacheTestUtils = {
     },
     dataMetadataResponse,
     getDataCacheMaxEntries: () => DATA_CACHE_MAX_ENTRIES,
+    getDataFileMetadata,
     getDataMetadataCacheSize: () => dataMetadataCache.size,
     getParsedDataCacheSize: () => parsedDataCache.size,
     getValidatedDataCacheSize: () => validatedDataCache.size,

@@ -1,0 +1,12 @@
+<en-US>
+Mindwtr 0.9.4 adds a configurable quick access tab, optional Focus grouping, inbox project conversion, and compact task sorting. Android polish keeps the widget capture button visible, themes the navigation bar, improves reminder reopen flow, and makes sync quieter when nothing changed.
+</en-US>
+<de-DE>
+Mindwtr 0.9.4 ergaenzt einen konfigurierbaren Schnellzugriff-Tab, optionale Focus-Gruppierung, Umwandlung von Projekten in Inbox-Eintraege und kompakte Sortierung. Android-Feinschliff haelt den Widget-Capture-Button sichtbar, thematisiert die Navigationsleiste und beruhigt Sync, wenn nichts geaendert wurde.
+</de-DE>
+<es-ES>
+Mindwtr 0.9.4 agrega una pestana de acceso rapido configurable, agrupacion opcional en Focus, conversion de proyectos a Inbox y orden compacto. En Android, el boton de captura del widget sigue visible, la barra de navegacion respeta el tema y sync es mas silencioso cuando nada cambio.
+</es-ES>
+<zh-CN>
+Mindwtr 0.9.4 增加可配置的快速入口标签、可选的专注分组、项目转 Inbox 和紧凑排序。Android 体验也更稳：小组件收集按钮保持可见，导航栏跟随主题，提醒重新打开更可靠，未变更时同步更安静。
+</zh-CN>

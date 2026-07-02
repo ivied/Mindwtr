@@ -1,0 +1,15 @@
+<en-US>
+Mindwtr 0.9.10 adds Guided Mind Sweep in Inbox, people/assignee planning, board column ordering, weekly inbox processing, and follow-up-today review actions. Sync and attachments are safer with bounded requests, cleaner remote deletes, tombstone fixes, and better fallback handling. Mobile Inbox actions, shared text capture, and bulk review organization are steadier.
+</en-US>
+<de-DE>
+Mindwtr 0.9.10 fuegt Guided Mind Sweep in der Inbox, Personenplanung, Board-Sortierung, Inbox-Verarbeitung und Heute-Follow-ups hinzu. Sync und Anhaenge sind sicherer durch begrenzte Anfragen, Remote-Loeschungen, Tombstone-Fixes und bessere Fallbacks. Mobile Inbox-Aktionen, Teilen-Text und Review-Organisation sind stabiler.
+</de-DE>
+<es-ES>
+Mindwtr 0.9.10 agrega Guided Mind Sweep en Bandeja, planificacion por personas, orden en tablero, procesamiento de bandeja y seguimientos para hoy. Sync y adjuntos son mas seguros con solicitudes acotadas, borrados remotos limpios, fixes de tombstones y mejores fallbacks. Acciones moviles, texto compartido y organizacion de revision son mas estables.
+</es-ES>
+<fr-FR>
+Mindwtr 0.9.10 ajoute Guided Mind Sweep dans l'Inbox, la planification par personnes, l'ordre du tableau, le traitement d'inbox et les suivis du jour. Sync et pieces jointes sont plus sures avec requetes bornees, suppressions distantes propres, tombstones corriges et meilleurs fallbacks. Les actions mobiles et la revue sont plus stables.
+</fr-FR>
+<zh-CN>
+Mindwtr 0.9.10 在收件箱加入 Guided Mind Sweep、人员/负责人规划、看板列排序、收件箱处理和今日跟进。同步和附件更安全：请求有边界、远程删除更干净、墓碑处理更稳、回退更可靠。移动端收件箱操作、分享文本捕获和批量整理也更稳定。
+</zh-CN>

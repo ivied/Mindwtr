@@ -1,13 +1,14 @@
 import React, { useEffect, useRef, useMemo, useCallback, useState } from 'react';
 import { View, Text, FlatList, Pressable, StyleSheet, Alert } from 'react-native';
-import { safeFormatDate, useTaskStore } from '@mindwtr/core';
+import { getInlineMarkdownPreview, safeFormatDate, shallow, useTaskStore } from '@mindwtr/core';
 import type { Task } from '@mindwtr/core';
+import { MarkdownInlineText } from '@/components/markdown-text';
 import { useLanguage } from '../../contexts/language-context';
 
 import { useMobileAreaFilter } from '@/hooks/use-mobile-area-filter';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import type { ThemeColors } from '@/hooks/use-theme-colors';
-import { taskMatchesAreaFilter } from '@/lib/area-filter';
+import { taskMatchesAreaFilter } from '@mindwtr/core';
 import { openContextsScreen, openProjectScreen } from '@/lib/task-meta-navigation';
 import { TaskEditModal } from '@/components/task-edit-modal';
 import { Swipeable, GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -84,9 +85,12 @@ function ArchivedTaskItem({
                         {task.title}
                     </Text>
                     {task.description && (
-                        <Text style={[styles.taskDescription, { color: tc.secondaryText }]} numberOfLines={1}>
-                            {task.description}
-                        </Text>
+                        <MarkdownInlineText
+                            markdown={getInlineMarkdownPreview(task.description)}
+                            tc={tc}
+                            style={[styles.taskDescription, { color: tc.secondaryText }]}
+                            numberOfLines={1}
+                        />
                     )}
                     <Text style={[styles.archivedDate, { color: tc.secondaryText }]}>
                         {completedLabel}: {completionDateLabel}
@@ -99,7 +103,14 @@ function ArchivedTaskItem({
 }
 
 export default function ArchivedScreen() {
-    const { _allTasks, projects, updateTask, purgeTask, highlightTaskId, setHighlightTask } = useTaskStore();
+    const { _allTasks, projects, updateTask, purgeTask, highlightTaskId, setHighlightTask } = useTaskStore((state) => ({
+        _allTasks: state._allTasks,
+        projects: state.projects,
+        updateTask: state.updateTask,
+        purgeTask: state.purgeTask,
+        highlightTaskId: state.highlightTaskId,
+        setHighlightTask: state.setHighlightTask,
+    }), shallow);
     const { t } = useLanguage();
     const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
@@ -209,7 +220,7 @@ export default function ArchivedScreen() {
                     maxToRenderPerBatch={12}
                     windowSize={5}
                     updateCellsBatchingPeriod={50}
-                    removeClippedSubviews={archivedTasks.length >= 25}
+                    removeClippedSubviews={false}
                     showsVerticalScrollIndicator={false}
                     ListEmptyComponent={
                         <View style={styles.emptyState}>

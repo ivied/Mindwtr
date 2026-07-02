@@ -12,8 +12,17 @@ assignees: ''
 
 ### ℹ️ Environment
 - **App Version:** 
+- **Install Channel:** (Play Store / F-Droid / App Store / TestFlight / release APK / source-dev build)
 - **OS Version:** 
 - **Device Model:** 
+
+<details>
+<summary><strong>Install channel examples (Click to expand)</strong></summary>
+
+- **Android:** Play Store, F-Droid, release file / sideloaded APK, source/dev build
+- **iOS:** App Store, TestFlight, source/dev build
+
+</details>
 
 ### 📝 Description
 What UI/UX issue are you seeing?

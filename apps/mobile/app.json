@@ -2,7 +2,7 @@
   "expo": {
     "name": "Mindwtr",
     "slug": "mindwtr",
-    "version": "0.9.3",
+    "version": "1.0.5",
     "orientation": "default",
     "icon": "./assets/images/icon.png",
     "scheme": "mindwtr",
@@ -36,11 +36,12 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "versionCode": 67,
+      "versionCode": 82,
       "package": "tech.dongdongbh.mindwtr",
       "permissions": [
         "RECORD_AUDIO",
         "POST_NOTIFICATIONS",
+        "SCHEDULE_EXACT_ALARM",
         "READ_CALENDAR",
         "WRITE_CALENDAR"
       ],
@@ -134,10 +135,18 @@
           "remindersPermission": "Mindwtr needs reminders access to import your chosen Apple Reminders capture list into Inbox."
         }
       ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Mindwtr uses Face ID to unlock the app when app lock is enabled."
+        }
+      ],
       "expo-secure-store",
       "./plugins/android-app-shortcuts",
       "./plugins/android-quick-settings-tile",
       "./plugins/android-manifest-fixes",
+      "./plugins/android-monochrome-icon",
+      "./plugins/android-system-bars",
       "./plugins/android-startup-trace",
       "./plugins/patch-alarm-notification-gradle"
     ],

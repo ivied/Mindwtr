@@ -23,21 +23,58 @@ export const allowedEnglishMirrorTerms = [
     'JSON',
     'CSV',
     'PDF',
+    'ZIP',
     'Markdown',
     'TaskNotes',
     'Todoist',
+    'TickTick',
     'OmniFocus',
+    'Obsidian',
     'DGT',
     'Vim',
     'Emacs',
     'Nord',
 ] as const;
 
+export const allowedEnglishMirrorKeysByLocale: Record<string, readonly string[]> = {
+    fr: [
+        'calendar.date',
+        'common.pause',
+        'context.energy.routine',
+        'list.compact',
+        'list.densityCompact',
+        'projects.sectionsLabel',
+        'recurrence.occurrenceUnit',
+        'review.description',
+        'settings.aiMobile.suggestions',
+        'settings.densityCompact',
+        'settings.documentation',
+        'settings.feedbackMessage',
+        'settings.feedbackWhereNotifications',
+        'settings.gtdMobile.simple',
+        'settings.gtdMobile.standard',
+        'settings.notifications',
+        'settings.speechFieldDescription',
+        'settings.syncHistoryBackend',
+        'settings.syncHistoryType',
+        'settings.version',
+        'tab.menu',
+        'tags.title',
+        'task.aria.tags',
+        'taskEdit.descriptionLabel',
+        'taskEdit.tagsLabel',
+    ],
+};
+
 const translatableEnglishPattern = /[A-Za-z]{3,}/;
+
+export function isAllowedEnglishMirrorKey(locale: string, key: string): boolean {
+    return allowedEnglishMirrorKeysByLocale[locale]?.includes(key) ?? false;
+}
 
 export function stripAllowedEnglishTerms(value: string): string {
     let next = value
-        .replace(/https?:\/\/\S+/gi, '')
+        .replace(/[A-Za-z][A-Za-z0-9+.-]*:\/\/\S*/g, '')
         .replace(/\{\{\s*[A-Za-z0-9_]+\s*\}\}/g, '')
         .replace(/\/[A-Za-z][A-Za-z0-9:_-]*/g, '')
         .replace(/[+#@!][A-Za-z][A-Za-z0-9:_-]*/g, '');

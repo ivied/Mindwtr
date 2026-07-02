@@ -17,9 +17,11 @@ The native iCloud backend syncs the same core GTD data as the other structured b
 - projects
 - sections
 - areas
+- attachment metadata
+- attachment files through CloudKit assets
 - synced settings groups
 
-It uses CloudKit in your Apple account rather than a user-selected `data.json` folder.
+It uses CloudKit records and assets in your Apple account rather than a user-selected `data.json` and `attachments/` folder.
 
 ## Setup
 
@@ -35,6 +37,7 @@ After setup, Mindwtr keeps using the normal local-first merge flow and can react
 
 - If a non-Apple build sees an old `cloudkit` backend value, Mindwtr falls back to `Off` instead of showing a broken iCloud option.
 - macOS users can still use **iCloud Drive + File Sync** if they prefer a folder-based workflow over the native CloudKit backend.
+- Native iCloud attachment sync is also Apple-only. Mixed-platform setups should use a cross-platform backend if attachments need to move between Apple and non-Apple devices.
 - If you need a cross-platform backend between Apple and non-Apple devices, use **WebDAV**, **Mindwtr Cloud**, **Dropbox** (supported builds), or **File Sync**.
 
 ## When To Use It

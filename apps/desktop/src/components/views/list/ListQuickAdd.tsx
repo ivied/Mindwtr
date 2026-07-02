@@ -33,6 +33,7 @@ export function ListQuickAdd({
     onResetCopilot,
     dense = false,
 }: ListQuickAddProps) {
+    const iconButtonClass = "inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
     return (
         <form onSubmit={onSubmit} className="relative">
             <TaskInput
@@ -54,15 +55,15 @@ export function ListQuickAdd({
                 }}
                 placeholder={`${t('nav.addTask')}... ${t('quickAdd.example')}`}
                 className={cn(
-                    "w-full bg-card border border-border rounded-lg shadow-sm focus:ring-2 focus:ring-primary focus:border-transparent transition-all",
-                    dense ? "py-2 pl-3 pr-16 text-sm" : "py-3 pl-4 pr-20"
+                    "w-full rounded-lg border border-border bg-card shadow-sm transition-all focus:border-primary focus:ring-2 focus:ring-primary/30",
+                    dense ? "py-2 pl-3 pr-24 text-sm" : "py-3 pl-4 pr-24"
                 )}
             />
             <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-2">
                 <button
                     type="button"
                     onClick={onOpenAudio}
-                    className="p-1.5 bg-muted/60 text-muted-foreground rounded-md hover:bg-muted transition-colors"
+                    className={cn(iconButtonClass, "bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground")}
                     aria-label={t('quickAdd.audioCaptureLabel')}
                 >
                     <Mic className="w-4 h-4" />
@@ -70,7 +71,7 @@ export function ListQuickAdd({
                 <button
                     type="submit"
                     disabled={!value.trim()}
-                    className="p-1.5 bg-primary text-primary-foreground rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-primary/90 transition-colors"
+                    className={cn(iconButtonClass, "border-primary bg-primary text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50")}
                     aria-label={t('common.add')}
                 >
                     <Plus className="w-4 h-4" />

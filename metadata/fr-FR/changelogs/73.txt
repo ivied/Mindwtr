@@ -1,0 +1,3 @@
+- Verrouillage optionnel de l'application avec authentification de l'appareil.
+- Le texte partagé est capturé comme notes de tâche, et la capture rapide est plus fluide.
+- Les lignes de projets, les heures planifiées, la synchronisation des listes, l'édition et la recherche sont plus fiables.

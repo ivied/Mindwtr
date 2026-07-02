@@ -14,6 +14,8 @@ APP_STORE_TEXT_FILES = {
     "subtitle.txt",
 }
 
+REQUIRED_LOCALES = {"en-US", "de-DE", "es-ES", "fr-FR", "zh-Hans"}
+
 EMOJI_RE = re.compile(
     "["
     "\U0001F000-\U0001FAFF"
@@ -28,6 +30,20 @@ def find_invalid_metadata(metadata_dir: Path) -> list[str]:
 
     if not metadata_dir.is_dir():
         raise ValueError(f"Fastlane metadata directory does not exist: {metadata_dir}")
+
+    for locale in sorted(REQUIRED_LOCALES):
+        locale_dir = metadata_dir / locale
+        if not locale_dir.is_dir():
+            errors.append(f"{locale}: required App Store metadata locale is missing")
+            continue
+
+        for filename in sorted(APP_STORE_TEXT_FILES):
+            path = locale_dir / filename
+            if not path.is_file():
+                errors.append(f"{locale}/{filename}: required App Store metadata file is missing")
+                continue
+            if not path.read_text(encoding="utf-8").strip():
+                errors.append(f"{locale}/{filename}: required App Store metadata file is empty")
 
     for path in sorted(metadata_dir.rglob("*.txt")):
         if path.name not in APP_STORE_TEXT_FILES:

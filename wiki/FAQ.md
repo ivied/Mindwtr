@@ -14,6 +14,26 @@ Mindwtr is a cross-platform Getting Things Done (GTD) productivity app that help
 
 Yes! Mindwtr is open source and free to use under the AGPL-3.0 license.
 
+### Is Mindwtr AI-generated? What is the project's stance on AI?
+
+Mindwtr is AI-assisted, not AI-generated. That distinction matters.
+
+The architecture, product direction, feature design, and GTD philosophy behind Mindwtr are designed and owned by the maintainer. AI tools help with execution: drafting implementations faster, reducing boilerplate, improving wording, and speeding up bug investigation. Every shipped change is still specified, reviewed, tested, and the maintainer takes responsibility for the result.
+
+AI-assisted development is normal software engineering practice today, including at major technology companies and across open source. AI is a tool, like IDEs, autocomplete, documentation, and Stack Overflow. Using it does not remove the developer's work; it shifts more of the work toward direction, judgment, review, integration, and validation.
+
+Mindwtr is maintained by a solo developer with 10+ years of software engineering experience. That experience is what makes AI useful rather than dangerous: knowing what to build, what not to build, when output is wrong, and how to keep the system coherent. AI helps a project this broad stay maintainable by one person, but it does not decide the design or own the result.
+
+Issue and discussion replies are written by the maintainer. AI may be used to polish English wording, but no agent auto-triages or auto-answers issues.
+
+For contributions, see the [LLM-assisted coding section in CONTRIBUTING.md](https://github.com/dongdongbh/Mindwtr/blob/main/docs/CONTRIBUTING.md#llm-assisted-coding-vibe-coding).
+
+### Why are there so many commits and issue reports?
+
+Mindwtr is a cross-platform end-user app, not a small CLI or library with one narrow command surface. It includes desktop and mobile clients, local-first persistence, sync backends, imports, notifications, quick capture, widgets, translations, installation channels, and GTD workflow decisions. That kind of product creates many small follow-up commits because UI polish, platform differences, packaging fixes, and edge-case reports are part of normal maintenance.
+
+The public issue count is also intentionally broad. GitHub issues include feature requests, UX improvements, platform-specific corner cases, release packaging reports, documentation gaps, and confirmed bugs. Many reports are not blockers for the main capture/organize/review workflow, but they are still tracked publicly so users can see what is known and what changed. Fast follow-up fixes are part of the maintenance model, not a sign that issues are ignored or hidden.
+
 ### Is there a roadmap or upcoming features page?
 
 We don’t maintain a fixed roadmap page. The living roadmap is the GitHub Issues list:
@@ -23,7 +43,9 @@ If you have a feature request, please open an issue and describe the workflow yo
 
 ### Where should I report bugs or request features?
 
-Please use GitHub Issues instead of email so reports stay trackable and searchable:
+Use **Send feedback** from **Settings → About** when it is available in your build. It can send a bug report, feature request, or other note without needing a GitHub account, and the reply email field is optional.
+
+For public tracking, longer discussions, or reports with files/logs, please use GitHub Issues instead of email so reports stay trackable and searchable:
 https://github.com/dongdongbh/Mindwtr/issues
 
 If Mindwtr is useful to you, support options are listed here:
@@ -42,20 +64,23 @@ Yes — GitHub Sponsors: https://github.com/sponsors/dongdongbh
 Mindwtr currently supports:
 
 - English
+- Tiếng Việt
 - 中文（简体）
 - 中文（繁體）
 - Español
-- Deutsch
-- 日本語
 - हिन्दी
 - العربية
+- Deutsch
 - Русский
+- 日本語
 - Français
 - Português
 - Polski
 - 한국어
+- Čeština
 - Italiano
 - Türkçe
+- Nederlands
 
 ### Where is my data stored?
 
@@ -139,16 +164,43 @@ For Horizons 3–5 (Goals, Vision, Purpose), there isn’t a dedicated entity ye
 
 If you rely on explicit Goal/Vision objects, please open an issue with your desired workflow and review cadence.
 
+### What is Project Section used for?
+
+A **Project Section** is a labeled group inside one project. Use sections to keep a longer project readable, such as **Design**, **Development**, and **Content** inside a **Launch website** project.
+
+Sections are not subtasks and not separate projects. They are just headings for tasks inside the same project outcome.
+
+The **Project Section** field on a task assigns that task to one of the sections in its current project. It only does something when the task already belongs to a project that has sections. If the task has no project, or the project has no sections, leave it blank.
+
+### Why can a project have multiple Next tasks?
+
+In Mindwtr, **Next** is a task status: the task has been clarified and is actionable. It is not always the same thing as "the single next action" for a project.
+
+Project type controls what gets surfaced:
+
+- **Sequential:** one available Next task is surfaced at a time. Later Next tasks stay in the project and wait their turn.
+- **Parallel:** multiple independent Next tasks can be surfaced because they can be done in any order.
+
+Later steps in a sequential project are not **Reference**. Reference is for non-actionable support material, notes, and documents.
+
 ### How do I enable Priority or Estimated Time?
 
 Mindwtr uses progressive disclosure, so optional fields are hidden by default.
 
-Enable them in:
+Control task edit fields in:
 
-**Settings → GTD → Task Editor Layout**
+**Settings -> GTD -> Task Editor Layout**
 
-Turn on **Priority** and **Estimated Time** there (and reorder fields if needed).
+Turn on **Priority** and **Estimated Time** there (and reorder fields if needed). Hidden fields still appear under **More** or when a task already has content in that field.
 
+
+### What is the difference between Done and Archived tasks?
+
+Use **Done** for tasks you have completed recently. Done tasks keep their completion date, stay visible in the Done view, and are useful during daily or weekly review when you want to see what was finished.
+
+Use **Archived** for completed tasks you want to file away. Archived tasks are hidden from normal task lists and remain available in the Archived view for search, restore, or permanent deletion. Archiving does not delete the task.
+
+In practice, treat Done as a short-term completion log and Archived as long-term history. The **Auto-Archive** setting can move Done tasks to Archived automatically after a chosen number of days, or you can set it to **Never** if you prefer to keep all completions in Done.
 
 
 ### How do recurring tasks work?
@@ -161,6 +213,8 @@ Mindwtr supports two recurrence strategies:
   Example: complete today, then next is due in 5 days from today.
 
 Set recurrence in the task editor (daily/weekly/monthly/yearly), then enable **Repeat after completion** if you want fluid behavior.
+
+Mindwtr keeps one active instance of a recurring task. It does not pre-populate future Calendar entries for the series; the next task instance is created only when the current one is completed.
 
 ### How do I collect logs for a bug report?
 
@@ -264,7 +318,7 @@ Install from Google Play or download the APK from [GitHub Releases](https://gith
 
 ### How do I capture from other apps?
 
-Use the **share sheet**! When viewing content in any app (browser, email, notes), tap Share and select Mindwtr. The content will be added to your Inbox.
+Use the **share sheet**! When viewing content in any app (browser, email, notes), tap Share and select Mindwtr. Mindwtr opens the capture screen with the shared content in the note so you can add a title, adjust fields, and save it to your Inbox.
 
 ### Is there a widget?
 
@@ -375,6 +429,18 @@ sudo pacman -S webkit2gtk-4.1
 sudo apt install libwebkit2gtk-4.1-0
 ```
 
+### Why is the AUR install or build directory so large?
+
+Use `mindwtr-bin` on Arch-based distributions unless you specifically want to build from source:
+
+```bash
+yay -S mindwtr-bin
+```
+
+`mindwtr-bin` installs the prebuilt GitHub release package and should be the small, fast AUR path. The source package, `mindwtr`, builds the desktop app locally and must download build dependencies for a Tauri, Rust, Bun, and React app. That can use substantially more disk space during the build.
+
+The source package is intended to fetch the release tag archive rather than the full Git history. If an AUR helper appears to download a very large Git checkout, check that you installed `mindwtr-bin` for the binary package path, or report the source-package behavior so the AUR recipe can be corrected.
+
 ### App crashes on startup (Mobile)
 
 Try clearing app data:
@@ -407,7 +473,7 @@ Note: This deletes local data.
 
 ### How can I contribute?
 
-- Report bugs and suggest features on [GitHub Issues](https://github.com/dongdongbh/Mindwtr/issues)
+- Report bugs and suggest features with **Send feedback** in **Settings → About** or on [GitHub Issues](https://github.com/dongdongbh/Mindwtr/issues)
 - Submit pull requests
 - Help with translations
 - Spread the word!

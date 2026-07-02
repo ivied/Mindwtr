@@ -199,22 +199,23 @@ describe('widget-service', () => {
         expect(countRenderedTaskRows(renderedTree)).toBe(2);
     });
 
-    it('writes family-specific iOS payloads using adaptive task limits', async () => {
+    it('writes family-specific iOS payloads with per-size item budgets', async () => {
         mockPlatform.OS = 'ios';
         mockIosWidgetSetItem.mockResolvedValue(undefined);
 
-        const didUpdate = await updateMobileWidgetFromData(buildData(9));
+        const didUpdate = await updateMobileWidgetFromData(buildData(30));
 
         expect(didUpdate).toBe(true);
         expect(mockRequestWidgetUpdate).not.toHaveBeenCalled();
-        expect(mockIosWidgetSetItem).toHaveBeenCalledTimes(4);
+        expect(mockIosWidgetSetItem).toHaveBeenCalledTimes(5);
         const payloadByKey = new Map(
             mockIosWidgetSetItem.mock.calls.map(([key, value]) => [key, JSON.parse(value as string)])
         );
         expect(payloadByKey.get('mindwtr-ios-widget-payload-small')?.items).toHaveLength(3);
         expect(payloadByKey.get('mindwtr-ios-widget-payload-medium')?.items).toHaveLength(5);
-        expect(payloadByKey.get('mindwtr-ios-widget-payload-large')?.items).toHaveLength(8);
-        expect(payloadByKey.get('mindwtr-ios-widget-payload')?.items).toHaveLength(5);
+        expect(payloadByKey.get('mindwtr-ios-widget-payload-large')?.items).toHaveLength(12);
+        expect(payloadByKey.get('mindwtr-ios-widget-payload-extra-large')?.items).toHaveLength(24);
+        expect(payloadByKey.get('mindwtr-ios-widget-payload')?.items).toHaveLength(12);
         expect(mockIosWidgetReloadTimelines).toHaveBeenCalledWith('MindwtrTasksWidget');
     });
 });

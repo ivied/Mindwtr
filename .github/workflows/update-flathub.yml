@@ -7,9 +7,16 @@ on:
         description: 'Release tag to publish to Flathub (e.g. v0.7.5)'
         required: true
         type: string
+      channel:
+        description: 'Flathub channel to update: stable or beta'
+        required: false
+        default: 'stable'
+        type: string
     secrets:
       FLATHUB_REPO_TOKEN:
         required: true
+      VITE_DROPBOX_APP_KEY:
+        required: false
 
 permissions:
   contents: read
@@ -18,7 +25,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 concurrency:
-  group: update-flathub-${{ inputs.tag }}
+  group: update-flathub-${{ inputs.channel }}-${{ inputs.tag }}
   cancel-in-progress: false
 
 jobs:
@@ -28,6 +35,8 @@ jobs:
     timeout-minutes: 60
     env:
       VITE_DROPBOX_APP_KEY: ${{ vars.VITE_DROPBOX_APP_KEY || secrets.VITE_DROPBOX_APP_KEY }}
+      VITE_FEEDBACK_ENDPOINT_URL: ${{ vars.VITE_FEEDBACK_ENDPOINT_URL || 'https://feedback.mindwtr.app' }}
+      VITE_ANALYTICS_RELEASE_VERSION: ${{ inputs.tag }}
 
     steps:
       - name: Checkout Mindwtr
@@ -45,8 +54,26 @@ jobs:
       - name: Classify release tag
         id: stability
         run: |
+          set -euo pipefail
           TAG="${{ steps.version.outputs.tag }}"
-          if [[ "$TAG" == *-* ]]; then
+          CHANNEL="${{ inputs.channel }}"
+
+          case "$CHANNEL" in
+            stable)
+              FLATHUB_BRANCH="master"
+              ;;
+            beta)
+              FLATHUB_BRANCH="beta"
+              ;;
+            *)
+              echo "Unsupported Flathub channel: ${CHANNEL}. Expected stable or beta." >&2
+              exit 1
+              ;;
+          esac
+
+          echo "flathub_branch=${FLATHUB_BRANCH}" >> "$GITHUB_OUTPUT"
+
+          if [[ "$TAG" == *-* && "$CHANNEL" != "beta" ]]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "message=Stable Flathub automation skips prerelease tags: $TAG" >> "$GITHUB_OUTPUT"
           else
@@ -64,14 +91,37 @@ jobs:
             exit 1
           fi
 
+      - name: Verify Flathub branch exists
+        if: steps.stability.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          BRANCH="${{ steps.stability.outputs.flathub_branch }}"
+          REPO_URL="https://github.com/flathub/tech.dongdongbh.mindwtr.git"
+          if ! git ls-remote --exit-code --heads "$REPO_URL" "$BRANCH" >/dev/null 2>&1; then
+            echo "Missing Flathub branch ${BRANCH} in flathub/tech.dongdongbh.mindwtr. Create it before enabling ${BRANCH} RC publication." >&2
+            exit 1
+          fi
+
       - name: Checkout Flathub repo
         if: steps.stability.outputs.skip != 'true'
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           repository: flathub/tech.dongdongbh.mindwtr
-          ref: master
+          ref: ${{ steps.stability.outputs.flathub_branch }}
           token: ${{ secrets.FLATHUB_REPO_TOKEN }}
           path: flathub
+
+      - name: Verify Flathub target branch
+        if: steps.stability.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          BRANCH="${{ steps.stability.outputs.flathub_branch }}"
+          cd flathub
+          if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
+            echo "Could not check out Flathub branch ${BRANCH}. Create the Flathub beta branch before enabling beta RC publication." >&2
+            exit 1
+          fi
+          echo "Using Flathub branch ${BRANCH}."
 
       - name: Prepare Flathub branch
         id: branch
@@ -80,7 +130,8 @@ jobs:
           set -euo pipefail
 
           VERSION="${{ steps.version.outputs.version }}"
-          BRANCH="automation/update-v${VERSION}"
+          CHANNEL="${{ inputs.channel }}"
+          BRANCH="automation/update-${CHANNEL}-v${VERSION}"
 
           cd flathub
 
@@ -209,7 +260,7 @@ jobs:
           existing_pr_url="$(gh pr list \
             --repo "$REPO" \
             --head "$BRANCH" \
-            --base master \
+            --base "${{ steps.stability.outputs.flathub_branch }}" \
             --state open \
             --json url \
             --jq '.[0].url // ""')"
@@ -226,6 +277,12 @@ jobs:
             tech.dongdongbh.mindwtr.yml \
             tech.dongdongbh.mindwtr.node-sources.json \
             tech.dongdongbh.mindwtr.cargo-sources.json
+          if [ -f .gitmodules ]; then
+            git add .gitmodules
+          fi
+          if [ -e shared-modules ]; then
+            git add shared-modules
+          fi
 
           if git diff --cached --quiet; then
             echo "No staged Flathub changes to commit."
@@ -233,7 +290,7 @@ jobs:
             exit 0
           fi
 
-          git commit -m "Update to ${TAG}"
+          git commit -m "Update ${{ inputs.channel }} to ${TAG}"
           if [ "${{ steps.branch.outputs.exists }}" = "true" ]; then
             git push origin "$BRANCH"
           else
@@ -250,9 +307,9 @@ jobs:
 
           pr_url="$(gh pr create \
             --repo "$REPO" \
-            --base master \
+            --base "${{ steps.stability.outputs.flathub_branch }}" \
             --head "$BRANCH" \
-            --title "Update to ${TAG}" \
+            --title "Update ${{ inputs.channel }} to ${TAG}" \
             --body "$pr_body")"
 
           echo "url=${pr_url}" >> "$GITHUB_OUTPUT"
@@ -263,6 +320,8 @@ jobs:
           echo "### Flathub Update" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- Tag: ${{ steps.version.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Channel: ${{ inputs.channel }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Flathub branch: ${{ steps.stability.outputs.flathub_branch }}" >> "$GITHUB_STEP_SUMMARY"
           if [ "${{ steps.stability.outputs.skip }}" = "true" ]; then
             echo "- Skipped: ${{ steps.stability.outputs.message }}" >> "$GITHUB_STEP_SUMMARY"
           elif [ -n "${{ steps.pr.outputs.url }}" ]; then

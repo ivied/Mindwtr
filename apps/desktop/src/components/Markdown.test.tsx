@@ -36,4 +36,14 @@ describe('Markdown', () => {
         );
         expect(container.querySelector('hr')).not.toBeNull();
     });
+
+    it('preserves intentional blank lines between blocks', () => {
+        const { container } = render(
+            <LanguageProvider>
+                <Markdown markdown={'Top\n\nBottom'} />
+            </LanguageProvider>
+        );
+
+        expect(container.querySelectorAll('.mindwtr-markdown-blank-line')).toHaveLength(1);
+    });
 });

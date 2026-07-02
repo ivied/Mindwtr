@@ -5,6 +5,7 @@ export interface ExternalCalendarSubscription {
     name: string;
     url: string;
     enabled: boolean;
+    color?: string;
 }
 
 export interface ExternalCalendarEvent {

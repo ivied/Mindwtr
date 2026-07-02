@@ -43,6 +43,55 @@ const getAbortSignalReason = (signal: AbortSignal, fallbackMessage: string): Err
     return createAbortError(fallbackMessage);
 };
 
+const getCause = (value: unknown): unknown => {
+    if ((typeof value !== 'object' && typeof value !== 'function') || value === null) {
+        return undefined;
+    }
+    return (value as { cause?: unknown }).cause;
+};
+
+const getErrorLikeMessage = (value: unknown): string => {
+    if (value instanceof Error) return value.message;
+    if ((typeof value === 'object' || typeof value === 'function') && value !== null) {
+        const message = (value as { message?: unknown }).message;
+        if (typeof message === 'string') return message;
+    }
+    return typeof value === 'string' ? value : '';
+};
+
+const appendErrorCauseChain = (error: unknown): unknown => {
+    if (!(error instanceof Error)) return error;
+
+    const rootMessage = error.message;
+    const causes: string[] = [];
+    const seen = new Set<unknown>([error]);
+    let cause = getCause(error);
+
+    while (cause !== undefined && cause !== null && !seen.has(cause)) {
+        seen.add(cause);
+        const detail = getErrorLikeMessage(cause).trim();
+        if (detail && detail !== rootMessage && !causes.includes(detail)) {
+            causes.push(detail);
+        }
+        cause = getCause(cause);
+    }
+
+    if (causes.length === 0 || rootMessage.includes('(caused by:')) {
+        return error;
+    }
+
+    const message = `${rootMessage} (caused by: ${causes.join(' -> ')})`;
+    try {
+        error.message = message;
+        return error;
+    } catch {
+        const enriched = new Error(message);
+        enriched.name = error.name;
+        (enriched as Error & { cause?: unknown }).cause = error;
+        return enriched;
+    }
+};
+
 const parseIpv4Host = (host: string): Ipv4Octets | null => {
     const parts = host.split('.');
     if (parts.length !== 4) return null;
@@ -249,7 +298,7 @@ export const fetchWithTimeout = async (
             }
             throw new Error(timeoutMessage);
         }
-        throw error;
+        throw appendErrorCauseChain(error);
     } finally {
         if (timeoutId) clearTimeout(timeoutId);
     }

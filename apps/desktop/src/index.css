@@ -4,10 +4,10 @@
 
 /*
  * Z-INDEX SCALE
- *   z-10  — inline overlays anchored to a relative parent (action buttons, floating labels)
- *   z-20  — popovers and dropdowns (AreaSelector, ProjectSelector, SectionSelector)
- *   z-50  — modals, global search, toast host, skip-link
- *   z-70  — modal-over-modal (ExpandedMarkdownEditor opened from another modal)
+ *   z-10    — inline overlays anchored to a relative parent (action buttons, floating labels)
+ *   z-20    — inline popovers and dropdowns (SectionSelector, SidebarAreaFilter)
+ *   z-50    — modals, global search, toast host, skip-link
+ *   z-[70]  — modal-over-modal and portaled selectors that must escape clipped surfaces
  * New overlays should pick from this scale, not invent new values.
  *
  * MODAL BACKDROP
@@ -285,6 +285,10 @@
     --mindwtr-text-scale: 1;
   }
 
+  html[data-text-size='small'] {
+    --mindwtr-text-scale: 0.875;
+  }
+
   html[data-text-size='large'] {
     --mindwtr-text-scale: 1.125;
   }
@@ -297,6 +301,19 @@
   body,
   #root {
     height: 100%;
+    background-color: #ffffff;
+    color: #0f172a;
+    background-color: hsl(var(--background, 0 0% 100%));
+    color: hsl(var(--foreground, 222.2 84% 4.9%));
+  }
+
+  .dark,
+  .dark body,
+  .dark #root {
+    background-color: #1e1e2e;
+    color: #e4e4e7;
+    background-color: hsl(var(--background, 220 13% 13%));
+    color: hsl(var(--foreground, 220 13% 91%));
   }
 
   html[data-text-size] .text-\[10px\] {
@@ -319,11 +336,40 @@
     @apply bg-background text-foreground;
     overflow: hidden;
   }
+
+  select {
+    color-scheme: light;
+  }
+
+  option,
+  optgroup {
+    background-color: hsl(var(--popover, 0 0% 100%));
+    color: hsl(var(--popover-foreground, 222.2 84% 4.9%));
+  }
+
+  option:checked {
+    background-color: hsl(var(--accent, 210 40% 96.1%));
+    color: hsl(var(--accent-foreground, 222.2 47.4% 11.2%));
+  }
+
+  .dark select,
+  .dark option,
+  .dark optgroup {
+    color-scheme: dark;
+  }
+
+  html[data-quick-add-window='true'],
+  html[data-quick-add-window='true'] body,
+  html[data-quick-add-window='true'] #root {
+    background-color: transparent;
+  }
 }
 
 @layer components {
   .metadata-badge {
     @apply inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium tracking-wide;
+    max-width: 100%;
+    min-width: 0;
     background-color: hsl(var(--muted));
     color: hsl(var(--muted-foreground));
   }
@@ -332,15 +378,17 @@
     width: 0.45rem;
     height: 0.45rem;
     border-radius: 9999px;
+    flex-shrink: 0;
   }
 
   .metadata-badge__icon {
     width: 0.75rem;
     height: 0.75rem;
+    flex-shrink: 0;
   }
 
   .metadata-badge__label {
-    @apply truncate;
+    @apply min-w-0 truncate;
   }
 
   .metadata-badge--interactive {
@@ -426,5 +474,64 @@
   .dark .metadata-badge--age-very-stale {
     background-color: hsl(0 30% 24%);
     color: hsl(0 70% 80%);
+  }
+
+  .project-details-header {
+    container-type: inline-size;
+  }
+
+  .task-item-display {
+    container-type: inline-size;
+    position: relative;
+  }
+
+  @container (max-width: 560px) {
+    .task-item-display__main {
+      width: 100%;
+    }
+
+    .task-item-display__actions {
+      max-width: calc(100% - 0.5rem);
+      position: absolute;
+      right: 0.25rem;
+      top: 0.25rem;
+      z-index: 10;
+      justify-content: flex-end;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 120ms ease;
+    }
+
+    .task-item-display__title {
+      padding-right: 0.125rem !important;
+    }
+
+    .task-item-display:hover .task-item-display__actions,
+    .task-item-display__actions:focus-within {
+      opacity: 1;
+      pointer-events: auto;
+    }
+  }
+
+  @container (max-width: 720px) {
+    .project-details-header__content {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .project-details-header__titleGroup {
+      flex: none;
+      width: 100%;
+    }
+
+    .project-details-header__actions {
+      justify-content: flex-start;
+      width: 100%;
+    }
+
+    .project-details-header__titleInput {
+      font-size: 1.25rem;
+      line-height: 1.75rem;
+    }
   }
 }

@@ -1,3 +1,5 @@
+import { sleep } from './async-utils';
+
 export type RetryOptions = {
     maxAttempts?: number;
     baseDelayMs?: number;
@@ -12,8 +14,6 @@ const DEFAULT_MAX_ATTEMPTS = 3;
 const DEFAULT_BASE_DELAY_MS = 1000;
 const DEFAULT_MAX_DELAY_MS = 30_000;
 const DEFAULT_JITTER_RATIO = 0.2;
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 const extractStatus = (error: unknown): number | null => {
     if (!error || typeof error !== 'object') return null;

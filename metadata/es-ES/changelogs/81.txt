@@ -1,0 +1,4 @@
+- Recordatorios repetidos para tareas con hora explicita.
+- Captura Bulk Quick Add y manejo mas seguro del texto escrito.
+- Mejor refresco de Focus/proyectos, ventanas sobre teclado, texto grande y controles Material 3.
+- Reparacion de sync mas fuerte con errores WebDAV/nativos mas claros.

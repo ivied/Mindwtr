@@ -22,6 +22,144 @@ final class CloudKitSyncManager {
 
     private init() {}
 
+    private let attachmentRecordType = "MindwtrAttachment"
+    private let attachmentAssetField = "asset"
+
+    private func fileURL(from path: String) throws -> URL {
+        if path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw NSError(
+                domain: "MindwtrCloudKit",
+                code: 1001,
+                userInfo: [NSLocalizedDescriptionKey: "Attachment file path is empty"]
+            )
+        }
+        if let url = URL(string: path), url.isFileURL {
+            return url
+        }
+        return URL(fileURLWithPath: path)
+    }
+
+    private func applyAttachmentMetadata(_ metadata: [String: Any], to record: CKRecord) {
+        let stringFields = [
+            "attachmentId",
+            "ownerType",
+            "ownerId",
+            "title",
+            "mimeType",
+            "fileHash",
+            "updatedAt",
+            "deletedAt",
+        ]
+        for field in stringFields {
+            if let value = metadata[field] as? String, !value.isEmpty {
+                record[field] = value as CKRecordValue
+            } else {
+                record[field] = nil
+            }
+        }
+        if let size = metadata["size"] as? Int64 {
+            record["size"] = size as CKRecordValue
+        } else if let size = metadata["size"] as? Int {
+            record["size"] = Int64(size) as CKRecordValue
+        } else if let size = metadata["size"] as? Double, size.isFinite {
+            record["size"] = Int64(size) as CKRecordValue
+        } else {
+            record["size"] = nil
+        }
+    }
+
+    private func attachmentMetadata(from record: CKRecord) -> [String: Any] {
+        var result: [String: Any] = ["recordName": record.recordID.recordName]
+        let stringFields = [
+            "attachmentId",
+            "ownerType",
+            "ownerId",
+            "title",
+            "mimeType",
+            "fileHash",
+            "updatedAt",
+            "deletedAt",
+        ]
+        for field in stringFields {
+            if let value = record[field] as? String {
+                result[field] = value
+            }
+        }
+        if let size = record["size"] as? Int64 {
+            result["size"] = size
+        } else if let size = record["size"] as? Int {
+            result["size"] = size
+        }
+        return result
+    }
+
+    func saveAttachmentAsset(recordName: String, filePath: String, metadata: [String: Any]) async throws -> [String: Any] {
+        let recordID = CKRecord.ID(recordName: recordName, zoneID: zoneID)
+        let fetched = try await fetchRecordsByID([recordID])
+        let record = fetched[recordID] ?? CKRecord(recordType: attachmentRecordType, recordID: recordID)
+        applyAttachmentMetadata(metadata, to: record)
+        record[attachmentAssetField] = CKAsset(fileURL: try fileURL(from: filePath))
+
+        let op = CKModifyRecordsOperation(recordsToSave: [record], recordIDsToDelete: nil)
+        op.savePolicy = .changedKeys
+        op.qualityOfService = .userInitiated
+
+        let savedRecord = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<CKRecord, Error>) in
+            var perRecordError: Error?
+            op.perRecordSaveBlock = { _, result in
+                if case .failure(let error) = result {
+                    perRecordError = error
+                }
+            }
+            op.modifyRecordsResultBlock = { result in
+                switch result {
+                case .success:
+                    if let perRecordError {
+                        continuation.resume(throwing: perRecordError)
+                    } else {
+                        continuation.resume(returning: record)
+                    }
+                case .failure(let error):
+                    continuation.resume(throwing: perRecordError ?? error)
+                }
+            }
+            self.privateDB.add(op)
+        }
+
+        return attachmentMetadata(from: savedRecord)
+    }
+
+    func fetchAttachmentAsset(recordName: String, targetPath: String) async throws -> [String: Any] {
+        let recordID = CKRecord.ID(recordName: recordName, zoneID: zoneID)
+        let fetched = try await fetchRecordsByID([recordID])
+        guard let record = fetched[recordID] else {
+            throw NSError(
+                domain: "MindwtrCloudKit",
+                code: 1002,
+                userInfo: [NSLocalizedDescriptionKey: "Attachment asset record not found"]
+            )
+        }
+        guard let asset = record[attachmentAssetField] as? CKAsset, let sourceURL = asset.fileURL else {
+            throw NSError(
+                domain: "MindwtrCloudKit",
+                code: 1003,
+                userInfo: [NSLocalizedDescriptionKey: "Attachment asset is missing"]
+            )
+        }
+
+        let destinationURL = try fileURL(from: targetPath)
+        let parentURL = destinationURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: parentURL, withIntermediateDirectories: true)
+        if FileManager.default.fileExists(atPath: destinationURL.path) {
+            try FileManager.default.removeItem(at: destinationURL)
+        }
+        try FileManager.default.copyItem(at: sourceURL, to: destinationURL)
+
+        var metadata = attachmentMetadata(from: record)
+        metadata["filePath"] = destinationURL.absoluteString
+        return metadata
+    }
+
     // MARK: - Account Status
 
     func accountStatus() async throws -> CKAccountStatus {

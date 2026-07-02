@@ -3,18 +3,25 @@ import { Keyboard, Platform, Pressable, Text, TextInput, TouchableOpacity, View 
 import DateTimePicker from '@react-native-community/datetimepicker';
 import {
     buildRRuleString,
+    computeRelativeStartTime,
+    getProjectedRecurringTaskCalendarDate,
+    getTaskDateCoherenceIssues,
     getRecurrenceUntilValue,
     hasTimeComponent,
     parseRRuleString,
+    RECURRENCE_INTERVAL_MAX,
+    REPEAT_REMINDER_INTERVAL_OPTIONS,
     safeFormatDate,
     safeParseDate,
     tFallback,
     type RecurrenceByDay,
     type RecurrenceRule,
     type RecurrenceStrategy,
+    type Task,
 } from '@mindwtr/core';
 
 import { QuickDateChips } from '../QuickDateChips';
+import { CompactText } from '@/components/compact-text';
 import { buildRecurrenceValue } from './recurrence-utils';
 import type {
     ShowDatePickerMode,
@@ -26,6 +33,23 @@ type ScheduleFieldId = 'recurrence' | 'startTime' | 'dueDate' | 'reviewAt';
 type TaskEditScheduleFieldProps = TaskEditFieldRendererProps & {
     fieldId: ScheduleFieldId;
 };
+
+const normalizeRecurrenceIntervalInput = (value: number): number => (
+    Number.isFinite(value) && value > 0
+        ? Math.min(Math.round(value), RECURRENCE_INTERVAL_MAX)
+        : 1
+);
+
+const isSubDayRelativeStartUnit = (unit: NonNullable<Task['relativeStartOffset']>['unit']): boolean => (
+    unit === 'minute' || unit === 'hour'
+);
+
+const normalizeRelativeStartUnitForDueDate = (
+    dueDate: string | undefined,
+    unit: NonNullable<Task['relativeStartOffset']>['unit'],
+): NonNullable<Task['relativeStartOffset']>['unit'] => (
+    dueDate && !hasTimeComponent(dueDate) && isSubDayRelativeStartUnit(unit) ? 'day' : unit
+);
 
 export function TaskEditScheduleField({
     applyQuickDate,
@@ -55,6 +79,7 @@ export function TaskEditScheduleField({
     tc,
     task,
 }: TaskEditScheduleFieldProps) {
+    const [repeatReminderOptionsExpanded, setRepeatReminderOptionsExpanded] = React.useState(false);
     const getStatusChipStyle = (active: boolean) => ([
         styles.statusChip,
         { backgroundColor: active ? tc.tint : tc.filterBg, borderColor: active ? tc.tint : tc.border },
@@ -108,6 +133,7 @@ export function TaskEditScheduleField({
             : buildRRuleString(rule, byDay, interval, { byMonthDay, count, until });
         return buildRecurrenceValue(rule, hasOverride('strategy') ? overrides.strategy ?? recurrenceStrategyValue : recurrenceStrategyValue, {
             byDay,
+            byMonthDay,
             count,
             until,
             completedOccurrences,
@@ -143,9 +169,11 @@ export function TaskEditScheduleField({
                     </Pressable>
                 </View>
                 <DateTimePicker
+                    key={showDatePicker}
                     value={getDatePickerValue(showDatePicker)}
                     mode={getDatePickerMode(showDatePicker)}
                     display="spinner"
+                    textColor={tc.text}
                     onChange={onDateChange}
                 />
             </View>
@@ -154,14 +182,17 @@ export function TaskEditScheduleField({
     const renderQuickDateChips = (
         mode: 'start' | 'due' | 'review',
         selectedDate: Date | null
-    ) => (
-        <QuickDateChips
-            t={t}
-            tc={tc}
-            selectedDate={selectedDate}
-            onSelect={(date) => applyQuickDate(mode, date)}
-        />
-    );
+    ) => {
+        if (mode === 'due' && showDatePicker !== 'due') return null;
+        return (
+            <QuickDateChips
+                t={t}
+                tc={tc}
+                selectedDate={selectedDate}
+                onSelect={(date) => applyQuickDate(mode, date)}
+            />
+        );
+    };
     const formatStartDateTime = (dateStr?: string) => {
         if (!dateStr) return t('common.notSet');
         const parsed = safeParseDate(dateStr);
@@ -172,10 +203,167 @@ export function TaskEditScheduleField({
             t('common.notSet')
         ) || t('common.notSet');
     };
-    const dateOnlyLabel = tFallback(t, 'taskEdit.dateOnly', 'Date only');
+    const dateOnlyLabel = t('taskEdit.dateOnly');
+    const dateIssueLabel = getTaskDateCoherenceIssues({
+        startTime: editedTask.startTime,
+        dueDate: editedTask.dueDate,
+    }).some((issue) => issue.code === 'start_after_due')
+        ? tFallback(t, 'task.dateIssue.startAfterDue', 'Starts after due date')
+        : '';
+    const renderDateIssue = () => (
+        dateIssueLabel ? (
+            <Text style={[styles.dateIssueText, { color: tc.warning }]}>
+                {dateIssueLabel}
+            </Text>
+        ) : null
+    );
     const clearTimePart = (value?: string): string | undefined => {
         const parsed = safeParseDate(value);
         return parsed ? safeFormatDate(parsed, 'yyyy-MM-dd') : undefined;
+    };
+    const projectedRecurrenceDateLabel = (() => {
+        const recurrence = editedTask.recurrence ?? task?.recurrence;
+        if (!recurrenceRuleValue || !recurrence) return '';
+        const nowIso = new Date().toISOString();
+        const previewTask = {
+            ...(task ?? {}),
+            ...editedTask,
+            id: editedTask.id ?? task?.id ?? 'draft-recurrence-preview',
+            title: String(editedTask.title ?? task?.title ?? ''),
+            status: editedTask.status ?? task?.status ?? 'next',
+            tags: editedTask.tags ?? task?.tags ?? [],
+            contexts: editedTask.contexts ?? task?.contexts ?? [],
+            createdAt: editedTask.createdAt ?? task?.createdAt ?? nowIso,
+            updatedAt: editedTask.updatedAt ?? task?.updatedAt ?? nowIso,
+            recurrence,
+            showFutureRecurrence: true,
+        } as Task;
+        return safeFormatDate(getProjectedRecurringTaskCalendarDate(previewTask, nowIso), 'PP');
+    })();
+    const projectedRecurrenceDateHint = projectedRecurrenceDateLabel
+        ? `${tFallback(t, 'recurrence.nextCalendarPreview', 'Next calendar preview')}: ${projectedRecurrenceDateLabel}.`
+        : '';
+    const hasReminderHandoffSchedule = hasTimeComponent(editedTask.startTime) || hasTimeComponent(editedTask.dueDate);
+    const renderReminderHandoffControl = () => {
+        if (fieldId !== 'dueDate' || !hasReminderHandoffSchedule) return null;
+        const enabled = editedTask.suppressMindwtrReminders === true;
+        return (
+            <TouchableOpacity
+                accessibilityRole="switch"
+                accessibilityState={{ checked: enabled }}
+                style={[
+                    styles.dateBtn,
+                    {
+                        marginTop: 8,
+                        backgroundColor: enabled ? tc.filterBg : tc.cardBg,
+                        borderColor: enabled ? tc.tint : tc.border,
+                    },
+                ]}
+                onPress={() => setEditedTask((prev) => ({
+                    ...prev,
+                    suppressMindwtrReminders: prev.suppressMindwtrReminders ? undefined : true,
+                }))}
+            >
+                <Text style={[styles.modalLabel, { color: tc.text }]}>
+                    {tFallback(t, 'taskEdit.suppressMindwtrReminders', 'Use calendar reminder')}
+                </Text>
+                <Text style={{ marginTop: 4, color: tc.secondaryText, fontSize: 12, lineHeight: 16 }}>
+                    {tFallback(t, 'taskEdit.suppressMindwtrRemindersHint', 'Skip Mindwtr start/due reminders for this task when your device calendar already reminds you.')}
+                </Text>
+            </TouchableOpacity>
+        );
+    };
+    const renderRepeatReminderControl = () => {
+        if (fieldId !== 'dueDate' || !hasTimeComponent(editedTask.dueDate)) return null;
+        if (editedTask.suppressMindwtrReminders === true) return null;
+        const label = tFallback(t, 'taskEdit.repeatReminderLabel', 'Repeat reminder');
+        const current = editedTask.repeatReminderMinutes ?? 0;
+        const options = [0, ...REPEAT_REMINDER_INTERVAL_OPTIONS];
+        const formatValue = (minutes: number) => (
+            minutes === 0
+                ? tFallback(t, 'taskEdit.repeatReminderOff', 'Off')
+                : tFallback(t, 'taskEdit.repeatReminderEveryMinutes', 'Every {count} min').replace('{count}', String(minutes))
+        );
+        const formatOption = (minutes: number) => (
+            minutes === 0
+                ? tFallback(t, 'taskEdit.repeatReminderOff', 'Off')
+                : tFallback(t, 'taskEdit.repeatReminderMinutesShort', '{count} min').replace('{count}', String(minutes))
+        );
+        return (
+            <View style={{ marginTop: 8 }}>
+                <TouchableOpacity
+                    accessibilityRole="button"
+                    accessibilityLabel={`${label}: ${formatValue(current)}`}
+                    style={[
+                        styles.dateBtn,
+                        {
+                            backgroundColor: current > 0 ? tc.filterBg : tc.cardBg,
+                            borderColor: repeatReminderOptionsExpanded || current > 0 ? tc.tint : tc.border,
+                        },
+                    ]}
+                    onPress={() => setRepeatReminderOptionsExpanded((expanded) => !expanded)}
+                >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                        <Text style={[styles.modalLabel, { color: tc.text, flexShrink: 1 }]} numberOfLines={1}>{label}</Text>
+                        <Text style={{ color: current > 0 ? tc.tint : tc.secondaryText, fontSize: 13, flexShrink: 0 }} numberOfLines={1}>
+                            {formatValue(current)}
+                        </Text>
+                    </View>
+                </TouchableOpacity>
+                {repeatReminderOptionsExpanded && (
+                    <View style={[styles.statusContainer, { marginTop: 8 }]}>
+                        {options.map((minutes) => (
+                            <TouchableOpacity
+                                key={minutes}
+                                accessibilityRole="button"
+                                accessibilityLabel={formatOption(minutes)}
+                                style={getStatusChipStyle(current === minutes)}
+                                onPress={() => {
+                                    setEditedTask((prev) => ({
+                                        ...prev,
+                                        repeatReminderMinutes: minutes > 0 ? minutes : undefined,
+                                    }));
+                                    setRepeatReminderOptionsExpanded(false);
+                                }}
+                            >
+                                <Text style={getStatusTextStyle(current === minutes)}>
+                                    {formatOption(minutes)}
+                                </Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+                )}
+            </View>
+        );
+    };
+
+    const applyRelativeStartOffset = (amountValue: number, unitValue: NonNullable<Task['relativeStartOffset']>['unit']) => {
+        if (!editedTask.dueDate || !Number.isFinite(amountValue)) return;
+        const unit = normalizeRelativeStartUnitForDueDate(editedTask.dueDate, unitValue);
+        const offset = { amount: -Math.max(1, Math.floor(amountValue)), unit };
+        const computedStart = computeRelativeStartTime(editedTask.dueDate, offset);
+        if (!computedStart) {
+            setEditedTask((prev) => ({ ...prev, relativeStartOffset: undefined }));
+            return;
+        }
+        setEditedTask((prev) => ({
+            ...prev,
+            relativeStartOffset: offset,
+            startTime: computedStart,
+        }));
+    };
+
+    const updateDueDate = (dueDate: string | undefined) => {
+        setEditedTask((prev) => {
+            if (!dueDate) return { ...prev, dueDate: undefined, relativeStartOffset: undefined };
+            const computedStart = computeRelativeStartTime(dueDate, prev.relativeStartOffset);
+            return {
+                ...prev,
+                dueDate,
+                ...(computedStart ? { startTime: computedStart } : {}),
+                ...(prev.relativeStartOffset && !computedStart ? { relativeStartOffset: undefined } : {}),
+            };
+        });
     };
 
     switch (fieldId) {
@@ -241,7 +429,9 @@ export function TaskEditScheduleField({
                                             recurrence: buildEditedRecurrence('yearly', {
                                                 byDay: undefined,
                                                 byMonthDay: undefined,
-                                                interval: undefined,
+                                                interval: parsedRecurrenceRRule.rule === 'yearly' && parsedRecurrenceRRule.interval && parsedRecurrenceRRule.interval > 0
+                                                    ? parsedRecurrenceRRule.interval
+                                                    : 1,
                                             }),
                                         }));
                                         return;
@@ -264,7 +454,7 @@ export function TaskEditScheduleField({
                                     value={String(Math.max(parsedRecurrenceRRule.interval ?? 1, 1))}
                                     onChangeText={(value) => {
                                         const parsed = Number.parseInt(value, 10);
-                                        const interval = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 52) : 1;
+                                        const interval = normalizeRecurrenceIntervalInput(parsed);
                                         setEditedTask((prev) => ({
                                             ...prev,
                                             recurrence: buildEditedRecurrence('weekly', {
@@ -290,8 +480,8 @@ export function TaskEditScheduleField({
                                             style={[
                                                 styles.weekdayButton,
                                                 {
-                                                    borderColor: tc.border,
-                                                    backgroundColor: active ? tc.filterBg : tc.cardBg,
+                                                    borderColor: active ? tc.tint : tc.border,
+                                                    backgroundColor: active ? tc.tint : tc.cardBg,
                                                 },
                                             ]}
                                             onPress={() => {
@@ -308,7 +498,7 @@ export function TaskEditScheduleField({
                                                 }));
                                             }}
                                         >
-                                            <Text style={[styles.weekdayButtonText, { color: tc.text }]}>{day.label}</Text>
+                                            <Text style={[styles.weekdayButtonText, { color: active ? tc.onTint : tc.text }]}>{day.label}</Text>
                                         </TouchableOpacity>
                                     );
                                 })}
@@ -322,7 +512,7 @@ export function TaskEditScheduleField({
                                 value={String(dailyInterval)}
                                 onChangeText={(value) => {
                                     const parsed = Number.parseInt(value, 10);
-                                    const interval = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 365) : 1;
+                                    const interval = normalizeRecurrenceIntervalInput(parsed);
                                     setEditedTask((prev) => ({
                                         ...prev,
                                         recurrence: buildEditedRecurrence('daily', {
@@ -348,7 +538,7 @@ export function TaskEditScheduleField({
                                     value={String(monthlyInterval)}
                                     onChangeText={(value) => {
                                         const parsed = Number.parseInt(value, 10);
-                                        const interval = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 120) : 1;
+                                        const interval = normalizeRecurrenceIntervalInput(parsed);
                                         setEditedTask((prev) => ({
                                             ...prev,
                                             recurrence: buildEditedRecurrence('monthly', { interval }),
@@ -388,6 +578,31 @@ export function TaskEditScheduleField({
                                 </TouchableOpacity>
                             </View>
                         </>
+                    )}
+                    {recurrenceRuleValue === 'yearly' && (
+                        <View style={[styles.customRow, { marginTop: 8, borderColor: tc.border }]}>
+                            <Text style={[styles.modalLabel, { color: tc.secondaryText }]}>{t('recurrence.repeatEvery')}</Text>
+                            <TextInput
+                                value={String(Math.max(parsedRecurrenceRRule.interval ?? 1, 1))}
+                                onChangeText={(value) => {
+                                    const parsed = Number.parseInt(value, 10);
+                                    const interval = normalizeRecurrenceIntervalInput(parsed);
+                                    setEditedTask((prev) => ({
+                                        ...prev,
+                                        recurrence: buildEditedRecurrence('yearly', {
+                                            byDay: undefined,
+                                            byMonthDay: undefined,
+                                            interval,
+                                        }),
+                                    }));
+                                }}
+                                keyboardType="number-pad"
+                                style={[styles.customInput, { backgroundColor: tc.inputBg, borderColor: tc.border, color: tc.text }]}
+                                accessibilityLabel={t('recurrence.repeatEvery')}
+                                accessibilityHint={t('recurrence.yearUnit')}
+                            />
+                            <Text style={[styles.modalLabel, { color: tc.secondaryText }]}>{t('recurrence.yearUnit')}</Text>
+                        </View>
                     )}
                     {!!recurrenceRuleValue && (
                         <View style={{ marginTop: 8 }}>
@@ -506,6 +721,32 @@ export function TaskEditScheduleField({
                             </TouchableOpacity>
                         </View>
                     )}
+                    {!!recurrenceRuleValue && (
+                        <TouchableOpacity
+                            accessibilityRole="switch"
+                            accessibilityState={{ checked: editedTask.showFutureRecurrence === true }}
+                            style={[
+                                styles.dateBtn,
+                                {
+                                    marginTop: 8,
+                                    backgroundColor: editedTask.showFutureRecurrence ? tc.filterBg : tc.cardBg,
+                                    borderColor: editedTask.showFutureRecurrence ? tc.tint : tc.border,
+                                },
+                            ]}
+                            onPress={() => setEditedTask((prev) => ({
+                                ...prev,
+                                showFutureRecurrence: prev.showFutureRecurrence ? undefined : true,
+                            }))}
+                        >
+                            <Text style={[styles.modalLabel, { color: tc.text }]}>
+                                {tFallback(t, 'recurrence.showFutureInCalendar', 'Show next occurrence in Calendar')}
+                            </Text>
+                            <Text style={{ marginTop: 4, color: tc.secondaryText, fontSize: 12, lineHeight: 16 }}>
+                                {tFallback(t, 'recurrence.showFutureInCalendarHint', 'Planning-only preview; the next task is still created when this one is completed.')}
+                                {projectedRecurrenceDateHint ? ` ${projectedRecurrenceDateHint}` : ''}
+                            </Text>
+                        </TouchableOpacity>
+                    )}
                 </View>
             );
         case 'startTime': {
@@ -536,7 +777,7 @@ export function TaskEditScheduleField({
                             {!!editedTask.startTime && hasTime && (
                                 <TouchableOpacity
                                     style={[styles.clearDateBtn, { borderColor: tc.border, backgroundColor: tc.filterBg }]}
-                                    onPress={() => setEditedTask((prev) => ({ ...prev, startTime: clearTimePart(prev.startTime) }))}
+                                    onPress={() => setEditedTask((prev) => ({ ...prev, startTime: clearTimePart(prev.startTime), relativeStartOffset: undefined }))}
                                 >
                                     <Text style={[styles.clearDateText, { color: tc.secondaryText }]}>{dateOnlyLabel}</Text>
                                 </TouchableOpacity>
@@ -544,13 +785,92 @@ export function TaskEditScheduleField({
                             {!!editedTask.startTime && (
                                 <TouchableOpacity
                                     style={[styles.clearDateBtn, { borderColor: tc.border, backgroundColor: tc.filterBg }]}
-                                    onPress={() => setEditedTask((prev) => ({ ...prev, startTime: undefined }))}
+                                    onPress={() => setEditedTask((prev) => ({ ...prev, startTime: undefined, relativeStartOffset: undefined }))}
                                 >
                                     <Text style={[styles.clearDateText, { color: tc.secondaryText }]}>{t('common.clear')}</Text>
                                 </TouchableOpacity>
                             )}
                         </View>
                         {renderQuickDateChips('start', parsed)}
+                        {renderDateIssue()}
+                        {!!editedTask.dueDate && (() => {
+                            const dueDateHasTime = hasTimeComponent(editedTask.dueDate);
+                            const relativeUnit = normalizeRelativeStartUnitForDueDate(
+                                editedTask.dueDate,
+                                editedTask.relativeStartOffset?.unit ?? 'day'
+                            );
+                            const relativeAmount = editedTask.relativeStartOffset ? Math.abs(editedTask.relativeStartOffset.amount) : 3;
+                            const modeOptions = [
+                                { label: t('taskEdit.startModeAbsolute'), active: !editedTask.relativeStartOffset, onPress: () => setEditedTask((prev) => ({ ...prev, relativeStartOffset: undefined })) },
+                                { label: t('taskEdit.startModeRelative'), active: Boolean(editedTask.relativeStartOffset), onPress: () => applyRelativeStartOffset(relativeAmount, relativeUnit) },
+                            ];
+                            const unitOptions: Array<{ value: NonNullable<Task['relativeStartOffset']>['unit']; label: string }> = dueDateHasTime
+                                ? [
+                                    { value: 'minute', label: t('taskEdit.relativeStartMinutesShort') },
+                                    { value: 'hour', label: t('taskEdit.relativeStartHoursShort') },
+                                    { value: 'day', label: t('taskEdit.relativeStartDaysShort') },
+                                    { value: 'week', label: t('taskEdit.relativeStartWeeksShort') },
+                                ]
+                                : [
+                                    { value: 'day', label: t('taskEdit.relativeStartDaysShort') },
+                                    { value: 'week', label: t('taskEdit.relativeStartWeeksShort') },
+                                ];
+                            return (
+                                <View style={{ marginTop: 10, gap: 8 }}>
+                                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                                        {modeOptions.map((option) => (
+                                            <TouchableOpacity
+                                                key={option.label}
+                                                accessibilityRole="button"
+                                                accessibilityState={{ selected: option.active }}
+                                                style={[
+                                                    styles.statusChip,
+                                                    { backgroundColor: option.active ? tc.tint : tc.filterBg, borderColor: option.active ? tc.tint : tc.border },
+                                                ]}
+                                                onPress={option.onPress}
+                                            >
+                                                <Text style={[styles.statusText, { color: option.active ? '#fff' : tc.secondaryText }]}>{option.label}</Text>
+                                            </TouchableOpacity>
+                                        ))}
+                                    </View>
+                                    {!!editedTask.relativeStartOffset && (
+                                        <View style={{ gap: 8 }}>
+                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                                <TextInput
+                                                    value={String(relativeAmount)}
+                                                    keyboardType="number-pad"
+                                                    onChangeText={(text) => applyRelativeStartOffset(Number(text), relativeUnit)}
+                                                    style={[styles.input, { width: 74, color: tc.text, backgroundColor: tc.inputBg, borderColor: tc.border }]}
+                                                    accessibilityLabel={t('taskEdit.relativeStartAmount')}
+                                                />
+                                                <Text style={{ color: tc.secondaryText }}>
+                                                    {t('taskEdit.relativeStartBeforeDue')}
+                                                </Text>
+                                            </View>
+                                            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                                                {unitOptions.map((option) => {
+                                                    const active = relativeUnit === option.value;
+                                                    return (
+                                                        <TouchableOpacity
+                                                            key={option.value}
+                                                            accessibilityRole="button"
+                                                            accessibilityState={{ selected: active }}
+                                                            style={[
+                                                                styles.statusChip,
+                                                                { backgroundColor: active ? tc.tint : tc.filterBg, borderColor: active ? tc.tint : tc.border },
+                                                            ]}
+                                                            onPress={() => applyRelativeStartOffset(relativeAmount, option.value)}
+                                                        >
+                                                            <Text style={[styles.statusText, { color: active ? '#fff' : tc.secondaryText }]}>{option.label}</Text>
+                                                        </TouchableOpacity>
+                                                    );
+                                                })}
+                                            </View>
+                                        </View>
+                                    )}
+                                </View>
+                            );
+                        })()}
                         {renderInlineIOSDatePicker(['start', 'start-time'])}
                     </View>
                 </View>
@@ -560,6 +880,35 @@ export function TaskEditScheduleField({
             const parsed = editedTask.dueDate ? safeParseDate(editedTask.dueDate) : null;
             const hasTime = hasTimeComponent(editedTask.dueDate);
             const timeOnly = hasTime && parsed ? safeFormatDate(parsed, 'HH:mm') : '';
+            if (!editedTask.dueDate) {
+                const notSetLabel = t('common.notSet');
+                return (
+                    <View style={styles.formGroup}>
+                        <TouchableOpacity
+                            style={[styles.compactFieldRow, { backgroundColor: tc.filterBg, borderColor: tc.border }]}
+                            onPress={() => openDatePicker('due')}
+                            accessibilityRole="button"
+                            accessibilityLabel={`${t('taskEdit.dueDateLabel')}: ${notSetLabel}`}
+                        >
+                            <CompactText
+                                style={[styles.compactFieldLabel, { color: tc.secondaryText }]}
+                            >
+                                {t('taskEdit.dueDateLabel')}
+                            </CompactText>
+                            <CompactText
+                                style={[styles.compactFieldValue, { color: tc.tint }]}
+                                numberOfLines={2}
+                            >
+                                {notSetLabel}
+                            </CompactText>
+                        </TouchableOpacity>
+                        {renderQuickDateChips('due', parsed)}
+                        {renderInlineIOSDatePicker(['due'])}
+                        {renderReminderHandoffControl()}
+                        {renderRepeatReminderControl()}
+                    </View>
+                );
+            }
             return (
                 <View style={styles.formGroup}>
                     <Text style={[styles.label, { color: tc.secondaryText }]}>{t('taskEdit.dueDateLabel')}</Text>
@@ -584,7 +933,7 @@ export function TaskEditScheduleField({
                             {!!editedTask.dueDate && hasTime && (
                                 <TouchableOpacity
                                     style={[styles.clearDateBtn, { borderColor: tc.border, backgroundColor: tc.filterBg }]}
-                                    onPress={() => setEditedTask((prev) => ({ ...prev, dueDate: clearTimePart(prev.dueDate) }))}
+                                    onPress={() => updateDueDate(clearTimePart(editedTask.dueDate))}
                                 >
                                     <Text style={[styles.clearDateText, { color: tc.secondaryText }]}>{dateOnlyLabel}</Text>
                                 </TouchableOpacity>
@@ -592,14 +941,17 @@ export function TaskEditScheduleField({
                             {!!editedTask.dueDate && (
                                 <TouchableOpacity
                                     style={[styles.clearDateBtn, { borderColor: tc.border, backgroundColor: tc.filterBg }]}
-                                    onPress={() => setEditedTask((prev) => ({ ...prev, dueDate: undefined }))}
+                                    onPress={() => updateDueDate(undefined)}
                                 >
                                     <Text style={[styles.clearDateText, { color: tc.secondaryText }]}>{t('common.clear')}</Text>
                                 </TouchableOpacity>
                             )}
                         </View>
                         {renderQuickDateChips('due', parsed)}
+                        {renderDateIssue()}
                         {renderInlineIOSDatePicker(['due', 'due-time'])}
+                        {renderReminderHandoffControl()}
+                        {renderRepeatReminderControl()}
                     </View>
                 </View>
             );

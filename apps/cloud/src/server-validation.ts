@@ -1,5 +1,8 @@
 import {
     filterNotDeleted,
+    normalizeRecurrenceForLoad,
+    normalizeRelativeStartOffset,
+    normalizeRepeatReminderMinutes,
     searchAll,
     type Area,
     type AppData,
@@ -26,6 +29,77 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+const hasOwnField = (value: object, field: PropertyKey): boolean => (
+    Object.prototype.hasOwnProperty.call(value, field)
+);
+
+const CLOUD_RECURRENCE_ALLOWED_KEYS = new Set([
+    'rule',
+    'strategy',
+    'byDay',
+    'byMonthDay',
+    'weekStart',
+    'count',
+    'until',
+    'completedOccurrences',
+    'anchorDay',
+    'startAnchorDay',
+    'dueAnchorDay',
+    'reviewAnchorDay',
+    'rrule',
+]);
+
+function validateTaskRepeatReminderMinutes(value: Record<string, unknown>): string | null {
+    if (!hasOwnField(value, 'repeatReminderMinutes')) return null;
+    const minutes = value.repeatReminderMinutes;
+    if (minutes === undefined || minutes === null || minutes === 0) return null;
+    if (normalizeRepeatReminderMinutes(minutes) === minutes) return null;
+    return 'Invalid task repeatReminderMinutes';
+}
+
+function validateTaskRelativeStartOffset(value: Record<string, unknown>): string | null {
+    if (!hasOwnField(value, 'relativeStartOffset')) return null;
+    const offset = value.relativeStartOffset;
+    if (offset === undefined || offset === null) return null;
+    if (!isRecord(offset)) return 'Invalid task relativeStartOffset';
+    const invalidKeys = Object.keys(offset).filter((key) => key !== 'amount' && key !== 'unit');
+    if (invalidKeys.length > 0) return `Unsupported task relativeStartOffset fields: ${invalidKeys.slice(0, 10).join(', ')}`;
+    const normalized = normalizeRelativeStartOffset(offset);
+    if (!normalized || normalized.amount !== offset.amount || normalized.unit !== offset.unit) {
+        return 'Invalid task relativeStartOffset';
+    }
+    return null;
+}
+
+function isSameJsonValue(left: unknown, right: unknown): boolean {
+    return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function validateTaskRecurrence(value: Record<string, unknown>): string | null {
+    if (!hasOwnField(value, 'recurrence')) return null;
+    const recurrence = value.recurrence;
+    if (recurrence === undefined || recurrence === null) return null;
+    if (typeof recurrence === 'string') {
+        return normalizeRecurrenceForLoad(recurrence) ? null : 'Invalid task recurrence';
+    }
+    if (!isRecord(recurrence)) return 'Invalid task recurrence';
+    const invalidKeys = Object.keys(recurrence).filter((key) => !CLOUD_RECURRENCE_ALLOWED_KEYS.has(key));
+    if (invalidKeys.length > 0) return `Unsupported task recurrence fields: ${invalidKeys.slice(0, 10).join(', ')}`;
+    const normalized = normalizeRecurrenceForLoad(recurrence);
+    if (!normalized) return 'Invalid task recurrence';
+    const normalizedRecord = normalized as unknown as Record<string, unknown>;
+    for (const key of Object.keys(recurrence)) {
+        if (!isSameJsonValue(recurrence[key], normalizedRecord[key])) return 'Invalid task recurrence';
+    }
+    return null;
+}
+
+function validateTaskPropValues(value: Record<string, unknown>): string | null {
+    return validateTaskRepeatReminderMinutes(value)
+        ?? validateTaskRelativeStartOffset(value)
+        ?? validateTaskRecurrence(value);
+}
+
 function isValidIsoTimestamp(value: unknown): boolean {
     if (typeof value !== 'string' || value.trim().length === 0) return false;
     const parsed = Date.parse(value);
@@ -41,11 +115,13 @@ export function validateAppData(
     const sections = value.sections;
     const settings = value.settings;
     const areas = value.areas;
+    const people = value.people;
 
     if (!Array.isArray(tasks)) return { ok: false, error: 'Invalid data: tasks must be an array' };
     if (!Array.isArray(projects)) return { ok: false, error: 'Invalid data: projects must be an array' };
     if (sections !== undefined && !Array.isArray(sections)) return { ok: false, error: 'Invalid data: sections must be an array' };
     if (areas !== undefined && !Array.isArray(areas)) return { ok: false, error: 'Invalid data: areas must be an array' };
+    if (people !== undefined && !Array.isArray(people)) return { ok: false, error: 'Invalid data: people must be an array' };
     if (settings !== undefined && !isRecord(settings)) return { ok: false, error: 'Invalid data: settings must be an object' };
     if (tasks.length > MAX_ITEMS_PER_COLLECTION) return { ok: false, error: `Invalid data: tasks exceeds limit (${MAX_ITEMS_PER_COLLECTION})` };
     if (projects.length > MAX_ITEMS_PER_COLLECTION) return { ok: false, error: `Invalid data: projects exceeds limit (${MAX_ITEMS_PER_COLLECTION})` };
@@ -54,6 +130,9 @@ export function validateAppData(
     }
     if (Array.isArray(areas) && areas.length > MAX_ITEMS_PER_COLLECTION) {
         return { ok: false, error: `Invalid data: areas exceeds limit (${MAX_ITEMS_PER_COLLECTION})` };
+    }
+    if (Array.isArray(people) && people.length > MAX_ITEMS_PER_COLLECTION) {
+        return { ok: false, error: `Invalid data: people exceeds limit (${MAX_ITEMS_PER_COLLECTION})` };
     }
 
     for (const task of tasks) {
@@ -72,6 +151,10 @@ export function validateAppData(
         if (task.deletedAt != null && !isValidIsoTimestamp(task.deletedAt)) {
             return { ok: false, error: 'Invalid data: task deletedAt must be a valid ISO timestamp when present' };
         }
+        const valueError = validateTaskPropValues(task);
+        if (valueError) {
+            return { ok: false, error: `Invalid data: task ${String(task.id)}: ${valueError}` };
+        }
     }
 
     for (const project of projects) {
@@ -89,6 +172,9 @@ export function validateAppData(
         }
         if (project.deletedAt != null && !isValidIsoTimestamp(project.deletedAt)) {
             return { ok: false, error: 'Invalid data: project deletedAt must be a valid ISO timestamp when present' };
+        }
+        if (project.purgedAt != null && !isValidIsoTimestamp(project.purgedAt)) {
+            return { ok: false, error: 'Invalid data: project purgedAt must be a valid ISO timestamp when present' };
         }
     }
 
@@ -183,6 +269,32 @@ export function validateAppData(
         }
     }
 
+    if (Array.isArray(people)) {
+        for (const person of people) {
+            if (!isRecord(person) || typeof person.id !== 'string' || typeof person.name !== 'string') {
+                return { ok: false, error: 'Invalid data: each person must be an object with string id and name' };
+            }
+            if (person.id.trim().length === 0 || person.name.trim().length === 0) {
+                return { ok: false, error: 'Invalid data: each person must include non-empty id and name' };
+            }
+            if (person.note !== undefined && person.note !== null && typeof person.note !== 'string') {
+                return { ok: false, error: 'Invalid data: person note must be a string when present' };
+            }
+            if (person.referenceLink !== undefined && person.referenceLink !== null && typeof person.referenceLink !== 'string') {
+                return { ok: false, error: 'Invalid data: person referenceLink must be a string when present' };
+            }
+            if (!isValidIsoTimestamp(person.createdAt)) {
+                return { ok: false, error: 'Invalid data: person createdAt must be a valid ISO timestamp' };
+            }
+            if (!isValidIsoTimestamp(person.updatedAt)) {
+                return { ok: false, error: 'Invalid data: person updatedAt must be a valid ISO timestamp' };
+            }
+            if (person.deletedAt != null && !isValidIsoTimestamp(person.deletedAt)) {
+                return { ok: false, error: 'Invalid data: person deletedAt must be a valid ISO timestamp when present' };
+            }
+        }
+    }
+
     for (const project of projects) {
         if (!isRecord(project) || project.deletedAt != null) continue;
         const areaId = typeof project.areaId === 'string' ? project.areaId.trim() : '';
@@ -259,6 +371,8 @@ export function validateTaskCreationProps(
             error: `Unsupported task props: ${invalidKeys.slice(0, 10).join(', ')}`,
         };
     }
+    const valueError = validateTaskPropValues(value);
+    if (valueError) return { ok: false, error: valueError };
     return { ok: true, props: value as Partial<Task> };
 }
 
@@ -273,6 +387,8 @@ export function validateTaskPatchProps(
             error: `Unsupported task updates: ${invalidKeys.slice(0, 10).join(', ')}`,
         };
     }
+    const valueError = validateTaskPropValues(value);
+    if (valueError) return { ok: false, error: valueError };
     return { ok: true, props: value as Partial<Task> };
 }
 

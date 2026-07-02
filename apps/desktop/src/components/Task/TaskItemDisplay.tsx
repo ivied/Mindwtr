@@ -1,27 +1,29 @@
-import { Calendar as CalendarIcon, Tag, Trash2, ArrowRight, Repeat, Check, Clock, Timer, Paperclip, RotateCcw, Copy, MapPin, Hourglass, BookOpen, PauseCircle, Star, Zap, MoreHorizontal } from 'lucide-react';
-import type { Area, Attachment, Project, Task, TaskStatus, RecurrenceRule, RecurrenceStrategy, Language } from '@mindwtr/core';
-import { DEFAULT_AREA_COLOR, getChecklistProgress, getRecurrenceCountValue, getRecurrenceUntilValue, getTaskAgeLabel, getTaskStaleness, getTaskUrgency, hasTimeComponent, parseRRuleString, safeFormatDate, resolveTaskTextDirection, tFallback } from '@mindwtr/core';
+import { AlertTriangle, Calendar as CalendarIcon, Tag, Trash2, ArrowRight, Repeat, Check, Clock, Timer, Paperclip, RotateCcw, Copy, MapPin, Hourglass, Zap, MoreHorizontal } from 'lucide-react';
+import type { Area, Attachment, Project, RangeSelectionOptions, Task, TaskStatus, RecurrenceRule, RecurrenceStrategy, Language } from '@mindwtr/core';
+import { DEFAULT_AREA_COLOR, formatRecurrenceLabel, formatTimeEstimateLabel, getChecklistProgress, getInlineMarkdownPreview, getProjectedRecurringTaskCalendarDate, getTaskAgeLabel, getTaskDateCoherenceIssues, getTaskStaleness, getTaskUrgency, hasTimeComponent, safeFormatDate, resolveTaskTextDirection, tFallback } from '@mindwtr/core';
 import { cn } from '../../lib/utils';
 import { getAttachmentDisplayTitle } from '../../lib/attachment-utils';
 import { getContextColor } from '../../lib/context-color';
 import { MetadataBadge } from '../ui/MetadataBadge';
 import { AttachmentProgressIndicator } from '../AttachmentProgressIndicator';
 import { RichMarkdown } from '../RichMarkdown';
+import { InlineMarkdown } from '../Markdown';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
-import { memo, useEffect, useRef } from 'react';
+import { memo, useEffect, useMemo, useRef } from 'react';
 import { isImageAttachment } from './task-item-attachment-utils';
 import { AttachmentImage } from './AttachmentImage';
+import { FocusStarIcon } from '../FocusStarIcon';
 
 interface TaskItemDisplayActions {
-    onToggleSelect?: () => void;
+    onToggleSelect?: (options?: RangeSelectionOptions) => void;
     onToggleView: () => void;
     onEdit: () => void;
     onDelete: () => void;
     onDuplicate: () => void;
     onStatusChange: (status: TaskStatus) => void;
     onOpenQuickActions?: (event: MouseEvent<HTMLButtonElement>) => void;
-    onMoveToWaitingWithPrompt?: () => void;
     onOpenProject?: (projectId: string) => void;
+    onOpenContextToken?: (token: string) => void;
     openAttachment: (attachment: Attachment) => void;
     onToggleChecklistItem?: (index: number) => void;
     focusToggle?: {
@@ -53,6 +55,7 @@ interface TaskItemDisplayProps {
     showQuickDone: boolean;
     showStatusSelect?: boolean;
     showProjectBadgeInActions?: boolean;
+    showProjectBadgeInMetadata?: boolean;
     readOnly: boolean;
     compactMetaEnabled?: boolean;
     dense?: boolean;
@@ -60,6 +63,7 @@ interface TaskItemDisplayProps {
     dragHandle?: ReactNode;
     showTaskAge?: boolean;
     showHoverHint?: boolean;
+    projectDeadlineLabel?: string;
     t: (key: string) => string;
 }
 
@@ -73,13 +77,7 @@ const getUrgencyColor = (task: Task) => {
     }
 };
 
-const formatTimeEstimate = (estimate: string) => {
-    const value = String(estimate);
-    if (value.endsWith('min')) return value.replace('min', 'm');
-    if (value.endsWith('hr+')) return value.replace('hr+', 'h+');
-    if (value.endsWith('hr')) return value.replace('hr', 'h');
-    return value;
-};
+const formatTimeEstimate = formatTimeEstimateLabel;
 
 export const TaskItemDisplay = memo(function TaskItemDisplay({
     task,
@@ -92,14 +90,13 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
     quickActionsOpen = false,
     actions,
     visibleAttachments,
-    recurrenceRule,
-    recurrenceStrategy,
     prioritiesEnabled,
     timeEstimatesEnabled,
     isStagnant,
     showQuickDone,
     showStatusSelect = true,
     showProjectBadgeInActions = true,
+    showProjectBadgeInMetadata = true,
     readOnly,
     compactMetaEnabled = true,
     dense = false,
@@ -107,6 +104,7 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
     dragHandle,
     showTaskAge = false,
     showHoverHint = true,
+    projectDeadlineLabel,
     t,
 }: TaskItemDisplayProps) {
     const {
@@ -117,33 +115,27 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
         onDuplicate,
         onStatusChange,
         onOpenQuickActions,
-        onMoveToWaitingWithPrompt,
         onOpenProject,
+        onOpenContextToken,
         openAttachment,
         onToggleChecklistItem,
         focusToggle,
     } = actions;
-    const checklistProgress = getChecklistProgress(task);
-    const recurrenceCount = getRecurrenceCountValue(task.recurrence);
-    const recurrenceUntil = getRecurrenceUntilValue(task.recurrence);
-    const recurrenceInterval = task.recurrence && typeof task.recurrence === 'object' && task.recurrence.rrule
-        ? parseRRuleString(task.recurrence.rrule).interval
-        : undefined;
-    const recurrenceLabel = recurrenceRule
-        ? [
-            `${t(`recurrence.${recurrenceRule}`)}${recurrenceStrategy === 'fluid' ? ` · ${t('recurrence.afterCompletionShort')}` : ''}`,
-            recurrenceRule === 'weekly' && recurrenceInterval && recurrenceInterval > 1
-                ? `${t('recurrence.repeatEvery')} ${recurrenceInterval} ${t('recurrence.weekUnit')}`
-                : undefined,
-            recurrenceRule === 'monthly' && recurrenceInterval && recurrenceInterval > 1
-                ? `${t('recurrence.repeatEvery')} ${recurrenceInterval} ${t('recurrence.monthUnit')}`
-                : undefined,
-            recurrenceUntil ? `${t('recurrence.endsOnDate')} ${safeFormatDate(recurrenceUntil, 'P')}` : undefined,
-            recurrenceCount ? `${t('recurrence.endsAfterCount')} ${recurrenceCount} ${t('recurrence.occurrenceUnit')}` : undefined,
-        ].filter(Boolean).join(' · ')
+    const isReference = task.status === 'reference';
+    const checklistProgress = isReference ? null : getChecklistProgress(task);
+    const recurrenceLabel = formatRecurrenceLabel({ recurrence: task.recurrence, t });
+    const projectedRecurrenceDateLabel = task.showFutureRecurrence && recurrenceLabel
+        ? safeFormatDate(getProjectedRecurringTaskCalendarDate(task), 'PP')
         : '';
+    const recurrencePreviewLabel = recurrenceLabel && projectedRecurrenceDateLabel
+        ? `${recurrenceLabel} · ${tFallback(t, 'recurrence.nextCalendarPreview', 'Next calendar preview')}: ${projectedRecurrenceDateLabel}`
+        : recurrenceLabel;
     const ageLabel = getTaskAgeLabel(task.createdAt, language);
     const showCompactMeta = compactMetaEnabled && !isViewOpen;
+    const descriptionPreview = useMemo(
+        () => getInlineMarkdownPreview(task.description ?? ''),
+        [task.description],
+    );
     const showAgeBadge = showTaskAge && task.status !== 'done' && Boolean(ageLabel);
     const completionTimestamp = task.status === 'done' || task.status === 'archived'
         ? task.completedAt || task.updatedAt
@@ -151,16 +143,21 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
     const completionLabel = completionTimestamp
         ? safeFormatDate(completionTimestamp, 'Pp', completionTimestamp)
         : '';
+    const dateIssueLabel = getTaskDateCoherenceIssues(task).some((issue) => issue.code === 'start_after_due')
+        ? tFallback(t, 'task.dateIssue.startAfterDue', 'Starts after due date')
+        : '';
     const hasMetadata = Boolean(
-        project
+        (showProjectBadgeInMetadata && project)
         || area
+        || projectDeadlineLabel
         || completionLabel
         || task.startTime
         || task.dueDate
+        || dateIssueLabel
         || task.location
-        || recurrenceRule
+        || recurrencePreviewLabel
         || (prioritiesEnabled && task.priority)
-        || (task.status !== 'reference' && task.energyLevel)
+        || (!isReference && task.energyLevel)
         || task.assignedTo
         || (task.contexts?.length ?? 0) > 0
         || task.tags.length > 0
@@ -174,7 +171,7 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
         ? tFallback(t, 'task.hoverHint', 'Click to toggle details / Double-click to edit')
         : '';
     const moreOptionsLabel = tFallback(t, 'taskEdit.moreOptions', 'More options');
-    const moveToWaitingWithDueLabel = tFallback(t, 'task.moveToWaitingWithDue', 'Move to Waiting and set due date');
+    const openContextFilterLabel = tFallback(t, 'contexts.filter', 'Filter tasks');
     const imageAttachments = visibleAttachments.filter((attachment) => {
         if (!isImageAttachment(attachment)) return false;
         if (!attachment.uri) return false;
@@ -195,7 +192,7 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
     }, []);
     const handleTitleClick = (event: MouseEvent<HTMLButtonElement>) => {
         if (selectionMode) {
-            onToggleSelect?.();
+            onToggleSelect?.({ range: event.shiftKey });
             return;
         }
         // Keyboard activation should not be delayed.
@@ -230,6 +227,17 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
             onOpenProject?.(projectId);
         }
     };
+    const handleTokenClick = (event: MouseEvent<HTMLSpanElement>, token: string) => {
+        event.stopPropagation();
+        onOpenContextToken?.(token);
+    };
+    const handleTokenKeyDown = (event: KeyboardEvent<HTMLSpanElement>, token: string) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            event.stopPropagation();
+            onOpenContextToken?.(token);
+        }
+    };
     const renderProjectBadge = () => {
         if (!project) return null;
         if (!onOpenProject) {
@@ -258,6 +266,54 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
             </span>
         );
     };
+    const renderContextBadge = (ctx: string) => {
+        const badge = (
+            <MetadataBadge
+                key={ctx}
+                variant="context"
+                label={ctx}
+                dotColor={getContextColor(ctx)}
+            />
+        );
+        if (!onOpenContextToken) return badge;
+        return (
+            <span
+                key={ctx}
+                role="button"
+                tabIndex={0}
+                onClick={(event) => handleTokenClick(event, ctx)}
+                onKeyDown={(event) => handleTokenKeyDown(event, ctx)}
+                className="inline-flex metadata-badge--interactive"
+                aria-label={`${openContextFilterLabel}: ${ctx}`}
+            >
+                {badge}
+            </span>
+        );
+    };
+    const renderTagBadge = (tag: string) => {
+        const badge = (
+            <MetadataBadge
+                key={tag}
+                variant="tag"
+                icon={Tag}
+                label={tag}
+            />
+        );
+        if (!onOpenContextToken) return badge;
+        return (
+            <span
+                key={tag}
+                role="button"
+                tabIndex={0}
+                onClick={(event) => handleTokenClick(event, tag)}
+                onKeyDown={(event) => handleTokenKeyDown(event, tag)}
+                className="inline-flex metadata-badge--interactive"
+                aria-label={`${openContextFilterLabel}: ${tag}`}
+            >
+                {badge}
+            </span>
+        );
+    };
 
     const showQuickDoneButton = showQuickDone
         && !selectionMode
@@ -275,9 +331,21 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
             />
         );
     };
+    const renderProjectDeadlineMetadataBadge = () => {
+        if (!projectDeadlineLabel) return null;
+        return (
+            <MetadataBadge
+                variant="info"
+                icon={CalendarIcon}
+                label={projectDeadlineLabel}
+                className="text-amber-600 dark:text-amber-300"
+            />
+        );
+    };
     const renderMetadataRow = (className?: string) => (
         <div className={cn("flex flex-wrap items-center text-xs", className)}>
-            {renderProjectBadge()}
+            {showProjectBadgeInMetadata && renderProjectBadge()}
+            {renderProjectDeadlineMetadataBadge()}
             {!project && area && (
                 <MetadataBadge
                     variant="project"
@@ -310,6 +378,14 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
                     )}
                 </div>
             )}
+            {dateIssueLabel && (
+                <MetadataBadge
+                    variant="info"
+                    icon={AlertTriangle}
+                    label={dateIssueLabel}
+                    className="text-amber-500 dark:text-amber-300"
+                />
+            )}
             {task.location && (
                 <MetadataBadge
                     variant="info"
@@ -317,11 +393,11 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
                     label={task.location}
                 />
             )}
-            {recurrenceRule && (
+            {recurrencePreviewLabel && (
                 <MetadataBadge
                     variant="info"
                     icon={Repeat}
-                    label={recurrenceLabel}
+                    label={recurrencePreviewLabel}
                 />
             )}
             {prioritiesEnabled && task.priority && (
@@ -344,17 +420,13 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
                 />
             )}
             {task.contexts?.length > 0 && (
-                <div className="flex items-center gap-2">
-                    {task.contexts.map((ctx) => (
-                        <MetadataBadge key={ctx} variant="context" label={ctx} dotColor={getContextColor(ctx)} />
-                    ))}
+                <div className="flex flex-wrap items-center gap-2 min-w-0 max-w-full">
+                    {task.contexts.map((ctx) => renderContextBadge(ctx))}
                 </div>
             )}
             {task.tags.length > 0 && (
-                <div className="flex items-center gap-2">
-                    {task.tags.map((tag) => (
-                        <MetadataBadge key={tag} variant="tag" icon={Tag} label={tag} />
-                    ))}
+                <div className="flex flex-wrap items-center gap-2 min-w-0 max-w-full">
+                    {task.tags.map((tag) => renderTagBadge(tag))}
                 </div>
             )}
             {checklistProgress && (
@@ -400,8 +472,29 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
     const inlineLeftControls = !actionsOverlay && (showQuickDoneButton || dragHandle);
     const showActionTags = !actionsOverlay && !isViewOpen && task.tags.length > 0;
 
+    // Inbox items are unprocessed captures, not a done/not-done checklist, so the
+    // quick-complete check stays hidden at rest and only reveals on row hover (for the
+    // 2-minute rule). Actionable lists (next, projects, focus) show it at rest.
+    const isInboxItem = task.status === 'inbox';
+    const quickDoneButton = (
+        <button
+            type="button"
+            onClick={(event) => {
+                event.stopPropagation();
+                onStatusChange('done');
+            }}
+            aria-label={t('status.done')}
+            className={cn(
+                "text-emerald-400 hover:text-emerald-300 p-1 rounded hover:bg-emerald-500/20",
+                isInboxItem && "opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity",
+            )}
+        >
+            <Check className="w-4 h-4" />
+        </button>
+    );
+
     return (
-        <div className={cn("flex-1 min-w-0 flex items-start gap-3", actionsOverlay && "relative")}>
+        <div className={cn("task-item-display flex-1 min-w-0 flex items-start gap-3", actionsOverlay && "relative")}>
             {overlayDragHandle && (
                 <div
                     className="absolute left-0 top-2 flex items-center -translate-x-2 z-10"
@@ -415,20 +508,10 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
                     className="absolute left-4 top-2 flex items-center z-10"
                     onPointerDown={(event) => event.stopPropagation()}
                 >
-                    <button
-                        type="button"
-                        onClick={(event) => {
-                            event.stopPropagation();
-                            onStatusChange('done');
-                        }}
-                        aria-label={t('status.done')}
-                        className="text-emerald-400 hover:text-emerald-300 p-1 rounded hover:bg-emerald-500/20"
-                    >
-                        <Check className="w-4 h-4" />
-                    </button>
+                    {quickDoneButton}
                 </div>
             )}
-            <div className={cn("flex min-w-0 flex-1 items-start gap-2")}>
+            <div className={cn("task-item-display__main flex min-w-0 flex-1 items-start gap-2")}>
                 {inlineLeftControls && (
                     <div
                         className={cn(
@@ -437,19 +520,7 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
                         )}
                     >
                         {dragHandle}
-                        {showQuickDoneButton && (
-                            <button
-                                type="button"
-                                onClick={(event) => {
-                                    event.stopPropagation();
-                                    onStatusChange('done');
-                                }}
-                                aria-label={t('status.done')}
-                                className="text-emerald-400 hover:text-emerald-300 p-1 rounded hover:bg-emerald-500/20"
-                            >
-                                <Check className="w-4 h-4" />
-                            </button>
-                        )}
+                        {showQuickDoneButton && quickDoneButton}
                     </div>
                 )}
                 <div
@@ -458,16 +529,6 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
                         selectionMode ? "cursor-pointer hover:bg-muted/40" : "cursor-default",
                     )}
                 >
-                    {!selectionMode && !readOnly && showHoverHint && (
-                        <span
-                            className={cn(
-                                "pointer-events-none absolute right-2 top-1 text-[10px] text-muted-foreground/70 opacity-0 transition-opacity group-hover/content:opacity-100",
-                                isRtl && "left-2 right-auto"
-                            )}
-                        >
-                            {hoverHintText}
-                        </span>
-                    )}
                     <button
                         type="button"
                         data-task-edit-trigger
@@ -487,11 +548,12 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
                         )}
                         aria-expanded={isViewOpen}
                         aria-label={t('task.toggleDetails') || 'Toggle task details'}
+                        title={!selectionMode && !readOnly && showHoverHint ? hoverHintText : undefined}
                         dir={resolvedDirection}
                     >
                         <div
                             className={cn(
-                                "font-semibold truncate text-foreground group-hover/content:text-primary transition-colors",
+                                "task-item-display__title font-semibold whitespace-normal break-words text-foreground group-hover/content:text-primary transition-colors",
                                 dense ? "text-sm" : "text-base",
                                 task.status === 'done' && "line-through text-muted-foreground",
                                 actionsOverlay && "pr-20",
@@ -501,18 +563,31 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
                             {task.title}
                         </div>
                     </button>
+                    {showCompactMeta && descriptionPreview && (
+                        <div
+                            className={cn(
+                                "task-item-display__description-preview mt-0.5 truncate text-xs font-normal text-muted-foreground",
+                                (overlayDragHandle || overlayQuickDone) && "pl-12",
+                                isRtl && "text-right"
+                            )}
+                            dir={resolvedDirection}
+                        >
+                            <InlineMarkdown markdown={descriptionPreview} interactiveLinks={false} />
+                        </div>
+                    )}
                     {showCompactMeta && hasMetadata && renderMetadataRow(cn(
                         "gap-2 text-muted-foreground",
                         dense ? "mt-0.5" : "mt-1",
                         (overlayDragHandle || overlayQuickDone) && "pl-12"
                     ))}
-                    {!showCompactMeta && completionLabel && (
+                    {!showCompactMeta && !isViewOpen && (completionLabel || projectDeadlineLabel) && (
                         <div className={cn(
                             "flex flex-wrap items-center gap-2 text-xs text-muted-foreground",
                             dense ? "mt-0.5" : "mt-1",
                             (overlayDragHandle || overlayQuickDone) && "pl-12"
                         )}>
                             {renderCompletionMetadataBadge()}
+                            {renderProjectDeadlineMetadataBadge()}
                         </div>
                     )}
 
@@ -598,7 +673,7 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
                             )}
                             {hasMetadata && renderMetadataRow("gap-3 mt-2")}
 
-                            {(task.checklist || []).length > 0 && (
+                            {!isReference && (task.checklist || []).length > 0 && (
                                 <div
                                     className="mt-3 space-y-1 pl-1"
                                     onPointerDown={(e) => e.stopPropagation()}
@@ -629,7 +704,11 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
                                             >
                                                 {item.isCompleted && <Check className="w-2 h-2" />}
                                             </span>
-                                            <span className={cn(item.isCompleted && "line-through")}>{item.title}</span>
+                                            <InlineMarkdown
+                                                markdown={item.title}
+                                                className={cn(item.isCompleted && "line-through")}
+                                                interactiveLinks={false}
+                                            />
                                         </button>
                                     ))}
                                 </div>
@@ -642,10 +721,11 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
             {!selectionMode && (
                 <div
                     className={cn(
-                        "relative flex items-center gap-2",
+                        "task-item-display__actions relative z-20 flex shrink-0 items-center gap-2",
                         actionsOverlay && "absolute top-1 right-1 z-10"
                     )}
                     onPointerDown={(e) => e.stopPropagation()}
+                    onClick={(e) => e.stopPropagation()}
                 >
                     {showActionTags && (
                         <div className="flex items-center gap-1 max-w-[240px] overflow-hidden">
@@ -689,7 +769,7 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
                                         : "text-muted-foreground/30 cursor-not-allowed"
                             )}
                         >
-                            <Star className={cn("w-4 h-4", focusToggle.isFocused && "fill-current")} />
+                            <FocusStarIcon className="w-4 h-4" filled={focusToggle.isFocused} />
                         </button>
                     )}
                     {onOpenQuickActions && (
@@ -736,34 +816,18 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
                         </>
                     ) : (
                         <>
-                            {task.status !== 'reference' && (
-                                <button
-                                    type="button"
-                                    onClick={() => onStatusChange('reference')}
-                                    aria-label={t('task.convertToReference')}
-                                    title={t('task.convertToReference')}
-                                    className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity text-muted-foreground hover:text-foreground p-1 rounded hover:bg-muted/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                                >
-                                    <BookOpen className="w-4 h-4" />
-                                </button>
-                            )}
-                            {task.status === 'next' && onMoveToWaitingWithPrompt && (
-                                <button
-                                    type="button"
-                                    onClick={onMoveToWaitingWithPrompt}
-                                    aria-label={moveToWaitingWithDueLabel}
-                                    title={moveToWaitingWithDueLabel}
-                                    className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity text-muted-foreground hover:text-foreground p-1 rounded hover:bg-muted/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                                >
-                                    <PauseCircle className="w-4 h-4" />
-                                </button>
-                            )}
                             {showStatusSelect && (
                                 <select
                                     value={task.status}
                                     aria-label={t('task.aria.status')}
-                                    onChange={(e) => onStatusChange(e.target.value as TaskStatus)}
-                                    className="text-[11px] font-medium px-2.5 py-0.5 rounded-full cursor-pointer appearance-none bg-primary/10 text-primary border-none hover:bg-primary/15 focus:outline-none focus:ring-2 focus:ring-primary/40"
+                                onChange={(e) => {
+                                    const nextStatus = e.target.value as TaskStatus;
+                                    if (nextStatus === 'waiting' && task.status !== 'waiting') {
+                                        e.currentTarget.blur();
+                                    }
+                                    onStatusChange(nextStatus);
+                                }}
+                                    className="text-[11px] font-medium px-2.5 py-0.5 rounded-full cursor-pointer appearance-none bg-primary/10 text-blue-700 border-none hover:bg-primary/15 focus:outline-none focus:ring-2 focus:ring-primary/40 dark:text-primary"
                                 >
                                     <option value="inbox">{t('status.inbox')}</option>
                                     <option value="next">{t('status.next')}</option>
@@ -776,13 +840,6 @@ export const TaskItemDisplay = memo(function TaskItemDisplay({
                                     <option value="archived">{t('status.archived')}</option>
                                 </select>
                             )}
-                            <button
-                                onClick={onDelete}
-                                aria-label={t('task.aria.delete')}
-                                className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity text-muted-foreground hover:text-muted-foreground/70 p-1 rounded hover:bg-muted/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                            >
-                                <Trash2 className="w-4 h-4" />
-                            </button>
                         </>
                     )}
                 </div>

@@ -1,0 +1,4 @@
+- Added first-run setup and fuller Getting Started guidance.
+- Focus opens more consistently and task editing is faster.
+- Cleared project fields stay cleared and context automation triggers are quieter.
+- Sync cleanup, date warnings, recurrence, and large libraries are steadier.

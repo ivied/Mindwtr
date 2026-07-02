@@ -46,6 +46,16 @@ describe('mcp db bootstrap', () => {
             projects: [],
             sections: [],
             areas: [],
+            people: [
+              {
+                id: 'person-1',
+                name: 'Alex',
+                note: 'Design lead',
+                referenceLink: 'https://example.com/alex',
+                createdAt: '2026-04-13T00:00:00.000Z',
+                updatedAt: '2026-04-13T00:00:00.000Z',
+              },
+            ],
             settings: {},
           },
           null,
@@ -60,6 +70,16 @@ describe('mcp db bootstrap', () => {
         expect(
           db.prepare('SELECT id, title, status FROM tasks ORDER BY id').all()
         ).toEqual([{ id: 'task-1', title: 'Bootstrap task', status: 'inbox' }]);
+        expect(
+          db.prepare('SELECT id, name, note, referenceLink FROM people ORDER BY id').all()
+        ).toEqual([
+          {
+            id: 'person-1',
+            name: 'Alex',
+            note: 'Design lead',
+            referenceLink: 'https://example.com/alex',
+          },
+        ]);
       } finally {
         closeDb(db);
       }

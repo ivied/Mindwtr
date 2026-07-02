@@ -7,6 +7,7 @@ import {
     SUPPORTED_LANGUAGES,
     getTranslationsSync,
     getSequentialFirstTaskIds,
+    isTaskInActiveProject,
     loadTranslations,
     sortTasksBy,
 } from '@mindwtr/core';
@@ -20,6 +21,7 @@ export const IOS_WIDGET_PAYLOAD_KEY = 'mindwtr-ios-widget-payload';
 export const IOS_WIDGET_PAYLOAD_KEY_SMALL = 'mindwtr-ios-widget-payload-small';
 export const IOS_WIDGET_PAYLOAD_KEY_MEDIUM = 'mindwtr-ios-widget-payload-medium';
 export const IOS_WIDGET_PAYLOAD_KEY_LARGE = 'mindwtr-ios-widget-payload-large';
+export const IOS_WIDGET_PAYLOAD_KEY_EXTRA_LARGE = 'mindwtr-ios-widget-payload-extra-large';
 export const IOS_WIDGET_KIND = 'MindwtrTasksWidget';
 export const WIDGET_FOCUS_URI = 'mindwtr:///focus';
 export const WIDGET_QUICK_CAPTURE_URI = 'mindwtr:///capture-quick?mode=text';
@@ -128,6 +130,7 @@ export function buildWidgetPayload(
     const tr = getTranslationsSync(language);
     const tasks = data.tasks || [];
     const projects = data.projects || [];
+    const projectById = new Map(projects.map((project) => [project.id, project]));
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
     const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
@@ -139,10 +142,16 @@ export function buildWidgetPayload(
     const sequentialProjectIds = new Set(
         projects.filter((project) => project.isSequential && !project.deletedAt).map((project) => project.id)
     );
+    const sequentialWithinSectionProjectIds = new Set(
+        projects
+            .filter((project) => project.isSequential && project.sequentialScope === 'section' && !project.deletedAt)
+            .map((project) => project.id)
+    );
 
     const activeTasks = tasks.filter((task) => {
         if (task.deletedAt) return false;
         if (task.status === 'archived' || task.status === 'done' || task.status === 'reference') return false;
+        if (!isTaskInActiveProject(task, projectById)) return false;
         return true;
     });
 
@@ -167,6 +176,7 @@ export function buildWidgetPayload(
             && (!isPlannedForFuture(task) || isScheduleCandidate(task))
         )),
         sequentialProjectIds,
+        { sectionScopedProjectIds: sequentialWithinSectionProjectIds },
     );
     const isSequentialBlocked = (task: AppData['tasks'][number]) => {
         if (!task.projectId) return false;

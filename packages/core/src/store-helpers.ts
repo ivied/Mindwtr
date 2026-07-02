@@ -1,9 +1,14 @@
 import { createNextRecurringTask } from './recurrence';
-import { getUsedTaskTokens } from './task-token-usage';
+import { getTaskDateCoherenceIssues } from './task-date-coherence';
+import {
+    collectTaskTokenUsage,
+    getUsedTaskTokensFromUsage,
+} from './task-token-usage';
+import { resolveRelativeStartUpdates } from './task-relative-start';
 import { rescheduleTask } from './task-utils';
 import { filterNotDeleted } from './sync-helpers';
 import { nextRevision, normalizeRevision } from './sync-revision';
-import type { AiSettings, AppData, Area, Project, Section, Task, TaskStatus } from './types';
+import type { AiSettings, AppData, Area, Person, Project, Section, Task, TaskStatus } from './types';
 import { generateUUID as uuidv4 } from './uuid';
 import type { DerivedState, SaveBaseState } from './store-types';
 
@@ -17,11 +22,6 @@ type EntityWithRevision = EntityWithId & {
     deletedAt?: string;
     purgedAt?: string;
 };
-
-let projectOrderCacheRef: Task[] | null = null;
-let projectOrderCacheValue: Map<string, number> | null = null;
-let reservedProjectOrdersRef: Task[] | null = null;
-let reservedProjectOrdersValue: Map<string, number> | null = null;
 
 export const getNextDataChangeAt = (previous: number, now = Date.now()): number => (
     Math.max(now, previous + 1)
@@ -39,11 +39,12 @@ export const getReferenceTaskFieldClears = (): Partial<Task> => ({
     status: 'reference',
     startTime: undefined,
     dueDate: undefined,
+    relativeStartOffset: undefined,
     reviewAt: undefined,
     recurrence: undefined,
     priority: undefined,
     timeEstimate: undefined,
-    checklist: undefined,
+    suppressMindwtrReminders: undefined,
     isFocusedToday: false,
     pushCount: 0,
 });
@@ -85,8 +86,12 @@ export function applyTaskUpdates(oldTask: Task, updates: Partial<Task>, now: str
         };
     }
 
-    if (Object.prototype.hasOwnProperty.call(updatesToApply, 'dueDate') && incomingStatus !== 'reference') {
-        const rescheduled = rescheduleTask(oldTask, updatesToApply.dueDate);
+    if (incomingStatus !== 'reference') {
+        finalUpdates = resolveRelativeStartUpdates(oldTask, finalUpdates);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(finalUpdates, 'dueDate') && incomingStatus !== 'reference') {
+        const rescheduled = rescheduleTask(oldTask, finalUpdates.dueDate);
         finalUpdates = {
             ...finalUpdates,
             dueDate: rescheduled.dueDate,
@@ -142,6 +147,9 @@ export const selectVisibleSections = (sections: Section[]): Section[] =>
 
 export const selectVisibleAreas = (areas: Area[]): Area[] =>
     filterNotDeleted(areas);
+
+export const selectVisiblePeople = (people: Person[]): Person[] =>
+    filterNotDeleted(people).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
 
 export const completeTaskForProjectArchive = (task: Task, archivedAt: string, deviceId?: string): Task => ({
     ...task,
@@ -375,6 +383,7 @@ export const buildSaveSnapshot = (state: SaveBaseState, overrides?: Partial<AppD
     const projects = overrides?.projects ?? state._allProjects;
     const sections = overrides?.sections ?? state._allSections;
     const areas = overrides?.areas ?? state._allAreas;
+    const people = overrides?.people ?? state._allPeople;
     if (overrides?.tasks) {
         assertCollectionSnapshotIncludesExistingItems<Task>('task', tasks, state._allTasks);
     }
@@ -387,11 +396,15 @@ export const buildSaveSnapshot = (state: SaveBaseState, overrides?: Partial<AppD
     if (overrides?.areas) {
         assertCollectionSnapshotIncludesExistingItems<Area>('area', areas, state._allAreas);
     }
+    if (overrides?.people) {
+        assertCollectionSnapshotIncludesExistingItems<Person>('person', people, state._allPeople);
+    }
     return {
         tasks,
         projects,
         sections,
         areas,
+        people,
         settings: overrides?.settings ?? state.settings,
     };
 };
@@ -409,9 +422,10 @@ export const computeDerivedState = (tasks: Task[], projects: Project[]): Derived
 export const computeProjectDerivedState = (
     projects: Iterable<Project>,
     projectMap?: Map<string, Project>
-): Pick<DerivedState, 'projectMap' | 'sequentialProjectIds' | 'focusedProjectCount'> => {
+): Pick<DerivedState, 'projectMap' | 'sequentialProjectIds' | 'sequentialWithinSectionProjectIds' | 'focusedProjectCount'> => {
     const resolvedProjectMap = projectMap ?? new Map<string, Project>();
     const sequentialProjectIds = new Set<string>();
+    const sequentialWithinSectionProjectIds = new Set<string>();
     let focusedProjectCount = 0;
 
     for (const project of projects) {
@@ -421,6 +435,9 @@ export const computeProjectDerivedState = (
         if (project.deletedAt) continue;
         if (project.isSequential) {
             sequentialProjectIds.add(project.id);
+            if (project.sequentialScope === 'section') {
+                sequentialWithinSectionProjectIds.add(project.id);
+            }
         }
         if (project.isFocused) {
             focusedProjectCount += 1;
@@ -430,6 +447,7 @@ export const computeProjectDerivedState = (
     return {
         projectMap: resolvedProjectMap,
         sequentialProjectIds,
+        sequentialWithinSectionProjectIds,
         focusedProjectCount,
     };
 };
@@ -437,9 +455,17 @@ export const computeProjectDerivedState = (
 export const computeTaskDerivedState = (
     tasks: Task[],
     tasksById?: Map<string, Task>
-): Pick<DerivedState, 'tasksById' | 'activeTasksByStatus' | 'allContexts' | 'allTags' | 'focusedCount'> => {
+): Pick<DerivedState, 'tasksById' | 'activeTasksByStatus' | 'tasksByProjectId' | 'tasksByContext' | 'tasksByTag' | 'focusedTasks' | 'projectTaskSummaryById' | 'allContexts' | 'allTags' | 'contextTokenUsage' | 'tagTokenUsage' | 'dateCoherenceIssuesByTaskId' | 'focusedCount'> => {
     const resolvedTasksById = tasksById ?? new Map<string, Task>();
     const activeTasksByStatus = new Map<TaskStatus, Task[]>();
+    const tasksByProjectId = new Map<string, Task[]>();
+    const tasksByContext = new Map<string, Task[]>();
+    const tasksByTag = new Map<string, Task[]>();
+    const focusedTasks: Task[] = [];
+    const projectTaskSummaryById = new Map<string, { activeTaskCount: number; nextAction?: Task }>();
+    const dateCoherenceIssuesByTaskId = new Map<string, ReturnType<typeof getTaskDateCoherenceIssues>>();
+    const contextTokenUsage = collectTaskTokenUsage(tasks, (task) => task.contexts, { prefix: '@' });
+    const tagTokenUsage = collectTaskTokenUsage(tasks, (task) => task.tags, { prefix: '#' });
     let focusedCount = 0;
 
     tasks.forEach((task) => {
@@ -450,17 +476,52 @@ export const computeTaskDerivedState = (
         const list = activeTasksByStatus.get(task.status) ?? [];
         list.push(task);
         activeTasksByStatus.set(task.status, list);
+        if (task.projectId) {
+            const projectTasks = tasksByProjectId.get(task.projectId) ?? [];
+            projectTasks.push(task);
+            tasksByProjectId.set(task.projectId, projectTasks);
+
+            if (task.status !== 'done' && task.status !== 'reference' && task.status !== 'archived') {
+                const summary = projectTaskSummaryById.get(task.projectId) ?? { activeTaskCount: 0 };
+                summary.activeTaskCount += 1;
+                if (!summary.nextAction && task.status === 'next') summary.nextAction = task;
+                projectTaskSummaryById.set(task.projectId, summary);
+            }
+        }
+        (task.contexts ?? []).forEach((context) => {
+            const contextTasks = tasksByContext.get(context) ?? [];
+            contextTasks.push(task);
+            tasksByContext.set(context, contextTasks);
+        });
+        (task.tags ?? []).forEach((tag) => {
+            const tagTasks = tasksByTag.get(tag) ?? [];
+            tagTasks.push(task);
+            tasksByTag.set(tag, tagTasks);
+        });
+        const dateCoherenceIssues = getTaskDateCoherenceIssues(task);
+        if (dateCoherenceIssues.length > 0) {
+            dateCoherenceIssuesByTaskId.set(task.id, dateCoherenceIssues);
+        }
         // Done/reference tasks keep their historical focus flag but should not consume today's focus limit.
         if (task.isFocusedToday && task.status !== 'done' && task.status !== 'reference') {
             focusedCount += 1;
+            focusedTasks.push(task);
         }
     });
 
     return {
         tasksById: resolvedTasksById,
         activeTasksByStatus,
-        allContexts: getUsedTaskTokens(tasks, (task) => task.contexts, { prefix: '@' }),
-        allTags: getUsedTaskTokens(tasks, (task) => task.tags, { prefix: '#' }),
+        tasksByProjectId,
+        tasksByContext,
+        tasksByTag,
+        focusedTasks,
+        projectTaskSummaryById,
+        allContexts: getUsedTaskTokensFromUsage(contextTokenUsage),
+        allTags: getUsedTaskTokensFromUsage(tagTokenUsage),
+        contextTokenUsage,
+        tagTokenUsage,
+        dateCoherenceIssuesByTaskId,
         focusedCount,
     };
 };
@@ -497,7 +558,7 @@ export const stripSensitiveSettings = (settings: AppData['settings']): AppData['
 
 export const normalizeAiSettingsForSync = (ai?: AiSettings): AiSettings | undefined => {
     if (!ai) return ai;
-    const { apiKey, ...rest } = ai;
+    const { apiKey: _apiKey, ...rest } = ai;
     if (!rest.speechToText) return rest;
     return {
         ...rest,
@@ -531,9 +592,6 @@ export const getTaskOrder = (task: Pick<Task, 'order' | 'orderNum'>): number | u
 };
 
 const getProjectOrderIndex = (tasks: Task[]): Map<string, number> => {
-    if (projectOrderCacheRef === tasks && projectOrderCacheValue) {
-        return projectOrderCacheValue;
-    }
     const nextCache = new Map<string, number>();
     for (const task of tasks) {
         if (task.deletedAt || !task.projectId) continue;
@@ -542,12 +600,6 @@ const getProjectOrderIndex = (tasks: Task[]): Map<string, number> => {
         if (order > previous) {
             nextCache.set(task.projectId, order);
         }
-    }
-    projectOrderCacheRef = tasks;
-    projectOrderCacheValue = nextCache;
-    if (reservedProjectOrdersRef !== tasks) {
-        reservedProjectOrdersRef = tasks;
-        reservedProjectOrdersValue = null;
     }
     return nextCache;
 };
@@ -560,23 +612,14 @@ export const getNextProjectOrder = (
     return (getProjectOrderIndex(tasks).get(projectId) ?? -1) + 1;
 };
 
-export const reserveNextProjectOrder = (
-    projectId: string | undefined,
-    tasks: Task[]
-): number | undefined => {
-    if (!projectId) return undefined;
-    if (reservedProjectOrdersRef !== tasks || !reservedProjectOrdersValue) {
-        reservedProjectOrdersRef = tasks;
-        reservedProjectOrdersValue = new Map<string, number>();
-    }
-    const snapshotReservations = reservedProjectOrdersValue;
-    const reserved = snapshotReservations.get(projectId);
-    if (typeof reserved === 'number') {
-        snapshotReservations.set(projectId, reserved + 1);
-        return reserved;
-    }
-    const nextOrder = getNextProjectOrder(projectId, tasks);
-    if (typeof nextOrder !== 'number') return undefined;
-    snapshotReservations.set(projectId, nextOrder + 1);
-    return nextOrder;
+export type ProjectOrderReserver = (projectId: string | undefined) => number | undefined;
+
+export const createProjectOrderReserver = (tasks: Task[]): ProjectOrderReserver => {
+    const nextOrders = getProjectOrderIndex(tasks);
+    return (projectId: string | undefined): number | undefined => {
+        if (!projectId) return undefined;
+        const nextOrder = (nextOrders.get(projectId) ?? -1) + 1;
+        nextOrders.set(projectId, nextOrder);
+        return nextOrder;
+    };
 };

@@ -9,7 +9,7 @@ import {
     writeFileSync,
 } from 'fs';
 import { basename, dirname, join, relative, resolve, sep } from 'path';
-import type { AppData } from '@mindwtr/core';
+import { sleep, type AppData } from '@mindwtr/core';
 import {
     ATTACHMENT_PATH_ALLOWLIST,
     CLOUD_DATA_LOCK_REFRESH_MS,
@@ -40,7 +40,7 @@ export type WriteLockRunner = {
     getPendingLockCount: () => number;
 };
 
-const DEFAULT_DATA: AppData = { tasks: [], projects: [], sections: [], areas: [], settings: {} };
+const createDefaultData = (): AppData => ({ tasks: [], projects: [], sections: [], areas: [], people: [], settings: {} });
 
 const isObjectRecord = (value: unknown): value is Record<string, unknown> => (
     typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -54,6 +54,7 @@ const toAppDataShape = (value: unknown): AppData | null => {
         projects: value.projects as AppData['projects'],
         sections: Array.isArray(value.sections) ? value.sections as AppData['sections'] : [],
         areas: Array.isArray(value.areas) ? value.areas as AppData['areas'] : [],
+        people: Array.isArray(value.people) ? value.people as AppData['people'] : [],
         settings: (isObjectRecord(value.settings) ? value.settings : {}) as AppData['settings'],
     };
 };
@@ -281,7 +282,7 @@ export function readData(filePath: string): AppData | null {
 
 export function loadAppData(filePath: string): AppData {
     const raw = readData(filePath);
-    if (!raw) return { ...DEFAULT_DATA };
+    if (!raw) return createDefaultData();
     const nowIso = new Date().toISOString();
     const normalizedAreas = raw.areas.map((area) => {
         if (!isObjectRecord(area)) return area;
@@ -326,8 +327,6 @@ export function writeData(filePath: string, data: unknown) {
         }
     }
 }
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 function getCloudLockPath(dataDir: string, key: string): string {
     return join(dataDir, '.locks', `${key}.lock`);
@@ -501,7 +500,7 @@ export async function readRequestBytes(
     }
 }
 
-export async function readJsonBody(req: Request, maxBodyBytes: number, signal?: AbortSignal): Promise<any> {
+export async function readJsonBody(req: Request, maxBodyBytes: number, signal?: AbortSignal): Promise<unknown> {
     const bytes = await readRequestBytes(req, maxBodyBytes, signal);
     if (isBodyReadError(bytes)) {
         return bytes;

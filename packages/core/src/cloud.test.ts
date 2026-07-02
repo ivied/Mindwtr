@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
-import { cloudDeleteFile, cloudGetJson, cloudHeadJson, cloudPutJson } from './cloud';
+import { cloudDeleteFile, cloudGetFile, cloudGetJson, cloudHeadJson, cloudPutJson } from './cloud';
 
 const okResponse = (text: string) =>
     ({
         ok: true,
         status: 200,
         statusText: 'OK',
+        headers: {
+            get: () => null,
+        },
         text: async () => text,
     }) as unknown as Response;
 
@@ -75,6 +78,46 @@ describe('cloud sync http helpers', () => {
         expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
     });
 
+    it('returns post-write metadata from put json responses', async () => {
+        const fetcher = vi.fn(async () => headResponse({
+            etag: '"sha256-abc"',
+            'last-modified': 'Thu, 07 May 2026 10:00:00 GMT',
+            'content-length': '42',
+        }));
+
+        const metadata = await cloudPutJson('https://example.com/v1/data', { hello: 'world' }, { fetcher });
+
+        expect(metadata).toMatchObject({
+            exists: true,
+            fingerprint: 'cloud:v1:etag="sha256-abc"',
+            etag: '"sha256-abc"',
+        });
+    });
+
+    it('prefers server-returned post-merge fingerprint metadata', async () => {
+        const fetcher = vi.fn(async () => ({
+            ...headResponse({
+                etag: '"response-body"',
+                'last-modified': 'Thu, 07 May 2026 10:00:00 GMT',
+            }),
+            text: async () => JSON.stringify({
+                remoteFingerprint: 'cloud:v1:etag="stored"',
+                etag: '"stored"',
+                contentLength: '123',
+                serverMergedRemoteData: true,
+            }),
+        } as unknown as Response));
+
+        const metadata = await cloudPutJson('https://example.com/v1/data', { hello: 'world' }, { fetcher });
+
+        expect(metadata).toMatchObject({
+            fingerprint: 'cloud:v1:etag="stored"',
+            etag: '"stored"',
+            contentLength: '123',
+            serverMergedRemoteData: true,
+        });
+    });
+
     it('reads HEAD metadata for fast sync checks', async () => {
         const fetcher = vi.fn(async () => headResponse({
             etag: '"sha256-abc"',
@@ -86,7 +129,7 @@ describe('cloud sync http helpers', () => {
 
         expect(metadata).toMatchObject({
             exists: true,
-            fingerprint: 'cloud:v1:etag="sha256-abc":mtime=Thu, 07 May 2026 10:00:00 GMT:len=42',
+            fingerprint: 'cloud:v1:etag="sha256-abc"',
             etag: '"sha256-abc"',
         });
         const [, init] = fetcher.mock.calls[0] as [string, RequestInit];
@@ -97,6 +140,16 @@ describe('cloud sync http helpers', () => {
     it('treats 404 delete as success', async () => {
         const fetcher = vi.fn(async () => errorResponse(404, 'Not Found'));
         await expect(cloudDeleteFile('https://example.com/v1/file', { fetcher })).resolves.toBeUndefined();
+    });
+
+    it('exposes status on file get failures', async () => {
+        const fetcher = vi.fn(async () => errorResponse(404, 'Not Found'));
+
+        await expect(cloudGetFile('https://example.com/v1/file', { fetcher })).rejects.toMatchObject({
+            message: 'Cloud File GET failed (404): Not Found',
+            status: 404,
+            statusCode: 404,
+        });
     });
 
     it('throws on delete failures', async () => {

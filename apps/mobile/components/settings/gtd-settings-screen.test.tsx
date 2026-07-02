@@ -1,6 +1,6 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
-import { Modal, Switch, TextInput } from 'react-native';
+import { Modal, Switch, Text, TextInput, TouchableOpacity } from 'react-native';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { AppData } from '@mindwtr/core';
 
@@ -9,8 +9,23 @@ import { GtdSettingsScreen } from './gtd-settings-screen';
 const updateSettings = vi.fn().mockResolvedValue(undefined);
 const showToast = vi.fn();
 
+const flattenStyle = (style: unknown): Record<string, unknown> => {
+  if (Array.isArray(style)) {
+    return Object.assign({}, ...style.map(flattenStyle));
+  }
+  return style && typeof style === 'object' ? style as Record<string, unknown> : {};
+};
+
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: {
+    getItem: vi.fn(async () => null),
+    setItem: vi.fn(async () => undefined),
+  },
+}));
+
 type MockStoreState = {
   settings: AppData['settings'];
+  areas: AppData['areas'];
   updateSettings: typeof updateSettings;
 };
 
@@ -24,11 +39,17 @@ const storeState: MockStoreState = {
       timeEstimates: true,
     },
   },
+  areas: [],
   updateSettings,
 };
 
 vi.mock('@mindwtr/core', () => ({
   FOCUS_TASK_LIMIT_OPTIONS: [3, 5, 10],
+  getDefaultTaskAreaMode: (settings: AppData['settings']) => {
+    const mode = settings?.gtd?.defaultAreaMode;
+    if (mode === 'none' || mode === 'fixed' || mode === 'active') return mode;
+    return settings?.gtd?.defaultAreaId ? 'fixed' : 'none';
+  },
   normalizeClockTimeInput: (value?: string | null) => {
     const trimmed = String(value ?? '').trim();
     if (!trimmed) return '';
@@ -40,6 +61,14 @@ vi.mock('@mindwtr/core', () => ({
     return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
   },
   normalizeFocusTaskLimit: (value?: number) => value ?? 3,
+  resolveDefaultNewTaskAreaId: (settings: AppData['settings'], areas: AppData['areas']) => {
+    const mode = settings?.gtd?.defaultAreaMode ?? (settings?.gtd?.defaultAreaId ? 'fixed' : 'none');
+    if (mode !== 'fixed') return undefined;
+    const areaId = settings?.gtd?.defaultAreaId;
+    return typeof areaId === 'string' && areas.some((area) => area.id === areaId && !area.deletedAt)
+      ? areaId
+      : undefined;
+  },
   sanitizePomodoroDurations: (value?: { focusMinutes?: number; breakMinutes?: number }) => ({
     focusMinutes: Number.isFinite(value?.focusMinutes) ? Math.round(value!.focusMinutes!) : 25,
     breakMinutes: Number.isFinite(value?.breakMinutes) ? Math.round(value!.breakMinutes!) : 5,
@@ -50,6 +79,10 @@ vi.mock('@mindwtr/core', () => ({
   },
   translateText: (value: string) => value,
   useTaskStore: () => storeState,
+}));
+
+vi.mock('@/hooks/use-theme-tokens', () => ({
+  useThemeTokens: () => ({ isMaterial: false, roles: null, shape: { large: 16 } }),
 }));
 
 vi.mock('@/hooks/use-theme-colors', () => ({
@@ -138,6 +171,7 @@ describe('GtdSettingsScreen task editor layout', () => {
         timeEstimates: true,
       },
     };
+    storeState.areas = [];
   });
 
   it('quick-toggles the eye icon without opening the field sheet', () => {
@@ -251,6 +285,131 @@ describe('GtdSettingsScreen task editor layout', () => {
     }));
   });
 
+  it('keeps focus limit options on a single equal-width row', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<GtdSettingsScreen onNavigate={vi.fn()} screen="gtd" />);
+    });
+
+    const focusLimitButtons = [3, 5, 10].map((option) => {
+      const button = tree.root.findAllByType(TouchableOpacity).find((candidate) => (
+        candidate.findAllByType(Text).some((textNode) => textNode.props.children === option)
+      ));
+      expect(button).toBeTruthy();
+      return button!;
+    });
+
+    focusLimitButtons.forEach((button) => {
+      const flattenedStyle = flattenStyle(button.props.style);
+      expect(flattenedStyle.flexBasis).toBe(0);
+      expect(flattenedStyle.minWidth).toBe(0);
+      expect(flattenedStyle.flexGrow).toBe(1);
+    });
+  });
+
+  it('saves the default project flow mode from GTD settings', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<GtdSettingsScreen onNavigate={vi.fn()} screen="gtd" />);
+    });
+
+    const sequentialButton = tree.root.findAllByType(TouchableOpacity).find((button) => (
+      button.findAllByType(Text).some((text) => text.props.children === 'Sequential')
+    ));
+    expect(sequentialButton).toBeTruthy();
+
+    renderer.act(() => {
+      sequentialButton?.props.onPress();
+    });
+
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      gtd: expect.objectContaining({
+        defaultProjectFlowMode: 'sequential',
+      }),
+    }));
+  });
+
+  it('opens a picker before saving the default area from capture settings', () => {
+    storeState.settings = {
+      gtd: {
+        defaultAreaId: null,
+        taskEditor: {},
+      },
+      features: {
+        priorities: true,
+        timeEstimates: true,
+      },
+    };
+    storeState.areas = [{
+      id: 'area-work',
+      name: 'Work',
+      color: '#64748b',
+      order: 0,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    }];
+
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<GtdSettingsScreen onNavigate={vi.fn()} screen="gtd-capture" />);
+    });
+
+    expect(tree.root.findByType(Modal).props.visible).toBe(false);
+
+    renderer.act(() => {
+      tree.root.findByProps({ testID: 'default-area-picker-button' }).props.onPress();
+    });
+
+    expect(tree.root.findByType(Modal).props.visible).toBe(true);
+
+    renderer.act(() => {
+      tree.root.findByProps({ testID: 'default-area-picker-option-area-work' }).props.onPress();
+    });
+
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      gtd: expect.objectContaining({
+        defaultAreaMode: 'fixed',
+        defaultAreaId: 'area-work',
+      }),
+    }));
+    expect(tree.root.findByType(Modal).props.visible).toBe(false);
+  });
+
+  it('saves the active area mode from capture settings', () => {
+    storeState.settings = {
+      gtd: {
+        defaultAreaId: null,
+        taskEditor: {},
+      },
+      features: {
+        priorities: true,
+        timeEstimates: true,
+      },
+    };
+    storeState.areas = [];
+
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(<GtdSettingsScreen onNavigate={vi.fn()} screen="gtd-capture" />);
+    });
+
+    renderer.act(() => {
+      tree.root.findByProps({ testID: 'default-area-picker-button' }).props.onPress();
+    });
+
+    renderer.act(() => {
+      tree.root.findByProps({ testID: 'default-area-picker-option-__active-area__' }).props.onPress();
+    });
+
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      gtd: expect.objectContaining({
+        defaultAreaMode: 'active',
+        defaultAreaId: null,
+      }),
+    }));
+    expect(tree.root.findByType(Modal).props.visible).toBe(false);
+  });
+
   it('routes GTD feature areas to sub-screens from the hub', () => {
     storeState.settings = {
       features: {
@@ -279,5 +438,15 @@ describe('GtdSettingsScreen task editor layout', () => {
     expect(onNavigate).toHaveBeenCalledWith('gtd-pomodoro');
     expect(onNavigate).toHaveBeenCalledWith('gtd-capture');
     expect(onNavigate).toHaveBeenCalledWith('gtd-inbox');
+  });
+
+  it('keeps the temporary manual onboarding trigger hidden by default', () => {
+    let tree!: renderer.ReactTestRenderer;
+
+    renderer.act(() => {
+      tree = renderer.create(<GtdSettingsScreen onNavigate={vi.fn()} screen="gtd" />);
+    });
+
+    expect(tree.root.findAllByProps({ testID: 'mobile-onboarding-test-trigger' })).toHaveLength(0);
   });
 });

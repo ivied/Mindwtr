@@ -7,6 +7,7 @@ private let mindwtrWidgetPayloadKey = "mindwtr-ios-widget-payload"
 private let mindwtrWidgetPayloadKeySmall = "mindwtr-ios-widget-payload-small"
 private let mindwtrWidgetPayloadKeyMedium = "mindwtr-ios-widget-payload-medium"
 private let mindwtrWidgetPayloadKeyLarge = "mindwtr-ios-widget-payload-large"
+private let mindwtrWidgetPayloadKeyExtraLarge = "mindwtr-ios-widget-payload-extra-large"
 private let darkThemeModes: Set<String> = ["dark", "material3-dark", "nord", "oled"]
 private let lightThemeModes: Set<String> = ["light", "material3-light", "eink", "sepia"]
 
@@ -127,8 +128,64 @@ private struct MindwtrTasksWidgetProvider: TimelineProvider {
             return mindwtrWidgetPayloadKeyMedium
         case .systemLarge:
             return mindwtrWidgetPayloadKeyLarge
+        case .systemExtraLarge:
+            return mindwtrWidgetPayloadKeyExtraLarge
         default:
             return mindwtrWidgetPayloadKey
+        }
+    }
+}
+
+private struct MindwtrWidgetMetrics {
+    let headerSize: CGFloat
+    let subtitleSize: CGFloat
+    let taskSize: CGFloat
+    let buttonSize: CGFloat
+    let rowSpacing: CGFloat
+    let sectionSpacing: CGFloat
+    let padding: CGFloat
+    let buttonVPadding: CGFloat
+    let taskRowVPadding: CGFloat
+
+    // Header block (title + subtitle) plus the pinned capture button never
+    // hold tasks, so reserve their height before deciding how many rows fit.
+    var reservedHeight: CGFloat {
+        padding * 2
+            + headerSize + subtitleSize + rowSpacing
+            + sectionSpacing * 2
+            + buttonSize + buttonVPadding * 2
+    }
+
+    var rowHeight: CGFloat {
+        taskSize + taskRowVPadding * 2 + rowSpacing
+    }
+
+    static func resolve(for family: WidgetFamily) -> MindwtrWidgetMetrics {
+        switch family {
+        case .systemExtraLarge:
+            return MindwtrWidgetMetrics(
+                headerSize: 18, subtitleSize: 13, taskSize: 14, buttonSize: 15,
+                rowSpacing: 4, sectionSpacing: 9, padding: 16,
+                buttonVPadding: 10, taskRowVPadding: 2
+            )
+        case .systemLarge:
+            return MindwtrWidgetMetrics(
+                headerSize: 18, subtitleSize: 12, taskSize: 14, buttonSize: 14,
+                rowSpacing: 4, sectionSpacing: 8, padding: 14,
+                buttonVPadding: 9, taskRowVPadding: 2
+            )
+        case .systemMedium:
+            return MindwtrWidgetMetrics(
+                headerSize: 17, subtitleSize: 12, taskSize: 14, buttonSize: 14,
+                rowSpacing: 4, sectionSpacing: 7, padding: 14,
+                buttonVPadding: 9, taskRowVPadding: 2
+            )
+        default:
+            return MindwtrWidgetMetrics(
+                headerSize: 15, subtitleSize: 11, taskSize: 13, buttonSize: 13,
+                rowSpacing: 3, sectionSpacing: 6, padding: 12,
+                buttonVPadding: 7, taskRowVPadding: 1
+            )
         }
     }
 }
@@ -141,17 +198,25 @@ private struct MindwtrTasksWidgetView: View {
     var body: some View {
         let payload = entry.payload
         let palette = resolvePalette(payload)
+        let metrics = MindwtrWidgetMetrics.resolve(for: widgetFamily)
+        let columnCount = widgetFamily == .systemExtraLarge ? 2 : 1
         GeometryReader { geometry in
-            let visibleTaskLimit = resolveTaskLimit(itemCount: payload.items.count, availableHeight: geometry.size.height)
-            VStack(alignment: .leading, spacing: 6) {
+            let visibleTaskLimit = resolveTaskLimit(
+                itemCount: payload.items.count,
+                availableHeight: geometry.size.height,
+                metrics: metrics,
+                columns: columnCount
+            )
+            let visibleItems = Array(payload.items.prefix(visibleTaskLimit))
+            VStack(alignment: .leading, spacing: metrics.sectionSpacing) {
                 Link(destination: URL(string: payload.focusUri) ?? URL(fileURLWithPath: "/")) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(payload.headerTitle)
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(.system(size: metrics.headerSize, weight: .semibold))
                             .foregroundColor(hexColor(palette.text))
                             .lineLimit(1)
                         Text(payload.subtitle)
-                            .font(.system(size: 11))
+                            .font(.system(size: metrics.subtitleSize))
                             .foregroundColor(hexColor(palette.mutedText))
                             .lineLimit(1)
                     }
@@ -161,40 +226,80 @@ private struct MindwtrTasksWidgetView: View {
                     TaskLineView(
                         title: payload.emptyMessage,
                         textColor: palette.mutedText,
+                        fontSize: metrics.taskSize,
+                        verticalPadding: metrics.taskRowVPadding,
                         focusUri: payload.focusUri
                     )
-                } else {
-                    ForEach(payload.items.prefix(visibleTaskLimit), id: \.id) { item in
-                        TaskLineView(
-                            title: "• \(item.title)",
-                            textColor: palette.text,
+                } else if columnCount == 2 {
+                    let leftCount = (visibleItems.count + 1) / 2
+                    HStack(alignment: .top, spacing: metrics.padding) {
+                        taskColumn(
+                            Array(visibleItems.prefix(leftCount)),
+                            palette: palette,
+                            metrics: metrics,
+                            focusUri: payload.focusUri
+                        )
+                        taskColumn(
+                            Array(visibleItems.dropFirst(leftCount)),
+                            palette: palette,
+                            metrics: metrics,
                             focusUri: payload.focusUri
                         )
                     }
+                } else {
+                    taskColumn(
+                        visibleItems,
+                        palette: palette,
+                        metrics: metrics,
+                        focusUri: payload.focusUri
+                    )
                 }
 
-                Spacer(minLength: 0)
+                Spacer(minLength: metrics.sectionSpacing)
 
                 Link(destination: URL(string: payload.quickCaptureUri) ?? URL(fileURLWithPath: "/")) {
                     Text(payload.captureLabel)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: metrics.buttonSize, weight: .semibold))
                         .foregroundColor(hexColor(palette.onAccent))
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
+                        .padding(.vertical, metrics.buttonVPadding)
                         .background(hexColor(palette.accent))
                         .clipShape(Capsule())
                 }
             }
-            .padding(12)
+            .padding(metrics.padding)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .mindwtrWidgetBackground(hexColor(palette.background))
         }
     }
 
+    @ViewBuilder
+    private func taskColumn(
+        _ items: [MindwtrWidgetTaskItem],
+        palette: MindwtrWidgetPalette,
+        metrics: MindwtrWidgetMetrics,
+        focusUri: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: metrics.rowSpacing) {
+            ForEach(items, id: \.id) { item in
+                TaskLineView(
+                    title: "• \(item.title)",
+                    textColor: palette.text,
+                    fontSize: metrics.taskSize,
+                    verticalPadding: metrics.taskRowVPadding,
+                    focusUri: focusUri
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
     private var familyTaskCap: Int {
         switch widgetFamily {
+        case .systemExtraLarge:
+            return 24
         case .systemLarge:
-            return 8
+            return 12
         case .systemMedium:
             return 5
         default:
@@ -202,16 +307,15 @@ private struct MindwtrTasksWidgetView: View {
         }
     }
 
-    private func resolveTaskLimit(itemCount: Int, availableHeight: CGFloat) -> Int {
+    private func resolveTaskLimit(itemCount: Int, availableHeight: CGFloat, metrics: MindwtrWidgetMetrics, columns: Int) -> Int {
         guard itemCount > 0 else { return 0 }
         let minimumRows = min(3, itemCount)
-        let reservedHeight: CGFloat = 110
-        let rowHeight: CGFloat = 16
-        let fitRows = max(0, Int(floor((availableHeight - reservedHeight) / rowHeight)))
-        if fitRows >= minimumRows {
-            return min(itemCount, min(familyTaskCap, fitRows))
+        let perColumn = max(0, Int(floor((availableHeight - metrics.reservedHeight) / metrics.rowHeight)))
+        let fitItems = perColumn * max(1, columns)
+        if perColumn >= minimumRows {
+            return min(itemCount, min(familyTaskCap, fitItems))
         }
-        return min(itemCount, max(1, fitRows))
+        return min(itemCount, max(1, fitItems))
     }
 
     private func resolvePalette(_ payload: MindwtrTasksWidgetPayload) -> MindwtrWidgetPalette {
@@ -236,17 +340,19 @@ private struct MindwtrTasksWidgetView: View {
 private struct TaskLineView: View {
     let title: String
     let textColor: String
+    let fontSize: CGFloat
+    let verticalPadding: CGFloat
     let focusUri: String
 
     var body: some View {
         Link(destination: URL(string: focusUri) ?? URL(fileURLWithPath: "/")) {
             Text(title)
-                .font(.system(size: 12))
+                .font(.system(size: fontSize))
                 .foregroundColor(hexColor(textColor))
                 .lineLimit(1)
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 1)
+                .padding(.vertical, verticalPadding)
         }
     }
 }
@@ -304,6 +410,6 @@ struct MindwtrTasksWidget: Widget {
         }
         .configurationDisplayName("Mindwtr")
         .description("Inbox, focus, and quick capture")
-        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge, .systemExtraLarge])
     }
 }

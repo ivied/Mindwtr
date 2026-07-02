@@ -1,0 +1,15 @@
+<en-US>
+Mindwtr 1.0.0 makes sync and storage safer: people/assignee data survives backups and sync, project deletes detach tasks more reliably, and shared attachment files are preserved. Mobile Quick Capture, calendar/project accessibility, Android icon assets, and large task lists are smoother.
+</en-US>
+<de-DE>
+Mindwtr 1.0.0 macht Sync und Speicher sicherer: Personen/Verantwortliche bleiben in Backups und Sync erhalten, Projektloeschungen trennen Aufgaben zuverlaessiger, gemeinsame Anhaenge bleiben erhalten. Quick Capture, Kalender/Projekte, Android-Icons und grosse Listen laufen ruhiger.
+</de-DE>
+<es-ES>
+Mindwtr 1.0.0 mejora sync y almacenamiento: personas/asignados se conservan en copias y sync, borrar proyectos separa tareas con mas seguridad y los adjuntos compartidos se preservan. Quick Capture, calendario/proyectos, iconos Android y listas grandes van mas fluidos.
+</es-ES>
+<fr-FR>
+Mindwtr 1.0.0 securise sync et stockage: personnes/assignations restent dans les sauvegardes et sync, les suppressions de projets detachent mieux les taches, les pieces jointes partagees restent. Quick Capture, calendrier/projets, icones Android et grandes listes sont plus fluides.
+</fr-FR>
+<zh-CN>
+Mindwtr 1.0.0 让同步和存储更稳：人员/负责人数据会在备份和同步中保留，删除项目时更可靠地保留任务，共用附件文件不会被误删。Quick Capture、日历/项目无障碍、Android 图标和大型任务列表也更顺畅。
+</zh-CN>

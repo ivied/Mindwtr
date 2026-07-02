@@ -1,0 +1,262 @@
+[
+  {
+    "name": "daily due date-only strict",
+    "completedAt": "2026-06-14T12:00:00.000Z",
+    "previousStatus": "done",
+    "task": {
+      "id": "parity-daily-due-date",
+      "title": "Water plants",
+      "status": "done",
+      "dueDate": "2026-06-14",
+      "recurrence": "daily",
+      "tags": [],
+      "contexts": [],
+      "createdAt": "2026-06-01T00:00:00.000Z",
+      "updatedAt": "2026-06-01T00:00:00.000Z"
+    },
+    "expected": {
+      "status": "next",
+      "dueDate": "2026-06-15",
+      "recurrence": "daily"
+    }
+  },
+  {
+    "name": "weekly start datetime strict",
+    "completedAt": "2026-06-01T12:00:00.000Z",
+    "previousStatus": "next",
+    "task": {
+      "id": "parity-weekly-start-time",
+      "title": "Weekly planning",
+      "status": "next",
+      "startTime": "2026-06-01T09:00:00.000Z",
+      "recurrence": "weekly",
+      "tags": [],
+      "contexts": [],
+      "createdAt": "2026-06-01T00:00:00.000Z",
+      "updatedAt": "2026-06-01T00:00:00.000Z"
+    },
+    "expected": {
+      "status": "next",
+      "startTime": "2026-06-08T09:00:00.000Z",
+      "recurrence": "weekly"
+    }
+  },
+  {
+    "name": "monthly due date-only clamp seeds anchors",
+    "completedAt": "2025-01-31T12:00:00.000Z",
+    "previousStatus": "done",
+    "task": {
+      "id": "parity-monthly-clamp",
+      "title": "Month end report",
+      "status": "done",
+      "dueDate": "2025-01-31",
+      "recurrence": "monthly",
+      "tags": [],
+      "contexts": [],
+      "createdAt": "2025-01-01T00:00:00.000Z",
+      "updatedAt": "2025-01-01T00:00:00.000Z"
+    },
+    "expected": {
+      "status": "next",
+      "dueDate": "2025-02-28",
+      "recurrence": {
+        "rule": "monthly",
+        "anchorDay": 31,
+        "dueAnchorDay": 31
+      }
+    }
+  },
+  {
+    "name": "monthly follow-up preserves clamped anchor",
+    "completedAt": "2025-02-28T12:00:00.000Z",
+    "previousStatus": "done",
+    "task": {
+      "id": "parity-monthly-anchor-followup",
+      "title": "Month end report",
+      "status": "done",
+      "dueDate": "2025-02-28",
+      "recurrence": {
+        "rule": "monthly",
+        "anchorDay": 31,
+        "dueAnchorDay": 31
+      },
+      "tags": [],
+      "contexts": [],
+      "createdAt": "2025-02-28T12:00:00.000Z",
+      "updatedAt": "2025-02-28T12:00:00.000Z"
+    },
+    "expected": {
+      "status": "next",
+      "dueDate": "2025-03-31",
+      "recurrence": {
+        "rule": "monthly",
+        "anchorDay": 31,
+        "startAnchorDay": 31,
+        "dueAnchorDay": 31,
+        "reviewAnchorDay": 31
+      }
+    }
+  },
+  {
+    "name": "yearly leap-day follow-up preserves anchor",
+    "completedAt": "2027-02-28T12:00:00.000Z",
+    "previousStatus": "done",
+    "task": {
+      "id": "parity-yearly-leap-anchor",
+      "title": "Leap day reminder",
+      "status": "done",
+      "dueDate": "2027-02-28T09:30:00.000Z",
+      "recurrence": {
+        "rule": "yearly",
+        "anchorDay": 29,
+        "dueAnchorDay": 29
+      },
+      "tags": [],
+      "contexts": [],
+      "createdAt": "2027-02-28T12:00:00.000Z",
+      "updatedAt": "2027-02-28T12:00:00.000Z"
+    },
+    "expected": {
+      "status": "next",
+      "dueDate": "2028-02-29T09:30:00.000Z",
+      "recurrence": {
+        "rule": "yearly",
+        "anchorDay": 29,
+        "startAnchorDay": 29,
+        "dueAnchorDay": 29,
+        "reviewAnchorDay": 29
+      }
+    }
+  },
+  {
+    "name": "fluid due datetime uses completion time",
+    "completedAt": "2025-01-05T14:00:00.000Z",
+    "previousStatus": "done",
+    "task": {
+      "id": "parity-fluid-due-datetime",
+      "title": "Stretching",
+      "status": "done",
+      "dueDate": "2025-01-01T09:00:00.000Z",
+      "recurrence": {
+        "rule": "daily",
+        "strategy": "fluid"
+      },
+      "tags": [],
+      "contexts": [],
+      "createdAt": "2025-01-01T00:00:00.000Z",
+      "updatedAt": "2025-01-01T00:00:00.000Z"
+    },
+    "expected": {
+      "status": "next",
+      "dueDate": "2025-01-06T14:00:00.000Z",
+      "recurrence": {
+        "rule": "daily",
+        "strategy": "fluid"
+      }
+    }
+  },
+  {
+    "name": "yearly start and due window keeps field anchors",
+    "completedAt": "2027-04-15T12:00:00.000Z",
+    "previousStatus": "done",
+    "task": {
+      "id": "parity-yearly-window",
+      "title": "Annual enrollment reminder",
+      "status": "done",
+      "startTime": "2027-03-01T09:00:00.000Z",
+      "dueDate": "2027-04-15T09:00:00.000Z",
+      "recurrence": "yearly",
+      "tags": [],
+      "contexts": [],
+      "createdAt": "2027-01-01T00:00:00.000Z",
+      "updatedAt": "2027-01-01T00:00:00.000Z"
+    },
+    "expected": {
+      "status": "next",
+      "startTime": "2028-03-01T09:00:00.000Z",
+      "dueDate": "2028-04-15T09:00:00.000Z",
+      "recurrence": {
+        "rule": "yearly",
+        "anchorDay": 15,
+        "startAnchorDay": 1,
+        "dueAnchorDay": 15
+      }
+    }
+  },
+  {
+    "name": "unscheduled fluid recurrence defers from completion",
+    "completedAt": "2025-01-05T14:00:00.000Z",
+    "previousStatus": "next",
+    "task": {
+      "id": "parity-unscheduled-fluid",
+      "title": "Unscheduled recurring task",
+      "status": "next",
+      "recurrence": {
+        "rule": "daily",
+        "strategy": "fluid"
+      },
+      "tags": [],
+      "contexts": [],
+      "createdAt": "2025-01-01T00:00:00.000Z",
+      "updatedAt": "2025-01-01T00:00:00.000Z"
+    },
+    "expected": {
+      "status": "next",
+      "startTime": "2025-01-06T14:00:00.000Z",
+      "recurrence": {
+        "rule": "daily",
+        "strategy": "fluid"
+      }
+    }
+  },
+  {
+    "name": "counted recurrence increments completed occurrences",
+    "completedAt": "2025-01-01T12:00:00.000Z",
+    "previousStatus": "done",
+    "task": {
+      "id": "parity-counted-next",
+      "title": "Three-time reminder",
+      "status": "done",
+      "dueDate": "2025-01-01",
+      "recurrence": {
+        "rule": "daily",
+        "count": 3,
+        "completedOccurrences": 1
+      },
+      "tags": [],
+      "contexts": [],
+      "createdAt": "2025-01-01T00:00:00.000Z",
+      "updatedAt": "2025-01-01T00:00:00.000Z"
+    },
+    "expected": {
+      "status": "next",
+      "dueDate": "2025-01-02",
+      "recurrence": {
+        "rule": "daily",
+        "count": 3,
+        "completedOccurrences": 2
+      }
+    }
+  },
+  {
+    "name": "counted recurrence stops when exhausted",
+    "completedAt": "2025-01-01T12:00:00.000Z",
+    "previousStatus": "done",
+    "task": {
+      "id": "parity-counted-exhausted",
+      "title": "One-time reminder",
+      "status": "done",
+      "dueDate": "2025-01-01",
+      "recurrence": {
+        "rule": "daily",
+        "count": 1,
+        "completedOccurrences": 0
+      },
+      "tags": [],
+      "contexts": [],
+      "createdAt": "2025-01-01T00:00:00.000Z",
+      "updatedAt": "2025-01-01T00:00:00.000Z"
+    },
+    "expected": null
+  }
+]

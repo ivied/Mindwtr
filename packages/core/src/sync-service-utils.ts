@@ -12,8 +12,8 @@ export type AutoSyncConfig = {
     isDropboxConnected?: boolean;
 };
 
-const DEFAULT_SYNC_FILE_NAME = 'data.json';
-const DEFAULT_LEGACY_SYNC_FILE_NAME = 'mindwtr-sync.json';
+export const SYNC_FILE_NAME = 'data.json';
+export const LEGACY_SYNC_FILE_NAME = 'mindwtr-sync.json';
 const AI_KEY_PATTERNS = [
     /sk-[A-Za-z0-9-]{10,}/g,
     /sk-ant-[A-Za-z0-9-]{10,}/g,
@@ -21,7 +21,7 @@ const AI_KEY_PATTERNS = [
     /AIza[0-9A-Za-z\-_]{10,}/g,
 ];
 const TOKEN_PATTERN = /(password|pass|token|access_token|api_key|apikey|authorization|username|user|secret|session|cookie)=([^\s&]+)/gi;
-const AUTH_HEADER_PATTERN = /(Authorization:\s*)(Basic|Bearer)\s+[A-Za-z0-9+\/=._-]+/gi;
+const AUTH_HEADER_PATTERN = /(Authorization:\s*)(Basic|Bearer)\s+[A-Za-z0-9+/=._-]+/gi;
 const READONLY_ERROR_PATTERN = /isn't writable|not writable|read-only|read only|permission denied|EACCES/i;
 const OFFLINE_ERROR_PATTERNS = [
     /offline state detected/i,
@@ -48,8 +48,8 @@ export const normalizePath = (input: string): string => input.replace(/\\/g, '/'
 
 export const isSyncFilePath = (
     path: string,
-    syncFileName = DEFAULT_SYNC_FILE_NAME,
-    legacySyncFileName = DEFAULT_LEGACY_SYNC_FILE_NAME
+    syncFileName = SYNC_FILE_NAME,
+    legacySyncFileName = LEGACY_SYNC_FILE_NAME
 ): boolean => {
     const normalized = normalizePath(path);
     return normalized.endsWith(`/${syncFileName}`) || normalized.endsWith(`/${legacySyncFileName}`);
@@ -86,8 +86,8 @@ export const canAutoSync = (config: AutoSyncConfig): boolean => {
 
 export const getFileSyncDir = (
     syncPath: string,
-    syncFileName = DEFAULT_SYNC_FILE_NAME,
-    legacySyncFileName = DEFAULT_LEGACY_SYNC_FILE_NAME
+    syncFileName = SYNC_FILE_NAME,
+    legacySyncFileName = LEGACY_SYNC_FILE_NAME
 ): string => {
     if (!syncPath) return '';
     const trimmed = syncPath.replace(/[\\/]+$/, '');

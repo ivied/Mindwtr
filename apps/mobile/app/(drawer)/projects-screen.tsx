@@ -1,13 +1,23 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { View, Text, TextInput, TouchableOpacity, Alert, FlatList, Dimensions, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { AREA_PRESET_COLORS, Attachment, DEFAULT_PROJECT_COLOR, Project, Task, useTaskStore } from '@mindwtr/core';
+import { AREA_PRESET_COLORS, Attachment, DEFAULT_PROJECT_COLOR, Project, shallow, Task, type Section, type TaskSortBy, useTaskStore } from '@mindwtr/core';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { ChevronDown, ChevronRight } from 'lucide-react-native';
+import { ChevronDown, ChevronRight, Plus } from 'lucide-react-native';
 
+import {
+  DEFAULT_PROJECT_LIST_VIEW_STATE,
+  PROJECT_LIST_VIEW_STATE_STORAGE_KEY,
+  type ProjectListViewState,
+  compactCollapsedAreas,
+  readProjectListViewState,
+  serializeProjectListViewState,
+} from '@/lib/view-state/project-list-view-state';
 import { projectsScreenStyles as styles } from '@/components/projects-screen/projects-screen.styles';
 import {
+  buildProjectQuickCaptureReturnTo,
   formatProjectDate,
   normalizeProjectTag,
   resolveAttachmentValidationMessage,
@@ -17,25 +27,90 @@ import { ProjectAreaModals } from '@/components/projects-screen/ProjectAreaModal
 import { ProjectDetailModal } from '@/components/projects-screen/ProjectDetailModal';
 import { ProjectImagePreviewModal, ProjectLinkModal, ProjectTagPickerModal } from '@/components/projects-screen/ProjectOverlayModals';
 import { ProjectRow } from '@/components/projects-screen/ProjectRow';
-import { buildProjectListRows, type ProjectListRow } from '@/components/projects-screen/project-list-model';
+import {
+  buildProjectListRows,
+  type ProjectListRow,
+} from '@/components/projects-screen/project-list-model';
 import { useProjectAttachments } from '@/components/projects-screen/use-project-attachments';
 import { useProjectNotesEditor } from '@/components/projects-screen/use-project-notes-editor';
 import { TaskEditModal } from '@/components/task-edit-modal';
+import type { TaskEditTab } from '@/components/task-edit/use-task-edit-state';
 import { useProjectFiltering } from '@/hooks/use-project-filtering';
 import { useMobileAreaFilter } from '@/hooks/use-mobile-area-filter';
+import { useQuickCapture } from '../../contexts/quick-capture-context';
 import { useLanguage } from '../../contexts/language-context';
 import { useToast } from '../../contexts/toast-context';
 import { useThemeColors } from '@/hooks/use-theme-colors';
+import { useFilledButtonColors } from '@/hooks/use-filled-button-colors';
 import { ListSectionHeader, defaultListContentStyle } from '@/components/list-layout';
 import { logError, logWarn } from '../../lib/app-log';
-import { AREA_FILTER_ALL, AREA_FILTER_NONE } from '@/lib/area-filter';
+import { AREA_FILTER_ALL, AREA_FILTER_NONE } from '@mindwtr/core';
 import { openContextsScreen, openProjectScreen } from '@/lib/task-meta-navigation';
+import { CompactText, CompactTextInput } from '@/components/compact-text';
+
+type ProjectTaskSortBy = TaskSortBy;
+const EMPTY_PROJECT_TASKS: Task[] = [];
+function resolveTaskRouteTab(value?: string | string[]): TaskEditTab {
+  const routeValue = Array.isArray(value) ? value[0] : value;
+  return routeValue === 'task' ? 'task' : 'view';
+}
 
 export default function ProjectsScreen() {
-  const { projects, tasks, addProject, updateProject, deleteProject, restoreProject, toggleProjectFocus, addArea, updateArea, deleteArea, reorderAreas, updateTask, setHighlightTask, settings, getDerivedState } = useTaskStore();
+  const {
+    projects,
+    tasks,
+    sections,
+    addProject,
+    updateProject,
+    deleteProject,
+    restoreProject,
+    duplicateProject,
+    addSection,
+    updateSection,
+    deleteSection,
+    reorderSections,
+    toggleProjectFocus,
+    addArea,
+    updateArea,
+    deleteArea,
+    reorderAreas,
+    updateTask,
+    setHighlightTask,
+    settings,
+    getDerivedState,
+  } = useTaskStore((state) => ({
+    projects: state.projects,
+    tasks: state.tasks,
+    sections: state.sections,
+    addProject: state.addProject,
+    updateProject: state.updateProject,
+    deleteProject: state.deleteProject,
+    restoreProject: state.restoreProject,
+    duplicateProject: state.duplicateProject,
+    addSection: state.addSection,
+    updateSection: state.updateSection,
+    deleteSection: state.deleteSection,
+    reorderSections: state.reorderSections,
+    toggleProjectFocus: state.toggleProjectFocus,
+    addArea: state.addArea,
+    updateArea: state.updateArea,
+    deleteArea: state.deleteArea,
+    reorderAreas: state.reorderAreas,
+    updateTask: state.updateTask,
+    setHighlightTask: state.setHighlightTask,
+    settings: state.settings,
+    getDerivedState: state.getDerivedState,
+  }), shallow);
   const { t, language } = useLanguage();
   const { showToast } = useToast();
+  const { openQuickCapture } = useQuickCapture();
   const tc = useThemeColors();
+  const filledButton = useFilledButtonColors();
+  const {
+    focusedProjectCount,
+    projectTaskSummaryById,
+    tasksByProjectId,
+  } = getDerivedState();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const statusPalette: Record<Project['status'], { text: string; bg: string; border: string }> = {
@@ -46,17 +121,20 @@ export default function ProjectsScreen() {
   };
   const [newProjectTitle, setNewProjectTitle] = useState('');
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [projectTaskSortBy, setProjectTaskSortBy] = useState<ProjectTaskSortBy>('default');
   const [showProjectMeta, setShowProjectMeta] = useState(false);
   const [showDueDatePicker, setShowDueDatePicker] = useState(false);
   const [showReviewPicker, setShowReviewPicker] = useState(false);
   const [showStatusMenu, setShowStatusMenu] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [taskModalDefaultTab, setTaskModalDefaultTab] = useState<TaskEditTab>('view');
+  const [taskModalOpenKey, setTaskModalOpenKey] = useState('manual');
   const [showAreaPicker, setShowAreaPicker] = useState(false);
   const [showAreaManager, setShowAreaManager] = useState(false);
   const [newAreaName, setNewAreaName] = useState('');
   const [newAreaColor, setNewAreaColor] = useState('#3b82f6');
   const [expandedAreaColorId, setExpandedAreaColorId] = useState<string | null>(null);
-  const { projectId, taskId, openToken } = useLocalSearchParams<{ projectId?: string; taskId?: string; openToken?: string }>();
+  const { projectId, taskId, openToken, taskTab } = useLocalSearchParams<{ projectId?: string; taskId?: string; openToken?: string; taskTab?: string }>();
   const lastOpenedTaskKeyRef = useRef<string | null>(null);
   const ALL_TAGS = '__all__';
   const NO_TAGS = '__none__';
@@ -65,8 +143,12 @@ export default function ProjectsScreen() {
   const [selectedTagFilter, setSelectedTagFilter] = useState(ALL_TAGS);
   const [showTagPicker, setShowTagPicker] = useState(false);
   const [collapsedAreas, setCollapsedAreas] = useState<Record<string, boolean>>({});
+  const [projectListViewStateHydrated, setProjectListViewStateHydrated] = useState(false);
   const [showDeferredProjects, setShowDeferredProjects] = useState(false);
   const [showArchivedProjects, setShowArchivedProjects] = useState(false);
+  const [showCompletedProjectTasks, setShowCompletedProjectTasks] = useState(false);
+  const projectListViewStateRef = useRef<ProjectListViewState>(DEFAULT_PROJECT_LIST_VIEW_STATE);
+  const projectListViewStateTouchedRef = useRef(false);
   const {
     areaById,
     resolvedAreaFilter: selectedAreaFilter,
@@ -76,6 +158,25 @@ export default function ProjectsScreen() {
   const logProjectError = useCallback((message: string, error?: unknown) => {
     if (!error) return;
     void logError(error, { scope: 'project', extra: { message } });
+  }, []);
+  const applyProjectListViewState = useCallback((nextState: ProjectListViewState) => {
+    const compactState = {
+      ...nextState,
+      collapsedAreas: compactCollapsedAreas(nextState.collapsedAreas),
+    };
+    projectListViewStateRef.current = compactState;
+    setCollapsedAreas(compactState.collapsedAreas);
+    setShowArchivedProjects(compactState.showArchivedProjects);
+    setShowDeferredProjects(compactState.showDeferredProjects);
+  }, []);
+  const persistProjectListViewState = useCallback((nextState: ProjectListViewState) => {
+    const compactState = {
+      ...nextState,
+      collapsedAreas: compactCollapsedAreas(nextState.collapsedAreas),
+    };
+    projectListViewStateRef.current = compactState;
+    AsyncStorage.setItem(PROJECT_LIST_VIEW_STATE_STORAGE_KEY, serializeProjectListViewState(compactState))
+      .catch(() => undefined);
   }, []);
   const resolveText = useCallback((key: string, fallback: string) => {
     const value = t(key);
@@ -88,7 +189,7 @@ export default function ProjectsScreen() {
   const pickerCardMaxHeight = Math.min(windowHeight * 0.8, 560);
   const areaListMaxHeight = Math.min(windowHeight * 0.4, 280);
   const areaManagerListMaxHeight = Math.min(windowHeight * 0.45, 320);
-  const overlayModalPresentation = Platform.OS === 'ios' ? 'overFullScreen' : 'fullScreen';
+  const overlayModalPresentation = 'overFullScreen' as const;
 
   const colors = AREA_PRESET_COLORS;
   const colorDisplayByHex: Record<string, { nameKey: string; swatch: string }> = {
@@ -116,7 +217,7 @@ export default function ProjectsScreen() {
     selectedAreaFilter,
     allTagsValue: ALL_TAGS,
     noTagsValue: NO_TAGS,
-    focusedProjectCount: getDerivedState().focusedProjectCount,
+    focusedProjectCount,
     t,
   });
   const {
@@ -147,6 +248,29 @@ export default function ProjectsScreen() {
     updateProject,
     language,
   });
+
+  useEffect(() => {
+    let active = true;
+    AsyncStorage.getItem(PROJECT_LIST_VIEW_STATE_STORAGE_KEY)
+      .then((raw) => {
+        if (!active) return;
+        if (!projectListViewStateTouchedRef.current) {
+          const persisted = readProjectListViewState(raw);
+          if (persisted) {
+            applyProjectListViewState(persisted);
+          }
+        }
+        setProjectListViewStateHydrated(true);
+      })
+      .catch(() => {
+        if (active) {
+          setProjectListViewStateHydrated(true);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [applyProjectListViewState]);
   const {
     linkModalVisible,
     setLinkModalVisible,
@@ -168,28 +292,52 @@ export default function ProjectsScreen() {
     logProjectError,
   });
 
-  const projectListRows = useMemo(() => buildProjectListRows({
+  const projectListRows = useMemo(() => {
+    if (!projectListViewStateHydrated) return [];
+    return buildProjectListRows({
+      areaById,
+      collapsedAreas,
+      groupedActiveProjects,
+      groupedArchivedProjects,
+      groupedDeferredProjects,
+      showArchivedProjects,
+      showDeferredProjects,
+      t,
+    });
+  }, [
     areaById,
     collapsedAreas,
     groupedActiveProjects,
     groupedArchivedProjects,
     groupedDeferredProjects,
-    showArchivedProjects,
-    showDeferredProjects,
-    t,
-  }), [
-    areaById,
-    collapsedAreas,
-    groupedActiveProjects,
-    groupedArchivedProjects,
-    groupedDeferredProjects,
+    projectListViewStateHydrated,
     showArchivedProjects,
     showDeferredProjects,
     t,
   ]);
+  const projectListEmptyLabel = projectListViewStateHydrated
+    ? t('projects.empty')
+    : resolveText('common.loading', 'Loading...');
+
+  const selectedProjectTasks = useMemo(
+    () => (selectedProject ? tasksByProjectId.get(selectedProject.id) ?? EMPTY_PROJECT_TASKS : EMPTY_PROJECT_TASKS),
+    [tasksByProjectId, selectedProject?.id]
+  );
+  const selectedProjectSections = useMemo<Section[]>(() => {
+    if (!selectedProject) return [];
+    return sections
+      .filter((section) => section.projectId === selectedProject.id && !section.deletedAt)
+      .sort((a, b) => {
+        const aOrder = Number.isFinite(a.order) ? a.order : 0;
+        const bOrder = Number.isFinite(b.order) ? b.order : 0;
+        if (aOrder !== bOrder) return aOrder - bOrder;
+        return a.title.localeCompare(b.title);
+      });
+  }, [sections, selectedProject?.id]);
 
   const openProject = useCallback((project: Project) => {
     setSelectedProject(project);
+    setProjectTaskSortBy('default');
     resetProjectNotesUi();
     setShowProjectMeta(false);
     setShowDueDatePicker(false);
@@ -197,6 +345,16 @@ export default function ProjectsScreen() {
     setShowStatusMenu(false);
     resetProjectAttachmentUi();
   }, [resetProjectAttachmentUi, resetProjectNotesUi]);
+
+  const openProjectQuickAdd = useCallback((projectToAddTo: Project) => {
+    openQuickCapture({
+      initialProps: {
+        projectId: projectToAddTo.id,
+        status: 'next',
+      },
+      returnTo: buildProjectQuickCaptureReturnTo(projectToAddTo.id),
+    });
+  }, [openQuickCapture]);
 
   useEffect(() => {
     if (!projectId || typeof projectId !== 'string') return;
@@ -209,14 +367,17 @@ export default function ProjectsScreen() {
   useEffect(() => {
     if (!taskId || typeof taskId !== 'string') return;
     if (!selectedProject || selectedProject.id !== projectId) return;
-    const openKey = `${taskId}:${typeof openToken === 'string' ? openToken : ''}`;
+    const nextTaskTab = resolveTaskRouteTab(taskTab);
+    const openKey = `${taskId}:${typeof openToken === 'string' ? openToken : ''}:${nextTaskTab}`;
     if (lastOpenedTaskKeyRef.current === openKey) return;
     const task = tasks.find((item) => item.id === taskId && !item.deletedAt);
     if (!task || task.projectId !== selectedProject.id) return;
     lastOpenedTaskKeyRef.current = openKey;
     setHighlightTask(task.id);
+    setTaskModalDefaultTab(nextTaskTab);
+    setTaskModalOpenKey(`route:${openKey}`);
     setEditingTask(task);
-  }, [openToken, taskId, projectId, selectedProject, tasks, setHighlightTask]);
+  }, [openToken, taskId, projectId, selectedProject, taskTab, tasks, setHighlightTask]);
 
   const sortAreasByName = () => {
     const reordered = [...sortedAreas]
@@ -294,17 +455,45 @@ export default function ProjectsScreen() {
     undoNotificationsEnabled,
   ]);
 
+  const handleDuplicateProject = useCallback((projectIdToDuplicate: string) => {
+    void Promise.resolve(duplicateProject(projectIdToDuplicate))
+      .then((createdProject) => {
+        if (!createdProject) {
+          showToast({
+            title: resolveText('common.notice', 'Notice'),
+            message: resolveText('projects.duplicateFailed', 'Failed to duplicate project'),
+            tone: 'error',
+          });
+          return;
+        }
+        setSelectedProject(createdProject);
+        showToast({
+          title: resolveText('common.done', 'Done'),
+          message: resolveText('projects.duplicated', 'Project duplicated'),
+          tone: 'success',
+        });
+      })
+      .catch((error) => {
+        logProjectError('Failed to duplicate project', error);
+        showToast({
+          title: resolveText('common.notice', 'Notice'),
+          message: resolveText('projects.duplicateFailed', 'Failed to duplicate project'),
+          tone: 'error',
+        });
+      });
+  }, [duplicateProject, logProjectError, resolveText, showToast]);
+
   const renderProjectItem = (project: Project) => {
     return (
       <ProjectRow
         project={project}
-        tasks={tasks}
-        areaById={areaById}
+        taskSummary={projectTaskSummaryById.get(project.id)}
         tc={tc}
         focusedCount={focusedCount}
         statusPalette={statusPalette}
         t={t}
         onDeleteProject={handleDeleteProject}
+        onDuplicateProject={handleDuplicateProject}
         onOpenProject={openProject}
         onToggleProjectFocus={toggleProjectFocus}
       />
@@ -312,11 +501,41 @@ export default function ProjectsScreen() {
   };
 
   const toggleAreaCollapse = useCallback((areaId: string) => {
-    setCollapsedAreas((current) => ({
+    projectListViewStateTouchedRef.current = true;
+    const current = projectListViewStateRef.current;
+    const collapsedAreas = { ...current.collapsedAreas };
+    if (collapsedAreas[areaId]) {
+      delete collapsedAreas[areaId];
+    } else {
+      collapsedAreas[areaId] = true;
+    }
+    const nextState = {
       ...current,
-      [areaId]: !(current[areaId] ?? false),
-    }));
-  }, []);
+      collapsedAreas,
+    };
+    setCollapsedAreas(compactCollapsedAreas(collapsedAreas));
+    persistProjectListViewState(nextState);
+  }, [persistProjectListViewState]);
+
+  const toggleProjectSection = useCallback((sectionKind: Extract<ProjectListRow, { type: 'section-toggle' }>['sectionKind']) => {
+    projectListViewStateTouchedRef.current = true;
+    const current = projectListViewStateRef.current;
+    if (sectionKind === 'deferred') {
+      const nextState = {
+        ...current,
+        showDeferredProjects: !current.showDeferredProjects,
+      };
+      setShowDeferredProjects(nextState.showDeferredProjects);
+      persistProjectListViewState(nextState);
+      return;
+    }
+    const nextState = {
+      ...current,
+      showArchivedProjects: !current.showArchivedProjects,
+    };
+    setShowArchivedProjects(nextState.showArchivedProjects);
+    persistProjectListViewState(nextState);
+  }, [persistProjectListViewState]);
 
   const renderProjectListRow = ({ item, index }: { item: ProjectListRow; index: number }) => {
     if (item.type === 'section-label') {
@@ -328,11 +547,7 @@ export default function ProjectsScreen() {
       return (
         <TouchableOpacity
           onPress={() => {
-            if (item.sectionKind === 'deferred') {
-              setShowDeferredProjects((current) => !current);
-              return;
-            }
-            setShowArchivedProjects((current) => !current);
+            toggleProjectSection(item.sectionKind);
           }}
           style={[
             styles.collapsibleSectionToggle,
@@ -421,6 +636,7 @@ export default function ProjectsScreen() {
   };
 
   const closeProjectDetail = () => {
+    commitSelectedProjectNotes();
     persistSelectedProjectEdits(selectedProject);
     setSelectedProject(null);
     resetProjectNotesUi();
@@ -523,24 +739,53 @@ export default function ProjectsScreen() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <View style={[styles.container, { backgroundColor: tc.bg }]}>
       <View style={[styles.inputContainer, { borderBottomColor: tc.border }]}>
-        <TextInput
-          style={[styles.input, { borderColor: tc.border, backgroundColor: tc.inputBg, color: tc.text }]}
-          placeholder={t('projects.addPlaceholder')}
-          placeholderTextColor={tc.secondaryText}
-          value={newProjectTitle}
-          onChangeText={setNewProjectTitle}
-          onSubmitEditing={handleAddProject}
-          returnKeyType="done"
-        />
+        <View style={styles.addProjectRow}>
+          <CompactTextInput
+            style={[styles.input, styles.addProjectInput, { borderColor: tc.border, backgroundColor: tc.inputBg, color: tc.text }]}
+            placeholder={t('projects.addPlaceholder')}
+            placeholderTextColor={tc.secondaryText}
+            value={newProjectTitle}
+            onChangeText={setNewProjectTitle}
+            onSubmitEditing={handleAddProject}
+            returnKeyType="done"
+            accessibilityLabel={t('projects.addPlaceholder')}
+          />
+          <TouchableOpacity
+            accessibilityRole="button"
+            accessibilityLabel={t('projects.add')}
+            onPress={handleAddProject}
+            style={[
+              styles.addIconButton,
+              { backgroundColor: filledButton.backgroundColor },
+              !newProjectTitle.trim() && styles.addButtonDisabled,
+            ]}
+            disabled={!newProjectTitle.trim()}
+          >
+            <Plus size={22} color={filledButton.textColor ?? tc.onTint} strokeWidth={2.4} />
+          </TouchableOpacity>
+        </View>
         <View style={styles.filterSection}>
           <TouchableOpacity
             style={styles.filterHeader}
             onPress={() => setShowTagFilter((prev) => !prev)}
+            accessibilityRole="button"
+            accessibilityLabel={`${t('projects.tagFilter')}: ${showTagFilter ? t('filters.hide') : t('filters.show')}`}
+            accessibilityState={{ expanded: showTagFilter }}
           >
-            <Text style={[styles.tagFilterLabel, { color: tc.text }]}>{t('projects.tagFilter')}</Text>
-            <Text style={[styles.filterToggleText, { color: tc.secondaryText }]}>
+            <CompactText
+              style={[styles.tagFilterLabel, { color: tc.text }]}
+              numberOfLines={1}
+            >
+              {t('projects.tagFilter')}
+            </CompactText>
+            <CompactText
+              style={[styles.filterToggleText, { color: tc.secondaryText }]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.78}
+            >
               {showTagFilter ? t('filters.hide') : t('filters.show')}
-            </Text>
+            </CompactText>
           </TouchableOpacity>
           {showTagFilter && (
             <View style={styles.tagFilterChips}>
@@ -552,6 +797,9 @@ export default function ProjectsScreen() {
                     : { borderColor: tc.border, backgroundColor: tc.cardBg },
                 ]}
                 onPress={() => setSelectedTagFilter(ALL_TAGS)}
+                accessibilityRole="button"
+                accessibilityLabel={t('projects.allTags')}
+                accessibilityState={{ selected: selectedTagFilter === ALL_TAGS }}
               >
                 <Text
                   style={[
@@ -572,6 +820,9 @@ export default function ProjectsScreen() {
                       : { borderColor: tc.border, backgroundColor: tc.cardBg },
                   ]}
                   onPress={() => setSelectedTagFilter(tag)}
+                  accessibilityRole="button"
+                  accessibilityLabel={tag}
+                  accessibilityState={{ selected: selectedTagFilter === tag }}
                 >
                   <Text
                     style={[
@@ -592,6 +843,9 @@ export default function ProjectsScreen() {
                       : { borderColor: tc.border, backgroundColor: tc.cardBg },
                   ]}
                   onPress={() => setSelectedTagFilter(NO_TAGS)}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('projects.noTags')}
+                  accessibilityState={{ selected: selectedTagFilter === NO_TAGS }}
                 >
                   <Text
                     style={[
@@ -606,17 +860,6 @@ export default function ProjectsScreen() {
             </View>
           )}
         </View>
-        <TouchableOpacity
-          onPress={handleAddProject}
-          style={[
-            styles.addButton,
-            { backgroundColor: tc.tint },
-            !newProjectTitle.trim() && styles.addButtonDisabled,
-          ]}
-          disabled={!newProjectTitle.trim()}
-        >
-          <Text style={styles.addButtonText}>{t('projects.add')}</Text>
-        </TouchableOpacity>
       </View>
 
       <FlatList
@@ -626,14 +869,16 @@ export default function ProjectsScreen() {
         style={{ flex: 1 }}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
-            <Text style={[styles.emptyText, { color: tc.secondaryText }]}>{t('projects.empty')}</Text>
+            <Text style={[styles.emptyText, { color: tc.secondaryText }]}>{projectListEmptyLabel}</Text>
           </View>
         }
         renderItem={renderProjectListRow}
+        removeClippedSubviews={false}
       />
 
       <ProjectDetailModal
         addProjectFileAttachment={addProjectFileAttachment}
+        addSection={addSection}
         closeProjectDetail={closeProjectDetail}
         commitSelectedProjectNotes={commitSelectedProjectNotes}
         formatProjectDate={formatProjectDate}
@@ -649,11 +894,15 @@ export default function ProjectsScreen() {
         notesExpanded={notesExpanded}
         notesFullscreen={notesFullscreen}
         onCloseNotesFullscreen={() => setNotesFullscreen(false)}
+        onDuplicateProject={handleDuplicateProject}
         onDownloadAttachment={downloadAttachment}
         onOpenAreaPicker={openAreaPicker}
         onOpenAttachment={openAttachment}
+        onOpenProjectQuickAdd={openProjectQuickAdd}
         onOpenTagPicker={openTagPicker}
         onRemoveProjectAttachment={removeProjectAttachment}
+        deleteSection={deleteSection}
+        reorderSections={reorderSections}
         onSetLinkInput={setLinkInput}
         onSetLinkModalVisible={setLinkModalVisible}
         onSetNotesExpanded={setNotesExpanded}
@@ -665,9 +914,14 @@ export default function ProjectsScreen() {
         onSetShowProjectMeta={setShowProjectMeta}
         onSetShowReviewPicker={setShowReviewPicker}
         onSetShowStatusMenu={setShowStatusMenu}
+        onProjectTaskSortByChange={setProjectTaskSortBy}
+        onToggleShowCompletedTasks={() => setShowCompletedProjectTasks((current) => !current)}
         overlayVisible={!!selectedProject}
         presentationStyle={Platform.OS === 'ios' ? 'pageSheet' : 'fullScreen'}
+        projectTaskSortBy={projectTaskSortBy}
         selectedProject={selectedProject}
+        selectedProjectSections={selectedProjectSections}
+        selectedProjectTasks={selectedProjectTasks}
         selectedProjectAreaName={selectedProjectAreaName}
         selectedProjectNotes={selectedProjectNotes}
         selectedProjectNotesDirection={selectedProjectNotesDirection}
@@ -680,18 +934,21 @@ export default function ProjectsScreen() {
         showProjectMeta={showProjectMeta}
         showReviewPicker={showReviewPicker}
         showStatusMenu={showStatusMenu}
+        showCompletedTasks={showCompletedProjectTasks}
         statusPalette={statusPalette}
         t={t}
         tc={tc}
         updateProject={updateProject}
+        updateSection={updateSection}
       />
 
       <TaskEditModal
+        key={taskModalOpenKey}
         visible={editingTask !== null}
         task={editingTask}
         onClose={() => setEditingTask(null)}
         onSave={(taskId, updates) => updateTask(taskId, updates)}
-        defaultTab="view"
+        defaultTab={taskModalDefaultTab}
         onProjectNavigate={(projectId) => {
           if (!selectedProject || selectedProject.id !== projectId) {
             openProjectScreen(projectId);

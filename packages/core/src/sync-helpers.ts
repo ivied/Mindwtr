@@ -1,7 +1,8 @@
 import type { AppData, Attachment } from './types';
 import { normalizeSavedFilters } from './saved-filters';
+import { SYNC_FILE_NAME } from './sync-service-utils';
 
-const SYNC_FILE_NAME = 'data.json';
+const MISSING_ATTACHMENT_TIMESTAMP_SENTINEL = '1970-01-01T00:00:00.000Z';
 
 export type SoftDeletable = {
     deletedAt?: string | null;
@@ -16,13 +17,32 @@ export type PendingAttachmentUpload = {
     ownerId: string;
     attachmentId: string;
     title: string;
+    uriScheme: string;
+    localStatus?: Attachment['localStatus'];
 };
 
 export const normalizeWebdavUrl = (rawUrl: string): string => {
-    const trimmed = rawUrl.replace(/\/+$/, '');
-    return trimmed.toLowerCase().endsWith(`/${SYNC_FILE_NAME}`) || trimmed.toLowerCase().endsWith('.json')
-        ? trimmed
-        : `${trimmed}/${SYNC_FILE_NAME}`;
+    const splitIndex = rawUrl.search(/[?#]/);
+    const pathEnd = splitIndex >= 0 ? splitIndex : rawUrl.length;
+    const path = rawUrl.slice(0, pathEnd).replace(/\/+$/, '');
+    const suffix = rawUrl.slice(pathEnd);
+    const lowerPath = path.toLowerCase();
+    const normalizedPath = lowerPath.endsWith(`/${SYNC_FILE_NAME}`) || lowerPath.endsWith('.json')
+        ? path
+        : `${path}/${SYNC_FILE_NAME}`;
+
+    if (!suffix) return normalizedPath;
+    const hashIndex = suffix.indexOf('#');
+    const queryPart = suffix.startsWith('?')
+        ? suffix.slice(0, hashIndex >= 0 ? hashIndex : suffix.length)
+        : '';
+    const hashPart = hashIndex >= 0 ? suffix.slice(hashIndex) : (suffix.startsWith('#') ? suffix : '');
+    if (!queryPart) return `${normalizedPath}${hashPart}`;
+
+    const params = new URLSearchParams(queryPart.slice(1));
+    params.delete('_');
+    const query = params.toString();
+    return `${normalizedPath}${query ? `?${query}` : ''}${hashPart}`;
 };
 
 export const normalizeCloudUrl = (rawUrl: string): string => {
@@ -46,7 +66,16 @@ const isLocalAttachmentUri = (uri: string): boolean => {
     return !/^https?:\/\//i.test(trimmed);
 };
 
-const isLocalCalendarSourceUrl = (url: string): boolean => url.trim().toLowerCase().startsWith('file://');
+const getAttachmentUriScheme = (uri: string): string => {
+    const trimmed = uri.trim();
+    const match = /^([a-z][a-z0-9+.-]*):/i.exec(trimmed);
+    return match?.[1]?.toLowerCase() ?? (trimmed ? 'file' : 'empty');
+};
+
+const isLocalCalendarSourceUrl = (url: string): boolean => {
+    const normalized = url.trim().toLowerCase();
+    return normalized.startsWith('file://') || normalized.startsWith('content://');
+};
 
 const collectPendingUploads = (
     ownerType: PendingAttachmentUpload['ownerType'],
@@ -69,6 +98,8 @@ const collectPendingUploads = (
             ownerId,
             attachmentId: attachment.id,
             title: attachment.title,
+            uriScheme: getAttachmentUriScheme(attachment.uri),
+            localStatus: attachment.localStatus,
         }));
 };
 
@@ -102,6 +133,12 @@ export const assertNoPendingAttachmentUploads = (data: AppData): void => {
     );
 };
 
+export const hasPendingSyncSideEffects = (data: AppData): boolean => (
+    Boolean(data.settings.pendingRemoteWriteAt)
+    || findPendingAttachmentUploads(data).length > 0
+    || Boolean(data.settings.attachments?.pendingRemoteDeletes?.length)
+);
+
 export const sanitizeAppDataForRemote = (data: AppData): AppData => {
     const hasNonEmptyValue = (value: unknown): boolean => (
         typeof value === 'string' && value.trim().length > 0
@@ -113,10 +150,9 @@ export const sanitizeAppDataForRemote = (data: AppData): AppData => {
             const hasCloudKey = hasNonEmptyValue(attachment.cloudKey);
             if (!attachment.deletedAt) {
                 if ((ownerDeleted && !hasCloudKey) || (attachment.localStatus === 'missing' && !hasCloudKey)) {
-                    const nowIso = new Date().toISOString();
                     const fallbackUpdatedAt = hasNonEmptyValue(attachment.updatedAt)
                         ? attachment.updatedAt
-                        : nowIso;
+                        : MISSING_ATTACHMENT_TIMESTAMP_SENTINEL;
                     return {
                         ...attachment,
                         deletedAt: fallbackUpdatedAt,
@@ -159,10 +195,17 @@ export const sanitizeAppDataForRemote = (data: AppData): AppData => {
         }
 
         if (prefs.gtd === true) {
-            if (settings.gtd?.defaultScheduleTime !== undefined || settings.gtd?.focusTaskLimit !== undefined) {
+            if (
+                settings.gtd?.defaultScheduleTime !== undefined
+                || settings.gtd?.focusTaskLimit !== undefined
+                || settings.gtd?.focusGroupBy !== undefined
+                || settings.gtd?.defaultProjectFlowMode !== undefined
+            ) {
                 next.gtd = {
                     ...(settings.gtd.defaultScheduleTime !== undefined ? { defaultScheduleTime: settings.gtd.defaultScheduleTime } : {}),
                     ...(settings.gtd.focusTaskLimit !== undefined ? { focusTaskLimit: settings.gtd.focusTaskLimit } : {}),
+                    ...(settings.gtd.focusGroupBy !== undefined ? { focusGroupBy: settings.gtd.focusGroupBy } : {}),
+                    ...(settings.gtd.defaultProjectFlowMode !== undefined ? { defaultProjectFlowMode: settings.gtd.defaultProjectFlowMode } : {}),
                 };
             }
         }

@@ -8,7 +8,9 @@ import {
     formatPomodoroClock,
     getPomodoroPresetOptions,
     getPomodoroPhaseSeconds,
+    recordPomodoroFocusSessions,
     sanitizePomodoroDurations,
+    sanitizePomodoroSessionHistory,
     tickPomodoroState,
 } from './pomodoro';
 
@@ -94,5 +96,45 @@ describe('pomodoro helpers', () => {
         expect(formatPomodoroClock(0)).toBe('00:00');
         expect(formatPomodoroClock(65)).toBe('01:05');
         expect(formatPomodoroClock(3605)).toBe('1:00:05');
+    });
+
+    it('sanitizes persisted local session history', () => {
+        expect(sanitizePomodoroSessionHistory({
+            totalCompletedFocusSessions: 1.2,
+            completedFocusSessionsByTaskId: {
+                ' task-1 ': 2.8,
+                'task-2': -1,
+                '': 4,
+            },
+        }, 5)).toEqual({
+            totalCompletedFocusSessions: 5,
+            completedFocusSessionsByTaskId: {
+                'task-1': 2,
+            },
+        });
+    });
+
+    it('records completed focus sessions in local task history', () => {
+        const previous = {
+            totalCompletedFocusSessions: 2,
+            completedFocusSessionsByTaskId: {
+                'task-1': 1,
+            },
+        };
+
+        const next = recordPomodoroFocusSessions(previous, 'task-1', 2);
+
+        expect(next).toEqual({
+            totalCompletedFocusSessions: 4,
+            completedFocusSessionsByTaskId: {
+                'task-1': 3,
+            },
+        });
+        expect(previous).toEqual({
+            totalCompletedFocusSessions: 2,
+            completedFocusSessionsByTaskId: {
+                'task-1': 1,
+            },
+        });
     });
 });

@@ -38,12 +38,12 @@ describe('useTaskEditDates', () => {
         act(() => {
             tree = renderer.create(
                 <DateFormatterProbe
-                    startDate="2026-06-05"
+                    startDate="2026-06-05T09:30:00"
                     dueDate="2026-06-05T17:00:00"
                 />
             );
         });
 
-        expect(tree.root.findByType(Text).props.children).toBe('2026-06-05|2026-06-05 17:00');
+        expect(tree.root.findByType(Text).props.children).toBe('2026-06-05 09:30|2026-06-05 17:00');
     });
 });

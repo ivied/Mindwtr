@@ -1,0 +1,4 @@
+- Sync y copias conservan mejor personas/asignados, con fixes para bucles de personas duplicadas y borrado de proyectos mas seguro.
+- Los adjuntos compartidos se preservan y los metadatos de adjuntos en proyectos duplicados se limpian.
+- Quick Capture, calendario/proyectos, iconos Android y listas grandes van mas fluidos.
+- La configuracion FOSS es mas consistente.

@@ -1,5 +1,5 @@
 import React from 'react';
-import { parseMarkdownReferenceHref, tFallback, useTaskStore, shallow } from '@mindwtr/core';
+import { parseMarkdownReferenceHref, tFallback, useTaskStore, shallow, type Project, type Task } from '@mindwtr/core';
 
 import { useLanguage } from '../contexts/language-context';
 import { dispatchNavigateEvent } from '../lib/navigation-events';
@@ -13,12 +13,96 @@ type InternalMarkdownLinkProps = {
     href?: string;
     className?: string;
     children: React.ReactNode;
+    linkContext: InternalMarkdownLinkContext;
 };
+
+type TaskStoreSnapshot = ReturnType<typeof useTaskStore.getState>;
+type UiStoreSnapshot = ReturnType<typeof useUiStore.getState>;
+
+export type InternalMarkdownLinkContext = {
+    tasksById: Map<string, Task>;
+    deletedTasksById: Map<string, Task>;
+    projectsById: Map<string, Project>;
+    deletedProjectsById: Map<string, Project>;
+    restoreTask: TaskStoreSnapshot['restoreTask'];
+    restoreProject: TaskStoreSnapshot['restoreProject'];
+    setHighlightTask: TaskStoreSnapshot['setHighlightTask'];
+    setProjectView: UiStoreSnapshot['setProjectView'];
+};
+
+type CreateInternalMarkdownLinkContextParams = {
+    tasks: Task[];
+    projects: Project[];
+    restoreTask: TaskStoreSnapshot['restoreTask'];
+    restoreProject: TaskStoreSnapshot['restoreProject'];
+    setHighlightTask: TaskStoreSnapshot['setHighlightTask'];
+    setProjectView: UiStoreSnapshot['setProjectView'];
+};
+
+export function createInternalMarkdownLinkContext({
+    tasks,
+    projects,
+    restoreTask,
+    restoreProject,
+    setHighlightTask,
+    setProjectView,
+}: CreateInternalMarkdownLinkContextParams): InternalMarkdownLinkContext {
+    const tasksById = new Map<string, Task>();
+    const deletedTasksById = new Map<string, Task>();
+    const projectsById = new Map<string, Project>();
+    const deletedProjectsById = new Map<string, Project>();
+
+    tasks.forEach((task) => {
+        if (task.deletedAt) {
+            deletedTasksById.set(task.id, task);
+        } else {
+            tasksById.set(task.id, task);
+        }
+    });
+    projects.forEach((project) => {
+        if (project.deletedAt) {
+            deletedProjectsById.set(project.id, project);
+        } else {
+            projectsById.set(project.id, project);
+        }
+    });
+
+    return {
+        tasksById,
+        deletedTasksById,
+        projectsById,
+        deletedProjectsById,
+        restoreTask,
+        restoreProject,
+        setHighlightTask,
+        setProjectView,
+    };
+}
+
+export function useInternalMarkdownLinkContext(): InternalMarkdownLinkContext {
+    const { tasks, projects, restoreTask, restoreProject, setHighlightTask } = useTaskStore((state) => ({
+        tasks: state._allTasks,
+        projects: state._allProjects,
+        restoreTask: state.restoreTask,
+        restoreProject: state.restoreProject,
+        setHighlightTask: state.setHighlightTask,
+    }), shallow);
+    const setProjectView = useUiStore((state) => state.setProjectView);
+
+    return React.useMemo(() => createInternalMarkdownLinkContext({
+        tasks,
+        projects,
+        restoreTask,
+        restoreProject,
+        setHighlightTask,
+        setProjectView,
+    }), [tasks, projects, restoreTask, restoreProject, setHighlightTask, setProjectView]);
+}
 
 function isSafeExternalHref(href: string): boolean {
     try {
         const url = new URL(href);
-        return ['http:', 'https:', 'mailto:', 'tel:'].includes(url.protocol);
+        return ['http:', 'https:', 'mailto:', 'tel:', 'mid:'].includes(url.protocol);
     } catch {
         return false;
     }
@@ -44,16 +128,18 @@ async function openExternalHref(href: string): Promise<void> {
     }
 }
 
-export function InternalMarkdownLink({ href, className, children }: InternalMarkdownLinkProps) {
+export function InternalMarkdownLink({ href, className, children, linkContext }: InternalMarkdownLinkProps) {
     const { t } = useLanguage();
-    const { tasks, projects, restoreTask, restoreProject, setHighlightTask } = useTaskStore((state) => ({
-        tasks: state._allTasks,
-        projects: state._allProjects,
-        restoreTask: state.restoreTask,
-        restoreProject: state.restoreProject,
-        setHighlightTask: state.setHighlightTask,
-    }), shallow);
-    const setProjectView = useUiStore((state) => state.setProjectView);
+    const {
+        tasksById,
+        deletedTasksById,
+        projectsById,
+        deletedProjectsById,
+        restoreTask,
+        restoreProject,
+        setHighlightTask,
+        setProjectView,
+    } = linkContext;
 
     if (!href) {
         return <>{children}</>;
@@ -88,8 +174,8 @@ export function InternalMarkdownLink({ href, className, children }: InternalMark
     const restoreLabel = tFallback(t, 'markdown.referenceRestore', 'Restore');
 
     if (reference.entityType === 'project') {
-        const project = projects.find((candidate) => candidate.id === reference.id && !candidate.deletedAt);
-        const deletedProject = project ? null : projects.find((candidate) => candidate.id === reference.id && !!candidate.deletedAt);
+        const project = projectsById.get(reference.id);
+        const deletedProject = project ? null : deletedProjectsById.get(reference.id);
         if (!project) {
             return (
                 <span className={cn('text-muted-foreground', className)}>
@@ -134,8 +220,8 @@ export function InternalMarkdownLink({ href, className, children }: InternalMark
         );
     }
 
-    const task = tasks.find((candidate) => candidate.id === reference.id && !candidate.deletedAt);
-    const deletedTask = task ? null : tasks.find((candidate) => candidate.id === reference.id && !!candidate.deletedAt);
+    const task = tasksById.get(reference.id);
+    const deletedTask = task ? null : deletedTasksById.get(reference.id);
     if (!task) {
         return (
             <span className={cn('text-muted-foreground', className)}>

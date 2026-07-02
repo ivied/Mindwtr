@@ -8,6 +8,20 @@ type ScheduleOptions = {
     includeReviewAt?: boolean;
 };
 
+export const REPEAT_REMINDER_INTERVAL_OPTIONS = [5, 10, 15, 30, 60] as const;
+export const REPEAT_REMINDER_MAX_WINDOW_MINUTES = 120;
+export const REPEAT_REMINDER_MAX_OCCURRENCES = 8;
+
+const REPEAT_REMINDER_INTERVAL_SET: ReadonlySet<number> = new Set(REPEAT_REMINDER_INTERVAL_OPTIONS);
+
+/**
+ * Coerce a stored repeat-reminder interval to an allowed preset, or undefined when off/invalid.
+ */
+export function normalizeRepeatReminderMinutes(value: unknown): number | undefined {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+    return REPEAT_REMINDER_INTERVAL_SET.has(value) ? value : undefined;
+}
+
 function parseExplicitReminderDate(value: string | undefined | null): Date | null {
     if (!hasTimeComponent(value ?? undefined)) {
         return null;
@@ -24,8 +38,9 @@ export function getNextScheduledAt(task: Task, now: Date = new Date(), options: 
     if (task.status === 'done' || task.status === 'archived' || task.status === 'reference') return null;
 
     const candidates: Date[] = [];
-    const includeStartTime = options.includeStartTime !== false;
-    const includeDueDate = options.includeDueDate !== false;
+    const includeTaskReminders = task.suppressMindwtrReminders !== true;
+    const includeStartTime = includeTaskReminders && options.includeStartTime !== false;
+    const includeDueDate = includeTaskReminders && options.includeDueDate !== false;
     const start = includeStartTime ? parseExplicitReminderDate(task.startTime) : null;
     const due = includeDueDate ? parseExplicitReminderDate(task.dueDate) : null;
     const review = options.includeReviewAt ? parseExplicitReminderDate(task.reviewAt) : null;
@@ -37,6 +52,40 @@ export function getNextScheduledAt(task: Task, now: Date = new Date(), options: 
     if (candidates.length === 0) return null;
     candidates.sort((a, b) => a.getTime() - b.getTime());
     return candidates[0];
+}
+
+/**
+ * Returns the bounded repeat-reminder occurrence times for a task's due time.
+ *
+ * Repeats anchor on the explicit due *time* only and start at index 1 (`due + N`); the due moment
+ * itself stays the task's single due reminder, so callers never double-fire. Returns `[]` when the
+ * task is inactive, has no explicit due time, suppresses reminders, has due reminders disabled, or
+ * has no valid repeat interval. The occurrence count is bounded by both a window and a hard ceiling:
+ * `min(REPEAT_REMINDER_MAX_OCCURRENCES, floor(REPEAT_REMINDER_MAX_WINDOW_MINUTES / interval))`.
+ *
+ * Pure: callers filter by `now` for delivery.
+ */
+export function getDueReminderRepeatTimes(task: Task, options: ScheduleOptions = {}): Date[] {
+    if (task.deletedAt) return [];
+    if (task.status === 'done' || task.status === 'archived' || task.status === 'reference') return [];
+    if (task.suppressMindwtrReminders === true) return [];
+    if (options.includeDueDate === false) return [];
+
+    const interval = normalizeRepeatReminderMinutes(task.repeatReminderMinutes);
+    if (!interval) return [];
+
+    const due = parseExplicitReminderDate(task.dueDate);
+    if (!due) return [];
+
+    const count = Math.min(
+        REPEAT_REMINDER_MAX_OCCURRENCES,
+        Math.floor(REPEAT_REMINDER_MAX_WINDOW_MINUTES / interval),
+    );
+    const times: Date[] = [];
+    for (let i = 1; i <= count; i += 1) {
+        times.push(new Date(due.getTime() + i * interval * 60_000));
+    }
+    return times;
 }
 
 export function getUpcomingSchedules(tasks: Task[], now: Date = new Date(), options: ScheduleOptions = {}) {

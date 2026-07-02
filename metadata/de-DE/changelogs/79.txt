@@ -1,0 +1,4 @@
+- Guided Mind Sweep erfasst private und berufliche Punkte direkt in der Inbox.
+- Personenplanung, Board-Sortierung, Inbox-Verarbeitung und Heute-Follow-ups verbessern die Organisation.
+- Sync und Anhaenge sind sicherer durch begrenzte Anfragen, Remote-Loeschungen, Tombstone-Fixes und bessere Fallbacks.
+- Mobile Inbox-Aktionen, Teilen-Text und Review-Organisation sind stabiler.

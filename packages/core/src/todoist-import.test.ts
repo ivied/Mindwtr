@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { applyTodoistImport, parseTodoistImportSource, type ParsedTodoistProject } from './todoist-import';
 import { mockAppData } from './sync-test-utils';
-import type { Project } from './types';
+import type { Person, Project } from './types';
 
 describe('todoist import', () => {
     it('parses a CSV export with sections, labels, notes, subtasks, and recurring tasks', () => {
@@ -47,11 +47,11 @@ describe('todoist import', () => {
             checklist: ['Follow up'],
             sectionName: 'Planning',
             priority: 'urgent',
-            dueDate: '2026-04-02T00:00:00.000Z',
+            dueDate: '2026-04-02',
         });
         expect(project.tasks[0].description).toContain('Write launch brief');
         expect(project.tasks[0].description).toContain('Share with leadership');
-        expect(project.tasks[0].description).toContain('Subtask "Follow up": Check dependencies | Due: 2026-04-03T00:00:00.000Z');
+        expect(project.tasks[0].description).toContain('Subtask "Follow up": Check dependencies | Due: 2026-04-03');
         expect(project.tasks[1]).toMatchObject({
             title: 'Weekly review',
             tags: ['#home'],
@@ -135,15 +135,24 @@ describe('todoist import', () => {
                         checklist: ['Call vendor'],
                         sectionName: 'Planning',
                         priority: 'high',
-                        dueDate: '2026-04-02T00:00:00.000Z',
+                        dueDate: '2026-04-02',
                         description: 'Brief the team.',
                     },
                 ],
             },
         ];
 
+        const existingPerson: Person = {
+            id: 'person-existing',
+            name: 'Alex',
+            createdAt: '2026-03-01T00:00:00.000Z',
+            updatedAt: '2026-03-01T00:00:00.000Z',
+        };
+        const currentData = mockAppData([], [existingProject], []);
+        currentData.people = [existingPerson];
+
         const result = applyTodoistImport(
-            mockAppData([], [existingProject], []),
+            currentData,
             parsedProjects,
             { now: '2026-03-30T12:00:00.000Z' }
         );
@@ -154,6 +163,7 @@ describe('todoist import', () => {
         expect(result.importedChecklistItemCount).toBe(1);
         expect(result.warnings).toContain('Imported project "Launch" was renamed to "Launch (Todoist)" to avoid a title conflict.');
         expect(result.data.settings.deviceId).toBeTruthy();
+        expect(result.data.people).toEqual([existingPerson]);
 
         const importedProject = result.data.projects.find((project) => project.id !== existingProject.id);
         expect(importedProject).toMatchObject({
@@ -172,12 +182,12 @@ describe('todoist import', () => {
         const importedTask = result.data.tasks[0];
         expect(importedTask).toMatchObject({
             title: 'Plan launch',
-            status: 'inbox',
+            status: 'next',
             taskMode: 'list',
             projectId: importedProject?.id,
             sectionId: importedSection?.id,
             priority: 'high',
-            dueDate: '2026-04-02T00:00:00.000Z',
+            dueDate: '2026-04-02',
             description: 'Brief the team.',
             tags: ['#work'],
         });
@@ -185,5 +195,39 @@ describe('todoist import', () => {
         expect(importedTask.checklist?.[0]?.title).toBe('Call vendor');
         expect(importedTask.rev).toBe(1);
         expect(importedTask.revBy).toBe(result.data.settings.deviceId);
+    });
+
+    it('does not duplicate Todoist records when the same import is applied again', () => {
+        const parsedProjects: ParsedTodoistProject[] = [
+            {
+                name: 'Launch',
+                sections: ['Planning'],
+                checklistItemCount: 1,
+                recurringCount: 0,
+                tasks: [
+                    {
+                        title: 'Plan launch',
+                        tags: ['#work'],
+                        checklist: ['Call vendor'],
+                        sectionName: 'Planning',
+                        priority: 'high',
+                        dueDate: '2026-04-02',
+                        description: 'Brief the team.',
+                    },
+                ],
+            },
+        ];
+
+        const first = applyTodoistImport(mockAppData([], [], []), parsedProjects, { now: '2026-03-30T12:00:00.000Z' });
+        const second = applyTodoistImport(first.data, parsedProjects, { now: '2026-03-31T12:00:00.000Z' });
+
+        expect(second.importedProjectCount).toBe(0);
+        expect(second.importedSectionCount).toBe(0);
+        expect(second.importedTaskCount).toBe(0);
+        expect(second.importedChecklistItemCount).toBe(0);
+        expect(second.data.projects).toHaveLength(first.data.projects.length);
+        expect(second.data.sections).toHaveLength(first.data.sections.length);
+        expect(second.data.tasks).toHaveLength(first.data.tasks.length);
+        expect(second.data.tasks.map((task) => task.id)).toEqual(first.data.tasks.map((task) => task.id));
     });
 });

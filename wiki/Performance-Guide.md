@@ -30,6 +30,14 @@ When a screen feels slow, use this order:
 4. Split large components by concern (header/form/list/modals) so state updates stay localized.
 5. Replace broad dependency arrays with smaller memoized selectors/helpers.
 
+### Desktop Project List Virtualization
+- Use `@tanstack/react-virtual` for large desktop task lists that share the main workspace scroll container.
+- Keep row keys task-ID based; never use indexes for task rows that can be edited, selected, moved, or reordered.
+- Measure virtual rows when task card height can change, and keep a conservative row estimate so scrolling does not jump.
+- Preserve drag/reorder semantics by virtualizing the existing sortable row component rather than swapping in a separate row UI.
+- Avoid nested scroll containers inside project sections. If a virtual list is below project metadata or a section header, account for the list offset with scroll margin.
+- Add bounded render-count tests for large-list regressions. A test should prove the mounted row count stays near the visible window plus overscan, not the full task count.
+
 ### FlatList / Virtualization Tuning (Mobile)
 
 - Set `initialNumToRender`, `maxToRenderPerBatch`, `windowSize` intentionally by screen.
@@ -38,6 +46,7 @@ When a screen feels slow, use this order:
 - Keep `keyExtractor` stable and avoid index keys.
 - Avoid inline anonymous renderers in deeply nested item trees.
 
+Keep normal task screens on `FlatList`. For task lists embedded inside an existing `ScrollView`, use a manual visible-window slice with spacer rows rather than nesting another vertical virtualized list, so swipe, pull, keyboard, and drag gestures keep a single scroll owner.
 Calendar-specific rule: virtualize unbounded result sets, not fixed calendar scaffolding. The mobile Schedule view can grow with every visible task/event and should stay on `FlatList`; day and week timelines are bounded by the visible hour grid, and month cells are bounded by calendar weeks, so `ScrollView` is acceptable there as long as task/event rows are pre-filtered outside the render loop.
 
 ## Sync Performance Guidance
@@ -68,6 +77,62 @@ If sync latency regresses:
 3. Check attachment hash validation/retries for repeated failures.
 4. Confirm remote payload size and collection counts are within configured limits.
 5. Capture log samples with timestamps and request IDs around slow windows.
+
+## Release-Mode Critical Journey Profiling
+
+Profile real release/profile builds before broad performance changes. Development builds and test runners are useful for guards, but they can hide the actual dominant layer: data derivation, React render/commit, virtualization, persistence, or native/UI-thread work.
+
+### Critical Journey Budgets
+
+Use these as triage budgets, not hard product guarantees. Record p50 and p95 when possible, and keep the data shape next to every result.
+
+| Journey | Android release budget | Desktop release budget | Primary signal |
+| --- | ---: | ---: | --- |
+| Quick capture opens and accepts first keystroke | <= 500 ms open, <= 100 ms input latency | <= 300 ms open, <= 100 ms input latency | Time from command/tap to editable input and first accepted character |
+| Task complete/toggle | <= 150 ms visual response, <= 500 ms save queued | <= 100 ms visual response, <= 300 ms save queued | Input-to-visual update plus persistence phase |
+| Task edit open/save/close | <= 300 ms open, <= 300 ms save/close | <= 200 ms open, <= 200 ms save/close | Modal/sheet commit time and save flush |
+| Project opens with 100+ tasks | <= 2,000 ms | <= 1,000 ms | Navigation to interactive task list |
+| Picker opens/dismisses while Focus/Inbox/Projects is mounted | <= 200 ms | <= 150 ms | Picker transition and parent view recomputation |
+| Focus, Inbox, and Projects view switch | <= 500 ms | <= 300 ms | Route/view switch to interactive state |
+| Search-as-you-type | <= 150 ms p95 per keystroke | <= 100 ms p95 per keystroke | Keystroke to updated visible results |
+
+### Capture Matrix
+
+Keep captures attached to the issue or follow-up issue. Each capture should name the commit, app version, install channel, device, OS, data shape, journey, and artifact link.
+
+| Platform | Required build | Tooling | Capture artifact | Dominant layer to record |
+| --- | --- | --- | --- | --- |
+| Android | Release or profile APK/AAB with representative local data | Android Studio profiler, Hermes sampling, or Flipper where available | CPU trace or Hermes profile plus screen recording/timestamps | JavaScript derivation, React render/commit, list virtualization, SQLite/persistence, native/UI thread |
+| Desktop | Tauri release build with representative local data | WebView DevTools Performance profiler and app diagnostics log | Performance trace plus diagnostics timestamps | Data derivation, React render/commit, web virtualization, SQLite/persistence, WebView/native shell |
+
+### Capture Notes Template
+
+```markdown
+Commit:
+Version/channel:
+Platform/device/OS:
+Dataset:
+- tasks:
+- projects:
+- largest project task count:
+- contexts/tags:
+Journey:
+Tool/artifact:
+Observed p50/p95:
+Dominant layer:
+Notes:
+Follow-up issue:
+```
+
+### Layer Classification
+
+- Data derivation: profile shows repeated full-store scans, sorting/filtering, count aggregation, or selector churn before render starts. Prefer query-scoped selectors and derived indexes. Track in #647.
+- React render/commit: profile shows large commit time, repeated row renders, unstable props, or broad subscriptions. Memoize rows and narrow subscriptions before changing data models.
+- Virtualization: profile shows thousands of row components mounted for a visible list. Use platform virtualizers and bounded render-count tests. Track in #648.
+- Persistence: UI stalls align with save flushes, SQLite work, import/export, sync writes, or JSON serialization. Split urgent visual updates from storage work.
+- Native/UI thread: Android trace or desktop WebView trace shows animation/layout/input stalls outside JavaScript. Reduce layout churn, nested scrolling, or native bridge traffic.
+
+For the project-open slowdown reported in #643, collect Android and desktop captures first. If derivation dominates, use #647. If mounted row count dominates, use #648. If persistence or native/UI-thread stalls dominate, open a smaller follow-up with the capture artifact and exact journey.
 
 ## Database Guidance
 

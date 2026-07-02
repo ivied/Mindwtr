@@ -1,23 +1,24 @@
-Mindwtr (pronounced "mind water") is a privacy-focused, local-first task manager designed for the "Getting Things Done" (GTD) methodology.
+Mindwtr (pronounced "mind water") is a free, open-source task manager and to-do list built for Getting Things Done (GTD).
 
-Unlike most productivity apps that store your life on a remote server, Mindwtr keeps your data 100% on your device. You own your data, not us. There are no logins, no tracking, and no monthly subscriptions—just a clean, powerful tool to help you reach mind like water.
+It is local-first and privacy-first by default. No account required. No cloud dependency. Your data stays on your device unless you choose to sync, export, or back it up.
+
+Use Mindwtr as an offline task list for your whole life: capture inbox items, clarify next actions, organize projects, and review what matters without giving a company your personal task data.
 
 KEY FEATURES:
 
-• Zero Friction Capture: Instantly get thoughts out of your head and into your Inbox.
-• GTD Workflow: Built-in workflow to Clarify, Organize, and Reflect on your tasks.
-• Projects & Areas: Organize complex goals with a hierarchical system that keeps you focused.
-• Visual Kanban Boards: Visualize your workflow with drag-and-drop boards.
-• Weekly Review Wizard: A guided process to review your week and plan ahead, ensuring nothing slips through the cracks.
-• Offline First: Works perfectly without an internet connection. Your data never leaves your phone unless you choose to sync it yourself.
+- GTD task manager: Inbox, Next, Waiting, Someday, Projects, Areas, and Contexts map directly to the Getting Things Done workflow.
+- To-do list and offline task list: Works without an internet connection, with fast local storage on your device.
+- Kanban board: Visualize work with board view and drag-and-drop task flow.
+- Projects and Areas: Keep complex goals organized without turning every task into a calendar event.
+- Review workflow: Daily and weekly review tools help you keep commitments current.
+- Optional sync and backup: You decide if and where data syncs.
+- Open source: Transparent code, no account lock-in, and no subscription required.
 
 PRIVACY BY DESIGN:
 
-• No Accounts Required: Start using the app immediately.
-• No Cloud Server: We do not see, store, or sell your data.
-• Local Storage: Everything is saved to a local database on your device.
-• Open Source: The code is transparent and community-driven.
+- No account required.
+- No cloud dependency.
+- Your data stays on your device.
+- Mindwtr does not sell your task data.
 
-Whether you are a GTD veteran or just looking for a simple, private way to organize your life, Mindwtr is built for you.
-
-Download Mindwtr today and clear your mind.
+Whether you are a GTD veteran, building a private to-do list, or looking for an offline task manager with kanban board support, Mindwtr helps you reach mind like water.

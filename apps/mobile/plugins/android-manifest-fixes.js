@@ -2,6 +2,12 @@ const { withAndroidManifest } = require('@expo/config-plugins');
 
 const MLKIT_ACTIVITY = 'com.google.mlkit.vision.codescanner.internal.GmsBarcodeScanningDelegateActivity';
 const MAIN_ACTIVITY = '.MainActivity';
+const CONTEXT_AUTOMATION_HEADLESS_SERVICE = '.ContextAutomationHeadlessService';
+const CONTEXT_AUTOMATION_RECEIVER = '.ContextAutomationReceiver';
+const CONTEXT_INTENT_ACTIONS = [
+  'tech.dongdongbh.mindwtr.action.ACTIVATE_CONTEXT',
+  'tech.dongdongbh.mindwtr.action.DEACTIVATE_CONTEXT',
+];
 const GMS_MODULE_DEPENDENCIES_SERVICE = 'com.google.android.gms.metadata.ModuleDependencies';
 const PERMISSIONS_TO_REMOVE = [
   'android.permission.CAMERA',
@@ -12,6 +18,104 @@ const PERMISSIONS_TO_REMOVE = [
   'com.google.android.finsky.permission.BIND_GET_INSTALL_REFERRER_SERVICE',
 ];
 const isFossBuild = process.env.FOSS_BUILD === '1' || process.env.FOSS_BUILD === 'true';
+const androidProfileableEnabled =
+    process.env.ANDROID_PROFILEABLE === '1' || process.env.ANDROID_PROFILEABLE === 'true';
+
+const ensureArray = (target, key) => {
+  if (!Array.isArray(target[key])) {
+    target[key] = [];
+  }
+  return target[key];
+};
+
+const hasAction = (filter, actionName) => (
+  Array.isArray(filter.action)
+  && filter.action.some((action) => action?.$?.['android:name'] === actionName)
+);
+
+const hasCategory = (filter, categoryName) => (
+  Array.isArray(filter.category)
+  && filter.category.some((category) => category?.$?.['android:name'] === categoryName)
+);
+
+const hasDataScheme = (filter, scheme) => (
+  Array.isArray(filter.data)
+  && filter.data.some((data) => data?.$?.['android:scheme'] === scheme)
+);
+
+const hasContextIntentFilter = (filter, { dataScheme } = {}) => (
+  CONTEXT_INTENT_ACTIONS.every((actionName) => hasAction(filter, actionName))
+  && hasCategory(filter, 'android.intent.category.DEFAULT')
+  && (dataScheme ? hasDataScheme(filter, dataScheme) : !Array.isArray(filter.data))
+);
+
+const buildContextIntentFilter = ({ dataScheme } = {}) => ({
+  action: CONTEXT_INTENT_ACTIONS.map((actionName) => ({
+    $: { 'android:name': actionName },
+  })),
+  category: [
+    { $: { 'android:name': 'android.intent.category.DEFAULT' } },
+  ],
+  ...(dataScheme
+    ? { data: [{ $: { 'android:scheme': dataScheme } }] }
+    : {}),
+});
+
+const ensureContextIntentFilters = (activity) => {
+  const filters = ensureArray(activity, 'intent-filter');
+  if (!filters.some((filter) => hasContextIntentFilter(filter))) {
+    filters.push(buildContextIntentFilter());
+  }
+  if (!filters.some((filter) => hasContextIntentFilter(filter, { dataScheme: 'mindwtr' }))) {
+    filters.push(buildContextIntentFilter({ dataScheme: 'mindwtr' }));
+  }
+};
+
+const removeContextIntentFilters = (activity) => {
+  if (!Array.isArray(activity['intent-filter'])) return;
+  activity['intent-filter'] = activity['intent-filter'].filter((filter) => (
+    !hasContextIntentFilter(filter) && !hasContextIntentFilter(filter, { dataScheme: 'mindwtr' })
+  ));
+};
+
+const ensureContextAutomationReceiver = (application) => {
+  const receivers = ensureArray(application, 'receiver');
+  let receiver = receivers.find((entry) => entry?.$?.['android:name'] === CONTEXT_AUTOMATION_RECEIVER);
+  if (!receiver) {
+    receiver = { $: {} };
+    receivers.push(receiver);
+  }
+
+  receiver.$['android:name'] = CONTEXT_AUTOMATION_RECEIVER;
+  receiver.$['android:exported'] = 'true';
+  ensureContextIntentFilters(receiver);
+};
+
+const ensureContextAutomationHeadlessService = (application) => {
+    const services = ensureArray(application, 'service');
+    let service = services.find((entry) => entry?.$?.['android:name'] === CONTEXT_AUTOMATION_HEADLESS_SERVICE);
+  if (!service) {
+    service = { $: {} };
+    services.push(service);
+  }
+
+    service.$['android:name'] = CONTEXT_AUTOMATION_HEADLESS_SERVICE;
+    service.$['android:exported'] = 'false';
+};
+
+const setProfileable = (application, enabled = androidProfileableEnabled) => {
+    if (enabled) {
+        application.profileable = [
+            {
+                $: {
+                    'android:shell': 'true',
+                },
+            },
+        ];
+    } else {
+        delete application.profileable;
+    }
+};
 
 module.exports = function withAndroidManifestFixes(config) {
   return withAndroidManifest(config, (config) => {
@@ -29,8 +133,9 @@ module.exports = function withAndroidManifestFixes(config) {
       return config;
     }
     if (!application.$) {
-      application.$ = {};
+        application.$ = {};
     }
+    setProfileable(application);
     application.$['android:resizeableActivity'] = 'true';
     // WebDAV sync allows HTTP only for localhost, private IPs, and local hostnames in app code.
     // Android still needs cleartext enabled at the manifest level for those private endpoints.
@@ -62,6 +167,7 @@ module.exports = function withAndroidManifestFixes(config) {
         // Explicitly allow both portrait and landscape on tablets/Chromebooks.
         activity.$['android:screenOrientation'] = 'fullUser';
         activity.$['android:resizeableActivity'] = 'true';
+        removeContextIntentFilters(activity);
         didUpdateMainActivity = true;
       }
       if (activity.$ && activity.$['android:name'] === MLKIT_ACTIVITY) {
@@ -89,6 +195,9 @@ module.exports = function withAndroidManifestFixes(config) {
         },
       });
     }
+
+    ensureContextAutomationReceiver(application);
+    ensureContextAutomationHeadlessService(application);
 
     if (!didUpdateMlkit && application.activity.length > 0) {
       application.activity.push({
@@ -144,4 +253,12 @@ module.exports = function withAndroidManifestFixes(config) {
 
     return config;
   });
+};
+
+module.exports.__testables = {
+    buildContextIntentFilter,
+    ensureContextAutomationHeadlessService,
+    ensureContextAutomationReceiver,
+    removeContextIntentFilters,
+    setProfileable,
 };

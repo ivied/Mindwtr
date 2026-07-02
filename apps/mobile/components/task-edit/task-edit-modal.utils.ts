@@ -1,8 +1,8 @@
 import { Dimensions } from 'react-native';
-import { type TaskEditorFieldId, type TaskEditorSectionId, type TaskEditorSettings, type TaskStatus } from '@mindwtr/core';
+import { type Project, type Task, type TaskEditorFieldId, type TaskEditorSectionId, type TaskEditorSettings, type TaskStatus } from '@mindwtr/core';
 import { logError, logWarn } from '../../lib/app-log';
 
-export const STATUS_OPTIONS: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'reference', 'done'];
+export const STATUS_OPTIONS: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'done', 'reference'];
 const formatError = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const buildTaskExtra = (message?: string, error?: unknown): Record<string, string> | undefined => {
     const extra: Record<string, string> = {};
@@ -36,6 +36,30 @@ export const isValidLinkUri = (value: string): boolean => {
     } catch {
         return false;
     }
+};
+
+export const getEditedTaskValue = <K extends keyof Task>(
+    editedTask: Partial<Task>,
+    task: Task | null | undefined,
+    key: K
+): Task[K] | undefined => (
+    Object.prototype.hasOwnProperty.call(editedTask, key)
+        ? editedTask[key]
+        : task?.[key]
+);
+
+export const getAreaIdForClearedProject = (
+    editedTask: Partial<Task>,
+    task: Task | null | undefined,
+    projects: Pick<Project, 'id' | 'areaId'>[],
+): string | undefined => {
+    const explicitAreaId = getEditedTaskValue(editedTask, task, 'areaId');
+    if (typeof explicitAreaId === 'string' && explicitAreaId.trim()) return explicitAreaId;
+
+    const projectId = getEditedTaskValue(editedTask, task, 'projectId');
+    if (!projectId) return undefined;
+    const projectAreaId = projects.find((project) => project.id === projectId)?.areaId;
+    return typeof projectAreaId === 'string' && projectAreaId.trim() ? projectAreaId : undefined;
 };
 
 export const QUICK_TOKEN_LIMIT = 6;
@@ -83,36 +107,37 @@ export const syncTaskEditPagerPosition = ({
 export const DEFAULT_TASK_EDITOR_ORDER: TaskEditorFieldId[] = [
     'status',
     'project',
-    'section',
     'area',
-    'priority',
-    'energyLevel',
-    'assignedTo',
     'contexts',
-    'description',
-    'tags',
-    'timeEstimate',
+    'dueDate',
+    'section',
     'recurrence',
     'startTime',
-    'dueDate',
     'reviewAt',
+    'tags',
+    'description',
     'attachments',
     'checklist',
+    'priority',
+    'energyLevel',
+    'timeEstimate',
+    'assignedTo',
+    'location',
 ];
 
 export const DEFAULT_TASK_EDITOR_VISIBLE: TaskEditorFieldId[] = [
     'status',
     'project',
-    'section',
     'area',
-    'description',
-    'checklist',
-    'energyLevel',
-    'assignedTo',
     'contexts',
     'dueDate',
-    'priority',
-    'timeEstimate',
+    'recurrence',
+    'startTime',
+    'reviewAt',
+    'tags',
+    'description',
+    'attachments',
+    'checklist',
 ];
 
 export const TASK_EDITOR_FIXED_FIELDS: TaskEditorFieldId[] = ['status', 'project', 'section', 'area'];
@@ -127,8 +152,9 @@ export const DEFAULT_TASK_EDITOR_SECTION_BY_FIELD: Record<TaskEditorFieldId, Tas
     priority: 'organization',
     energyLevel: 'organization',
     assignedTo: 'organization',
-    contexts: 'organization',
+    contexts: 'basic',
     tags: 'organization',
+    location: 'details',
     timeEstimate: 'organization',
     recurrence: 'scheduling',
     startTime: 'scheduling',
@@ -157,7 +183,7 @@ export const DEFAULT_TASK_EDITOR_SECTION_OPEN: Record<TaskEditorSectionId, boole
     basic: true,
     scheduling: false,
     organization: false,
-    details: true,
+    details: false,
 };
 
 const isTaskEditorSectionId = (value: unknown): value is TaskEditorSectionId =>
@@ -198,7 +224,7 @@ export const getTaskEditorSectionOpenDefaults = (
 };
 
 const TASK_EDITOR_PRESET_VISIBLE_FIELDS: Record<Exclude<TaskEditorPresetId, 'custom'>, TaskEditorFieldId[]> = {
-    simple: ['status', 'project', 'dueDate', 'description'],
+    simple: ['status', 'project', 'area', 'contexts', 'dueDate'],
     standard: [...DEFAULT_TASK_EDITOR_VISIBLE],
     full: [...DEFAULT_TASK_EDITOR_ORDER],
 };
@@ -262,9 +288,10 @@ export const buildTaskEditorPresetConfig = (
     const featureHiddenSet = new Set(featureHiddenFields);
     const visibleSet = new Set(TASK_EDITOR_PRESET_VISIBLE_FIELDS[presetId]);
     const hidden = DEFAULT_TASK_EDITOR_ORDER.filter((fieldId) => !visibleSet.has(fieldId));
+    const simpleOrder: TaskEditorFieldId[] = ['status', 'project', 'area', 'contexts', 'dueDate'];
     const base: TaskEditorPresetConfig = {
         order: presetId === 'simple'
-            ? ['status', 'project', 'dueDate', 'description', ...DEFAULT_TASK_EDITOR_ORDER.filter((fieldId) => !['status', 'project', 'dueDate', 'description'].includes(fieldId))]
+            ? [...simpleOrder, ...DEFAULT_TASK_EDITOR_ORDER.filter((fieldId) => !simpleOrder.includes(fieldId))]
             : [...DEFAULT_TASK_EDITOR_ORDER],
         hidden: normalizeTaskEditorHidden(hidden, featureHiddenSet),
         sections: {},

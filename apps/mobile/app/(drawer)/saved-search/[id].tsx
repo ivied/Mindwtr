@@ -1,20 +1,38 @@
 import React, { useMemo, useState, useCallback } from 'react';
 import { View, Text, FlatList, StyleSheet, RefreshControl, TouchableOpacity, Alert } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
-import { useTaskStore, filterTasksBySearch, sortTasksBy, type Task, type TaskStatus, type TaskSortBy } from '@mindwtr/core';
+import { useTaskStore, filterTasksBySearch, shallow, sortTasksBy, type Task, type TaskStatus, type TaskSortBy } from '@mindwtr/core';
 import { SwipeableTaskItem } from '@/components/swipeable-task-item';
 import { TaskEditModal } from '@/components/task-edit-modal';
 import { useLanguage } from '@/contexts/language-context';
 import { useMobileAreaFilter } from '@/hooks/use-mobile-area-filter';
 import { useTheme } from '@/contexts/theme-context';
 import { useThemeColors } from '@/hooks/use-theme-colors';
-import { taskMatchesAreaFilter } from '@/lib/area-filter';
+import { taskMatchesAreaFilter } from '@mindwtr/core';
 import { openContextsScreen, openProjectScreen } from '@/lib/task-meta-navigation';
 import { Trash2 } from 'lucide-react-native';
 
 export default function SavedSearchScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { tasks, projects, settings, updateTask, deleteTask, fetchData, updateSettings } = useTaskStore();
+  const {
+    tasks,
+    projects,
+    savedSearches,
+    taskSortBy,
+    updateTask,
+    deleteTask,
+    fetchData,
+    updateSettings,
+  } = useTaskStore((state) => ({
+    tasks: state.tasks,
+    projects: state.projects,
+    savedSearches: state.settings?.savedSearches,
+    taskSortBy: state.settings?.taskSortBy,
+    updateTask: state.updateTask,
+    deleteTask: state.deleteTask,
+    fetchData: state.fetchData,
+    updateSettings: state.updateSettings,
+  }), shallow);
   const { t } = useLanguage();
   const { isDark } = useTheme();
   const tc = useThemeColors();
@@ -25,9 +43,9 @@ export default function SavedSearchScreen() {
     else router.replace('/inbox');
   }, []);
 
-  const savedSearch = settings?.savedSearches?.find(s => s.id === id);
+  const savedSearch = savedSearches?.find(s => s.id === id);
   const query = savedSearch?.query || '';
-  const sortBy = (settings?.taskSortBy ?? 'default') as TaskSortBy;
+  const sortBy = (taskSortBy ?? 'default') as TaskSortBy;
 
   const filteredTasks = useMemo(() => {
     if (!query) return [];
@@ -61,18 +79,18 @@ export default function SavedSearchScreen() {
           text: t('common.delete'),
           style: 'destructive',
           onPress: async () => {
-            const updated = (settings?.savedSearches || []).filter(s => s.id !== id);
+            const updated = (savedSearches || []).filter(s => s.id !== id);
             await updateSettings({ savedSearches: updated });
             goBackOrInbox();
           },
         },
       ]
     );
-  }, [savedSearch, id, settings?.savedSearches, updateSettings, t, goBackOrInbox]);
+  }, [savedSearch, id, savedSearches, updateSettings, t, goBackOrInbox]);
 
   const emptyMessage = (() => {
     if (savedSearch) return t('search.noResults');
-    const hasAnySavedSearches = (settings?.savedSearches?.length ?? 0) > 0;
+    const hasAnySavedSearches = (savedSearches?.length ?? 0) > 0;
     return hasAnySavedSearches ? t('search.noResults') : t('search.noSavedSearches');
   })();
 
@@ -85,7 +103,7 @@ export default function SavedSearchScreen() {
         setEditingTask(item);
         setIsModalVisible(true);
       }}
-      onStatusChange={(status) => { void updateTask(item.id, { status: status as TaskStatus }); }}
+      onStatusChange={(status) => updateTask(item.id, { status: status as TaskStatus })}
       onDelete={() => { void deleteTask(item.id); }}
       onProjectPress={openProjectScreen}
       onContextPress={openContextsScreen}
@@ -150,6 +168,7 @@ export default function SavedSearchScreen() {
             )}
           </View>
         }
+        removeClippedSubviews={false}
       />
 
       <TaskEditModal

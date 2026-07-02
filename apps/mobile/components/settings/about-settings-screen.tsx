@@ -5,7 +5,10 @@ import * as Application from 'expo-application';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { submitFeedbackSubmission } from '@mindwtr/core';
 import { useToast } from '@/contexts/toast-context';
+import { getDeviceLocale, resolveMobileAnalyticsVersion } from '@/lib/analytics-heartbeat';
+import { readRecentLogText } from '@/lib/app-log';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import { getPlayStoreUpdateInfoAsync } from '@/lib/play-store-updates';
 import { compareVersions, logSettingsError, logSettingsWarn } from '@/lib/settings-utils';
@@ -17,11 +20,15 @@ import {
     UPDATE_BADGE_LAST_CHECK_KEY,
     UPDATE_BADGE_LATEST_KEY,
 } from './settings.constants';
+import { FeedbackSettingsModal, type FeedbackSubmitInput } from './feedback-settings-modal';
 import { useSettingsLocalization, useSettingsScrollContent } from './settings.hooks';
 import { SettingsTopBar } from './settings.shell';
 import { styles } from './settings.styles';
 
 const appIconSource = require('../../assets/images/icon.png');
+
+const parseExtraBool = (value: unknown): boolean =>
+    value === true || value === 1 || value === '1' || value === 'true';
 
 export function AboutSettingsScreen({
     onUpdateBadgeChange,
@@ -33,11 +40,14 @@ export function AboutSettingsScreen({
     const { tr, t } = useSettingsLocalization();
     const scrollContentStyle = useSettingsScrollContent();
     const extraConfig = Constants.expoConfig?.extra as MobileExtraConfig | undefined;
-    const isFossBuild = extraConfig?.isFossBuild === true || extraConfig?.isFossBuild === 'true';
+    const isFossBuild = parseExtraBool(extraConfig?.isFossBuild);
     const isExpoGo = Constants.appOwnership === 'expo';
     const currentVersion = Constants.expoConfig?.version || '0.0.0';
+    const displayVersion = resolveMobileAnalyticsVersion(currentVersion, extraConfig?.analyticsReleaseVersion);
+    const feedbackEndpointUrl = String(extraConfig?.feedbackEndpointUrl ?? '').trim();
     const appName = Constants.expoConfig?.name || Application.applicationName || 'Mindwtr';
     const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
+    const [feedbackOpen, setFeedbackOpen] = useState(false);
     const [androidInstallerSource, setAndroidInstallerSource] = useState<'play-store' | 'sideload' | 'unknown'>(
         Platform.OS === 'android' ? 'unknown' : 'play-store'
     );
@@ -70,6 +80,7 @@ export function AboutSettingsScreen({
     }, [isFossBuild]);
 
     const openLink = (url: string) => Linking.openURL(url);
+    const GITHUB_ISSUES_URL = 'https://github.com/dongdongbh/Mindwtr/issues/new/choose';
     const GITHUB_RELEASES_API = 'https://api.github.com/repos/dongdongbh/Mindwtr/releases/latest';
     const GITHUB_RELEASES_URL = 'https://github.com/dongdongbh/Mindwtr/releases/latest';
     const ANDROID_PACKAGE_NAME = Constants.expoConfig?.android?.package || Application.applicationId || 'tech.dongdongbh.mindwtr';
@@ -239,7 +250,7 @@ export function AboutSettingsScreen({
                 if (hasUpdate) {
                     const updateMessage = result.source === 'play-store'
                         ? tr('settings.aboutMobile.updateIsAvailableOnGooglePlayOpenAppListingNow')
-                        : tr('settings.aboutMobile.googlePlayUpdateAvailableWithVersions', { currentVersion, latestVersion: result.version });
+                        : tr('settings.aboutMobile.googlePlayUpdateAvailableWithVersions', { currentVersion: displayVersion, latestVersion: result.version });
                     Alert.alert(tr('settings.updateAvailable'), updateMessage, [
                         { text: tr('settings.later'), style: 'cancel' },
                         { text: tr('attachments.open'), onPress: () => Linking.openURL(targetUrl) },
@@ -270,7 +281,7 @@ export function AboutSettingsScreen({
                 if (hasUpdate) {
                     Alert.alert(
                         tr('settings.updateAvailable'),
-                        tr('settings.aboutMobile.appStoreUpdateAvailableWithVersions', { currentVersion, latestVersion }),
+                        tr('settings.aboutMobile.appStoreUpdateAvailableWithVersions', { currentVersion: displayVersion, latestVersion }),
                         [
                             { text: tr('settings.later'), style: 'cancel' },
                             ...(targetUrl ? [{ text: tr('attachments.open'), onPress: () => Linking.openURL(targetUrl) }] : []),
@@ -297,7 +308,7 @@ export function AboutSettingsScreen({
                 const changelog = release.body || tr('settings.noChangelog');
                 Alert.alert(
                     tr('settings.updateAvailable'),
-                    `v${currentVersion} → v${latestVersion}\n\n${tr('settings.changelog')}:\n${changelog.substring(0, 500)}${changelog.length > 500 ? '...' : ''}`,
+                    `v${displayVersion} → v${latestVersion}\n\n${tr('settings.changelog')}:\n${changelog.substring(0, 500)}${changelog.length > 500 ? '...' : ''}`,
                     [
                         { text: tr('settings.later'), style: 'cancel' },
                         { text: tr('attachments.download'), onPress: () => Linking.openURL(downloadUrl) },
@@ -356,6 +367,33 @@ export function AboutSettingsScreen({
         }
     };
 
+    const getInstallChannel = () => {
+        if (isFossBuild) return 'fdroid';
+        if (Platform.OS === 'ios') return 'app-store';
+        if (Platform.OS === 'android') return androidInstallerSource;
+        return Platform.OS || 'mobile';
+    };
+
+    const handleSubmitFeedback = async (input: FeedbackSubmitInput) => {
+        const diagnosticsLogs = input.includeDiagnostics && input.category === 'bug'
+            ? await readRecentLogText()
+            : null;
+        await submitFeedbackSubmission(feedbackEndpointUrl, {
+            category: input.category,
+            email: input.email,
+            message: input.message,
+            metadata: {
+                appVersion: displayVersion,
+                build: Application.nativeBuildVersion ?? undefined,
+                installChannel: getInstallChannel(),
+                locale: getDeviceLocale(),
+                os: `${Platform.OS} ${String(Platform.Version ?? '')}`.trim(),
+                platform: Platform.OS,
+            },
+            diagnostics: diagnosticsLogs ? { logs: diagnosticsLogs } : undefined,
+        });
+    };
+
     return (
         <SafeAreaView style={[styles.container, { backgroundColor: tc.bg }]} edges={['bottom']}>
             <SettingsTopBar title={t('settings.about')} />
@@ -363,11 +401,11 @@ export function AboutSettingsScreen({
                 <View style={[styles.settingCard, { backgroundColor: tc.cardBg }]}>
                     <View style={[styles.aboutAppHeader, { borderBottomColor: tc.border }]}>
                         <Image source={appIconSource} style={styles.aboutAppIcon} resizeMode="cover" />
-                        <Text style={[styles.aboutAppName, { color: tc.text }]} numberOfLines={1}>
+                        <Text style={[styles.aboutAppName, { color: tc.text }]} numberOfLines={2}>
                             {appName}
                         </Text>
-                        <Text style={[styles.aboutAppVersion, { color: tc.secondaryText }]} numberOfLines={1}>
-                            v{currentVersion}
+                        <Text style={[styles.aboutAppVersion, { color: tc.secondaryText }]} numberOfLines={2}>
+                            v{displayVersion}
                         </Text>
                     </View>
                     {!isFossBuild && (
@@ -395,17 +433,17 @@ export function AboutSettingsScreen({
                     )}
                     <TouchableOpacity
                         style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}
-                        onPress={() => openLink('https://github.com/dongdongbh/Mindwtr/wiki')}
+                        onPress={() => setFeedbackOpen(true)}
                     >
-                        <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.documentation')}</Text>
-                        <Text style={styles.linkText}>GitHub Wiki</Text>
+                        <Text style={[styles.settingLabel, { color: tc.text }]}>{tr('settings.feedback')}</Text>
+                        <Text style={styles.linkText}>{tr('settings.feedbackSubmit')}</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
                         style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}
-                        onPress={() => openLink('https://ko-fi.com/dongdongbh')}
+                        onPress={() => openLink('https://docs.mindwtr.app')}
                     >
-                        <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.sponsorProject')}</Text>
-                        <Text style={styles.linkText}>Ko-fi</Text>
+                        <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.documentation')}</Text>
+                        <Text style={styles.linkText}>docs.mindwtr.app</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
                         style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}
@@ -416,10 +454,10 @@ export function AboutSettingsScreen({
                     </TouchableOpacity>
                     <TouchableOpacity
                         style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}
-                        onPress={() => openLink('https://dongdongbh.tech')}
+                        onPress={() => openLink('https://mindwtr.app/donate?src=app_about')}
                     >
-                        <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.website')}</Text>
-                        <Text style={styles.linkText}>dongdongbh.tech</Text>
+                        <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.sponsorProject')}</Text>
+                        <Text style={styles.linkText}>{tr('settings.donateLinkValue')}</Text>
                     </TouchableOpacity>
                     <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}>
                         <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.license')}</Text>
@@ -427,6 +465,14 @@ export function AboutSettingsScreen({
                     </View>
                 </View>
             </ScrollView>
+            <FeedbackSettingsModal
+                visible={feedbackOpen}
+                isConfigured={Boolean(feedbackEndpointUrl)}
+                tr={tr}
+                onClose={() => setFeedbackOpen(false)}
+                onOpenIssue={() => openLink(GITHUB_ISSUES_URL)}
+                onSubmit={handleSubmitFeedback}
+            />
         </SafeAreaView>
     );
 }

@@ -16,6 +16,10 @@ describe('calendar locale helpers', () => {
         expect(getCalendarWeekdayHeaders('en-US', 1)).toEqual(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']);
     });
 
+    it('orders weekday headers from Saturday when the week starts on Saturday', () => {
+        expect(getCalendarWeekdayHeaders('en-US', 6)).toEqual(['Sat', 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri']);
+    });
+
     it('localizes weekday headers for the requested locale', () => {
         const formatter = new Intl.DateTimeFormat('zh-TW', { weekday: 'short' });
         const expected = sundayFirstReference.map((date) => formatter.format(date));

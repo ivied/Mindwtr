@@ -199,6 +199,44 @@ describe('scanObsidianVault', () => {
         ]);
     });
 
+    it('imports Dataview metadata only when configured', async () => {
+        const deps: ObsidianScannerDependencies = {
+            exists: async () => true,
+            readDir: async (path) => {
+                if (path === '/Vault') {
+                    return [{ name: 'Inbox.md', isFile: true, isDirectory: false }];
+                }
+                return [];
+            },
+            readTextFile: async () => '- [ ] Draft launch note [project:: Launch] [context:: @desk] [due:: 2026-05-01] [priority:: medium]',
+            stat: async (path) => ({
+                mtime: new Date('2026-03-14T12:00:00.000Z'),
+                isFile: path.endsWith('.md'),
+                isDirectory: !path.endsWith('.md'),
+            }),
+        };
+
+        const disabledResult = await scanObsidianVault({
+            vaultPath: '/Vault',
+            enabled: true,
+            scanFolders: ['/'],
+        }, deps);
+        const enabledResult = await scanObsidianVault({
+            vaultPath: '/Vault',
+            enabled: true,
+            scanFolders: ['/'],
+            dataviewMetadataEnabled: true,
+        }, deps);
+
+        expect(disabledResult.tasks[0]?.dataviewData).toBeUndefined();
+        expect(enabledResult.tasks[0]?.dataviewData).toMatchObject({
+            priority: 'medium',
+            dueDate: '2026-05-01',
+            contexts: ['desk'],
+            projects: ['Launch'],
+        });
+    });
+
     it('can include archived tasknotes files when configured', async () => {
         const result = await scanObsidianVault({
             vaultPath: fixtureRoot,
@@ -245,6 +283,7 @@ describe('normalizeObsidianConfig', () => {
             scanFolders: ['/'],
             inboxFile: DEFAULT_OBSIDIAN_INBOX_FILE,
             taskNotesIncludeArchived: false,
+            dataviewMetadataEnabled: false,
             newTaskFormat: 'auto',
             lastScannedAt: null,
             enabled: false,
@@ -261,6 +300,7 @@ describe('normalizeObsidianConfig', () => {
             scanFolders: ['Projects', 'Daily'],
             inboxFile: DEFAULT_OBSIDIAN_INBOX_FILE,
             taskNotesIncludeArchived: false,
+            dataviewMetadataEnabled: false,
             newTaskFormat: 'auto',
         });
     });

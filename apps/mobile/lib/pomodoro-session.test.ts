@@ -16,6 +16,10 @@ const baseSession = (overrides?: Partial<ResolvedPomodoroSession>): ResolvedPomo
   selectedTaskId: 'task-1',
   phaseEndsAt: undefined,
   lastEvent: null,
+  sessionHistory: {
+    totalCompletedFocusSessions: 0,
+    completedFocusSessionsByTaskId: {},
+  },
   ...overrides,
 });
 
@@ -58,6 +62,36 @@ describe('pomodoro-session helpers', () => {
     });
     expect(resolved.phaseEndsAt).toBeUndefined();
     expect(resolved.lastEvent).toBe('focus-finished');
+  });
+
+
+
+  it('records linked task history when a stored focus session completes', () => {
+    const running = startPomodoroSession(baseSession({
+      timerState: {
+        phase: 'focus',
+        remainingSeconds: 5,
+        isRunning: false,
+        completedFocusSessions: 2,
+      },
+      sessionHistory: {
+        totalCompletedFocusSessions: 2,
+        completedFocusSessionsByTaskId: {
+          'task-1': 1,
+        },
+      },
+    }), 10_000);
+
+    const resolved = resolvePomodoroSession(serializePomodoroSession(running), 16_000);
+
+    expect(resolved.timerState.completedFocusSessions).toBe(3);
+    expect(resolved.sessionHistory).toEqual({
+      totalCompletedFocusSessions: 3,
+      completedFocusSessionsByTaskId: {
+        'task-1': 2,
+      },
+    });
+    expect(serializePomodoroSession(resolved).sessionHistory).toEqual(resolved.sessionHistory);
   });
 
   it('keeps the next break running when auto-start breaks is enabled', () => {

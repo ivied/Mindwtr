@@ -1,8 +1,10 @@
 import * as BackgroundTask from 'expo-background-task';
 import * as TaskManager from 'expo-task-manager';
+import { flushPendingSave } from '@mindwtr/core';
 
 import type { SyncBackend } from './sync-service-utils';
 import { logInfo, logWarn } from './app-log';
+import { getMobileSyncConfigurationStatus, performMobileSync } from './sync-service';
 
 export const MOBILE_BACKGROUND_SYNC_TASK_NAME = 'mindwtr-background-sync';
 export const MOBILE_BACKGROUND_SYNC_MINIMUM_INTERVAL_MINUTES = 15;
@@ -21,11 +23,6 @@ export type MobileBackgroundSyncRegistrationResult = {
 export const supportsMobileScheduledBackgroundSync = (backend: SyncBackend): boolean => (
   backend === 'webdav' || backend === 'cloud' || backend === 'cloudkit'
 );
-
-const readMobileSyncConfigurationStatus = async () => {
-  const { getMobileSyncConfigurationStatus } = await import('./sync-service');
-  return getMobileSyncConfigurationStatus();
-};
 
 const logBackgroundSyncWarning = (message: string, error?: unknown) => {
   const extra = error ? { error: error instanceof Error ? error.message : String(error) } : undefined;
@@ -64,15 +61,11 @@ const defineMobileBackgroundSyncTask = () => {
 
   TaskManager.defineTask(MOBILE_BACKGROUND_SYNC_TASK_NAME, async () => {
     try {
-      const { backend, configured } = await readMobileSyncConfigurationStatus();
+      const { backend, configured } = await getMobileSyncConfigurationStatus();
       if (!configured || !supportsMobileScheduledBackgroundSync(backend)) {
         return BackgroundTask.BackgroundTaskResult.Success;
       }
 
-      const [{ flushPendingSave }, { performMobileSync }] = await Promise.all([
-        import('@mindwtr/core'),
-        import('./sync-service'),
-      ]);
       await flushPendingSave().catch((error) => {
         logBackgroundSyncWarning('Mobile background sync save flush failed', error);
       });
@@ -94,7 +87,7 @@ defineMobileBackgroundSyncTask();
 
 export async function syncMobileBackgroundSyncRegistration(): Promise<MobileBackgroundSyncRegistrationResult> {
   const [configuration, status, taskManagerAvailable, registered] = await Promise.all([
-    readMobileSyncConfigurationStatus(),
+    getMobileSyncConfigurationStatus(),
     getBackgroundTaskStatus(),
     isTaskManagerAvailable(),
     isBackgroundTaskRegistered(),

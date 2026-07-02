@@ -32,4 +32,34 @@ describe('resolveNativeDateInputLocale', () => {
             systemLocale: 'en-US',
         })).toBe('en-US-u-hc-h23-fw-sun');
     });
+
+    it('applies Saturday first-weekday preference', () => {
+        expect(resolveNativeDateInputLocale({
+            language: 'en',
+            dateFormat: 'system',
+            timeFormat: 'system',
+            weekStart: 'saturday',
+            systemLocale: 'en-US',
+        })).toBe('en-US-u-fw-sat');
+    });
+
+    it('uses the Persian calendar locale only when the system locale is Persian', () => {
+        expect(resolveNativeDateInputLocale({
+            language: 'en',
+            dateFormat: 'system',
+            calendarSystem: 'jalali',
+            timeFormat: '24h',
+            weekStart: 'saturday',
+            systemLocale: 'fa-IR',
+        })).toBe('fa-IR-u-ca-persian-hc-h23-fw-sat');
+
+        expect(resolveNativeDateInputLocale({
+            language: 'en',
+            dateFormat: 'system',
+            calendarSystem: 'jalali',
+            timeFormat: 'system',
+            weekStart: 'sunday',
+            systemLocale: 'en-US',
+        })).toBe('en-US-u-fw-sun');
+    });
 });

@@ -82,9 +82,24 @@ vi.mock('@mindwtr/core', () => ({
     getState: () => storeHolder.state,
     setState: (partial: Record<string, unknown> | ((state: any) => Record<string, unknown>)) => {
       const nextPartial = typeof partial === 'function' ? partial(storeHolder.state) : partial;
-      storeHolder.state = {
+      const nextState = {
         ...storeHolder.state,
         ...nextPartial,
+      };
+      if (Array.isArray(nextPartial._allTasks)) {
+        nextState.tasks = nextPartial._allTasks.filter((task: any) => !task.deletedAt && task.status !== 'archived');
+      }
+      if (Array.isArray(nextPartial._allProjects)) {
+        nextState.projects = nextPartial._allProjects.filter((project: any) => !project.deletedAt);
+      }
+      if (Array.isArray(nextPartial._allSections)) {
+        nextState.sections = nextPartial._allSections.filter((section: any) => !section.deletedAt);
+      }
+      if (Array.isArray(nextPartial._allAreas)) {
+        nextState.areas = nextPartial._allAreas.filter((area: any) => !area.deletedAt);
+      }
+      storeHolder.state = {
+        ...nextState,
       };
       setStateSpy(nextPartial);
     },

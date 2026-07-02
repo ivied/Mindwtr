@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const {
     mockGetItem,
     mockSetItem,
+    mockReadSafString,
     mockGetCalendarsAsync,
     mockGetCalendarPermissionsAsync,
     mockRequestCalendarPermissionsAsync,
@@ -13,6 +14,7 @@ const {
 } = vi.hoisted(() => ({
     mockGetItem: vi.fn<(key: string) => Promise<string | null>>(async () => null),
     mockSetItem: vi.fn<(key: string, value: string) => Promise<void>>(async () => {}),
+    mockReadSafString: vi.fn(async () => ''),
     mockGetCalendarsAsync: vi.fn(async () => [] as Array<{
         id: string;
         title?: string;
@@ -34,6 +36,20 @@ const {
     mockEditEventInCalendarAsync: vi.fn(async () => ({ action: 'done', id: null })),
     mockOpenEventInCalendarAsync: vi.fn(async () => ({ action: 'done' })),
     mockPlatform: { OS: 'android' },
+}));
+
+vi.mock('expo-file-system/legacy', () => ({
+    __esModule: true,
+    documentDirectory: 'document',
+    cacheDirectory: 'cache',
+    StorageAccessFramework: {
+        readAsStringAsync: mockReadSafString,
+    },
+    readAsStringAsync: mockReadSafString,
+    getInfoAsync: vi.fn(async () => ({ exists: false })),
+    EncodingType: {
+        Base64: 'base64',
+    },
 }));
 
 vi.mock('@react-native-async-storage/async-storage', () => ({
@@ -69,6 +85,7 @@ import {
 beforeEach(() => {
     vi.clearAllMocks();
     mockPlatform.OS = 'android';
+    mockReadSafString.mockResolvedValue('');
     mockGetCalendarPermissionsAsync.mockResolvedValue({ status: 'granted' });
     mockRequestCalendarPermissionsAsync.mockResolvedValue({ status: 'granted' });
     mockGetItem.mockImplementation(async (key: string) => {
@@ -95,6 +112,43 @@ describe('getSystemCalendars', () => {
 });
 
 describe('fetchExternalCalendarEvents', () => {
+    it('loads Android local ICS files through content URIs', async () => {
+        const rangeStart = new Date('2026-04-20T00:00:00.000Z');
+        const rangeEnd = new Date('2026-04-21T00:00:00.000Z');
+        mockGetItem.mockImplementation(async (key: string) => {
+            if (key === EXTERNAL_CALENDARS_KEY) {
+                return JSON.stringify([
+                    { id: 'local-ics', name: 'Local ICS', url: 'content://downloads/agenda.ics', enabled: true },
+                ]);
+            }
+            if (key === SYSTEM_CALENDAR_SETTINGS_KEY) {
+                return JSON.stringify({ enabled: false, selectAll: true, selectedCalendarIds: [] });
+            }
+            return null;
+        });
+        mockReadSafString.mockResolvedValue(
+            [
+                'BEGIN:VCALENDAR',
+                'VERSION:2.0',
+                'BEGIN:VEVENT',
+                'UID:local-event',
+                'DTSTART:20260420T110000Z',
+                'DTEND:20260420T113000Z',
+                'SUMMARY:Local Meeting',
+                'END:VEVENT',
+                'END:VCALENDAR',
+            ].join('\r\n'),
+        );
+
+        const result = await fetchExternalCalendarEvents(rangeStart, rangeEnd);
+
+        expect(mockReadSafString).toHaveBeenCalledWith(
+            'content://downloads/agenda.ics',
+            {},
+        );
+        expect(result.events.map((event) => event.title)).toEqual(['Local Meeting']);
+    });
+
     it('does not import Mindwtr-pushed events back into the Mindwtr calendar view', async () => {
         const rangeStart = new Date('2026-04-20T00:00:00.000Z');
         const rangeEnd = new Date('2026-04-21T00:00:00.000Z');

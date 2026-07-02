@@ -1,0 +1,3 @@
+El acceso rapido configurable, la agrupacion opcional de Focus, la conversion de proyectos a Inbox y el orden compacto aclaran la navegacion movil.
+Android mantiene visible el boton de captura del widget, respeta el tema en la barra de navegacion y reabre mejor los recordatorios.
+Sync es mas silencioso cuando nada cambio y conserva mejor los reintentos de borrado de adjuntos.

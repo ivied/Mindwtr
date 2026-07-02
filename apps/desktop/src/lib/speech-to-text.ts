@@ -3,7 +3,7 @@ import type { AudioCaptureMode, AudioFieldStrategy } from '@mindwtr/core';
 import { isTauriRuntime } from './runtime';
 import { logWarn } from './app-log';
 
-type SpeechProvider = 'openai' | 'gemini' | 'whisper';
+type SpeechProvider = 'openai' | 'gemini' | 'whisper' | 'parakeet';
 
 export type SpeechToTextResult = {
     transcript: string;
@@ -89,6 +89,35 @@ const resolveLanguage = (value?: string) => {
         es: 'es',
     };
     return map[base] ?? base;
+};
+
+const normalizeLocalAsrTranscript = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+
+    const parseCandidate = (candidate: string) => {
+        try {
+            const parsed = JSON.parse(candidate) as unknown;
+            if (!parsed || typeof parsed !== 'object') return null;
+            const text = (parsed as { text?: unknown; transcript?: unknown }).text
+                ?? (parsed as { transcript?: unknown }).transcript;
+            return typeof text === 'string' ? text.trim() : null;
+        } catch {
+            return null;
+        }
+    };
+
+    const direct = parseCandidate(trimmed);
+    if (direct !== null) return direct;
+
+    const objectStart = trimmed.indexOf('{');
+    const objectEnd = trimmed.lastIndexOf('}');
+    if (objectStart >= 0 && objectEnd > objectStart) {
+        const embedded = parseCandidate(trimmed.slice(objectStart, objectEnd + 1));
+        if (embedded !== null) return embedded;
+    }
+
+    return trimmed;
 };
 
 const buildSmartPrompt = ({
@@ -387,7 +416,28 @@ const transcribeWhisper = async (audio: AudioInput, config: SpeechToTextConfig) 
         audioPath: audio.path,
         language: language === 'auto' ? null : language,
     });
-    return text.trim();
+    return normalizeLocalAsrTranscript(text);
+};
+
+
+const transcribeParakeet = async (audio: AudioInput, config: SpeechToTextConfig) => {
+    if (!config.modelPath) {
+        throw new Error('Parakeet model directory missing');
+    }
+    if (!audio.path) {
+        throw new Error('Parakeet requires a local audio path');
+    }
+    if (!isTauriRuntime()) {
+        throw new Error('Parakeet is only available in the desktop app');
+    }
+    const language = resolveLanguage(config.language);
+    const { invoke } = await import('@tauri-apps/api/core');
+    const text = await invoke<string>('transcribe_parakeet', {
+        modelPath: config.modelPath,
+        audioPath: audio.path,
+        language: language === 'auto' ? null : language,
+    });
+    return normalizeLocalAsrTranscript(text);
 };
 
 export async function processAudioCapture(
@@ -397,6 +447,10 @@ export async function processAudioCapture(
     const mode = config.mode ?? 'smart_parse';
     if (config.provider === 'whisper') {
         const transcript = await transcribeWhisper(audio, config);
+        return { transcript };
+    }
+    if (config.provider === 'parakeet') {
+        const transcript = await transcribeParakeet(audio, config);
         return { transcript };
     }
     if (config.provider === 'gemini') {

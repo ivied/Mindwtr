@@ -39,6 +39,7 @@ Your capture zone. All new tasks land here before processing.
 - **Add tasks** using the input field at the bottom
 - **Quick-add syntax** is supported (see [[Getting Started]])
 - **Process Inbox** using the clarify workflow
+- **Mind Sweep** prompts you through common life/work areas when you want a guided capture session instead of a blank input.
 
 ### 🎯 Focus
 
@@ -51,6 +52,8 @@ Your unified dashboard for daily engagement. Focus is not a full inventory of ev
 - **Review Due** — Items with tickler dates.
 
 Focus hides future-start tasks and later tasks in sequential projects. Use **Contexts**, **Projects**, or **Search** when you need to inspect broader task inventory.
+
+**Default Next Actions order:** Focus puts due-soon actions first, undated actions next, and far-future due actions last. Within the same bucket it uses priority when enabled, then start time, creation date, title, and id. See [[GTD Workflow in Mindwtr#How Focus sorts available actions]] for the full logic.
 
 **Features:**
 - **Context Filters**: Filter Next Actions by context (e.g., @home, @work) or tag. The filter picker groups contexts and tags so long metadata lists stay scannable.
@@ -65,13 +68,16 @@ Multi-step outcomes containing related tasks.
 
 - **Sequential mode** — Only the first available project task appears in Focus
 - **Parallel mode** — All available project tasks can appear in Focus
+- **Sequential scope** — Sequential projects can advance project-wide or section-by-section; section scope shows the first available task in each section.
 - **Status** — Active, Waiting, Someday, Archived
 - **Areas of Focus** — Group projects by higher-level areas (e.g., Work, Health) to keep your sidebar organized.
 - **Project tags** — Tag projects and filter by tag
 - **Support notes** — Add planning notes and reference material
-- **Sections** — Optional task groupings inside a project (phases, milestones, sub-workstreams)
+- **Sections** — Optional task groupings inside a project (phases, milestones, sub-workstreams). Sections are headings inside one project, not subtasks or separate projects.
 - **Review date** — Set tickler dates for project review
 - **Complete/Archive** — Mark projects as done or archive them
+
+The **Project Section** field in the task editor assigns a task to one of the sections in its current project. It only has a useful value after the task belongs to a project that has sections.
 
 ### 🏷️ Contexts
 
@@ -99,6 +105,8 @@ Incubate ideas you might want to pursue later.
 
 Time-based view of tasks with due dates or start times.
 
+On wide layouts, the Calendar includes a **Plan next actions** panel for the selected day. It surfaces unscheduled Next Actions and due-but-unscheduled tasks so you can place them into open time without leaving Calendar. Collapse the panel when you want more room for the day/week grid.
+
 ### 📋 Board View
 
 Kanban-style drag-and-drop board with columns:
@@ -109,13 +117,15 @@ Kanban-style drag-and-drop board with columns:
 - **Someday/Maybe** — Deferred items
 - **Done** — Completed tasks
 
+Drag cards within a column to set manual board order. Moving a task to another status clears its old column order so it can be ordered in the new column.
+
 ### ✅ Done
 
-Completed tasks.
+Recently completed tasks. Use this as your short-term completion log for daily or weekly review.
 
 ### 📦 Archived
 
-Archived tasks. You can restore or permanently delete items here.
+Completed tasks that have been filed away. Archived tasks are hidden from normal task lists, but you can search, restore, or permanently delete them here.
 
 ### 📝 Weekly Review
 
@@ -126,6 +136,8 @@ Guided GTD review wizard with steps:
 3. Follow up Waiting For
 4. Review Projects
 5. Review Someday/Maybe
+
+Use the **Process Inbox** action in the review to clear captured items before continuing through calendar, waiting-for, projects, and someday review.
 
 See [[Weekly Review]] for detailed guidance.
 
@@ -158,6 +170,7 @@ Use checklists as templates:
 - Click a task to open a **read-only view** of all details.
 - Press **Edit** (or `e`) to switch to edit mode.
 - The editor starts minimal. Use **More options** to reveal advanced fields.
+- **Project Section** is an organizational field for tasks inside a sectioned project. Leave it blank for Inbox tasks, unassigned tasks, or projects without sections.
 - Status, Priority, and Energy Level use pill controls instead of dropdowns for faster keyboard and pointer selection.
 - Date fields include quick chips for **Today**, **Tomorrow**, **+3 days**, **Next week**, **Next month**, and **No date**.
 - In **Settings → GTD → Task Editor Layout**, choose whether the desktop editor opens as the inline side peek or a centered pop-up.
@@ -166,8 +179,11 @@ Use checklists as templates:
 
 ## Calendar Integration
 
-Mindwtr can overlay external calendars (ICS subscriptions) in the Calendar view.
-Add an **ICS URL** in **Settings → Calendar**.
+Mindwtr can overlay external calendars in the Calendar view. On macOS it can read Apple Calendar through EventKit; on all desktop platforms it can read direct ICS subscription URLs.
+Add an **ICS URL** in **Settings → Calendar** when you need an ICS subscription.
+External events are read-only, but you can create a separate Mindwtr task from an event in Calendar; Mindwtr copies the event title, date/time, location, description, and calendar name where available.
+Use **Plan next actions** in Calendar to turn the selected day into a planning surface: review unscheduled work, choose a task, and schedule it into a free slot while keeping due dates as deadlines.
+On macOS, **Push tasks to calendar** can also write scheduled/due Mindwtr tasks into a selected writable Apple Calendar target. See [[Calendar Integration]] for setup details.
 
 ### 🔍 Global Search
 
@@ -185,6 +201,10 @@ Powerful search with operators to find anything instantly.
 | `tag:`      | `tag:#focused`     | Filter by tag                 |
 | `assigned:` | `assigned:Tom`     | Filter by delegated assignee  |
 | `project:`  | `project:HomeReno` | Filter by project name or ID  |
+| `location:` | `location:office`  | Filter by task location       |
+| `where:`    | `where:office`     | Alias for task location       |
+| `id:`       | `id:abc123`        | Find an exact task ID         |
+| `-id:`      | `-id:abc123`       | Exclude an exact task ID      |
 | `due:`      | `due:today`        | Tasks due on date             |
 | `due:<=`    | `due:<=7d`         | Tasks due within 7 days       |
 | `start:`    | `start:>=tomorrow` | Tasks starting from date      |
@@ -341,6 +361,7 @@ Configure notifications in Settings:
 | **Description**   | Markdown-formatted notes with preview               |
 | **Attachments**   | Files and links attached to the task                |
 | **Location**      | Physical location                                   |
+| **Assignee / Person** | Delegated person for Waiting For and `assigned:` search |
 | **Project**       | Parent project assignment                           |
 | **Section**       | Optional group within a project                     |
 
@@ -357,6 +378,8 @@ When you complete a recurring task, Mindwtr automatically creates the next insta
   Example: complete now, next is due 5 days later.
 - **Ends: Never / On date / After N occurrences**: choose whether the series runs forever, stops on a specific date, or stops after a fixed number of occurrences.
   `After N occurrences` counts the current task as part of the series total.
+
+Mindwtr keeps one active instance of a recurring task. The Calendar shows that current instance when it has a due date or start time; future occurrences are not pre-filled until the current one is completed unless **Show next occurrence in Calendar** is enabled for a planning-only preview.
 
 You can toggle this in the task editor recurrence field using **Repeat after completion**.
 Use the same recurrence sheet to set an end date or an occurrence count when you need the series to stop automatically.
@@ -431,7 +454,7 @@ Access Settings from the sidebar.
 
 ### General
 - **Appearance**: Light, Dark, or System
-- **Language**: English, Chinese (Simplified), Chinese (Traditional), Spanish, Hindi, Arabic, German, Russian, Japanese, French, Portuguese, Polish, Korean, Italian, Turkish
+- **Language**: English, Vietnamese, Chinese (Simplified), Chinese (Traditional), Spanish, Hindi, Arabic, German, Russian, Japanese, French, Portuguese, Polish, Korean, Czech, Italian, Turkish, Dutch
 - **Keyboard Shortcuts**: Vim or Emacs preset
 - **Launch at Startup**: Start Mindwtr automatically when you sign in
 
@@ -450,7 +473,7 @@ Access Settings from the sidebar.
 - **Review Day/Time** — Customize when you want to be reminded
 
 ### GTD
-- **Auto-Archive** — Automatically move completed tasks to the Archive after a set number of days (default: 7 days)
+- **Auto-Archive** — Automatically move Done tasks to Archived after a set number of days (default: 7 days), or choose **Never** to keep completed tasks in Done
 - **Focus task limit** — Choose how many tasks can be marked for Today's Focus
 - **Features** — Optional signals you can enable when needed:
   - **Priorities** — Show a priority flag on tasks
@@ -461,13 +484,15 @@ Access Settings from the sidebar.
   - Choose the editor opening style: **Side peek** for inline edits or **Pop-up** for focused editing
   - You can move fields like **Due Date** into **Scheduling** and choose which sections expand by default
 - **Manage** — Maintain your reusable metadata from one place
-  - Edit **Areas**, **Contexts**, and **Tags** without hunting through individual tasks
+  - Edit **Areas**, **People**, **Contexts**, and **Tags** without hunting through individual tasks
+  - People keep reusable assignee names, notes, and reference links for delegated work and suggestions
 
 ### Data & Sync
 
 **Sync Backend:**
-- **File** — Sync via a shared JSON file (Dropbox, Google Drive, etc.)
-- **WebDAV** — Sync to a WebDAV server (Nextcloud, ownCloud, etc.)
+- **Cloud Sync** — Dropbox in supported builds, plus iCloud on macOS where available
+- **Folder / File Sync** — File sync via a shared JSON file/folder (Google Drive, Syncthing, OneDrive, etc.)
+- **Advanced / Custom Server** — WebDAV or Self-Hosted Mindwtr Cloud
 
 **Settings sync options:**
 - Choose which preferences sync across devices (theme, language/date format, GTD defaults, external calendar URLs, AI settings, Saved Filters)
@@ -485,6 +510,7 @@ See [[Data and Sync]] for detailed setup.
 ### About
 - Version info
 - Check for updates
+- **Send feedback** for bug reports, feature requests, or other notes when the build has feedback enabled. You can include a reply email if you want follow-up.
 - Links to website and GitHub
 
 ---

@@ -11,6 +11,11 @@ export const projectsScreenStyles = StyleSheet.create({
         borderBottomWidth: 1,
         borderBottomColor: '#e5e5e5',
     },
+    addProjectRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
     filterSection: {
         gap: 8,
     },
@@ -18,14 +23,20 @@ export const projectsScreenStyles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
+        gap: 12,
     },
     filterToggleText: {
         fontSize: 12,
         fontWeight: '600',
+        flexShrink: 0,
+        minWidth: 48,
+        textAlign: 'right',
     },
     tagFilterLabel: {
         fontSize: 12,
         fontWeight: '600',
+        flex: 1,
+        minWidth: 0,
     },
     tagFilterChips: {
         flexDirection: 'row',
@@ -50,6 +61,10 @@ export const projectsScreenStyles = StyleSheet.create({
         paddingVertical: 8,
         fontSize: 16,
     },
+    addProjectInput: {
+        flex: 1,
+        minWidth: 0,
+    },
     colorPicker: {
         flexDirection: 'row',
         gap: 8,
@@ -64,18 +79,15 @@ export const projectsScreenStyles = StyleSheet.create({
     colorOptionSelected: {
         borderColor: '#000',
     },
-    addButton: {
-        borderRadius: 10,
-        paddingVertical: 10,
+    addIconButton: {
+        width: 46,
+        height: 46,
+        borderRadius: 8,
         alignItems: 'center',
+        justifyContent: 'center',
     },
     addButtonDisabled: {
         opacity: 0.5,
-    },
-    addButtonText: {
-        color: '#fff',
-        fontSize: 15,
-        fontWeight: '600',
     },
     projectItem: {
         flexDirection: 'row',
@@ -90,14 +102,63 @@ export const projectsScreenStyles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
     },
-    projectColor: {
-        width: 12,
-        height: 12,
-        borderRadius: 6,
-        marginRight: 12,
-    },
     projectDetailScroll: {
+        flexGrow: 1,
         paddingBottom: 24,
+    },
+    projectDetailRoot: {
+        flex: 1,
+    },
+    projectReorderListFill: {
+        flex: 1,
+    },
+    projectTaskPinnedToolbar: {
+        minHeight: 56,
+        borderBottomWidth: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+    },
+    projectTaskPinnedControl: {
+        width: 44,
+        height: 44,
+        borderRadius: 12,
+        borderWidth: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    projectTaskPinnedControlIcon: {
+        position: 'relative',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    projectTaskPinnedSpacer: {
+        flex: 1,
+    },
+    projectTaskPinnedAddButton: {
+        width: 56,
+        height: 44,
+        borderRadius: 14,
+        borderWidth: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    projectTaskPinnedBadge: {
+        minWidth: 18,
+        height: 18,
+        borderRadius: 9,
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 4,
+        position: 'absolute',
+        right: -10,
+        top: -8,
+    },
+    projectTaskPinnedBadgeText: {
+        fontSize: 10,
+        fontWeight: '800',
     },
     projectContent: {
         flex: 1,
@@ -152,12 +213,20 @@ export const projectsScreenStyles = StyleSheet.create({
     projectTitleRow: {
         flexDirection: 'row',
         alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 8,
+        marginBottom: 4,
+    },
+    projectTitleContent: {
+        flex: 1,
+        minWidth: 0,
+        flexDirection: 'row',
+        alignItems: 'center',
         gap: 6,
     },
     projectTagDots: {
         flexDirection: 'row',
         gap: 4,
-        marginLeft: 6,
     },
     projectTagDot: {
         width: 6,
@@ -166,19 +235,46 @@ export const projectsScreenStyles = StyleSheet.create({
         opacity: 0.7,
     },
     projectTitle: {
+        flexShrink: 1,
         fontSize: 16,
         fontWeight: '500',
-        marginBottom: 4,
+    },
+    projectTaskCountBadge: {
+        minWidth: 22,
+        minHeight: 20,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 999,
+        borderWidth: 1,
+        paddingHorizontal: 6,
+    },
+    projectTaskCountText: {
+        fontSize: 11,
+        fontWeight: '700',
+        lineHeight: 14,
     },
     projectMeta: {
         fontSize: 12,
         color: '#666',
     },
-    deleteButton: {
-        width: 32,
-        height: 32,
-        justifyContent: 'center',
+    projectSwipeAction: {
+        width: 96,
+        marginBottom: 8,
+        borderRadius: 8,
         alignItems: 'center',
+        justifyContent: 'center',
+        gap: 4,
+    },
+    projectSwipeDuplicateAction: {
+        backgroundColor: '#3B82F6',
+    },
+    projectSwipeDeleteAction: {
+        backgroundColor: '#EF4444',
+    },
+    projectSwipeActionText: {
+        color: '#FFFFFF',
+        fontSize: 12,
+        fontWeight: '700',
     },
     emptyContainer: {
         padding: 48,
@@ -198,11 +294,6 @@ export const projectsScreenStyles = StyleSheet.create({
     },
     backButton: {
         padding: 8,
-        width: 60,
-    },
-    backButtonText: {
-        fontSize: 16,
-        color: '#007AFF',
     },
     modalTitle: {
         fontSize: 18,
@@ -220,35 +311,50 @@ export const projectsScreenStyles = StyleSheet.create({
         fontWeight: '500',
     },
     sequentialToggle: {
+        minHeight: 30,
         paddingHorizontal: 10,
-        paddingVertical: 6,
+        paddingVertical: 4,
         borderRadius: 8,
+        borderWidth: 1,
         backgroundColor: '#F3F4F6',
     },
-    sequentialToggleActive: {
-        backgroundColor: '#3B82F6',
+    projectTypeControls: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    projectTypeHelpButton: {
+        width: 30,
+        height: 30,
+        borderRadius: 8,
+        borderWidth: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     sequentialToggleText: {
         fontSize: 12,
         fontWeight: '600',
         color: '#6B7280',
     },
-    sequentialToggleTextActive: {
-        color: '#FFFFFF',
-    },
-    statusBlock: {
-        borderBottomWidth: 1,
-    },
-    statusActionsRow: {
+    sequentialScopeOptions: {
         flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 16,
-        paddingVertical: 8,
         gap: 8,
+        marginTop: 8,
     },
-    statusLabel: {
+    sequentialScopeButton: {
+        flex: 1,
+        minHeight: 36,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderRadius: 8,
+        borderWidth: 1,
+        paddingHorizontal: 8,
+        paddingVertical: 8,
+    },
+    sequentialScopeText: {
         fontSize: 12,
-        fontWeight: '600',
+        fontWeight: '700',
+        textAlign: 'center',
     },
     statusPicker: {
         flexDirection: 'row',
@@ -285,12 +391,6 @@ export const projectsScreenStyles = StyleSheet.create({
         width: 8,
         height: 8,
         borderRadius: 999,
-    },
-    statusButton: {
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 8,
-        marginRight: 8,
     },
     statusButtonText: {
         fontSize: 12,
@@ -332,10 +432,16 @@ export const projectsScreenStyles = StyleSheet.create({
         paddingVertical: 8,
         marginTop: 6,
         marginBottom: 8,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
     },
     detailsToggleButton: {
         flexDirection: 'row',
         alignItems: 'center',
+        flex: 1,
+        minHeight: 30,
     },
     detailsToggleText: {
         fontSize: 14,
@@ -396,6 +502,23 @@ export const projectsScreenStyles = StyleSheet.create({
     helperText: {
         marginTop: 8,
         fontSize: 13,
+    },
+    projectSectionPillRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 8,
+        marginTop: 10,
+    },
+    projectSectionPill: {
+        maxWidth: '100%',
+        borderRadius: 999,
+        borderWidth: 1,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+    },
+    projectSectionPillText: {
+        fontSize: 12,
+        fontWeight: '700',
     },
     attachmentsList: {
         marginTop: 10,
@@ -493,6 +616,126 @@ export const projectsScreenStyles = StyleSheet.create({
         width: '100%',
         height: 360,
         backgroundColor: '#000',
+    },
+    sectionManagerCard: {
+        width: '100%',
+        maxWidth: 420,
+        maxHeight: '82%',
+        borderRadius: 12,
+        borderWidth: 1,
+        padding: 16,
+        gap: 12,
+    },
+    sectionManagerHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+    },
+    sectionManagerTitle: {
+        flex: 1,
+        minWidth: 0,
+        fontSize: 16,
+        fontWeight: '800',
+    },
+    sectionManagerCloseButton: {
+        width: 34,
+        height: 34,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    sectionManagerAddButton: {
+        minHeight: 42,
+        borderRadius: 10,
+        borderWidth: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+        paddingHorizontal: 12,
+        paddingVertical: 9,
+    },
+    sectionManagerAddButtonText: {
+        flexShrink: 1,
+        fontSize: 14,
+        fontWeight: '800',
+    },
+    sectionEditor: {
+        borderRadius: 10,
+        borderWidth: 1,
+        gap: 8,
+        padding: 10,
+    },
+    sectionEditorLabel: {
+        fontSize: 12,
+        fontWeight: '700',
+        textTransform: 'uppercase',
+    },
+    sectionEditorInput: {
+        borderWidth: 1,
+        borderRadius: 8,
+        fontSize: 16,
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+    },
+    sectionEditorActions: {
+        flexDirection: 'row',
+        justifyContent: 'flex-end',
+        gap: 8,
+    },
+    sectionManagerEmpty: {
+        borderRadius: 10,
+        borderWidth: 1,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+    },
+    sectionManagerList: {
+        maxHeight: 280,
+        borderRadius: 10,
+        borderWidth: 1,
+    },
+    sectionManagerListContent: {
+        paddingVertical: 2,
+    },
+    sectionManagerRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 10,
+        paddingHorizontal: 10,
+        paddingVertical: 9,
+        borderBottomWidth: 1,
+    },
+    sectionManagerRowTitleWrap: {
+        flex: 1,
+        minWidth: 0,
+    },
+    sectionManagerRowTitle: {
+        fontSize: 14,
+        fontWeight: '700',
+    },
+    sectionManagerRowActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        flexShrink: 0,
+    },
+    sectionManagerOrderButtons: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+    },
+    sectionManagerIconButton: {
+        width: 30,
+        height: 30,
+        borderRadius: 8,
+        borderWidth: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    sectionManagerIconButtonDisabled: {
+        opacity: 0.4,
     },
     areaManagerList: {
         paddingBottom: 8,
@@ -663,10 +906,39 @@ export const projectsScreenStyles = StyleSheet.create({
         paddingHorizontal: 16,
         paddingVertical: 12,
     },
+    projectSettingsRowSpacing: {
+        marginTop: 12,
+    },
+    projectManageActions: {
+        flexDirection: 'row',
+        gap: 8,
+        marginTop: 12,
+    },
+    projectActionsHelper: {
+        fontSize: 12,
+        lineHeight: 16,
+    },
+    projectManageButton: {
+        flex: 1,
+        minHeight: 38,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+        borderRadius: 8,
+        borderWidth: 1,
+        paddingHorizontal: 10,
+    },
+    reviewLabelRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        gap: 12,
+        marginBottom: 6,
+    },
     reviewLabel: {
         fontSize: 14,
         fontWeight: '600',
-        marginBottom: 6,
     },
     reviewButton: {
         padding: 10,

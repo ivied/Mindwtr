@@ -4,16 +4,31 @@ import { isSelectableProjectForTaskAssignment, type Project } from '@mindwtr/cor
 import type { ThemeColors } from '@/hooks/use-theme-colors';
 import { styles } from './task-edit-modal.styles';
 import { logError } from '../../lib/app-log';
+import { useAndroidKeyboardInset } from '../../lib/use-android-keyboard-inset';
+
+type ProjectPickerThemeColors = Pick<ThemeColors, 'border' | 'cardBg' | 'inputBg' | 'secondaryText' | 'text' | 'tint'>;
+
+type ProjectPickerLeadingOption = {
+    key: string;
+    label: string;
+    accessibilityLabel?: string;
+    selected?: boolean;
+    disabled?: boolean;
+    onPress: () => void;
+};
 
 interface TaskEditProjectPickerProps {
     visible: boolean;
     projects: Project[];
     allProjects?: Project[];
-    tc: ThemeColors;
+    tc: ProjectPickerThemeColors;
     t: (key: string) => string;
     onClose: () => void;
     onSelectProject: (projectId?: string) => void;
     onCreateProject: (title: string) => Promise<Project | null>;
+    allowCreate?: boolean;
+    leadingOptions?: ProjectPickerLeadingOption[];
+    selectedProjectId?: string | null;
     emptyLabel?: string;
     noMatchesLabel?: string;
 }
@@ -27,10 +42,14 @@ export function TaskEditProjectPicker({
     onClose,
     onSelectProject,
     onCreateProject,
+    allowCreate = true,
+    leadingOptions = [],
+    selectedProjectId,
     emptyLabel,
     noMatchesLabel,
 }: TaskEditProjectPickerProps) {
     const [projectQuery, setProjectQuery] = useState('');
+    const keyboardInset = useAndroidKeyboardInset(visible);
 
     useEffect(() => {
         if (visible) setProjectQuery('');
@@ -69,6 +88,7 @@ export function TaskEditProjectPicker({
     }, [allActiveProjects, normalizedProjectQuery]);
 
     const handleCreateProject = async () => {
+        if (!allowCreate) return;
         const title = projectQuery.trim();
         if (!title) return;
         if (hasExactProjectMatch) {
@@ -97,7 +117,7 @@ export function TaskEditProjectPicker({
             onRequestClose={onClose}
             accessibilityViewIsModal
         >
-            <View style={styles.overlay}>
+            <View style={keyboardInset > 0 ? [styles.overlay, { paddingBottom: keyboardInset }] : styles.overlay}>
                 <View style={[styles.modalCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>
                     <Text style={[styles.modalTitle, { color: tc.text }]} accessibilityRole="header">
                         {t('taskEdit.projectLabel')}
@@ -116,7 +136,7 @@ export function TaskEditProjectPicker({
                         accessibilityLabel={t('taskEdit.projectLabel')}
                         accessibilityHint={t('common.search')}
                     />
-                    {!hasExactProjectMatch && projectQuery.trim() && (
+                    {allowCreate && !hasExactProjectMatch && projectQuery.trim() && (
                         <Pressable
                             onPress={handleCreateProject}
                             style={styles.pickerItem}
@@ -132,6 +152,22 @@ export function TaskEditProjectPicker({
                         style={[styles.pickerList, { borderColor: tc.border, backgroundColor: tc.inputBg }]}
                         contentContainerStyle={{ paddingVertical: 4 }}
                     >
+                        {leadingOptions.map((option) => (
+                            <Pressable
+                                key={option.key}
+                                onPress={() => {
+                                    option.onPress();
+                                    onClose();
+                                }}
+                                disabled={option.disabled}
+                                style={styles.pickerItem}
+                                accessibilityRole="button"
+                                accessibilityLabel={option.accessibilityLabel ?? option.label}
+                                accessibilityState={{ selected: Boolean(option.selected), disabled: Boolean(option.disabled) }}
+                            >
+                                <Text style={[styles.pickerItemText, { color: option.disabled ? tc.secondaryText : tc.text }]}>{option.label}</Text>
+                            </Pressable>
+                        ))}
                         <Pressable
                             onPress={() => {
                                 onSelectProject(undefined);
@@ -140,6 +176,7 @@ export function TaskEditProjectPicker({
                             style={styles.pickerItem}
                             accessibilityRole="button"
                             accessibilityLabel={t('taskEdit.noProjectOption')}
+                            accessibilityState={{ selected: selectedProjectId === null }}
                         >
                             <Text style={[styles.pickerItemText, { color: tc.text }]}>{t('taskEdit.noProjectOption')}</Text>
                         </Pressable>
@@ -153,6 +190,7 @@ export function TaskEditProjectPicker({
                                 style={styles.pickerItem}
                                 accessibilityRole="button"
                                 accessibilityLabel={project.title}
+                                accessibilityState={{ selected: selectedProjectId === project.id }}
                             >
                                 <Text style={[styles.pickerItemText, { color: tc.text }]}>{project.title}</Text>
                             </Pressable>

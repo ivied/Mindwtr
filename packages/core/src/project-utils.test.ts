@@ -2,10 +2,12 @@ import { describe, it, expect } from 'vitest';
 import {
     filterProjectsBySelectedArea,
     filterProjectsNeedingNextAction,
+    getSequentialProjectTaskCues,
     getProjectNextActionCandidates,
     getProjectNextActionPromptData,
     getProjectsByArea,
     getProjectsByTag,
+    isTaskInActiveProject,
     isSelectableProjectForTaskAssignment,
     projectHasNextAction,
     shouldPromptForProjectNextAction,
@@ -107,6 +109,46 @@ describe('project-utils', () => {
         expect(getProjectNextActionPromptData(completedTask, [completedTask, ...tasks], projects)).toBeNull();
     });
 
+    it('marks one available next task in a sequential project', () => {
+        const project: Project = { ...projects[0], isSequential: true, sequentialScope: 'project' };
+        const projectTasks: Task[] = [
+            { ...tasks[0], id: 'first-next', projectId: project.id, order: 1 },
+            { ...tasks[0], id: 'second-next', projectId: project.id, order: 2 },
+            { ...tasks[0], id: 'waiting-step', projectId: project.id, status: 'waiting', order: 3 },
+        ];
+
+        const cues = getSequentialProjectTaskCues(project, projectTasks);
+
+        expect(cues.get('first-next')).toBe('available');
+        expect(cues.get('second-next')).toBe('later');
+        expect(cues.has('waiting-step')).toBe(false);
+    });
+
+    it('marks one available next task per section for section-scoped sequential projects', () => {
+        const project: Project = { ...projects[0], isSequential: true, sequentialScope: 'section' };
+        const projectTasks: Task[] = [
+            { ...tasks[0], id: 'section-a-first', projectId: project.id, sectionId: 'a', order: 1 },
+            { ...tasks[0], id: 'section-a-later', projectId: project.id, sectionId: 'a', order: 2 },
+            { ...tasks[0], id: 'section-b-first', projectId: project.id, sectionId: 'b', order: 3 },
+            { ...tasks[0], id: 'unsectioned-first', projectId: project.id, sectionId: 'missing', order: 4 },
+            { ...tasks[0], id: 'unsectioned-later', projectId: project.id, order: 5 },
+        ];
+
+        const cues = getSequentialProjectTaskCues(project, projectTasks, { sectionIds: ['a', 'b'] });
+
+        expect(cues.get('section-a-first')).toBe('available');
+        expect(cues.get('section-a-later')).toBe('later');
+        expect(cues.get('section-b-first')).toBe('available');
+        expect(cues.get('unsectioned-first')).toBe('available');
+        expect(cues.get('unsectioned-later')).toBe('later');
+    });
+
+    it('does not mark tasks in parallel projects', () => {
+        const project: Project = { ...projects[0], isSequential: false };
+
+        expect(getSequentialProjectTaskCues(project, tasks).size).toBe(0);
+    });
+
     it('does not prompt for inactive projects or incomplete tasks', () => {
         const somedayTask: Task = {
             id: 'someday-task',
@@ -155,6 +197,21 @@ describe('project-utils', () => {
         expect(isSelectableProjectForTaskAssignment(projects[4])).toBe(false);
         expect(isSelectableProjectForTaskAssignment(archivedProject)).toBe(false);
         expect(isSelectableProjectForTaskAssignment(completedProject)).toBe(false);
+    });
+
+    it('recognizes whether a task belongs to an active project surface', () => {
+        const projectMap = new Map(projects.map((project) => [project.id, project]));
+        const noProjectTask: Task = { id: 'no-project', title: 'Loose task', status: 'next', tags: [], contexts: [], createdAt: '', updatedAt: '' };
+        const activeProjectTask: Task = { ...noProjectTask, id: 'active-project', projectId: 'p1' };
+        const somedayProjectTask: Task = { ...noProjectTask, id: 'someday-project', projectId: 'p3' };
+        const deletedProjectTask: Task = { ...noProjectTask, id: 'deleted-project', projectId: 'p5' };
+        const missingProjectTask: Task = { ...noProjectTask, id: 'missing-project', projectId: 'missing' };
+
+        expect(isTaskInActiveProject(noProjectTask, projectMap)).toBe(true);
+        expect(isTaskInActiveProject(activeProjectTask, projectMap)).toBe(true);
+        expect(isTaskInActiveProject(somedayProjectTask, projectMap)).toBe(false);
+        expect(isTaskInActiveProject(deletedProjectTask, projectMap)).toBe(false);
+        expect(isTaskInActiveProject(missingProjectTask, projectMap)).toBe(true);
     });
 
     it('filters projects by tag', () => {

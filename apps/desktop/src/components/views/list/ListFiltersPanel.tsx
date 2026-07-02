@@ -12,11 +12,11 @@ interface ListFiltersPanelProps {
     selectedTokens: string[];
     tokenCounts: Record<string, number>;
     onToggleToken: (token: string) => void;
-    prioritiesEnabled: boolean;
+    showPriorityFilters: boolean;
     priorityOptions: TaskPriority[];
     selectedPriorities: TaskPriority[];
     onTogglePriority: (priority: TaskPriority) => void;
-    timeEstimatesEnabled: boolean;
+    showTimeEstimateFilters: boolean;
     timeEstimateOptions: TimeEstimate[];
     selectedTimeEstimates: TimeEstimate[];
     onToggleEstimate: (estimate: TimeEstimate) => void;
@@ -33,11 +33,11 @@ export function ListFiltersPanel({
     selectedTokens,
     tokenCounts,
     onToggleToken,
-    prioritiesEnabled,
+    showPriorityFilters,
     priorityOptions,
     selectedPriorities,
     onTogglePriority,
-    timeEstimatesEnabled,
+    showTimeEstimateFilters,
     timeEstimateOptions,
     selectedTimeEstimates,
     onToggleEstimate,
@@ -99,7 +99,7 @@ export function ListFiltersPanel({
                             })}
                         </div>
                     </div>
-                    {prioritiesEnabled && (
+                    {showPriorityFilters && (
                         <div className="space-y-2">
                             <div className="text-xs text-muted-foreground uppercase tracking-wide">{t('filters.priority')}</div>
                             <div className="flex flex-wrap gap-2">
@@ -125,7 +125,7 @@ export function ListFiltersPanel({
                             </div>
                         </div>
                     )}
-                    {timeEstimatesEnabled && (
+                    {showTimeEstimateFilters && (
                         <div className="space-y-2">
                             <div className="text-xs text-muted-foreground uppercase tracking-wide">{t('filters.timeEstimate')}</div>
                             <div className="flex flex-wrap gap-2">

@@ -4,6 +4,28 @@ import { render } from '@testing-library/react';
 import { ExpandedMarkdownEditor } from './ExpandedMarkdownEditor';
 
 describe('ExpandedMarkdownEditor', () => {
+    it('enables native spell checking in edit mode', () => {
+        const { getByRole } = render(
+            <ExpandedMarkdownEditor
+                isOpen
+                onClose={vi.fn()}
+                value="Fix teh typo"
+                onChange={vi.fn()}
+                title="Description"
+                placeholder="Description"
+                t={(key) => key}
+                initialMode="edit"
+                selection={{ start: 0, end: 0 }}
+                canUndo={false}
+                onUndo={() => undefined}
+                onApplyAction={() => undefined}
+                onSelectionChange={vi.fn()}
+            />,
+        );
+
+        expect(getByRole('textbox')).toHaveAttribute('spellcheck', 'true');
+    });
+
     it('renders GFM tables in preview mode', () => {
         const { container, getByRole, getByText } = render(
             <div style={{ transform: 'translateY(50px)' }}>

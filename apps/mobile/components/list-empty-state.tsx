@@ -1,5 +1,6 @@
 import React from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, TouchableOpacity, View } from 'react-native';
+import { CompactText } from '@/components/compact-text';
 
 export interface ListEmptyStateProps {
   message: string;
@@ -29,20 +30,20 @@ export function ListEmptyState({
       accessible
       accessibilityLabel={accessibilityLabel}
     >
-      <Text
+      <CompactText
         style={[styles.text, { color: textColor }]}
         accessibilityRole="text"
         accessibilityLiveRegion="polite"
       >
         {message}
-      </Text>
+      </CompactText>
       {hint ? (
-        <Text
+        <CompactText
           style={[styles.hint, { color: mutedTextColor ?? textColor }]}
           accessibilityRole="text"
         >
           {hint}
-        </Text>
+        </CompactText>
       ) : null}
       {actionLabel && onAction ? (
         <TouchableOpacity
@@ -51,9 +52,11 @@ export function ListEmptyState({
           accessibilityLabel={actionLabel}
           onPress={onAction}
         >
-          <Text style={[styles.actionText, { color: textColor }]}>
+          <CompactText
+            style={[styles.actionText, { color: textColor }]}
+          >
             {actionLabel}
-          </Text>
+          </CompactText>
         </TouchableOpacity>
       ) : null}
     </View>

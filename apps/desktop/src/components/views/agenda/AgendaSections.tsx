@@ -57,6 +57,7 @@ export function AgendaCollapsibleSection({
 type AgendaProjectSectionProps = {
     color: string;
     icon: LucideIcon;
+    onProjectPress: (projectId: string) => void;
     projects: Project[];
     t: (key: string) => string;
     title: string;
@@ -65,6 +66,7 @@ type AgendaProjectSectionProps = {
 export function AgendaProjectSection({
     color,
     icon: Icon,
+    onProjectPress,
     projects,
     t,
     title,
@@ -80,9 +82,15 @@ export function AgendaProjectSection({
             </h3>
             <div className="space-y-2">
                 {projects.map((project) => (
-                    <div
+                    <button
                         key={project.id}
-                        className="flex items-center justify-between rounded-lg border border-border bg-card/80 px-3 py-2"
+                        type="button"
+                        aria-label={`${t('common.open') || 'Open'} ${project.title}`}
+                        onClick={() => onProjectPress(project.id)}
+                        className={cn(
+                            'flex w-full items-center justify-between rounded-lg border border-border bg-card/80 px-3 py-2 text-left',
+                            'transition-colors hover:bg-muted/40 focus:outline-none focus:ring-2 focus:ring-primary/30',
+                        )}
                     >
                         <div className="flex items-center gap-2">
                             <Folder className="h-4 w-4" style={{ color: project.color }} />
@@ -96,7 +104,7 @@ export function AgendaProjectSection({
                                 {safeFormatDate(project.reviewAt, 'P')}
                             </span>
                         )}
-                    </div>
+                    </button>
                 ))}
             </div>
         </div>

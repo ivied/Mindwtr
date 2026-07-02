@@ -2,6 +2,7 @@ import { logWarn } from './logger';
 
 export const MAX_SYNC_REVISION = 2_147_483_647;
 export const SYNC_REVISION_WARNING_THRESHOLD = Math.floor(MAX_SYNC_REVISION * 0.9);
+export const SYNC_BACKUP_RESTORE_REV_BY = 'backup-restore';
 
 type RevisionCoercion = {
     revision: number;

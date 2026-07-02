@@ -6,6 +6,7 @@ type MockStoreState = {
     _allProjects: AppData['projects'];
     _allSections: AppData['sections'];
     _allAreas: AppData['areas'];
+    _allPeople: AppData['people'];
     lastDataChangeAt: number;
     settings: AppData['settings'];
     fetchData: ReturnType<typeof vi.fn>;
@@ -45,6 +46,7 @@ const localData: AppData = {
     projects: [],
     sections: [],
     areas: [],
+    people: [],
     settings: {},
 };
 
@@ -70,9 +72,11 @@ const buildResponse = (
 
 const invokeMock = vi.hoisted(() => vi.fn());
 const markLocalWriteMock = vi.hoisted(() => vi.fn());
+const markLocalSqliteWriteMock = vi.hoisted(() => vi.fn());
 const flushPendingSaveMock = vi.hoisted(() => vi.fn());
 const performSyncCycleMock = vi.hoisted(() => vi.fn());
 const getInMemoryAppDataSnapshotMock = vi.hoisted(() => vi.fn());
+const applySyncedDataToStoreMock = vi.hoisted(() => vi.fn());
 const useTaskStoreGetStateMock = vi.hoisted(() => vi.fn());
 const logInfoMock = vi.hoisted(() => vi.fn());
 const logWarnMock = vi.hoisted(() => vi.fn());
@@ -103,6 +107,7 @@ const storeStateRef = vi.hoisted(() => ({
         _allProjects: [],
         _allSections: [],
         _allAreas: [],
+        _allPeople: [],
         lastDataChangeAt: 1,
         settings: {},
         fetchData: vi.fn(),
@@ -126,6 +131,7 @@ describe('desktop sync-service runtime', () => {
             _allProjects: [],
             _allSections: [],
             _allAreas: [],
+            _allPeople: [],
             lastDataChangeAt: 1,
             settings: {},
             fetchData: vi.fn().mockResolvedValue(undefined),
@@ -137,11 +143,23 @@ describe('desktop sync-service runtime', () => {
         flushPendingSaveMock.mockResolvedValue(undefined);
         getInMemoryAppDataSnapshotMock.mockImplementation(() => ({
             tasks: structuredClone(storeStateRef.current._allTasks),
-            projects: [],
-            sections: [],
-            areas: [],
-            settings: {},
+            projects: structuredClone(storeStateRef.current._allProjects),
+            sections: structuredClone(storeStateRef.current._allSections),
+            areas: structuredClone(storeStateRef.current._allAreas),
+            people: structuredClone(storeStateRef.current._allPeople),
+            settings: structuredClone(storeStateRef.current.settings),
         }));
+        applySyncedDataToStoreMock.mockImplementation((data: AppData) => {
+            storeStateRef.current = {
+                ...storeStateRef.current,
+                _allTasks: structuredClone(data.tasks),
+                _allProjects: structuredClone(data.projects),
+                _allSections: structuredClone(data.sections),
+                _allAreas: structuredClone(data.areas),
+                _allPeople: structuredClone(data.people ?? []),
+                settings: structuredClone(data.settings),
+            };
+        });
         externalCalendarGetMock.mockResolvedValue([]);
         externalCalendarSetMock.mockResolvedValue(undefined);
         logSyncErrorMock.mockResolvedValue(null);
@@ -151,6 +169,7 @@ describe('desktop sync-service runtime', () => {
             projects: [],
             sections: [],
             areas: [],
+            people: [],
             settings: {},
         });
         writeRemoteCloudKitMock.mockResolvedValue(undefined);
@@ -197,7 +216,9 @@ describe('desktop sync-service runtime', () => {
             flushPendingSave: flushPendingSaveMock as typeof flushPendingSaveMock,
             performSyncCycle: performSyncCycleMock as typeof performSyncCycleMock,
             getInMemoryAppDataSnapshot: getInMemoryAppDataSnapshotMock as typeof getInMemoryAppDataSnapshotMock,
+            applySyncedDataToStore: applySyncedDataToStoreMock as typeof applySyncedDataToStoreMock,
             markLocalWrite: markLocalWriteMock as typeof markLocalWriteMock,
+            markLocalSqliteWrite: markLocalSqliteWriteMock as typeof markLocalSqliteWriteMock,
             reportError: vi.fn(),
             logInfo: logInfoMock as typeof logInfoMock,
             logWarn: logWarnMock as typeof logWarnMock,
@@ -219,6 +240,7 @@ describe('desktop sync-service runtime', () => {
 
         expect(result).toEqual({ success: true, skipped: 'requeued' });
         expect(markLocalWriteMock).toHaveBeenCalledTimes(1);
+        expect(markLocalSqliteWriteMock).toHaveBeenCalledTimes(2);
         expect(invokeMock).toHaveBeenCalledWith('save_data', {
             data: expect.objectContaining({
                 tasks: [
@@ -235,6 +257,371 @@ describe('desktop sync-service runtime', () => {
                 ],
             }),
         });
+    });
+
+    it('treats pending remote write backoff as a skipped sync', async () => {
+        const syncServiceModule = await syncServiceModulePromise;
+        performSyncCycleMock.mockResolvedValue({
+            status: 'skipped',
+            skipped: 'pendingRemoteWriteBackoff',
+            retryInMs: 5_000,
+            message: 'Sync paused briefly after remote write failure. Retry in about 5s.',
+            data: localData,
+        });
+
+        const result = await syncServiceModule.SyncService.performSync();
+
+        expect(result).toEqual({ success: true, skipped: 'pendingRemoteWriteBackoff' });
+        expect(storeStateRef.current.setError).not.toHaveBeenCalled();
+    });
+
+    it('clears a queued follow-up when the refreshed local snapshot already matches the sync result', async () => {
+        const syncServiceModule = await syncServiceModulePromise;
+        const syncedAttachment = {
+            ...localData.tasks[0].attachments?.[0],
+            cloudKey: 'attachments/att-1.txt',
+            uri: '',
+            localStatus: undefined,
+        } as NonNullable<AppData['tasks'][number]['attachments']>[number];
+        const baseData: AppData = {
+            ...structuredClone(localData),
+            tasks: [{
+                ...localData.tasks[0],
+                attachments: [syncedAttachment],
+            }],
+            settings: {},
+        };
+        const mergedData: AppData = {
+            ...structuredClone(baseData),
+            tasks: [{
+                ...baseData.tasks[0],
+                title: 'Merged from remote',
+                updatedAt: '2026-01-01T00:01:00.000Z',
+            }],
+        };
+        const localOnlyMergedData: AppData = {
+            ...structuredClone(mergedData),
+            tasks: [{
+                ...mergedData.tasks[0],
+                attachments: [{
+                    ...mergedData.tasks[0].attachments?.[0],
+                    uri: '/local/doc.txt',
+                    localStatus: 'available',
+                } as NonNullable<AppData['tasks'][number]['attachments']>[number]],
+            }],
+        };
+        expect(computeSyncPayloadFingerprint(localOnlyMergedData)).toBe(computeSyncPayloadFingerprint(mergedData));
+        let queuedResult: Promise<unknown> | null = null;
+
+        storeStateRef.current = {
+            ...storeStateRef.current,
+            _allTasks: structuredClone(baseData.tasks),
+            settings: {},
+            lastDataChangeAt: 1,
+        };
+        getInMemoryAppDataSnapshotMock.mockImplementation(() => ({
+            tasks: structuredClone(storeStateRef.current._allTasks),
+            projects: [],
+            sections: [],
+            areas: [],
+            people: [],
+            settings: structuredClone(storeStateRef.current.settings),
+        }));
+        invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+            if (command === 'get_sync_backend') return 'file';
+            if (command === 'get_sync_path') return '/sync/data.json';
+            if (command === 'create_data_snapshot') return undefined;
+            if (command === 'get_data') return structuredClone(baseData);
+            if (command === 'read_sync_file') return structuredClone(mergedData);
+            if (command === 'save_data') return undefined;
+            throw new Error(`Unexpected command: ${command} ${JSON.stringify(args)}`);
+        });
+        performSyncCycleMock.mockImplementation(async (io: {
+            readLocal: () => Promise<AppData>;
+            writeLocal: (data: AppData) => Promise<void>;
+        }) => {
+            await io.readLocal();
+            await io.writeLocal(mergedData);
+            storeStateRef.current = {
+                ...storeStateRef.current,
+                _allTasks: structuredClone(localOnlyMergedData.tasks),
+                settings: structuredClone(localOnlyMergedData.settings),
+                lastDataChangeAt: 2,
+            };
+            queuedResult = syncServiceModule.SyncService.performSync();
+            return { status: 'success', stats: emptyStats, data: mergedData };
+        });
+
+        const result = await syncServiceModule.SyncService.performSync();
+        await queuedResult;
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        expect(result).toEqual({ success: true, stats: emptyStats });
+        expect(performSyncCycleMock).toHaveBeenCalledTimes(1);
+        expect(syncServiceModule.SyncService.getSyncStatus()).toMatchObject({
+            inFlight: false,
+            queued: false,
+            lastResult: 'success',
+        });
+    });
+
+    it('clears the pending remote marker when local edits abort after remote write succeeds', async () => {
+        const syncServiceModule = await syncServiceModulePromise;
+        const pendingAt = '2026-01-01T00:00:00.000Z';
+        invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+            if (command === 'get_sync_backend') return 'file';
+            if (command === 'get_sync_path') return '/sync/data.json';
+            if (command === 'create_data_snapshot') return undefined;
+            if (command === 'get_data') return structuredClone(localData);
+            if (command === 'save_data') return undefined;
+            if (command === 'write_sync_file') return undefined;
+            throw new Error(`Unexpected command: ${command} ${JSON.stringify(args)}`);
+        });
+        const syncData: AppData = {
+            ...structuredClone(localData),
+            tasks: [{
+                ...localData.tasks[0],
+                attachments: [],
+            }],
+        };
+        const editedAfterRemote: AppData = {
+            ...structuredClone(syncData),
+            tasks: [{
+                ...syncData.tasks[0],
+                title: 'Edited after remote write',
+            }],
+            settings: {
+                pendingRemoteWriteAt: pendingAt,
+            },
+        };
+        performSyncCycleMock.mockImplementation(async (io: {
+            writeLocal: (data: AppData) => Promise<void>;
+            writeRemote: (data: AppData) => Promise<void>;
+            clearPendingRemoteWriteAfterLocalAbort?: (pendingAt: string) => Promise<void>;
+        }) => {
+            const pendingData: AppData = {
+                ...structuredClone(syncData),
+                settings: {
+                    pendingRemoteWriteAt: pendingAt,
+                },
+            };
+            await io.writeLocal(pendingData);
+            await io.writeRemote({
+                ...pendingData,
+                settings: {},
+            });
+            storeStateRef.current = {
+                ...storeStateRef.current,
+                lastDataChangeAt: 2,
+            };
+            getInMemoryAppDataSnapshotMock.mockReturnValue(editedAfterRemote);
+            try {
+                await io.writeLocal({
+                    ...pendingData,
+                    settings: {},
+                });
+            } catch (error) {
+                await io.clearPendingRemoteWriteAfterLocalAbort?.(pendingAt);
+                throw error;
+            }
+            throw new Error('Expected final local write to abort');
+        });
+
+        const result = await syncServiceModule.SyncService.performSync();
+        const saveDataCalls = invokeMock.mock.calls.filter(([command]) => command === 'save_data');
+        const clearedData = saveDataCalls[saveDataCalls.length - 1]?.[1]?.data as AppData | undefined;
+
+        expect(result).toEqual({ success: true, skipped: 'requeued' });
+        expect(saveDataCalls).toHaveLength(2);
+        expect(clearedData?.settings.pendingRemoteWriteAt).toBeUndefined();
+        expect(clearedData?.tasks[0]?.title).toBe('Edited after remote write');
+    });
+
+    it('uses native Tauri commands for self-hosted Cloud data sync on desktop', async () => {
+        const syncServiceModule = await syncServiceModulePromise;
+        const localCloudData: AppData = {
+            tasks: [],
+            projects: [],
+            sections: [],
+            areas: [],
+            settings: {},
+        };
+        const remoteCloudData: AppData = {
+            tasks: [{
+                id: 'remote-task',
+                title: 'Remote',
+                status: 'next',
+                tags: [],
+                contexts: [],
+                createdAt: '2026-06-08T00:00:00.000Z',
+                updatedAt: '2026-06-08T00:00:00.000Z',
+            }],
+            projects: [],
+            sections: [],
+            areas: [],
+            settings: {},
+        };
+        const mergedCloudData: AppData = {
+            ...structuredClone(remoteCloudData),
+            tasks: [{
+                ...remoteCloudData.tasks[0],
+                title: 'Merged remote',
+                updatedAt: '2026-06-08T00:01:00.000Z',
+            }],
+            settings: { lastSyncStatus: 'success' },
+        };
+        const httpFetchMock = vi.fn(async () => {
+            throw new Error('JS HTTP helper should not perform Cloud data sync');
+        });
+
+        storeStateRef.current = {
+            ...storeStateRef.current,
+            _allTasks: [],
+            _allProjects: [],
+            _allSections: [],
+            _allAreas: [],
+            settings: {},
+        };
+        getInMemoryAppDataSnapshotMock.mockImplementation(() => structuredClone(localCloudData));
+        invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+            if (command === 'get_sync_backend') return 'cloud';
+            if (command === 'get_cloud_config') return {
+                url: 'https://sync.example.com',
+                token: 'cloud-token',
+                allowInsecureHttp: false,
+            };
+            if (command === 'create_data_snapshot') return undefined;
+            if (command === 'get_data') return structuredClone(localCloudData);
+            if (command === 'save_data') return undefined;
+            if (command === 'cloud_get_json') return structuredClone(remoteCloudData);
+            if (command === 'cloud_put_json') return true;
+            throw new Error(`Unexpected command: ${command} ${JSON.stringify(args)}`);
+        });
+        syncServiceModule.__syncServiceTestUtils.setDependenciesForTests({
+            getTauriFetch: async () => httpFetchMock as unknown as typeof fetch,
+        });
+        performSyncCycleMock.mockImplementation(async (io: {
+            readLocal: () => Promise<AppData>;
+            readRemote: () => Promise<AppData | null>;
+            writeLocal: (data: AppData) => Promise<void>;
+            writeRemote: (data: AppData) => Promise<void>;
+        }) => {
+            await io.readLocal();
+            await expect(io.readRemote()).resolves.toEqual(remoteCloudData);
+            await io.writeRemote(mergedCloudData);
+            await io.writeLocal(mergedCloudData);
+            return { status: 'success', stats: emptyStats, data: mergedCloudData };
+        });
+
+        const result = await syncServiceModule.SyncService.performSync();
+
+        expect(result).toEqual({ success: true, stats: emptyStats });
+        expect(invokeMock).toHaveBeenCalledWith('cloud_get_json', undefined);
+        expect(invokeMock).toHaveBeenCalledWith('cloud_put_json', {
+            data: expect.objectContaining({
+                tasks: expect.arrayContaining([
+                    expect.objectContaining({
+                        id: 'remote-task',
+                        title: 'Merged remote',
+                    }),
+                ]),
+            }),
+        });
+        expect(invokeMock).toHaveBeenCalledWith('save_data', {
+            data: expect.objectContaining({
+                tasks: expect.arrayContaining([
+                    expect.objectContaining({
+                        id: 'remote-task',
+                        title: 'Merged remote',
+                    }),
+                ]),
+                settings: expect.objectContaining(mergedCloudData.settings),
+            }),
+        });
+        expect(httpFetchMock).not.toHaveBeenCalledWith(
+            'https://sync.example.com/v1/data',
+            expect.objectContaining({ method: 'GET' })
+        );
+        expect(httpFetchMock).not.toHaveBeenCalledWith(
+            'https://sync.example.com/v1/data',
+            expect.objectContaining({ method: 'PUT' })
+        );
+    });
+
+    it('only emits sync payload trace logs when diagnostics logging is enabled', async () => {
+        const syncServiceModule = await syncServiceModulePromise;
+        const syncedData: AppData = {
+            tasks: [{
+                id: 'task-1',
+                title: 'Task',
+                status: 'inbox',
+                tags: [],
+                contexts: [],
+                attachments: [{
+                    id: 'att-1',
+                    kind: 'file',
+                    title: 'doc.txt',
+                    uri: '/local/doc.txt',
+                    cloudKey: 'attachments/att-1.txt',
+                    localStatus: 'available',
+                    createdAt: '2026-01-01T00:00:00.000Z',
+                    updatedAt: '2026-01-01T00:00:00.000Z',
+                }],
+                createdAt: '2026-01-01T00:00:00.000Z',
+                updatedAt: '2026-01-01T00:00:00.000Z',
+            }],
+            projects: [],
+            sections: [],
+            areas: [],
+            people: [],
+            settings: {},
+        };
+        const hasPayloadTraceLog = () => logInfoMock.mock.calls.some(([message]) =>
+            typeof message === 'string' && message.startsWith('Sync trace')
+        );
+        const configureFileSync = () => {
+            invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+                if (command === 'get_sync_backend') return 'file';
+                if (command === 'get_sync_path') return '/sync/data.json';
+                if (command === 'create_data_snapshot') return undefined;
+                if (command === 'get_data') return structuredClone(syncedData);
+                if (command === 'read_sync_file') return structuredClone(syncedData);
+                if (command === 'save_data') return undefined;
+                if (command === 'write_sync_file') return undefined;
+                throw new Error(`Unexpected command: ${command} ${JSON.stringify(args)}`);
+            });
+            performSyncCycleMock.mockImplementation(async (io: {
+                readLocal: () => Promise<AppData>;
+                readRemote: () => Promise<AppData | null>;
+                writeLocal: (data: AppData) => Promise<void>;
+                writeRemote: (data: AppData) => Promise<void>;
+            }) => {
+                const local = await io.readLocal();
+                await io.readRemote();
+                await io.writeLocal(local);
+                await io.writeRemote(local);
+                return { status: 'success', stats: emptyStats, data: local };
+            });
+        };
+
+        configureFileSync();
+        await syncServiceModule.SyncService.performSync();
+
+        expect(hasPayloadTraceLog()).toBe(false);
+
+        await syncServiceModule.SyncService.resetForTests();
+        vi.clearAllMocks();
+        configureFileSync();
+        storeStateRef.current = {
+            ...storeStateRef.current,
+            settings: {
+                diagnostics: { loggingEnabled: true },
+            },
+        };
+
+        await syncServiceModule.SyncService.performSync();
+
+        expect(hasPayloadTraceLog()).toBe(true);
     });
 
     it('preserves attachment pre-sync mutations when local edits land during file attachment sync', async () => {
@@ -378,6 +765,7 @@ describe('desktop sync-service runtime', () => {
                 projects: [],
                 sections: [],
                 areas: [],
+                people: [],
                 settings: {},
             });
             return { status: 'success', stats: emptyStats, data: merged };
@@ -398,6 +786,7 @@ describe('desktop sync-service runtime', () => {
             projects: [],
             sections: [],
             areas: [],
+            people: [],
             settings: {
                 syncPreferences: { appearance: true },
                 syncPreferencesUpdatedAt: {
@@ -475,6 +864,7 @@ describe('desktop sync-service runtime', () => {
             projects: [],
             sections: [],
             areas: [],
+            people: [],
             settings: {
                 syncPreferences: { appearance: true },
                 theme: 'dark',
@@ -525,9 +915,10 @@ describe('desktop sync-service runtime', () => {
             projects: [],
             sections: [],
             areas: [],
+            people: [],
             settings: {},
         };
-        const remoteFingerprint = 'webdav:v1:etag="fast":mtime=:len=2';
+        const remoteFingerprint = 'webdav:v1:etag="fast"';
         const scope = computeStableValueFingerprint({
             backend: 'webdav',
             url: 'https://sync.example.com/data.json',
@@ -541,7 +932,7 @@ describe('desktop sync-service runtime', () => {
 
         storeStateRef.current = {
             ...storeStateRef.current,
-            _allTasks: [],
+            _allTasks: syncedData.tasks,
             _allProjects: [],
             _allSections: [],
             _allAreas: [],
@@ -582,10 +973,99 @@ describe('desktop sync-service runtime', () => {
         expect(headFetchMock.mock.calls.some(([input, init]) =>
             init?.method === 'HEAD' || (typeof Request !== 'undefined' && input instanceof Request && input.method === 'HEAD')
         )).toBe(true);
-        expect(storeStateRef.current.updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+        expect(headFetchMock.mock.calls).toHaveLength(1);
+        expect(invokeMock.mock.calls.some(([command]) => command === 'save_data')).toBe(false);
+        expect(JSON.parse(localStorage.getItem('mindwtr-local-sync-status-v1') ?? '{}')).toMatchObject({
             lastSyncStatus: 'success',
-            lastSyncError: undefined,
+        });
+        expect(storeStateRef.current.updateSettings).not.toHaveBeenCalled();
+        expect(fsMocks.readFile).not.toHaveBeenCalled();
+    });
+
+    it('reuses the fast-check local snapshot when falling back to a full WebDAV sync', async () => {
+        const syncServiceModule = await syncServiceModulePromise;
+        const syncedData: AppData = {
+            tasks: [],
+            projects: [],
+            sections: [],
+            areas: [],
+            people: [],
+            settings: {},
+        };
+        const remoteChangedData: AppData = {
+            ...syncedData,
+            settings: {
+                syncPreferences: { appearance: true },
+                theme: 'dark',
+            },
+        };
+        const cachedRemoteFingerprint = 'webdav:v1:etag="old"';
+        const freshRemoteFingerprint = 'webdav:v1:etag="new"';
+        const scope = computeStableValueFingerprint({
+            backend: 'webdav',
+            url: 'https://sync.example.com/data.json',
+            username: 'user',
+        });
+        const headFetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            expect(String(input)).toBe('https://sync.example.com/data.json');
+            expect(init?.method).toBe('HEAD');
+            return buildResponse(200, '', { etag: '"new"', 'content-length': '2' });
+        });
+
+        storeStateRef.current = {
+            ...storeStateRef.current,
+            _allTasks: [],
+            _allProjects: [],
+            _allSections: [],
+            _allAreas: [],
+            settings: {},
+        };
+        getInMemoryAppDataSnapshotMock.mockReturnValue(syncedData);
+        localStorage.setItem('mindwtr-fast-sync-state-v1', JSON.stringify({
+            scope,
+            localFingerprint: computeSyncPayloadFingerprint(syncedData),
+            remoteFingerprint: cachedRemoteFingerprint,
+            checkedAt: '2026-05-07T00:00:00.000Z',
         }));
+        invokeMock.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
+            if (command === 'get_sync_backend') return 'webdav';
+            if (command === 'create_data_snapshot') return undefined;
+            if (command === 'get_webdav_config') {
+                return {
+                    url: 'https://sync.example.com/data.json',
+                    username: 'user',
+                    password: 'pass',
+                    hasPassword: true,
+                    allowInsecureHttp: false,
+                };
+            }
+            if (command === 'get_data') return structuredClone(syncedData);
+            if (command === 'webdav_get_json') return structuredClone(remoteChangedData);
+            if (command === 'save_data') return undefined;
+            throw new Error(`Unexpected command: ${command} ${JSON.stringify(args)}`);
+        });
+        syncServiceModule.__syncServiceTestUtils.setDependenciesForTests({
+            getTauriFetch: async () => headFetchMock as unknown as typeof fetch,
+        });
+        performSyncCycleMock.mockImplementation(async (io: {
+            readLocal: () => Promise<AppData>;
+            readRemote: () => Promise<AppData | null>;
+        }) => {
+            const local = await io.readLocal();
+            const remote = await io.readRemote();
+            expect(local.tasks).toEqual([]);
+            expect(remote?.settings.theme).toBe('dark');
+            return { status: 'success', stats: emptyStats, data: remoteChangedData };
+        });
+
+        const result = await syncServiceModule.SyncService.performSync();
+
+        const getDataCalls = invokeMock.mock.calls.filter(([command]) => command === 'get_data');
+        expect(result).toEqual({ success: true, stats: emptyStats });
+        expect(getDataCalls).toHaveLength(1);
+        expect(performSyncCycleMock).toHaveBeenCalledTimes(1);
+        expect(headFetchMock).toHaveBeenCalled();
+        expect(freshRemoteFingerprint).not.toBe(cachedRemoteFingerprint);
     });
 
     it('falls back to browser fetch when native Dropbox download returns an empty body', async () => {

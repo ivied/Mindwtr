@@ -11,6 +11,7 @@ export type AppleRemindersImportSettings = {
   selectedListId?: string;
   selectedListTitle?: string;
   importedReminderIds: string[];
+  deleteImportedReminders: boolean;
 };
 
 export type AppleReminderList = {
@@ -21,6 +22,8 @@ export type AppleReminderList = {
 
 export type AppleRemindersImportResult = {
   importedCount: number;
+  deletedCount: number;
+  deleteFailedCount: number;
   skippedDuplicateCount: number;
   skippedCompletedCount: number;
   skippedEmptyTitleCount: number;
@@ -31,6 +34,7 @@ export type AddInboxTask = (title: string, props?: Partial<Task>) => Promise<Sto
 
 const DEFAULT_IMPORT_SETTINGS: AppleRemindersImportSettings = {
   importedReminderIds: [],
+  deleteImportedReminders: false,
 };
 
 const normalizeString = (value: unknown): string | undefined => {
@@ -77,6 +81,7 @@ export function normalizeAppleRemindersImportSettings(value: unknown): AppleRemi
     ...(selectedListId ? { selectedListId } : {}),
     ...(selectedListTitle ? { selectedListTitle } : {}),
     importedReminderIds,
+    deleteImportedReminders: raw.deleteImportedReminders === true,
   };
 }
 
@@ -140,10 +145,12 @@ export async function importAppleRemindersIntoInbox({
   addTask,
   listId,
   listTitle,
+  deleteImportedReminders,
 }: {
   addTask: AddInboxTask;
   listId: string;
   listTitle?: string;
+  deleteImportedReminders?: boolean;
 }): Promise<AppleRemindersImportResult> {
   if (Platform.OS !== 'ios') {
     throw new Error('Apple Reminders import is only available on iOS.');
@@ -161,9 +168,12 @@ export async function importAppleRemindersIntoInbox({
 
   const settings = await loadAppleRemindersImportSettings();
   const importedIds = new Set(settings.importedReminderIds);
+  const shouldDeleteImported = deleteImportedReminders ?? settings.deleteImportedReminders;
   const reminders = await Calendar.getRemindersAsync([normalizedListId], null, null, null);
   const result: AppleRemindersImportResult = {
     importedCount: 0,
+    deletedCount: 0,
+    deleteFailedCount: 0,
     skippedDuplicateCount: 0,
     skippedCompletedCount: 0,
     skippedEmptyTitleCount: 0,
@@ -201,12 +211,28 @@ export async function importAppleRemindersIntoInbox({
 
     result.importedCount += 1;
     importedIds.add(reminderKey);
+
+    if (shouldDeleteImported) {
+      const reminderId = normalizeString(reminder.id);
+      if (!reminderId) {
+        result.deleteFailedCount += 1;
+        continue;
+      }
+
+      try {
+        await Calendar.deleteReminderAsync(reminderId);
+        result.deletedCount += 1;
+      } catch {
+        result.deleteFailedCount += 1;
+      }
+    }
   }
 
   await saveAppleRemindersImportSettings({
     selectedListId: normalizedListId,
     ...(normalizeString(listTitle) ? { selectedListTitle: normalizeString(listTitle) } : {}),
     importedReminderIds: Array.from(importedIds),
+    deleteImportedReminders: shouldDeleteImported,
   });
 
   return result;

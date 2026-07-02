@@ -12,6 +12,7 @@ export const WEBDAV_ALLOW_WEAK_FINGERPRINT_KEY = 'mindwtr-webdav-allow-weak-fing
 export const CLOUD_URL_KEY = 'mindwtr-cloud-url';
 export const CLOUD_TOKEN_KEY = 'mindwtr-cloud-token';
 export const CLOUD_ALLOW_INSECURE_HTTP_KEY = 'mindwtr-cloud-allow-insecure-http';
+export const CLOUD_REMEMBER_TOKEN_KEY = 'mindwtr-cloud-remember-token';
 const CLOUD_PROVIDER_KEY = 'mindwtr-cloud-provider';
 const DEFAULT_DROPBOX_APP_KEY = String(import.meta.env.VITE_DROPBOX_APP_KEY || '').trim();
 
@@ -53,10 +54,11 @@ const setWebDavConfigLocal = (config: { url: string; username?: string; password
 };
 
 export const getCloudConfigLocal = (): CloudConfig => {
+    const rememberToken = localStorage.getItem(CLOUD_REMEMBER_TOKEN_KEY) === 'true';
     const sessionToken = sessionStorage.getItem(CLOUD_TOKEN_KEY) || '';
     const legacyLocalToken = localStorage.getItem(CLOUD_TOKEN_KEY) || '';
-    const token = sessionToken || legacyLocalToken;
-    if (!sessionToken && legacyLocalToken) {
+    const token = rememberToken ? (legacyLocalToken || sessionToken) : (sessionToken || legacyLocalToken);
+    if (!rememberToken && !sessionToken && legacyLocalToken) {
         sessionStorage.setItem(CLOUD_TOKEN_KEY, legacyLocalToken);
         localStorage.removeItem(CLOUD_TOKEN_KEY);
     }
@@ -64,18 +66,31 @@ export const getCloudConfigLocal = (): CloudConfig => {
         url: localStorage.getItem(CLOUD_URL_KEY) || '',
         token,
         allowInsecureHttp: localStorage.getItem(CLOUD_ALLOW_INSECURE_HTTP_KEY) === 'true',
+        rememberToken,
     };
 };
 
-const setCloudConfigLocal = (config: { url: string; token?: string; allowInsecureHttp?: boolean }) => {
+const setCloudConfigLocal = (config: { url: string; token?: string; allowInsecureHttp?: boolean; rememberToken?: boolean }) => {
+    const rememberToken = config.rememberToken === true;
     localStorage.setItem(CLOUD_URL_KEY, config.url);
     localStorage.setItem(CLOUD_ALLOW_INSECURE_HTTP_KEY, config.allowInsecureHttp === true ? 'true' : 'false');
+    if (rememberToken) {
+        localStorage.setItem(CLOUD_REMEMBER_TOKEN_KEY, 'true');
+    } else {
+        localStorage.removeItem(CLOUD_REMEMBER_TOKEN_KEY);
+    }
     if (config.token) {
-        sessionStorage.setItem(CLOUD_TOKEN_KEY, config.token);
+        if (rememberToken) {
+            localStorage.setItem(CLOUD_TOKEN_KEY, config.token);
+            sessionStorage.removeItem(CLOUD_TOKEN_KEY);
+        } else {
+            sessionStorage.setItem(CLOUD_TOKEN_KEY, config.token);
+            localStorage.removeItem(CLOUD_TOKEN_KEY);
+        }
     } else {
         sessionStorage.removeItem(CLOUD_TOKEN_KEY);
+        localStorage.removeItem(CLOUD_TOKEN_KEY);
     }
-    localStorage.removeItem(CLOUD_TOKEN_KEY);
 };
 
 const getCloudProviderLocal = (): CloudProvider => {
@@ -173,7 +188,7 @@ export async function readCloudConfig(
 }
 
 export async function writeCloudConfig(
-    config: { url: string; token?: string; allowInsecureHttp?: boolean },
+    config: { url: string; token?: string; allowInsecureHttp?: boolean; rememberToken?: boolean },
     deps: ConfigDeps,
 ): Promise<void> {
     if (!deps.isTauriRuntimeEnv()) {

@@ -31,6 +31,16 @@ export type ObsidianTaskNotesData = {
     bodyPreview: string | null;
 };
 
+export type ObsidianDataviewData = {
+    priority: TaskPriority | null;
+    dueDate: string | null;
+    scheduledDate: string | null;
+    contexts: string[];
+    projects: string[];
+    tags: string[];
+    timeEstimateMinutes: number | null;
+};
+
 export type ObsidianTask = {
     id: string;
     text: string;
@@ -41,6 +51,7 @@ export type ObsidianTask = {
     source: ObsidianSourceRef;
     format: ObsidianTaskFormat;
     taskNotesData?: ObsidianTaskNotesData;
+    dataviewData?: ObsidianDataviewData;
 };
 
 export type ObsidianFrontmatter = {
@@ -54,6 +65,7 @@ export type ParseObsidianTasksOptions = {
     vaultPath: string;
     relativeFilePath: string;
     fileModifiedAt: string;
+    dataviewMetadataEnabled?: boolean;
 };
 
 export type ParseObsidianTasksResult = {
@@ -65,6 +77,7 @@ const FENCE_RE = /^\s*(`{3,}|~{3,})/;
 const TASK_RE = /^([ \t]*)(?:[-*+])\s+\[( |x|X)\]\s+(.+)$/;
 const WIKI_LINK_RE = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
 const TAG_RE = /(^|\s)#([\p{L}\p{N}_/.:-]+)/gu;
+const DATAVIEW_FIELD_RE = /(^|[\s([])(project|projects|context|contexts|tag|tags|due|deadline|scheduled|start|startdate|priority|estimate|timeestimate|time-estimate)\s*::/gi;
 
 export const normalizeObsidianTagValue = (value: string): string => {
     const trimmed = value.trim();
@@ -148,6 +161,207 @@ export const extractObsidianWikiLinks = (text: string): string[] => {
     return uniqueObsidianStrings(links);
 };
 
+const normalizeDataviewKey = (key: string): string => key.trim().replace(/[-_\s]/g, '').toLowerCase();
+
+const stripDataviewValueWrapper = (value: string): string => {
+    let trimmed = value.trim();
+    while (trimmed.startsWith('[') && trimmed.endsWith(']') && !trimmed.startsWith('[[')) {
+        trimmed = trimmed.slice(1, -1).trim();
+    }
+    const wikiLinkMatch = trimmed.match(/^\[\[([^\]|]+)(?:\|([^\]]+))?\]\]$/);
+    if (wikiLinkMatch) {
+        return (wikiLinkMatch[2] || wikiLinkMatch[1] || '').trim();
+    }
+    return trimmed;
+};
+
+const splitDataviewListValue = (value: string): string[] => {
+    const normalized = stripDataviewValueWrapper(value);
+    if (!normalized) return [];
+    return normalized
+        .split(/[,;|]/)
+        .map(stripDataviewValueWrapper)
+        .map((item) => item.trim())
+        .filter(Boolean);
+};
+
+const normalizeDataviewToken = (value: string, prefix: '@' | '#' | null): string => {
+    const trimmed = stripDataviewValueWrapper(value).trim();
+    if (!trimmed) return '';
+    return prefix && trimmed.startsWith(prefix) ? trimmed.slice(1).trim() : trimmed;
+};
+
+const parseDataviewDate = (value: string): string | null => {
+    const normalized = stripDataviewValueWrapper(value).replace(/^date\((.+)\)$/i, '$1').trim();
+    const match = normalized.match(/\d{4}-\d{2}-\d{2}(?:[T ][^\s,\];)]+)?/);
+    return match?.[0] ?? null;
+};
+
+const normalizeDataviewPriority = (value: string): TaskPriority | null => {
+    const normalized = stripDataviewValueWrapper(value).trim().toLowerCase();
+    switch (normalized) {
+        case 'urgent':
+        case 'highest':
+        case 'p0':
+            return 'urgent';
+        case 'high':
+        case 'p1':
+            return 'high';
+        case 'medium':
+        case 'normal':
+        case 'p2':
+            return 'medium';
+        case 'low':
+        case 'lowest':
+        case 'p3':
+        case 'p4':
+            return 'low';
+        default:
+            return null;
+    }
+};
+
+const parseDataviewEstimateMinutes = (value: string): number | null => {
+    const normalized = stripDataviewValueWrapper(value).trim().toLowerCase();
+    const hoursMatch = normalized.match(/^(\d+(?:\.\d+)?)\s*h(?:ours?)?$/);
+    if (hoursMatch) {
+        const hours = Number(hoursMatch[1]);
+        return Number.isFinite(hours) && hours > 0 ? Math.round(hours * 60) : null;
+    }
+    const minutesMatch = normalized.match(/^(\d+)\s*m(?:in(?:ute)?s?)?$/);
+    if (minutesMatch) {
+        const minutes = Number(minutesMatch[1]);
+        return Number.isFinite(minutes) && minutes > 0 ? minutes : null;
+    }
+    const plainMinutes = Number(normalized);
+    return Number.isFinite(plainMinutes) && plainMinutes > 0 ? Math.round(plainMinutes) : null;
+};
+
+const findDataviewBracketEnd = (text: string, startIndex: number): number => {
+    for (let index = startIndex + 1; index < text.length; index += 1) {
+        if (text[index] === '[' && text[index + 1] === '[') {
+            const wikiEnd = text.indexOf(']]', index + 2);
+            if (wikiEnd === -1) return -1;
+            index = wikiEnd + 1;
+            continue;
+        }
+        if (text[index] === ']') return index;
+    }
+    return -1;
+};
+
+const collectBracketedDataviewFields = (text: string): Array<{ key: string; value: string; start: number; end: number }> => {
+    const fields: Array<{ key: string; value: string; start: number; end: number }> = [];
+    for (let index = 0; index < text.length; index += 1) {
+        if (text[index] !== '[' || text[index + 1] === '[') continue;
+        const end = findDataviewBracketEnd(text, index);
+        if (end === -1) break;
+        const content = text.slice(index + 1, end).trim();
+        const match = content.match(/^([A-Za-z][A-Za-z0-9_-]*)\s*::\s*(.+)$/s);
+        if (match) {
+            fields.push({
+                key: match[1] || '',
+                value: match[2] || '',
+                start: index,
+                end: end + 1,
+            });
+        }
+        index = end;
+    }
+    return fields;
+};
+
+const collectBareDataviewFields = (text: string): Array<{ key: string; value: string }> => {
+    const matches: Array<{ key: string; valueStart: number; fieldStart: number }> = [];
+    let match: RegExpExecArray | null;
+    DATAVIEW_FIELD_RE.lastIndex = 0;
+    while ((match = DATAVIEW_FIELD_RE.exec(text)) !== null) {
+        matches.push({
+            key: match[2] || '',
+            valueStart: DATAVIEW_FIELD_RE.lastIndex,
+            fieldStart: match.index + (match[1] || '').length,
+        });
+    }
+
+    return matches
+        .map((current, index) => {
+            const next = matches[index + 1];
+            const rawValue = text.slice(current.valueStart, next?.fieldStart ?? text.length);
+            const value = rawValue.replace(/[\s,;()[\]]+$/g, '').trim();
+            return { key: current.key, value };
+        })
+        .filter((field) => field.value.length > 0);
+};
+
+export const parseObsidianDataviewData = (text: string): ObsidianDataviewData | null => {
+    const bracketedFields = collectBracketedDataviewFields(text);
+    const bareSource = bracketedFields.reduce(
+        (current, field) => `${current.slice(0, field.start)}${' '.repeat(field.end - field.start)}${current.slice(field.end)}`,
+        text
+    );
+    const fields = [
+        ...bracketedFields.map(({ key, value }) => ({ key, value })),
+        ...collectBareDataviewFields(bareSource),
+    ];
+
+    const contexts: string[] = [];
+    const projects: string[] = [];
+    const tags: string[] = [];
+    let dueDate: string | null = null;
+    let scheduledDate: string | null = null;
+    let priority: TaskPriority | null = null;
+    let timeEstimateMinutes: number | null = null;
+
+    for (const field of fields) {
+        const key = normalizeDataviewKey(field.key);
+        if (!key) continue;
+        if (key === 'project' || key === 'projects') {
+            projects.push(...splitDataviewListValue(field.value));
+            continue;
+        }
+        if (key === 'context' || key === 'contexts') {
+            contexts.push(...splitDataviewListValue(field.value).map((item) => normalizeDataviewToken(item, '@')));
+            continue;
+        }
+        if (key === 'tag' || key === 'tags') {
+            tags.push(...splitDataviewListValue(field.value).map((item) => normalizeDataviewToken(item, '#')));
+            continue;
+        }
+        if ((key === 'due' || key === 'deadline') && !dueDate) {
+            dueDate = parseDataviewDate(field.value);
+            continue;
+        }
+        if ((key === 'scheduled' || key === 'start' || key === 'startdate') && !scheduledDate) {
+            scheduledDate = parseDataviewDate(field.value);
+            continue;
+        }
+        if (key === 'priority' && !priority) {
+            priority = normalizeDataviewPriority(field.value);
+            continue;
+        }
+        if ((key === 'estimate' || key === 'timeestimate') && !timeEstimateMinutes) {
+            timeEstimateMinutes = parseDataviewEstimateMinutes(field.value);
+        }
+    }
+
+    const normalizedContexts = uniqueObsidianStrings(contexts.filter(Boolean));
+    const normalizedProjects = uniqueObsidianStrings(projects.filter(Boolean));
+    const normalizedTags = uniqueObsidianStrings(tags.map(normalizeObsidianTagValue).filter(Boolean));
+    if (!dueDate && !scheduledDate && !priority && !timeEstimateMinutes && normalizedContexts.length === 0 && normalizedProjects.length === 0 && normalizedTags.length === 0) {
+        return null;
+    }
+
+    return {
+        priority,
+        dueDate,
+        scheduledDate,
+        contexts: normalizedContexts,
+        projects: normalizedProjects,
+        tags: normalizedTags,
+        timeEstimateMinutes,
+    };
+};
+
 export const parseObsidianNoteFrontmatter = (input: string): ObsidianFrontmatter => {
     const properties = parseObsidianFrontmatterProperties(input);
 
@@ -224,7 +438,10 @@ export const parseObsidianTasksFromMarkdown = (
         if (!text) continue;
 
         const lineNumber = split.bodyStartLineNumber + index;
-        const taskTags = uniqueObsidianStrings([...extractObsidianTags(text), ...frontmatter.tags]);
+        const dataviewData = options.dataviewMetadataEnabled
+            ? parseObsidianDataviewData(text)
+            : null;
+        const taskTags = uniqueObsidianStrings([...extractObsidianTags(text), ...frontmatter.tags, ...(dataviewData?.tags ?? [])]);
         tasks.push({
             id: buildObsidianTaskId(normalizedRelativePath, lineNumber),
             text,
@@ -241,6 +458,7 @@ export const parseObsidianTasksFromMarkdown = (
                 noteTags: frontmatter.tags,
             },
             format: 'inline',
+            ...(dataviewData ? { dataviewData } : {}),
         });
     }
 

@@ -46,6 +46,8 @@ const recurrenceText: Record<string, string> = {
     'keybindings.section.global': 'Global',
     'keybindings.section.taskList': 'Task list',
     'keybindings.quickAdd': 'Quick add',
+    'keybindings.globalQuickAdd': 'Global quick add',
+    'keybindings.inAppQuickAdd': 'In-app quick add',
     'keybindings.openSettings': 'Open settings',
     'keybindings.toggleSidebar': 'Toggle sidebar',
     'keybindings.toggleFocusMode': 'Toggle focus mode',
@@ -129,16 +131,40 @@ describe('Accessibility', () => {
 
     it('GlobalSearch should have no violations when open', async () => {
         vi.useFakeTimers();
-        const { container } = renderWithLanguage(<GlobalSearch onNavigate={vi.fn()} />);
+        renderWithLanguage(<GlobalSearch onNavigate={vi.fn()} />);
 
         await act(async () => {
             window.dispatchEvent(new Event('mindwtr:open-search'));
             await vi.advanceTimersByTimeAsync(50);
         });
 
-        expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+        const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]');
+        expect(dialog).not.toBeNull();
+        if (!dialog) throw new Error('Global search dialog did not open');
         vi.useRealTimers();
 
+        const results = await runAxe(dialog);
+        expect(results.violations).toHaveLength(0);
+    });
+
+    it('PomodoroPanel should have no violations with task linking enabled', async () => {
+        useTaskStore.setState((state) => ({
+            ...state,
+            settings: {
+                ...(state.settings ?? {}),
+                notificationsEnabled: false,
+                gtd: {
+                    ...(state.settings?.gtd ?? {}),
+                    pomodoro: {
+                        ...(state.settings?.gtd?.pomodoro ?? {}),
+                        linkTask: true,
+                    },
+                },
+            },
+            updateTask: vi.fn().mockResolvedValue(undefined),
+        }));
+
+        const { container } = renderWithLanguage(<PomodoroPanel tasks={[mockTask]} />);
         const results = await runAxe(container);
         expect(results.violations).toHaveLength(0);
     });

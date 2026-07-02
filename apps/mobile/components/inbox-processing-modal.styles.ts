@@ -155,6 +155,9 @@ export const styles = StyleSheet.create({
   stepContainer: {
     flex: 1,
   },
+  keyboardAvoidingContainer: {
+    flex: 1,
+  },
   stepContent: {
     flex: 1,
   },
@@ -399,6 +402,41 @@ export const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 10,
     paddingVertical: 8,
+  },
+  projectDecisionRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  projectDecisionButton: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  projectDecisionText: {
+    fontSize: 13,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  projectConversionCard: {
+    gap: 10,
+  },
+  projectFieldGroup: {
+    gap: 6,
+  },
+  projectFieldLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  projectConversionSubmit: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
+    paddingVertical: 12,
   },
   createProjectButton: {
     paddingHorizontal: 12,

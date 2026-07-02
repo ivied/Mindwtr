@@ -1,0 +1,4 @@
+- Sync et sauvegardes conservent mieux les personnes/assignations, avec des fixes pour doublons et suppressions de projets plus sures.
+- Les pieces jointes partagees sont preservees et les metadonnees des projets dupliques sont nettoyees.
+- Quick Capture, calendrier/projets, icones Android et grandes listes sont plus fluides.
+- La configuration FOSS est plus coherente.

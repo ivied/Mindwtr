@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   type Task,
@@ -10,14 +10,20 @@ import {
   type PomodoroAutoStartOptions,
   type PomodoroDurations,
   type PomodoroEvent,
+  type PomodoroSessionHistory,
   resetPomodoroState,
+  sanitizePomodoroSessionHistory,
   tFallback,
   useTaskStore,
 } from '@mindwtr/core';
 
 import { useLanguage } from '../contexts/language-context';
 import { useThemeColors } from '@/hooks/use-theme-colors';
-import { sendMobileImmediateNotification } from '../lib/notification-service';
+import { useFilledButtonColors } from '@/hooks/use-filled-button-colors';
+import {
+  cancelMobilePomodoroCompletionNotification,
+  scheduleMobilePomodoroCompletionNotification,
+} from '../lib/notification-service';
 import { logWarn } from '../lib/app-log';
 import {
   POMODORO_SESSION_STORAGE_KEY,
@@ -36,6 +42,7 @@ export function PomodoroPanel({
 }) {
   const { t } = useLanguage();
   const tc = useThemeColors();
+  const filledButton = useFilledButtonColors();
   const notificationsEnabled = useTaskStore((state) => state.settings.notificationsEnabled !== false);
   const customDurations = useTaskStore((state) => state.settings.gtd?.pomodoro?.customDurations);
   const linkTaskEnabled = useTaskStore((state) => state.settings.gtd?.pomodoro?.linkTask === true);
@@ -51,9 +58,9 @@ export function PomodoroPanel({
   const [selectedTaskId, setSelectedTaskId] = useState<string | undefined>(undefined);
   const [phaseEndsAt, setPhaseEndsAt] = useState<string | undefined>(undefined);
   const [lastEvent, setLastEvent] = useState<PomodoroEvent | null>(null);
+  const [sessionHistory, setSessionHistory] = useState<PomodoroSessionHistory>(() => sanitizePomodoroSessionHistory());
   const [isHydratingSession, setIsHydratingSession] = useState(true);
   const [isTaskPickerOpen, setIsTaskPickerOpen] = useState(false);
-  const previousEventRef = useRef<PomodoroEvent | null>(null);
   const hasHydratedRef = useRef(false);
   const persistedRemainingSeconds = timerState.isRunning && phaseEndsAt
     ? createPomodoroState(durations, timerState.phase, timerState.completedFocusSessions).remainingSeconds
@@ -78,6 +85,15 @@ export function PomodoroPanel({
     ));
     setSelectedTaskId((prev) => (prev === session.selectedTaskId ? prev : session.selectedTaskId));
     setPhaseEndsAt((prev) => (prev === session.phaseEndsAt ? prev : session.phaseEndsAt));
+    setSessionHistory((prev) => (
+      prev.totalCompletedFocusSessions === session.sessionHistory.totalCompletedFocusSessions
+        && Object.keys(prev.completedFocusSessionsByTaskId).length === Object.keys(session.sessionHistory.completedFocusSessionsByTaskId).length
+        && Object.entries(prev.completedFocusSessionsByTaskId).every(([taskId, count]) => (
+          session.sessionHistory.completedFocusSessionsByTaskId[taskId] === count
+        ))
+        ? prev
+        : session.sessionHistory
+    ));
     if (options?.emitEvent !== false) {
       setLastEvent(session.lastEvent);
     }
@@ -139,6 +155,7 @@ export function PomodoroPanel({
       selectedTaskId,
       phaseEndsAt,
       lastEvent: null,
+      sessionHistory,
     });
     void AsyncStorage.setItem(POMODORO_SESSION_STORAGE_KEY, JSON.stringify(payload)).catch((error) => {
       void logWarn('Failed to persist pomodoro session', {
@@ -150,6 +167,7 @@ export function PomodoroPanel({
     durations,
     phaseEndsAt,
     selectedTaskId,
+    sessionHistory,
     timerState.completedFocusSessions,
     timerState.isRunning,
     timerState.phase,
@@ -164,10 +182,11 @@ export function PomodoroPanel({
         timerState,
         selectedTaskId,
         phaseEndsAt,
+        sessionHistory,
       }, Date.now(), autoStartOptions));
     }, 1000);
     return () => clearInterval(interval);
-  }, [autoStartOptions, durations, phaseEndsAt, selectedTaskId, timerState]);
+  }, [autoStartOptions, durations, phaseEndsAt, selectedTaskId, sessionHistory, timerState]);
 
   const selectedTask = useMemo(
     () => (linkTaskEnabled && selectedTaskId ? tasks.find((task) => task.id === selectedTaskId) : undefined),
@@ -175,35 +194,40 @@ export function PomodoroPanel({
   );
   const presetOptions = useMemo(() => getPomodoroPresetOptions(customDurations), [customDurations]);
 
-  const cardTitle = tFallback(t, 'pomodoro.title', 'Pomodoro Focus');
+  const cardTitle = tFallback(t, 'pomodoro.mobileTitle', 'Pomodoro Timer');
   const focusDoneLabel = tFallback(t, 'pomodoro.focusComplete', 'Focus session complete. Take a short break.');
   const breakDoneLabel = tFallback(t, 'pomodoro.breakComplete', 'Break complete. Ready for the next focus session.');
   const phaseLabel = timerState.phase === 'focus'
-    ? tFallback(t, 'pomodoro.phaseFocus', 'Focus session')
-    : tFallback(t, 'pomodoro.phaseBreak', 'Break');
+    ? tFallback(t, 'pomodoro.phaseFocusShort', 'Focus')
+    : tFallback(t, 'pomodoro.phaseBreakShort', 'Break');
   const noTaskLabel = tFallback(t, 'pomodoro.noTask', 'No available focus task');
   const loadingLabel = tFallback(t, 'common.loading', 'Loading...');
   const sessionsDoneLabel = tFallback(t, 'pomodoro.sessionsDone', 'Focus sessions completed');
   const pauseLabel = tFallback(t, 'common.pause', 'Pause');
   const startLabel = tFallback(t, 'common.start', 'Start');
   const resetLabel = tFallback(t, 'common.reset', 'Reset');
-  const switchLabel = tFallback(t, 'pomodoro.switchPhase', 'Switch');
+  const switchLabel = timerState.phase === 'focus'
+    ? tFallback(t, 'pomodoro.switchToBreak', 'Switch to Break')
+    : tFallback(t, 'pomodoro.switchToFocus', 'Switch to Focus');
   const markDoneLabel = tFallback(t, 'pomodoro.markTaskDone', 'Mark task done');
   const selectedTaskLabel = tFallback(t, 'pomodoro.selectedTask', 'Timer task');
   const timerOnlyLabel = tFallback(t, 'pomodoro.timerOnly', 'Timer only');
   const changeTaskLabel = selectedTask ? tFallback(t, 'common.change', 'Change') : tFallback(t, 'pomodoro.linkTask', 'Link task');
   const taskDoneShortLabel = tFallback(t, 'pomodoro.taskDoneShort', 'Task done');
+  const timerIsRunning = timerState.isRunning;
+  const timerPhase = timerState.phase;
 
   useEffect(() => {
-    const previous = previousEventRef.current;
-    if (lastEvent && lastEvent !== previous && notificationsEnabled) {
-      const message = lastEvent === 'focus-finished' ? focusDoneLabel : breakDoneLabel;
-      void sendMobileImmediateNotification(cardTitle, message, {
-        phase: lastEvent === 'focus-finished' ? 'focus-complete' : 'break-complete',
-      });
+    if (!notificationsEnabled || !timerIsRunning || !phaseEndsAt) {
+      void cancelMobilePomodoroCompletionNotification();
+      return;
     }
-    previousEventRef.current = lastEvent;
-  }, [breakDoneLabel, cardTitle, focusDoneLabel, lastEvent, notificationsEnabled]);
+    const fireAt = new Date(phaseEndsAt);
+    const message = timerPhase === 'focus' ? focusDoneLabel : breakDoneLabel;
+    void scheduleMobilePomodoroCompletionNotification(cardTitle, message, fireAt, {
+      phase: timerPhase === 'focus' ? 'focus-complete' : 'break-complete',
+    });
+  }, [breakDoneLabel, cardTitle, focusDoneLabel, notificationsEnabled, phaseEndsAt, timerIsRunning, timerPhase]);
 
   const handleApplyPreset = (focusMinutes: number, breakMinutes: number) => {
     const nextDurations = { focusMinutes, breakMinutes };
@@ -212,6 +236,7 @@ export function PomodoroPanel({
       timerState,
       selectedTaskId,
       phaseEndsAt,
+      sessionHistory,
     }, Date.now(), autoStartOptions);
     applyResolvedSession({
       ...session,
@@ -228,6 +253,7 @@ export function PomodoroPanel({
       timerState,
       selectedTaskId,
       phaseEndsAt,
+      sessionHistory,
     }, Date.now(), autoStartOptions);
     if (session.lastEvent) {
       applyResolvedSession(session);
@@ -245,6 +271,7 @@ export function PomodoroPanel({
       timerState,
       selectedTaskId,
       phaseEndsAt,
+      sessionHistory,
     }, Date.now(), autoStartOptions);
     applyResolvedSession({
       ...session,
@@ -260,6 +287,7 @@ export function PomodoroPanel({
       timerState,
       selectedTaskId,
       phaseEndsAt,
+      sessionHistory,
     }, Date.now(), autoStartOptions);
     applyResolvedSession({
       ...session,
@@ -285,15 +313,8 @@ export function PomodoroPanel({
         <View style={styles.headerText}>
           <Text style={[styles.title, { color: tc.text }]}>{cardTitle}</Text>
         </View>
-        <View
-          style={[
-            styles.phaseBadge,
-            timerState.phase === 'focus'
-              ? { backgroundColor: '#2563EB20', borderColor: '#2563EB', }
-              : { backgroundColor: '#05966920', borderColor: '#059669', },
-          ]}
-        >
-          <Text style={[styles.phaseBadgeText, { color: timerState.phase === 'focus' ? '#2563EB' : '#059669' }]}>
+        <View style={styles.phaseStatus}>
+          <Text style={[styles.phaseStatusText, { color: timerState.phase === 'focus' ? '#2563EB' : '#059669' }]}>
             {phaseLabel}
           </Text>
         </View>
@@ -383,12 +404,12 @@ export function PomodoroPanel({
             styles.actionPrimary,
             {
               opacity: isHydratingSession ? 0.5 : 1,
-              backgroundColor: tc.tint,
-              borderColor: tc.tint,
+              backgroundColor: filledButton.backgroundColor,
+              borderColor: filledButton.backgroundColor,
             },
           ]}
         >
-          <Text style={[styles.actionPrimaryText, { color: tc.onTint }]}>
+          <Text style={[styles.actionPrimaryText, { color: filledButton.textColor ?? tc.onTint }]}>
             {timerState.isRunning ? pauseLabel : startLabel}
           </Text>
         </Pressable>
@@ -402,6 +423,8 @@ export function PomodoroPanel({
           </Text>
         </Pressable>
         <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={switchLabel}
           onPress={handleSwitchPhase}
           disabled={isHydratingSession}
           style={[styles.actionSecondary, { borderColor: tc.border, backgroundColor: tc.filterBg }]}
@@ -448,40 +471,48 @@ export function PomodoroPanel({
                   {timerOnlyLabel}
                 </Text>
               </Pressable>
-              <ScrollView style={styles.taskPickerList} contentContainerStyle={styles.taskPickerListContent}>
-                {tasks.length === 0 ? (
-                  <Text style={[styles.noTaskText, { color: tc.secondaryText }]}>{noTaskLabel}</Text>
-                ) : (
-                  tasks.map((task) => {
-                    const selected = task.id === selectedTaskId;
-                    return (
-                      <Pressable
-                        key={task.id}
-                        accessibilityRole="button"
-                        accessibilityState={{ selected }}
-                        onPress={() => {
-                          setSelectedTaskId(task.id);
-                          setIsTaskPickerOpen(false);
-                        }}
-                        style={[
-                          styles.taskPickerOption,
-                          {
-                            borderColor: selected ? tc.tint : tc.border,
-                            backgroundColor: selected ? `${tc.tint}18` : tc.filterBg,
-                          },
-                        ]}
+              <FlatList
+                data={tasks}
+                renderItem={({ item: task }) => {
+                  const selected = task.id === selectedTaskId;
+                  return (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}
+                      onPress={() => {
+                        setSelectedTaskId(task.id);
+                        setIsTaskPickerOpen(false);
+                      }}
+                      style={[
+                        styles.taskPickerOption,
+                        {
+                          borderColor: selected ? tc.tint : tc.border,
+                          backgroundColor: selected ? `${tc.tint}18` : tc.filterBg,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[styles.taskPickerOptionText, { color: selected ? tc.tint : tc.text }]}
+                        numberOfLines={2}
                       >
-                        <Text
-                          style={[styles.taskPickerOptionText, { color: selected ? tc.tint : tc.text }]}
-                          numberOfLines={2}
-                        >
-                          {task.title}
-                        </Text>
-                      </Pressable>
-                    );
-                  })
-                )}
-              </ScrollView>
+                        {task.title}
+                      </Text>
+                    </Pressable>
+                  );
+                }}
+                keyExtractor={(task) => task.id}
+                style={styles.taskPickerList}
+                contentContainerStyle={styles.taskPickerListContent}
+                initialNumToRender={12}
+                maxToRenderPerBatch={12}
+                windowSize={5}
+                updateCellsBatchingPeriod={50}
+                removeClippedSubviews={false}
+                showsVerticalScrollIndicator={false}
+                ListEmptyComponent={
+                  <Text style={[styles.noTaskText, { color: tc.secondaryText }]}>{noTaskLabel}</Text>
+                }
+              />
             </View>
           </View>
         </Modal>
@@ -520,15 +551,13 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
   },
-  phaseBadge: {
-    borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+  phaseStatus: {
+    paddingTop: 2,
   },
-  phaseBadgeText: {
+  phaseStatusText: {
     fontSize: 11,
     fontWeight: '700',
+    textTransform: 'uppercase',
   },
   presetRow: {
     flexDirection: 'row',

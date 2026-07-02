@@ -1,0 +1,3 @@
+- Send feedback from Settings in configured builds.
+- Custom time estimates, project sequencing hints, urgency colors, and faster large task lists improve planning.
+- Attachment sync, legacy attachment upgrades, filter search, notification task taps, context automation, and recurring follow-ups are more reliable.

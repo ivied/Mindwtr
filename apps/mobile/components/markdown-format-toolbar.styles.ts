@@ -14,6 +14,13 @@ export const markdownFormatToolbarStyles = StyleSheet.create({
         paddingTop: 4,
         paddingBottom: 4,
     },
+    inlineBar: {
+        borderWidth: StyleSheet.hairlineWidth,
+        borderRadius: 10,
+        marginTop: 8,
+        paddingHorizontal: 6,
+        paddingVertical: 4,
+    },
     scroll: {
         flex: 1,
     },
@@ -23,25 +30,25 @@ export const markdownFormatToolbarStyles = StyleSheet.create({
     },
     content: {
         alignItems: 'center',
-        gap: 4,
+        gap: 2,
         paddingVertical: 1,
-        paddingRight: 8,
+        paddingRight: 4,
     },
     trailingActions: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginLeft: 4,
+        marginLeft: 2,
     },
     divider: {
         width: StyleSheet.hairlineWidth,
         height: 20,
-        marginHorizontal: 4,
+        marginHorizontal: 3,
         opacity: 0.8,
     },
     button: {
-        minWidth: 32,
+        minWidth: 28,
         minHeight: 30,
-        paddingHorizontal: 7,
+        paddingHorizontal: 5,
         borderRadius: 7,
         alignItems: 'center',
         justifyContent: 'center',
@@ -52,8 +59,5 @@ export const markdownFormatToolbarStyles = StyleSheet.create({
     buttonText: {
         fontSize: 11,
         fontWeight: '700',
-    },
-    buttonTextItalic: {
-        fontStyle: 'italic',
     },
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { arOverrides } from './locales/ar';
+import { csOverrides } from './locales/cs';
 import { deOverrides } from './locales/de';
 import { en } from './locales/en';
 import { esOverrides } from './locales/es';
@@ -13,9 +14,10 @@ import { plOverrides } from './locales/pl';
 import { ptOverrides } from './locales/pt';
 import { ruOverrides } from './locales/ru';
 import { trOverrides } from './locales/tr';
+import { viOverrides } from './locales/vi';
 import { zhHans } from './locales/zh-Hans';
 import { zhHant } from './locales/zh-Hant';
-import { hasTranslatableEnglishText } from './locale-quality';
+import { allowedEnglishMirrorKeysByLocale, hasTranslatableEnglishText, isAllowedEnglishMirrorKey } from './locale-quality';
 
 const fullParityLocales: Record<string, Record<string, string>> = {
     zh: zhHans,
@@ -24,6 +26,7 @@ const fullParityLocales: Record<string, Record<string, string>> = {
 
 const overrideLocales: Record<string, Record<string, string>> = {
     ar: arOverrides,
+    cs: csOverrides,
     de: deOverrides,
     es: esOverrides,
     fr: frOverrides,
@@ -36,6 +39,7 @@ const overrideLocales: Record<string, Record<string, string>> = {
     pt: ptOverrides,
     ru: ruOverrides,
     tr: trOverrides,
+    vi: viOverrides,
 };
 
 const nonLatinOverrideLocales: Record<string, Record<string, string>> = {
@@ -48,6 +52,7 @@ const nonLatinOverrideLocales: Record<string, Record<string, string>> = {
 
 const overrideLocaleCoverageFloors: Record<string, number> = {
     ar: 69,
+    cs: 99,
     de: 71,
     es: 64,
     fr: 70,
@@ -56,10 +61,11 @@ const overrideLocaleCoverageFloors: Record<string, number> = {
     ja: 69,
     ko: 68,
     nl: 22,
-    pl: 71,
+    pl: 70,
     pt: 71,
     ru: 69,
-    tr: 72,
+    tr: 71,
+    vi: 99,
 };
 
 const shippedLocales: Record<string, Record<string, string>> = {
@@ -87,6 +93,25 @@ describe('locale parity', () => {
         }
     });
 
+    it('keeps promoted task action labels translated in every shipped locale', () => {
+        const taskActionKeys = [
+            'task.createProjectFromTask',
+            'task.duplicateFailed',
+            'task.promoteToProjectFailed',
+        ];
+
+        for (const [language, translations] of Object.entries(shippedLocales)) {
+            const missing = taskActionKeys.filter((key) => !translations[key]);
+            expect(missing, `Missing promoted task action translations in ${language}`).toEqual([]);
+        }
+    });
+
+    it('keeps desktop search scope hint translated in every shipped locale', () => {
+        for (const [language, translations] of Object.entries(shippedLocales)) {
+            expect(translations['search.scopeHint'], `Missing desktop search scope hint in ${language}`).toBeTruthy();
+        }
+    });
+
     it('keeps shipped locales limited to known English keys', () => {
         const englishKeys = new Set(Object.keys(en));
 
@@ -99,9 +124,23 @@ describe('locale parity', () => {
     it('does not hide untranslated copy behind verbatim English placeholders', () => {
         for (const [language, translations] of Object.entries(shippedLocales)) {
             const placeholders = Object.keys(translations).filter((key) => (
-                translations[key] === en[key] && hasTranslatableEnglishText(en[key])
+                translations[key] === en[key]
+                && hasTranslatableEnglishText(en[key])
+                && !isAllowedEnglishMirrorKey(language, key)
             ));
             expect(placeholders, `Verbatim English placeholders in ${language}`).toEqual([]);
+        }
+    });
+
+    it('keeps mirrored-English allow-lists limited to reviewed matching keys', () => {
+        for (const [language, allowedKeys] of Object.entries(allowedEnglishMirrorKeysByLocale)) {
+            const translations = shippedLocales[language];
+            expect(translations, `Known locale for mirrored-English allow-list ${language}`).toBeDefined();
+
+            const staleKeys = allowedKeys.filter((key) => (
+                !translations?.[key] || translations[key] !== en[key] || !hasTranslatableEnglishText(en[key])
+            ));
+            expect(staleKeys, `Stale mirrored-English allow-list keys in ${language}`).toEqual([]);
         }
     });
 

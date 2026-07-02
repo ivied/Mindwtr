@@ -1,0 +1,12 @@
+<en-US>
+Mindwtr 0.9.5 adds task locations to editing, filtering, search, and calendar-created tasks. Markdown editing is steadier with blank-line previews and code-block copy. Calendar sync is more consistent, Focus follows section-scoped sequential projects, and mobile sync avoids stale unchanged-skip checks.
+</en-US>
+<de-DE>
+Mindwtr 0.9.5 ergaenzt Aufgabenorte in Bearbeitung, Filtern, Suche und Kalenderaufgaben. Markdown-Bearbeitung ist stabiler mit Leerzeilen-Vorschau und Codeblock-Kopie. Kalender-Sync ist konsistenter, Focus folgt abschnittsgebundenen Sequenzen und mobile Sync vermeidet veraltete Unchanged-Skip-Pruefungen.
+</de-DE>
+<es-ES>
+Mindwtr 0.9.5 agrega ubicaciones de tareas en edicion, filtros, busqueda y tareas creadas desde calendario. Markdown es mas estable con vista de lineas en blanco y copia de bloques de codigo. Sync de calendario es mas consistente, Focus sigue secuencias por seccion y sync movil evita saltos obsoletos.
+</es-ES>
+<zh-CN>
+Mindwtr 0.9.5 将任务位置加入编辑、筛选、搜索和从日历创建的任务。Markdown 编辑更稳定，预览会保留空行，也可复制代码块。日历同步更一致，Focus 支持按区段顺序推进，移动端同步会避免过期的未变更跳过判断。
+</zh-CN>

@@ -1,0 +1,12 @@
+<en-US>
+Mindwtr 0.9.6 adds task-list filters, Android context automation intents, better Markdown snippets, and keyboard-safe editing. The Markdown toolbar now stays above the keyboard with adaptive buttons, checklist editing scrolls into view, and project next-action prompts handle errors more clearly.
+</en-US>
+<de-DE>
+Mindwtr 0.9.6 bringt Aufgabenlisten-Filter, Android-Kontextautomation, bessere Markdown-Ausschnitte und tastatursichere Bearbeitung. Die Markdown-Leiste bleibt ueber der Tastatur, die Tasten passen sich an, Checklisten scrollen sichtbar und Projekt-Prompts melden Fehler klarer.
+</de-DE>
+<es-ES>
+Mindwtr 0.9.6 agrega filtros de listas, automatizacion de contextos en Android, mejores fragmentos Markdown y edicion segura con teclado. La barra Markdown queda sobre el teclado, los botones se adaptan, las listas se desplazan a la vista y los avisos de proyecto muestran errores.
+</es-ES>
+<zh-CN>
+Mindwtr 0.9.6 新增任务列表筛选、Android 上下文自动化意图、更好的 Markdown 摘要和键盘安全编辑。Markdown 工具栏会停在键盘上方，按钮自适应尺寸，清单编辑会滚动到可见位置，项目下一步提示也会更清楚地显示错误。
+</zh-CN>

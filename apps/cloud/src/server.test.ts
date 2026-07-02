@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import type { AppData, Task } from '@mindwtr/core';
+import { cloudHeadJson, cloudPutJson, type AppData, type Task } from '@mindwtr/core';
 import { corsOrigin, errorResponse, preflightResponse } from './server-config';
 import { __cloudTestUtils, startCloudServer } from './server';
 
@@ -49,6 +49,7 @@ describe('cloud server utils', () => {
         expect(__cloudTestUtils.parseAllowedAuthTokens('')).toBeNull();
         const tokens = __cloudTestUtils.parseAllowedAuthTokens('alpha, beta ,gamma');
         expect(tokens?.size).toBe(3);
+        expect(tokens?.digests.every((digest) => digest.length === 32)).toBe(true);
         expect(__cloudTestUtils.isAuthorizedToken('beta', tokens || null)).toBe(true);
         expect(__cloudTestUtils.isAuthorizedToken('delta', tokens || null)).toBe(false);
         expect(__cloudTestUtils.isAuthorizedToken('any', null)).toBe(true);
@@ -66,40 +67,40 @@ describe('cloud server utils', () => {
                 MINDWTR_CLOUD_AUTH_TOKENS: 'alpha,beta',
             });
             expect(primaryOnly).not.toBeNull();
-            expect(primaryOnly?.has('alpha')).toBe(true);
-            expect(primaryOnly?.has('beta')).toBe(true);
+            expect(__cloudTestUtils.isAuthorizedToken('alpha', primaryOnly)).toBe(true);
+            expect(__cloudTestUtils.isAuthorizedToken('beta', primaryOnly)).toBe(true);
 
             const legacyOnly = __cloudTestUtils.resolveAllowedAuthTokensFromEnv({
                 MINDWTR_CLOUD_TOKEN: 'legacy-token',
             });
             expect(legacyOnly).not.toBeNull();
-            expect(legacyOnly?.has('legacy-token')).toBe(true);
+            expect(__cloudTestUtils.isAuthorizedToken('legacy-token', legacyOnly)).toBe(true);
 
             const combined = __cloudTestUtils.resolveAllowedAuthTokensFromEnv({
                 MINDWTR_CLOUD_AUTH_TOKENS: 'new-token',
                 MINDWTR_CLOUD_TOKEN: 'legacy-token',
             });
-            expect(combined?.has('new-token')).toBe(true);
-            expect(combined?.has('legacy-token')).toBe(true);
+            expect(__cloudTestUtils.isAuthorizedToken('new-token', combined)).toBe(true);
+            expect(__cloudTestUtils.isAuthorizedToken('legacy-token', combined)).toBe(true);
 
             const fileOnly = __cloudTestUtils.resolveAllowedAuthTokensFromEnv({
                 MINDWTR_CLOUD_AUTH_TOKENS_FILE: authTokensFile,
             });
-            expect(fileOnly?.has('file-alpha')).toBe(true);
-            expect(fileOnly?.has('file-beta')).toBe(true);
+            expect(__cloudTestUtils.isAuthorizedToken('file-alpha', fileOnly)).toBe(true);
+            expect(__cloudTestUtils.isAuthorizedToken('file-beta', fileOnly)).toBe(true);
 
             const legacyFileOnly = __cloudTestUtils.resolveAllowedAuthTokensFromEnv({
                 MINDWTR_CLOUD_TOKEN_FILE: legacyTokenFile,
             });
-            expect(legacyFileOnly?.has('legacy-file-token')).toBe(true);
+            expect(__cloudTestUtils.isAuthorizedToken('legacy-file-token', legacyFileOnly)).toBe(true);
 
             const mixedWithFile = __cloudTestUtils.resolveAllowedAuthTokensFromEnv({
                 MINDWTR_CLOUD_AUTH_TOKENS: 'inline-token',
                 MINDWTR_CLOUD_AUTH_TOKENS_FILE: authTokensFile,
             });
-            expect(mixedWithFile?.has('inline-token')).toBe(true);
-            expect(mixedWithFile?.has('file-alpha')).toBe(true);
-            expect(mixedWithFile?.has('file-beta')).toBe(true);
+            expect(__cloudTestUtils.isAuthorizedToken('inline-token', mixedWithFile)).toBe(true);
+            expect(__cloudTestUtils.isAuthorizedToken('file-alpha', mixedWithFile)).toBe(true);
+            expect(__cloudTestUtils.isAuthorizedToken('file-beta', mixedWithFile)).toBe(true);
 
             const allowAny = __cloudTestUtils.resolveAllowedAuthTokensFromEnv({
                 MINDWTR_CLOUD_ALLOW_ANY_TOKEN: 'true',
@@ -364,7 +365,11 @@ describe('cloud server utils', () => {
     test('rejects reserved task creation props', () => {
         expect(__cloudTestUtils.validateTaskCreationProps({
             status: 'next',
+            energyLevel: 'medium',
+            assignedTo: 'person-1',
             projectId: 'p1',
+            showFutureRecurrence: true,
+            suppressMindwtrReminders: true,
         }).ok).toBe(true);
 
         const invalid = __cloudTestUtils.validateTaskCreationProps({
@@ -382,7 +387,10 @@ describe('cloud server utils', () => {
         expect(__cloudTestUtils.validateTaskPatchProps({
             title: 'Renamed',
             status: 'next',
+            energyLevel: 'low',
+            assignedTo: 'person-2',
             order: 1,
+            suppressMindwtrReminders: false,
         }).ok).toBe(true);
 
         const invalid = __cloudTestUtils.validateTaskPatchProps({
@@ -395,6 +403,78 @@ describe('cloud server utils', () => {
         expect(invalid.error).toContain('id');
         expect(invalid.error).toContain('createdAt');
         expect(invalid.error).toContain('arbitrary');
+    });
+
+    test('validates schedule task prop values before REST writes', () => {
+        expect(__cloudTestUtils.validateTaskCreationProps({
+            status: 'next',
+            repeatReminderMinutes: 15,
+            relativeStartOffset: { amount: -3, unit: 'day' },
+            recurrence: { rule: 'weekly', byDay: ['MO'] },
+        }).ok).toBe(true);
+        expect(__cloudTestUtils.validateTaskPatchProps({
+            repeatReminderMinutes: 0,
+            recurrence: 'FREQ=DAILY;INTERVAL=2',
+        }).ok).toBe(true);
+
+        const invalidRepeat = __cloudTestUtils.validateTaskCreationProps({ repeatReminderMinutes: 7 });
+        expect(invalidRepeat.ok).toBe(false);
+        if (invalidRepeat.ok) throw new Error('Expected invalid repeatReminderMinutes');
+        expect(invalidRepeat.error).toContain('repeatReminderMinutes');
+
+        const invalidOffset = __cloudTestUtils.validateTaskPatchProps({ relativeStartOffset: { amount: 3, unit: 'day' } });
+        expect(invalidOffset.ok).toBe(false);
+        if (invalidOffset.ok) throw new Error('Expected invalid relativeStartOffset');
+        expect(invalidOffset.error).toContain('relativeStartOffset');
+
+        const invalidRecurrence = __cloudTestUtils.validateTaskPatchProps({ recurrence: { rule: 'daily', arbitrary: true } });
+        expect(invalidRecurrence.ok).toBe(false);
+        if (invalidRecurrence.ok) throw new Error('Expected invalid recurrence');
+        expect(invalidRecurrence.error).toContain('recurrence');
+
+        const invalidRecurrenceValue = __cloudTestUtils.validateTaskPatchProps({ recurrence: { rule: 'weekly', byDay: ['NOPE'] } });
+        expect(invalidRecurrenceValue.ok).toBe(false);
+        if (invalidRecurrenceValue.ok) throw new Error('Expected invalid recurrence value');
+        expect(invalidRecurrenceValue.error).toContain('recurrence');
+    });
+
+    test('validates schedule task prop values in app data snapshots', () => {
+        const baseTask = makeTestTask({ id: 't1', title: 'Task' });
+
+        const valid = __cloudTestUtils.validateAppData({
+            tasks: [{
+                ...baseTask,
+                repeatReminderMinutes: 15,
+                relativeStartOffset: { amount: -3, unit: 'day' },
+                recurrence: { rule: 'weekly', byDay: ['MO'] },
+            }],
+            projects: [],
+        });
+        expect(valid.ok).toBe(true);
+
+        const invalidRepeat = __cloudTestUtils.validateAppData({
+            tasks: [{ ...baseTask, repeatReminderMinutes: 7 }],
+            projects: [],
+        });
+        expect(invalidRepeat.ok).toBe(false);
+        if (invalidRepeat.ok) throw new Error('Expected invalid repeatReminderMinutes');
+        expect(invalidRepeat.error).toContain('repeatReminderMinutes');
+
+        const invalidOffset = __cloudTestUtils.validateAppData({
+            tasks: [{ ...baseTask, relativeStartOffset: { amount: 3, unit: 'day' } }],
+            projects: [],
+        });
+        expect(invalidOffset.ok).toBe(false);
+        if (invalidOffset.ok) throw new Error('Expected invalid relativeStartOffset');
+        expect(invalidOffset.error).toContain('relativeStartOffset');
+
+        const invalidRecurrence = __cloudTestUtils.validateAppData({
+            tasks: [{ ...baseTask, recurrence: { rule: 'weekly', byDay: ['NOPE'] } }],
+            projects: [],
+        });
+        expect(invalidRecurrence.ok).toBe(false);
+        if (invalidRecurrence.ok) throw new Error('Expected invalid recurrence');
+        expect(invalidRecurrence.error).toContain('recurrence');
     });
 
     test('validates settings.attachments.pendingRemoteDeletes structure', () => {
@@ -460,6 +540,8 @@ describe('cloud server utils', () => {
             duplex: 'half' as RequestDuplex,
         });
         const parsed = await __cloudTestUtils.readJsonBody(req, 10);
+        expect(__cloudTestUtils.isBodyReadError(parsed)).toBe(true);
+        if (!__cloudTestUtils.isBodyReadError(parsed)) throw new Error('Expected body read error');
         expect(parsed.__mindwtrError.message).toBe('Payload too large');
         expect(parsed.__mindwtrError.status).toBe(413);
     });
@@ -481,6 +563,8 @@ describe('cloud server utils', () => {
 
         controller.abort(new Error('Request timed out'));
         const parsed = await __cloudTestUtils.readJsonBody(req, 1024, controller.signal);
+        expect(__cloudTestUtils.isBodyReadError(parsed)).toBe(true);
+        if (!__cloudTestUtils.isBodyReadError(parsed)) throw new Error('Expected body read error');
         expect(parsed.__mindwtrError.message).toBe('Request timed out');
         expect(parsed.__mindwtrError.status).toBe(408);
     });
@@ -925,6 +1009,271 @@ describe('cloud server api', () => {
         expect(await response.text()).toBe('');
     });
 
+    test('returns post-write metadata for PUT /v1/data', async () => {
+        const response = await fetch(`${baseUrl}/v1/data`, {
+            method: 'PUT',
+            headers: {
+                ...authHeaders,
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                tasks: [],
+                projects: [],
+                sections: [],
+                areas: [],
+                settings: {},
+            } satisfies AppData),
+        });
+
+        expect(response.status).toBe(200);
+        const body = await response.json();
+        expect(body.ok).toBe(true);
+        expect(body.etag).toMatch(/^W\/"mindwtr-/);
+        expect(body.remoteFingerprint).toBe(`cloud:v1:etag=${body.etag}`);
+        expect(body.serverMergedRemoteData).toBe(false);
+        expect(body.contentLength).toBeTruthy();
+        expect(response.headers.get('etag')).toBe(body.etag);
+        expect(response.headers.get('access-control-expose-headers')).toContain('ETag');
+    });
+
+    test('marks PUT /v1/data when existing server data contributes to the stored merge', async () => {
+        const seedData: AppData = {
+            tasks: [makeTestTask({ id: 'server-only', title: 'Server Only' })],
+            projects: [],
+            sections: [],
+            areas: [],
+            settings: {},
+        };
+        const seedResponse = await fetch(`${baseUrl}/v1/data`, {
+            method: 'PUT',
+            headers: {
+                ...authHeaders,
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify(seedData),
+        });
+        expect(seedResponse.status).toBe(200);
+
+        const staleResponse = await fetch(`${baseUrl}/v1/data`, {
+            method: 'PUT',
+            headers: {
+                ...authHeaders,
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                tasks: [],
+                projects: [],
+                sections: [],
+                areas: [],
+                settings: {},
+            } satisfies AppData),
+        });
+
+        expect(staleResponse.status).toBe(200);
+        const body = await staleResponse.json();
+        expect(body.serverMergedRemoteData).toBe(true);
+        expect(body.remoteFingerprint).toBe(`cloud:v1:etag=${body.etag}`);
+
+        const getResponse = await fetch(`${baseUrl}/v1/data`, { headers: authHeaders });
+        const stored = await getResponse.json() as AppData;
+        expect(stored.tasks.map((task) => task.id)).toEqual(['server-only']);
+    });
+
+    test('auth failure throttling never bypasses token checks for PUT /v1/data', async () => {
+        let firstStatus = 0;
+        let lastStatus = 0;
+        for (let attempt = 0; attempt < 31; attempt += 1) {
+            const response = await fetch(`${baseUrl}/v1/data`, {
+                method: 'PUT',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({ tasks: [], projects: [], sections: [], areas: [], settings: {} }),
+            });
+            if (attempt === 0) firstStatus = response.status;
+            lastStatus = response.status;
+        }
+
+        expect(firstStatus).toBe(401);
+        expect(lastStatus).toBe(429);
+        expect(readdirSync(dataDir)).toEqual([]);
+    });
+
+    test('converges concurrent task creation and full data merge writes', async () => {
+        const iso = '2026-01-01T00:00:00.000Z';
+        const createRequest = fetch(`${baseUrl}/v1/tasks`, {
+            method: 'POST',
+            headers: {
+                ...authHeaders,
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({ title: 'Task from POST' }),
+        });
+        const putRequest = fetch(`${baseUrl}/v1/data`, {
+            method: 'PUT',
+            headers: {
+                ...authHeaders,
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                tasks: [makeTestTask({
+                    id: 'task-from-put',
+                    title: 'Task from PUT',
+                    createdAt: iso,
+                    updatedAt: iso,
+                })],
+                projects: [],
+                sections: [],
+                areas: [],
+                settings: {},
+            } satisfies AppData),
+        });
+
+        const [createResponse, putResponse] = await Promise.all([createRequest, putRequest]);
+        expect(createResponse.status).toBe(201);
+        expect(putResponse.status).toBe(200);
+        const createdJson = await createResponse.json();
+        const createdId = String(createdJson.task?.id || '');
+        expect(createdId).toBeTruthy();
+
+        const dataResponse = await fetch(`${baseUrl}/v1/data`, { headers: authHeaders });
+        expect(dataResponse.status).toBe(200);
+        const data = await dataResponse.json() as AppData;
+        const tasksById = new Map(data.tasks.map((task) => [task.id, task]));
+        expect(tasksById.get('task-from-put')?.title).toBe('Task from PUT');
+        expect(tasksById.get(createdId)?.title).toBe('Task from POST');
+    });
+
+    test('rejects writes when stored namespace data is corrupt before atomic write', async () => {
+        const key = __cloudTestUtils.tokenToKey(integrationToken);
+        const filePath = join(dataDir, `${key}.json`);
+        const corruptPayload = '{"tasks":[';
+        writeFileSync(filePath, corruptPayload);
+
+        const response = await fetch(`${baseUrl}/v1/data`, {
+            method: 'PUT',
+            headers: {
+                ...authHeaders,
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                tasks: [makeTestTask({ id: 'replacement-task', title: 'Replacement Task' })],
+                projects: [],
+                sections: [],
+                areas: [],
+                settings: {},
+            } satisfies AppData),
+        });
+
+        expect(response.status).toBe(500);
+        expect((await response.json()).error).toBe('Stored data failed validation');
+        expect(readFileSync(filePath, 'utf8')).toBe(corruptPayload);
+    });
+
+    test('preserves people across /v1/data server-side merges', async () => {
+        const seedData: AppData = {
+            tasks: [],
+            projects: [],
+            sections: [],
+            areas: [],
+            people: [{
+                id: 'person-1',
+                name: 'Alex',
+                note: 'Design lead',
+                referenceLink: 'https://example.com/alex',
+                createdAt: '2026-01-01T00:00:00.000Z',
+                updatedAt: '2026-01-01T00:00:00.000Z',
+                rev: 1,
+                revBy: 'device-a',
+            }],
+            settings: {},
+        };
+        const seedResponse = await fetch(`${baseUrl}/v1/data`, {
+            method: 'PUT',
+            headers: {
+                ...authHeaders,
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify(seedData),
+        });
+        expect(seedResponse.status).toBe(200);
+
+        const staleResponse = await fetch(`${baseUrl}/v1/data`, {
+            method: 'PUT',
+            headers: {
+                ...authHeaders,
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                tasks: [],
+                projects: [],
+                sections: [],
+                areas: [],
+                people: [],
+                settings: {},
+            } satisfies AppData),
+        });
+        expect(staleResponse.status).toBe(200);
+
+        const getResponse = await fetch(`${baseUrl}/v1/data`, { headers: authHeaders });
+        expect(getResponse.status).toBe(200);
+        const data = await getResponse.json() as AppData;
+        expect(data.people).toEqual(seedData.people);
+    });
+
+    test('returns fast-sync fingerprints for real self-hosted two-device writes', async () => {
+        const dataUrl = `${baseUrl}/v1/data`;
+        const firstDeviceData: AppData = {
+            tasks: [makeTestTask({ id: 'device-a-task', title: 'Device A task' })],
+            projects: [],
+            sections: [],
+            areas: [],
+            people: [],
+            settings: {},
+        };
+        const secondDeviceData: AppData = {
+            tasks: [makeTestTask({ id: 'device-b-task', title: 'Device B task' })],
+            projects: [],
+            sections: [],
+            areas: [],
+            people: [],
+            settings: {},
+        };
+
+        const firstWrite = await cloudPutJson(dataUrl, firstDeviceData, {
+            token: integrationToken,
+            allowInsecureHttp: true,
+        });
+        expect(firstWrite.serverMergedRemoteData).toBe(false);
+        expect(firstWrite.fingerprint).toMatch(/^cloud:v1:etag=/);
+        expect(firstWrite.etag).toBeTruthy();
+
+        const firstHead = await cloudHeadJson(dataUrl, {
+            token: integrationToken,
+            allowInsecureHttp: true,
+        });
+        expect(firstHead.fingerprint).toBe(firstWrite.fingerprint);
+
+        const secondWrite = await cloudPutJson(dataUrl, secondDeviceData, {
+            token: integrationToken,
+            allowInsecureHttp: true,
+        });
+        expect(secondWrite.serverMergedRemoteData).toBe(true);
+        expect(secondWrite.fingerprint).toMatch(/^cloud:v1:etag=/);
+
+        const secondHead = await cloudHeadJson(dataUrl, {
+            token: integrationToken,
+            allowInsecureHttp: true,
+        });
+        expect(secondHead.fingerprint).toBe(secondWrite.fingerprint);
+
+        const mergedResponse = await fetch(dataUrl, { headers: authHeaders });
+        expect(mergedResponse.status).toBe(200);
+        const mergedData = await mergedResponse.json() as AppData;
+        expect(mergedData.tasks.map((task) => task.id).sort()).toEqual([
+            'device-a-task',
+            'device-b-task',
+        ]);
+    });
+
     test('returns data metadata for HEAD /v1/data without a body', async () => {
         const seedResponse = await fetch(`${baseUrl}/v1/data`, {
             method: 'PUT',
@@ -1033,6 +1382,8 @@ describe('cloud server api', () => {
         const createdJson = await createResponse.json();
         const taskId = createdJson.task.id as string;
         expect(taskId).toBeTruthy();
+        expect(createdJson.task.rev).toBe(1);
+        expect(createdJson.task.revBy).toBe('cloud');
 
         const patchResponse = await fetch(`${baseUrl}/v1/tasks/${encodeURIComponent(taskId)}`, {
             method: 'PATCH',
@@ -1044,7 +1395,7 @@ describe('cloud server api', () => {
         });
         expect(patchResponse.status).toBe(200);
         const patchJson = await patchResponse.json();
-        expect(patchJson.task.rev).toBe(1);
+        expect(patchJson.task.rev).toBe(2);
         expect(patchJson.task.revBy).toBe('cloud');
 
         const getResponse = await fetch(`${baseUrl}/v1/tasks/${encodeURIComponent(taskId)}`, {
@@ -1067,7 +1418,7 @@ describe('cloud server api', () => {
         const deletedJson = await listDeleted.json();
         const deletedTask = (deletedJson.tasks as { id: string; deletedAt?: string; rev?: number; revBy?: string }[]).find((task) => task.id === taskId);
         expect(deletedTask?.deletedAt).toBeTruthy();
-        expect(deletedTask?.rev).toBe(2);
+        expect(deletedTask?.rev).toBe(3);
         expect(deletedTask?.revBy).toBe('cloud');
 
         const getDeleted = await fetch(`${baseUrl}/v1/tasks/${encodeURIComponent(taskId)}`, {
@@ -1096,6 +1447,62 @@ describe('cloud server api', () => {
             headers: authHeaders,
         });
         expect(archiveDeleted.status).toBe(404);
+    });
+
+    test('finalizes task REST writes before storing data', async () => {
+        const createResponse = await fetch(`${baseUrl}/v1/tasks`, {
+            method: 'POST',
+            headers: {
+                ...authHeaders,
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                title: 'Dangling create',
+                props: {
+                    projectId: 'missing-project',
+                    sectionId: 'missing-section',
+                    areaId: 'missing-area',
+                },
+            }),
+        });
+        expect(createResponse.status).toBe(400);
+        expect((await createResponse.json()).error).toContain('references missing or deleted project');
+
+        const validCreateResponse = await fetch(`${baseUrl}/v1/tasks`, {
+            method: 'POST',
+            headers: {
+                ...authHeaders,
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({ title: 'Valid task' }),
+        });
+        expect(validCreateResponse.status).toBe(201);
+        const validCreatedJson = await validCreateResponse.json();
+        const validTask = validCreatedJson.task as Task;
+
+        const patchResponse = await fetch(`${baseUrl}/v1/tasks/${encodeURIComponent(validTask.id)}`, {
+            method: 'PATCH',
+            headers: {
+                ...authHeaders,
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({
+                projectId: 'missing-project-after-patch',
+                sectionId: 'missing-section-after-patch',
+                areaId: 'missing-area-after-patch',
+            }),
+        });
+        expect(patchResponse.status).toBe(400);
+        expect((await patchResponse.json()).error).toContain('references missing or deleted project');
+
+        const dataResponse = await fetch(`${baseUrl}/v1/data`, { headers: authHeaders });
+        expect(dataResponse.status).toBe(200);
+        const stored = await dataResponse.json() as AppData;
+        expect(stored.tasks).toHaveLength(1);
+        const storedTask = stored.tasks.find((task) => task.id === validTask.id);
+        expect(storedTask?.projectId).toBeUndefined();
+        expect(storedTask?.sectionId).toBeUndefined();
+        expect(storedTask?.areaId).toBeUndefined();
     });
 
     test('rejects invalid task ids in task and task-action routes', async () => {
@@ -1264,6 +1671,95 @@ describe('cloud server api', () => {
         expect((await areasList.json()).total).toBe(1);
     });
 
+    test('purges deleted REST projects with refcounted remote attachment cleanup', async () => {
+        const iso = '2026-01-01T00:00:00.000Z';
+        const purgeIso = '2026-01-02T00:00:00.000Z';
+        const projectOnlyCloudKey = 'attachments/project-only.bin';
+        const sharedCloudKey = 'attachments/shared.bin';
+        const attachmentBase = {
+            kind: 'file' as const,
+            uri: '',
+            createdAt: iso,
+            updatedAt: iso,
+            localStatus: 'available' as const,
+        };
+
+        const seedData: AppData = {
+            tasks: [makeTestTask({
+                id: 'task-retaining-shared',
+                title: 'Retains shared attachment',
+                attachments: [{
+                    ...attachmentBase,
+                    id: 'task-att-shared',
+                    title: 'shared.bin',
+                    cloudKey: sharedCloudKey,
+                }],
+            })],
+            projects: [{
+                id: 'project-purged',
+                title: 'Purged project',
+                status: 'active',
+                color: '#6B7280',
+                order: 0,
+                tagIds: [],
+                createdAt: iso,
+                updatedAt: iso,
+                deletedAt: iso,
+                attachments: [
+                    {
+                        ...attachmentBase,
+                        id: 'project-att-only',
+                        title: 'project-only.bin',
+                        cloudKey: projectOnlyCloudKey,
+                    },
+                    {
+                        ...attachmentBase,
+                        id: 'project-att-shared',
+                        title: 'shared.bin',
+                        cloudKey: sharedCloudKey,
+                    },
+                ],
+            }],
+            sections: [],
+            areas: [],
+            people: [],
+            settings: {},
+        };
+        const seedResponse = await fetch(`${baseUrl}/v1/data`, {
+            method: 'PUT',
+            headers: {
+                ...authHeaders,
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify(seedData),
+        });
+        expect(seedResponse.status).toBe(200);
+
+        const purgeResponse = await fetch(`${baseUrl}/v1/projects/project-purged`, {
+            method: 'PATCH',
+            headers: {
+                ...authHeaders,
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({ purgedAt: purgeIso }),
+        });
+        expect(purgeResponse.status).toBe(200);
+        const purgeBody = await purgeResponse.json();
+        expect(purgeBody.project.purgedAt).toBe(purgeIso);
+        expect(purgeBody.project.attachments[0].cloudKey).toBeUndefined();
+        expect(purgeBody.project.attachments[0].localStatus).toBeUndefined();
+
+        const dataResponse = await fetch(`${baseUrl}/v1/data`, { headers: authHeaders });
+        expect(dataResponse.status).toBe(200);
+        const storedData = await dataResponse.json() as AppData;
+        const storedProject = storedData.projects.find((project) => project.id === 'project-purged');
+        expect(storedProject?.attachments?.map((attachment) => attachment.cloudKey)).toEqual([undefined, undefined]);
+        expect(storedData.settings.attachments?.pendingRemoteDeletes).toEqual([{
+            cloudKey: projectOnlyCloudKey,
+            title: 'project-only.bin',
+        }]);
+    });
+
     test('validates REST project, section, and area inputs consistently', async () => {
         const longName = 'x'.repeat(501);
         const reservedProject = await fetch(`${baseUrl}/v1/projects`, {
@@ -1370,7 +1866,7 @@ describe('cloud server api', () => {
         expect(completeResponse.status).toBe(200);
         const completeJson = await completeResponse.json();
         expect(completeJson.task.status).toBe('done');
-        expect(completeJson.task.rev).toBe(1);
+        expect(completeJson.task.rev).toBe(2);
         expect(completeJson.task.revBy).toBe('cloud');
 
         const archiveResponse = await fetch(`${baseUrl}/v1/tasks/${encodeURIComponent(taskId)}/archive`, {
@@ -1380,7 +1876,7 @@ describe('cloud server api', () => {
         expect(archiveResponse.status).toBe(200);
         const archiveJson = await archiveResponse.json();
         expect(archiveJson.task.status).toBe('archived');
-        expect(archiveJson.task.rev).toBe(2);
+        expect(archiveJson.task.rev).toBe(3);
         expect(archiveJson.task.revBy).toBe('cloud');
     });
 
@@ -1402,6 +1898,52 @@ describe('cloud server api', () => {
         expect(createResponse.status).toBe(400);
         const payload = await createResponse.json();
         expect(payload.error).toContain('Unsupported task props');
+    });
+
+    test('rejects invalid task prop values on REST writes', async () => {
+        const invalidCreate = await fetch(`${baseUrl}/v1/tasks`, {
+            method: 'POST',
+            headers: {
+                ...authHeaders,
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({ title: 'Cloud Task', props: { repeatReminderMinutes: 7 } }),
+        });
+        expect(invalidCreate.status).toBe(400);
+        expect((await invalidCreate.json()).error).toContain('repeatReminderMinutes');
+
+        const createResponse = await fetch(`${baseUrl}/v1/tasks`, {
+            method: 'POST',
+            headers: {
+                ...authHeaders,
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({ title: 'Cloud Task' }),
+        });
+        expect(createResponse.status).toBe(201);
+        const created = (await createResponse.json()).task as Task;
+
+        const invalidOffsetPatch = await fetch(`${baseUrl}/v1/tasks/${encodeURIComponent(created.id)}`, {
+            method: 'PATCH',
+            headers: {
+                ...authHeaders,
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({ relativeStartOffset: { amount: 1, unit: 'day' } }),
+        });
+        expect(invalidOffsetPatch.status).toBe(400);
+        expect((await invalidOffsetPatch.json()).error).toContain('relativeStartOffset');
+
+        const invalidRecurrencePatch = await fetch(`${baseUrl}/v1/tasks/${encodeURIComponent(created.id)}`, {
+            method: 'PATCH',
+            headers: {
+                ...authHeaders,
+                'content-type': 'application/json',
+            },
+            body: JSON.stringify({ recurrence: { rule: 'daily', arbitrary: true } }),
+        });
+        expect(invalidRecurrencePatch.status).toBe(400);
+        expect((await invalidRecurrencePatch.json()).error).toContain('recurrence');
     });
 
     test('accepts quick-add input longer than the task title limit when the parsed title stays short', async () => {
@@ -2329,261 +2871,5 @@ describe('cloud server api', () => {
         expect(mergedTask).toBeTruthy();
         expect(mergedTask?.deletedAt).toBe('2026-01-01T00:00:00.100Z');
         expect(mergedTask?.updatedAt).toBe('2026-01-01T00:00:00.100Z');
-    });
-});
-
-describe('cloud server task-change webhook', () => {
-    let dataDir = '';
-    let baseUrl = '';
-    let stopServer: (() => void) | null = null;
-    interface WebhookSink {
-        stop: () => void;
-        url: string;
-        calls: Array<{ url: string; body: unknown }>;
-    }
-    let webhookServer: WebhookSink | null = null;
-    const integrationToken = 'integration-token-1234567890';
-    const authHeaders = { Authorization: `Bearer ${integrationToken}` };
-
-    function startWebhookSink(): WebhookSink {
-        const calls: Array<{ url: string; body: unknown }> = [];
-        const handle = Bun.serve({
-            port: 0,
-            fetch: async (req) => {
-                if (req.method === 'POST') {
-                    const body = await req.json().catch(() => null);
-                    calls.push({ url: req.url, body });
-                    return new Response('{"ok":true}', { headers: { 'content-type': 'application/json' } });
-                }
-                return new Response('{"ok":true}');
-            },
-        });
-        return {
-            calls,
-            stop: () => handle.stop(),
-            url: `http://${handle.hostname}:${handle.port}/hook`,
-        };
-    }
-
-    beforeEach(async () => {
-        dataDir = mkdtempSync(join(tmpdir(), 'mindwtr-cloud-wh-'));
-        webhookServer = startWebhookSink();
-        process.env.MINDWTR_TASK_WEBHOOK_URL = webhookServer.url;
-        process.env.MINDWTR_TASK_WEBHOOK_TOKEN = 'wh-token';
-        const server = await startCloudServer({
-            host: '127.0.0.1',
-            port: 0,
-            dataDir,
-            allowedAuthTokens: new Set([integrationToken]),
-        });
-        baseUrl = `http://127.0.0.1:${server.port}`;
-        stopServer = server.stop;
-    });
-
-    afterEach(() => {
-        stopServer?.();
-        stopServer = null;
-        webhookServer?.stop();
-        webhookServer = null;
-        delete process.env.MINDWTR_TASK_WEBHOOK_URL;
-        delete process.env.MINDWTR_TASK_WEBHOOK_TOKEN;
-        if (dataDir) rmSync(dataDir, { recursive: true, force: true });
-        dataDir = '';
-        baseUrl = '';
-    });
-
-    async function createTask(): Promise<string> {
-        const res = await fetch(`${baseUrl}/v1/tasks`, {
-            method: 'POST',
-            headers: { ...authHeaders, 'content-type': 'application/json' },
-            body: JSON.stringify({ title: 'WebhookTask' }),
-        });
-        const json = await res.json();
-        // POST /v1/tasks fires its own 'create' webhook. Let it land and drain
-        // so the per-test assertions only see the PATCH/DELETE/PUT we're testing.
-        await new Promise((r) => setTimeout(r, 50));
-        webhookServer!.calls.length = 0;
-        return json.task.id as string;
-    }
-
-    test('PATCH from non-ai-service origin fires edit webhook', async () => {
-        const taskId = await createTask();
-        await fetch(`${baseUrl}/v1/tasks/${taskId}`, {
-            method: 'PATCH',
-            headers: { ...authHeaders, 'content-type': 'application/json' },
-            body: JSON.stringify({ title: 'Edited by user' }),
-        });
-        // Webhook is fire-and-forget; allow microtask flush.
-        await new Promise((r) => setTimeout(r, 50));
-        const calls = webhookServer!.calls;
-        expect(calls.length).toBe(1);
-        const body = calls[0]!.body as { kind: string; taskId: string; fields: { title: string } };
-        expect(body.kind).toBe('edit');
-        expect(body.taskId).toBe(taskId);
-        expect(body.fields.title).toBe('Edited by user');
-    });
-
-    test('PATCH with X-Mindwtr-Source=ai-service does NOT fire webhook', async () => {
-        const taskId = await createTask();
-        await fetch(`${baseUrl}/v1/tasks/${taskId}`, {
-            method: 'PATCH',
-            headers: {
-                ...authHeaders,
-                'content-type': 'application/json',
-                'x-mindwtr-source': 'ai-service',
-            },
-            body: JSON.stringify({ title: 'Edited by ai' }),
-        });
-        await new Promise((r) => setTimeout(r, 50));
-        expect(webhookServer!.calls.length).toBe(0);
-    });
-
-    test('DELETE from non-ai-service origin fires delete webhook', async () => {
-        const taskId = await createTask();
-        await fetch(`${baseUrl}/v1/tasks/${taskId}`, { method: 'DELETE', headers: authHeaders });
-        await new Promise((r) => setTimeout(r, 50));
-        const calls = webhookServer!.calls;
-        expect(calls.length).toBe(1);
-        const body = calls[0]!.body as { kind: string; taskId: string };
-        expect(body.kind).toBe('delete');
-        expect(body.taskId).toBe(taskId);
-    });
-
-    test('DELETE with X-Mindwtr-Source=ai-service does NOT fire webhook', async () => {
-        const taskId = await createTask();
-        await fetch(`${baseUrl}/v1/tasks/${taskId}`, {
-            method: 'DELETE',
-            headers: { ...authHeaders, 'x-mindwtr-source': 'ai-service' },
-        });
-        await new Promise((r) => setTimeout(r, 50));
-        expect(webhookServer!.calls.length).toBe(0);
-    });
-
-    test('PUT /v1/data fires create webhook for newly-arrived tasks (desktop manual-add path)', async () => {
-        // Seed with one existing task so we can verify the diff against prior state.
-        const existingId = 'task-existing';
-        await fetch(`${baseUrl}/v1/data`, {
-            method: 'PUT',
-            headers: { ...authHeaders, 'content-type': 'application/json' },
-            body: JSON.stringify({
-                tasks: [{
-                    id: existingId,
-                    title: 'Already known',
-                    status: 'inbox',
-                    createdAt: '2026-01-01T00:00:00.000Z',
-                    updatedAt: '2026-01-01T00:00:00.000Z',
-                }],
-                projects: [], sections: [], areas: [], settings: {},
-            }),
-        });
-        // First seed PUT is itself a 'new task arrival' — drain those calls.
-        await new Promise((r) => setTimeout(r, 50));
-        webhookServer!.calls.length = 0;
-
-        // Desktop UI does a full snapshot PUT after the user adds a card manually.
-        // The snapshot includes both the prior task and the new one.
-        const newId = 'task-manual-add';
-        const res = await fetch(`${baseUrl}/v1/data`, {
-            method: 'PUT',
-            headers: { ...authHeaders, 'content-type': 'application/json' },
-            body: JSON.stringify({
-                tasks: [
-                    {
-                        id: existingId,
-                        title: 'Already known',
-                        status: 'inbox',
-                        createdAt: '2026-01-01T00:00:00.000Z',
-                        updatedAt: '2026-01-01T00:00:00.000Z',
-                    },
-                    {
-                        id: newId,
-                        title: 'Manually added card',
-                        description: 'typed in QuickAddModal',
-                        status: 'inbox',
-                        tags: ['ux'],
-                        projectId: null,
-                        createdAt: '2026-05-14T20:00:00.000Z',
-                        updatedAt: '2026-05-14T20:00:00.000Z',
-                    },
-                ],
-                projects: [], sections: [], areas: [], settings: {},
-            }),
-        });
-        expect(res.status).toBe(200);
-        await new Promise((r) => setTimeout(r, 50));
-        const calls = webhookServer!.calls;
-        expect(calls.length).toBe(1);
-        const body = calls[0]!.body as {
-            kind: string;
-            taskId: string;
-            fields: { title: string; status: string; tags?: string[] };
-        };
-        expect(body.kind).toBe('create');
-        expect(body.taskId).toBe(newId);
-        expect(body.fields.title).toBe('Manually added card');
-        expect(body.fields.status).toBe('inbox');
-    });
-
-    test('PUT /v1/data with X-Mindwtr-Source=ai-service does NOT fire webhook', async () => {
-        const res = await fetch(`${baseUrl}/v1/data`, {
-            method: 'PUT',
-            headers: {
-                ...authHeaders,
-                'content-type': 'application/json',
-                'x-mindwtr-source': 'ai-service',
-            },
-            body: JSON.stringify({
-                tasks: [{
-                    id: 'task-from-ai',
-                    title: 'Should not loop back',
-                    status: 'inbox',
-                    createdAt: '2026-05-14T20:00:00.000Z',
-                    updatedAt: '2026-05-14T20:00:00.000Z',
-                }],
-                projects: [], sections: [], areas: [], settings: {},
-            }),
-        });
-        expect(res.status).toBe(200);
-        await new Promise((r) => setTimeout(r, 50));
-        expect(webhookServer!.calls.length).toBe(0);
-    });
-
-    test('PUT /v1/data does NOT re-fire create webhook for tasks already on server', async () => {
-        const taskId = 'task-already-there';
-        // Seed.
-        await fetch(`${baseUrl}/v1/data`, {
-            method: 'PUT',
-            headers: { ...authHeaders, 'content-type': 'application/json' },
-            body: JSON.stringify({
-                tasks: [{
-                    id: taskId,
-                    title: 'Seeded',
-                    status: 'inbox',
-                    createdAt: '2026-01-01T00:00:00.000Z',
-                    updatedAt: '2026-01-01T00:00:00.000Z',
-                }],
-                projects: [], sections: [], areas: [], settings: {},
-            }),
-        });
-        await new Promise((r) => setTimeout(r, 50));
-        webhookServer!.calls.length = 0;
-
-        // Subsequent PUT — same task, no new ids. Should not fire.
-        await fetch(`${baseUrl}/v1/data`, {
-            method: 'PUT',
-            headers: { ...authHeaders, 'content-type': 'application/json' },
-            body: JSON.stringify({
-                tasks: [{
-                    id: taskId,
-                    title: 'Seeded edited',
-                    status: 'next',
-                    createdAt: '2026-01-01T00:00:00.000Z',
-                    updatedAt: '2026-05-14T20:00:00.000Z',
-                }],
-                projects: [], sections: [], areas: [], settings: {},
-            }),
-        });
-        await new Promise((r) => setTimeout(r, 50));
-        expect(webhookServer!.calls.length).toBe(0);
     });
 });

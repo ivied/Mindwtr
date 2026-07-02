@@ -13,9 +13,23 @@ describe('i18n-loader sync fallback', () => {
         expect(nl['app.name']).toBe('Mindwtr');
     });
 
+    it('loads Vietnamese overrides on demand', async () => {
+        const vi = await loadTranslations('vi');
+        expect(vi['settings.language']).toBe('Ngôn ngữ');
+        expect(vi['nav.inbox']).toBe('Hộp thư đến');
+    });
+
     it('loads Traditional Chinese translations on demand', async () => {
         const zhHant = await loadTranslations('zh-Hant');
         expect(zhHant['nav.settings']).toBe('設置');
+    });
+
+    it('loads localized desktop search scope hints for Chinese locales', async () => {
+        const zhHans = await loadTranslations('zh');
+        const zhHant = await loadTranslations('zh-Hant');
+
+        expect(zhHans['search.scopeHint']).toBe('任务、项目和人员');
+        expect(zhHant['search.scopeHint']).toBe('任務、項目和人員');
     });
 
     it('includes common notice copy for toast titles', async () => {
@@ -65,5 +79,15 @@ describe('i18n-loader sync fallback', () => {
 
         expect(zhHant['settings.deviceCalendars']).toBe('裝置日曆');
         expect(zhHant['settings.syncOff']).toBe('同步已關閉');
+    });
+
+    it('keeps dense desktop helper copy compact', async () => {
+        const en = await loadTranslations('en');
+
+        expect(en['sort.created']).toBe('Oldest');
+        expect(en['sort.created-desc']).toBe('Newest');
+        expect(en['quickAdd.example']).toBe('e.g. Call mom /due:tomorrow @phone');
+        expect(en['quickAdd.inlineHint']).toBe('Try: Call mom /due:tomorrow 5pm @phone #family');
+        expect(en['quickAdd.inlineHint']).not.toContain('/start:<when>');
     });
 });

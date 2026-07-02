@@ -5,22 +5,25 @@ import {
     Task,
     TaskEditorFieldId,
     useTaskStore,
+    type Attachment,
     type RecurrenceWeekday,
     type RecurrenceByDay,
+    type TaskStatus,
     buildRRuleString,
     parseRRuleString,
     resolveAutoTextDirection,
     DEFAULT_PROJECT_COLOR,
     getLocalizedWeekdayButtons,
     getLocalizedWeekdayLabels,
-    getUsedTaskTokens,
     normalizeClockTimeInput,
+    shallow,
 } from '@mindwtr/core';
 import { useLanguage } from '../contexts/language-context';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import { useToast } from '@/contexts/toast-context';
 import { ExpandedMarkdownEditor } from './expanded-markdown-editor';
 import { KeyboardAccessoryHost } from './keyboard-accessory-host';
+import { MarkdownFormatToolbar } from './markdown-format-toolbar';
 import { styles } from './task-edit/task-edit-modal.styles';
 import { TaskEditFieldRenderer } from './task-edit/TaskEditFieldRenderer';
 import { useTaskDescriptionEditor } from './task-edit/use-task-description-editor';
@@ -37,7 +40,7 @@ import {
 } from './task-edit/recurrence-utils';
 import { getAssignedToSuggestions } from './task-metadata-suggestions';
 import { useTaskEditCopilot } from './task-edit/use-task-edit-copilot';
-import { logTaskError } from './task-edit/task-edit-modal.utils';
+import { getEditedTaskValue, logTaskError } from './task-edit/task-edit-modal.utils';
 import {
     parseTokenList,
     replaceTrailingToken,
@@ -53,6 +56,8 @@ import {
 import { useTaskEditDerivedState } from './task-edit/use-task-edit-derived-state';
 import { useTaskTokenSuggestions } from './task-edit/use-task-token-suggestions';
 
+
+const EMPTY_COPILOT_TAGS: string[] = [];
 
 interface TaskEditModalProps {
     visible: boolean;
@@ -83,20 +88,69 @@ function TaskEditModalInner({
         projects,
         sections,
         areas,
+        people,
         settings,
         duplicateTask,
+        promoteTaskToProject,
         resetTaskChecklist,
         addProject,
         addSection,
         addArea,
+        addPerson,
         deleteTask,
         restoreTask,
-    } = useTaskStore();
+        allContexts = [],
+        allTags = [],
+        contextTokenUsage = [],
+        tagTokenUsage = [],
+    } = useTaskStore((state) => {
+        const derived = state.getDerivedState();
+        return {
+            tasks: state.tasks,
+            projects: state.projects,
+            sections: state.sections,
+            areas: state.areas,
+            people: state.people,
+            settings: state.settings,
+            duplicateTask: state.duplicateTask,
+            promoteTaskToProject: state.promoteTaskToProject,
+            resetTaskChecklist: state.resetTaskChecklist,
+            addProject: state.addProject,
+            addSection: state.addSection,
+            addArea: state.addArea,
+            addPerson: state.addPerson,
+            deleteTask: state.deleteTask,
+            restoreTask: state.restoreTask,
+            allContexts: derived.allContexts,
+            allTags: derived.allTags,
+            contextTokenUsage: derived.contextTokenUsage,
+            tagTokenUsage: derived.tagTokenUsage,
+        };
+    }, shallow);
     const { t, language } = useLanguage();
-    const tc = useThemeColors();
+    const rawThemeColors = useThemeColors();
+    const tc = useMemo(() => rawThemeColors, [
+        rawThemeColors.bg,
+        rawThemeColors.border,
+        rawThemeColors.cardBg,
+        rawThemeColors.danger,
+        rawThemeColors.filterBg,
+        rawThemeColors.icon,
+        rawThemeColors.inputBg,
+        rawThemeColors.onTint,
+        rawThemeColors.secondaryText,
+        rawThemeColors.success,
+        rawThemeColors.tabIconDefault,
+        rawThemeColors.tabIconSelected,
+        rawThemeColors.taskItemBg,
+        rawThemeColors.text,
+        rawThemeColors.tint,
+        rawThemeColors.warning,
+    ]);
     const prioritiesEnabled = settings.features?.priorities !== false;
     const timeEstimatesEnabled = settings.features?.timeEstimates !== false;
     const resetCopilotStateRef = useRef<() => void>(() => {});
+    const descriptionToolbarInteractionUntilRef = useRef(0);
     const {
         aiModal,
         baseTaskRef,
@@ -152,13 +206,13 @@ function TaskEditModalInner({
     const aiProvider = settings.ai?.provider ?? 'openai';
 
     const contextOptions = React.useMemo(() => Array.from(new Set([
-            ...getUsedTaskTokens(tasks, (item) => item.contexts, { prefix: '@' }),
+            ...allContexts,
             ...(editedTask.contexts ?? []),
-        ])).filter(Boolean), [editedTask.contexts, tasks]);
+        ])).filter(Boolean), [allContexts, editedTask.contexts]);
     const tagOptions = React.useMemo(() => Array.from(new Set([
-            ...getUsedTaskTokens(tasks, (item) => item.tags, { prefix: '#' }),
+            ...allTags,
             ...(editedTask.tags ?? []),
-        ])).filter(Boolean), [editedTask.tags, tasks]);
+        ])).filter(Boolean), [allTags, editedTask.tags]);
     const {
         handlePreviewContextPress,
         handlePreviewProjectPress,
@@ -166,6 +220,7 @@ function TaskEditModalInner({
         projectContext,
     } = useTaskEditPreview({
         editedProjectId: editedTask.projectId,
+        includeProjectContext: aiEnabled,
         onClose,
         onContextNavigate,
         onProjectNavigate,
@@ -214,11 +269,14 @@ function TaskEditModalInner({
         closeLinkModal,
         confirmAddLink,
         downloadAttachment,
+        editLinkAttachment,
+        editingLinkAttachmentId,
         imagePreviewAttachment,
         isImageAttachment,
         linkInput,
         linkInputTouched,
         linkModalVisible,
+        openAddLinkAttachment,
         openAttachment,
         removeAttachment,
         retryAudioTranscription,
@@ -242,15 +300,18 @@ function TaskEditModalInner({
         selectedContextTokens,
         selectedTagTokens,
     } = useTaskTokenSuggestions({
-        tasks,
         editedContexts: editedTask.contexts,
         editedTags: editedTask.tags,
         contextInputDraft,
         tagInputDraft,
+        allContexts,
+        allTags,
+        contextTokenUsage,
+        tagTokenUsage,
     });
     const assignedToSuggestions = useMemo(
-        () => getAssignedToSuggestions(tasks, String(editedTask.assignedTo ?? ''), MAX_VISIBLE_SUGGESTIONS),
-        [editedTask.assignedTo, tasks]
+        () => getAssignedToSuggestions(tasks, String(editedTask.assignedTo ?? ''), MAX_VISIBLE_SUGGESTIONS, people),
+        [editedTask.assignedTo, people, tasks]
     );
 
     const closeAIModal = () => setAiModal(null);
@@ -296,6 +357,7 @@ function TaskEditModalInner({
         recurrenceStrategyValue,
         schedulingFields,
         sectionOpenDefaults,
+        showStatusField,
         timeEstimateOptions,
     } = useTaskEditDerivedState({
         task,
@@ -314,8 +376,8 @@ function TaskEditModalInner({
     const isReference = (editedTask.status ?? task?.status) === 'reference';
 
     useEffect(() => {
-        const projectId = editedTask.projectId ?? task?.projectId;
-        const sectionId = editedTask.sectionId ?? task?.sectionId;
+        const projectId = getEditedTaskValue(editedTask, task, 'projectId');
+        const sectionId = getEditedTaskValue(editedTask, task, 'sectionId');
         if (!sectionId) return;
         if (!projectId) {
             setEditedTask(prev => ({ ...prev, sectionId: undefined }));
@@ -363,6 +425,9 @@ function TaskEditModalInner({
     const [customOrdinal, setCustomOrdinal] = useState<'1' | '2' | '3' | '4' | '-1'>('1');
     const [customWeekday, setCustomWeekday] = useState<RecurrenceWeekday>(monthlyWeekdayCode);
     const [customMonthDay, setCustomMonthDay] = useState<number>(monthlyAnchorDate.getDate());
+    const [waitingAssignmentModalVisible, setWaitingAssignmentModalVisible] = useState(false);
+    const [waitingAssignmentInput, setWaitingAssignmentInput] = useState('');
+    const [isTitleInputFocused, setIsTitleInputFocused] = useState(false);
 
     const openCustomRecurrence = useCallback(() => {
         const parsed = parseRRuleString(recurrenceRRuleValue);
@@ -411,6 +476,7 @@ function TaskEditModalInner({
                 rule: 'monthly',
                 strategy: recurrenceStrategyValue,
                 ...(customMode === 'nth' ? { byDay: [`${customOrdinal}${customWeekday}` as RecurrenceByDay] } : {}),
+                ...(customMode === 'date' ? { byMonthDay: [safeMonthDay] } : {}),
                 rrule,
             },
         }));
@@ -438,6 +504,7 @@ function TaskEditModalInner({
     useEffect(() => {
         if (!visible) {
             setIsMarkdownOverlayOpen(false);
+            setIsTitleInputFocused(false);
         }
     }, [visible]);
 
@@ -470,6 +537,30 @@ function TaskEditModalInner({
     const applyAssignedToSuggestion = useCallback((assignedTo: string) => {
         setEditedTask((prev) => ({ ...prev, assignedTo }));
     }, [setEditedTask]);
+    const createAssignedToPerson = useCallback(async (name: string) => {
+        const created = await addPerson(name);
+        if (created) {
+            setEditedTask((prev) => ({ ...prev, assignedTo: created.name }));
+        }
+        return created;
+    }, [addPerson, setEditedTask]);
+    const closeWaitingAssignmentModal = useCallback(() => {
+        setWaitingAssignmentModalVisible(false);
+    }, []);
+    const confirmWaitingAssignment = useCallback(() => {
+        const assignedTo = waitingAssignmentInput.trim() || undefined;
+        setEditedTask((prev) => ({ ...prev, status: 'waiting', assignedTo }));
+        setWaitingAssignmentModalVisible(false);
+    }, [setEditedTask, waitingAssignmentInput]);
+    const requestStatusChange = useCallback((status: TaskStatus) => {
+        const currentStatus = editedTask.status ?? task?.status;
+        if (status === 'waiting' && currentStatus !== 'waiting') {
+            setWaitingAssignmentInput(String(editedTask.assignedTo ?? task?.assignedTo ?? ''));
+            setWaitingAssignmentModalVisible(true);
+            return;
+        }
+        setEditedTask((prev) => ({ ...prev, status }));
+    }, [editedTask.assignedTo, editedTask.status, setEditedTask, task?.assignedTo, task?.status]);
     const toggleQuickContextToken = useCallback((token: string) => {
         const next = new Set(parseTokenList(contextInputDraft, '@'));
         if (next.has(token)) {
@@ -506,12 +597,11 @@ function TaskEditModalInner({
         handleDeleteTask,
         handleDone,
         handleDuplicateTask,
+        handlePromoteTaskToProject,
         handleResetChecklist,
         handleShare,
     } = useTaskEditActions({
-        addProject,
         aiEnabled,
-        areas,
         baseTaskRef,
         closeAIModal,
         contextInputDraft,
@@ -521,6 +611,7 @@ function TaskEditModalInner({
         descriptionDraft,
         descriptionDraftRef,
         duplicateTask,
+        promoteTaskToProject,
         editedTask,
         formatDate,
         formatDueDate,
@@ -532,8 +623,6 @@ function TaskEditModalInner({
         onSave,
         prioritiesEnabled,
         projectContext,
-        projectFilterAreaId,
-        projects,
         recurrenceRuleValue,
         recurrenceRRuleValue,
         recurrenceStrategyValue,
@@ -541,6 +630,7 @@ function TaskEditModalInner({
         restoreTask,
         sections,
         setAiModal,
+        setDescriptionDraft,
         setEditedTask,
         setIsAIWorking,
         setTitleImmediate,
@@ -555,14 +645,29 @@ function TaskEditModalInner({
         titleDraftRef,
     });
 
-    const inputStyle = { backgroundColor: tc.inputBg, borderColor: tc.border, color: tc.text };
+    const inputStyle = useMemo(
+        () => ({ backgroundColor: tc.inputBg, borderColor: tc.border, color: tc.text }),
+        [tc.border, tc.inputBg, tc.text]
+    );
     const combinedText = `${titleDraft ?? ''}\n${descriptionDraft ?? ''}`.trim();
     const resolvedDirection = resolveAutoTextDirection(combinedText, language);
-    const textDirectionStyle = {
+    const textDirectionStyle = useMemo(() => ({
         writingDirection: resolvedDirection,
         textAlign: resolvedDirection === 'rtl' ? 'right' : 'left',
-    } as const;
-    const fieldRendererProps = {
+    }) as const, [resolvedDirection]);
+    const openAttachmentRef = useRef(openAttachment);
+    useEffect(() => {
+        openAttachmentRef.current = openAttachment;
+    }, [openAttachment]);
+    const stableOpenAttachment = useCallback((attachment: Attachment) => (
+        openAttachmentRef.current(attachment)
+    ), []);
+    const noopAIAction = useCallback(() => {}, []);
+    const formHandleAIClarify = aiEnabled ? handleAIClarify : noopAIAction;
+    const formHandleAIBreakdown = aiEnabled ? handleAIBreakdown : noopAIAction;
+    const formApplyCopilotSuggestion = aiEnabled ? applyCopilotSuggestion : noopAIAction;
+    const formCopilotTags = aiEnabled ? copilotTags : EMPTY_COPILOT_TAGS;
+    const fieldRendererProps = useMemo(() => ({
         addFileAttachment,
         addImageAttachment,
         applyAssignedToSuggestion,
@@ -575,22 +680,24 @@ function TaskEditModalInner({
         commitTagDraft,
         contextInputDraft,
         contextTokenSuggestions,
+        createAssignedToPerson,
         customWeekdays,
         dailyInterval,
         descriptionDraft,
         descriptionInputRef: descriptionEditor.descriptionInputRef,
         descriptionSelection: descriptionEditor.descriptionSelection,
+        descriptionSelectionRestorePending: descriptionEditor.descriptionSelectionRestorePending,
         setDescriptionSelection: descriptionEditor.setDescriptionSelection,
-        descriptionUndoDepth: descriptionEditor.descriptionUndoDepth,
+        descriptionToolbarInteractionUntilRef,
         isDescriptionInputFocused: descriptionEditor.isDescriptionInputFocused,
         setIsDescriptionInputFocused: descriptionEditor.setIsDescriptionInputFocused,
         handleDescriptionChange: descriptionEditor.handleDescriptionChange,
-        handleDescriptionUndo: descriptionEditor.handleDescriptionUndo,
-        handleDescriptionApplyAction: descriptionEditor.handleDescriptionApplyAction,
+        handleDescriptionKeyPress: descriptionEditor.handleDescriptionKeyPress,
         applyDescriptionResult: descriptionEditor.applyDescriptionResult,
         applyQuickDate,
         openDescriptionExpandedEditor: descriptionEditor.openDescriptionExpandedEditor,
         downloadAttachment,
+        editLinkAttachment,
         editedTask,
         formatDate,
         formatDueDate,
@@ -599,10 +706,12 @@ function TaskEditModalInner({
         getSafePickerDateValue,
         handleInputFocus,
         handleResetChecklist,
+        applyChecklistUpdate,
         language,
         monthlyPattern,
         onDateChange,
-        openAttachment,
+        openAddLinkAttachment,
+        openAttachment: stableOpenAttachment,
         openCustomRecurrence,
         pendingDueDate,
         pendingStartDate,
@@ -616,6 +725,7 @@ function TaskEditModalInner({
         recurrenceRuleValue,
         recurrenceStrategyValue,
         recurrenceWeekdayButtons,
+        requestStatusChange,
         removeAttachment,
         selectedContextTokens,
         selectedTagTokens,
@@ -646,10 +756,105 @@ function TaskEditModalInner({
         updateContextInput,
         updateTagInput,
         visibleAttachments,
-    };
-    const renderField = (fieldId: TaskEditorFieldId) => (
+    }), [
+        addFileAttachment,
+        addImageAttachment,
+        applyAssignedToSuggestion,
+        applyContextSuggestion,
+        applyTagSuggestion,
+        areas,
+        assignedToSuggestions,
+        availableStatusOptions,
+        commitContextDraft,
+        commitTagDraft,
+        contextInputDraft,
+        contextTokenSuggestions,
+        createAssignedToPerson,
+        customWeekdays,
+        dailyInterval,
+        descriptionDraft,
+        descriptionEditor.applyDescriptionResult,
+        descriptionEditor.descriptionInputRef,
+        descriptionEditor.descriptionSelection,
+        descriptionEditor.descriptionSelectionRestorePending,
+        descriptionEditor.handleDescriptionChange,
+        descriptionEditor.handleDescriptionKeyPress,
+        descriptionEditor.isDescriptionInputFocused,
+        descriptionEditor.openDescriptionExpandedEditor,
+        descriptionEditor.setDescriptionSelection,
+        descriptionEditor.setIsDescriptionInputFocused,
+        descriptionToolbarInteractionUntilRef,
+        downloadAttachment,
+        editLinkAttachment,
+        editedTask,
+        formatDate,
+        formatDueDate,
+        frequentContextSuggestions,
+        frequentTagSuggestions,
+        getSafePickerDateValue,
+        handleInputFocus,
+        handleResetChecklist,
+        applyChecklistUpdate,
+        language,
+        monthlyPattern,
+        onDateChange,
+        openAddLinkAttachment,
+        stableOpenAttachment,
+        openCustomRecurrence,
+        pendingDueDate,
+        pendingStartDate,
+        prioritiesEnabled,
+        energyLevelOptions,
+        priorityOptions,
+        projects,
+        projectSections,
+        recurrenceOptions,
+        recurrenceRRuleValue,
+        recurrenceRuleValue,
+        recurrenceStrategyValue,
+        recurrenceWeekdayButtons,
+        requestStatusChange,
+        removeAttachment,
+        selectedContextTokens,
+        selectedTagTokens,
+        setCustomWeekdays,
+        setEditedTask,
+        setIsContextInputFocused,
+        setIsTagInputFocused,
+        setLinkInputTouched,
+        setLinkModalVisible,
+        setShowAreaPicker,
+        setShowDatePicker,
+        setShowDescriptionPreview,
+        setShowProjectPicker,
+        setShowSectionPicker,
+        showDatePicker,
+        showDescriptionPreview,
+        styles,
+        tagInputDraft,
+        tagTokenSuggestions,
+        task,
+        t,
+        tc,
+        timeEstimateOptions,
+        timeEstimatesEnabled,
+        titleDraft,
+        toggleQuickContextToken,
+        toggleQuickTagToken,
+        updateContextInput,
+        updateTagInput,
+        visibleAttachments,
+    ]);
+    const renderField = useCallback((fieldId: TaskEditorFieldId) => (
         <TaskEditFieldRenderer fieldId={fieldId} {...fieldRendererProps} />
-    );
+    ), [fieldRendererProps]);
+    const handleViewStatusUpdate = useCallback((status: TaskStatus) => {
+        requestStatusChange(status);
+    }, [requestStatusChange]);
+    const isTaskFormTextInputFocused = isTitleInputFocused
+        || descriptionEditor.isDescriptionInputFocused
+        || isContextInputFocused
+        || isTagInputFocused;
 
     if (!task) return null;
 
@@ -668,10 +873,10 @@ function TaskEditModalInner({
                     edges={['top']}
                 >
                     <TaskEditHeader
-                        title={String(titleDraft || editedTask.title || '').trim() || t('taskEdit.title')}
                         onDone={handleDone}
                         onShare={handleShare}
                         onDuplicate={handleDuplicateTask}
+                        onPromoteToProject={handlePromoteTaskToProject}
                         onDelete={handleDeleteTask}
                         onConvertToReference={handleConvertToReference}
                         showConvertToReference={!isReference}
@@ -692,7 +897,7 @@ function TaskEditModalInner({
                             ref={scrollRef}
                             horizontal
                             pagingEnabled
-                            scrollEnabled={!isMarkdownOverlayOpen}
+                            scrollEnabled={!isMarkdownOverlayOpen && !isTaskFormTextInputFocused}
                             scrollEventThrottle={16}
                             showsHorizontalScrollIndicator={false}
                             directionalLockEnabled
@@ -711,14 +916,14 @@ function TaskEditModalInner({
                                 setEditedTask={setEditedTask}
                                 aiEnabled={aiEnabled}
                                 isAIWorking={isAIWorking}
-                                handleAIClarify={handleAIClarify}
-                                handleAIBreakdown={handleAIBreakdown}
+                                handleAIClarify={formHandleAIClarify}
+                                handleAIBreakdown={formHandleAIBreakdown}
                                 copilotSuggestion={copilotSuggestion}
                                 copilotApplied={copilotApplied}
-                                applyCopilotSuggestion={applyCopilotSuggestion}
+                                applyCopilotSuggestion={formApplyCopilotSuggestion}
                                 copilotContext={copilotContext}
                                 copilotEstimate={copilotEstimate}
-                                copilotTags={copilotTags}
+                                copilotTags={formCopilotTags}
                                 timeEstimatesEnabled={timeEstimatesEnabled}
                                 renderField={renderField}
                                 basicFields={basicFields}
@@ -735,6 +940,8 @@ function TaskEditModalInner({
                                 textDirectionStyle={textDirectionStyle}
                                 titleDraft={titleDraft}
                                 onTitleDraftChange={handleTitleDraftChange}
+                                onInputFocusTracked={handleInputFocus}
+                                onTitleInputFocusChange={setIsTitleInputFocused}
                                 registerScrollToEnd={registerScrollTaskFormToEnd}
                                 formResetKey={`${task.id}:${visible ? 'open' : 'closed'}`}
                                 suspendKeyboardHandling={isMarkdownOverlayOpen}
@@ -757,7 +964,7 @@ function TaskEditModalInner({
                                     getRecurrenceStrategyValue={getRecurrenceStrategyValue}
                                     applyChecklistUpdate={applyChecklistUpdate}
                                     visibleAttachments={visibleAttachments}
-                                    openAttachment={openAttachment}
+                                    openAttachment={stableOpenAttachment}
                                     isImageAttachment={isImageAttachment}
                                     textDirectionStyle={textDirectionStyle}
                                     resolvedDirection={resolvedDirection}
@@ -765,7 +972,8 @@ function TaskEditModalInner({
                                     onProjectPress={onProjectNavigate ? handlePreviewProjectPress : undefined}
                                     onContextPress={onContextNavigate ? handlePreviewContextPress : undefined}
                                     onTagPress={onTagNavigate ? handlePreviewTagPress : undefined}
-                                    onStatusUpdate={(status) => setEditedTask((prev) => ({ ...prev, status }))}
+                                    onStatusUpdate={handleViewStatusUpdate}
+                                    showStatusField={showStatusField}
                                 />
                             </View>
                         </Animated.ScrollView>
@@ -800,6 +1008,7 @@ function TaskEditModalInner({
                         linkInput={linkInput}
                         linkInputTouched={linkInputTouched}
                         linkModalVisible={linkModalVisible}
+                        linkModalTitle={editingLinkAttachmentId ? t('common.edit') : t('attachments.addLink')}
                         projectFilterAreaId={projectFilterAreaId}
                         projects={projects}
                         recurrenceWeekdayButtons={recurrenceWeekdayButtons}
@@ -822,11 +1031,37 @@ function TaskEditModalInner({
                         showProjectPicker={showProjectPicker}
                         showSectionPicker={showSectionPicker}
                         styles={styles}
+                        task={task}
                         t={t}
                         tc={tc}
                         retryAudioTranscription={retryAudioTranscription}
                         toggleAudioPlayback={toggleAudioPlayback}
+                        waitingAssignmentInput={waitingAssignmentInput}
+                        waitingAssignmentModalVisible={waitingAssignmentModalVisible}
+                        closeWaitingAssignmentModal={closeWaitingAssignmentModal}
+                        confirmWaitingAssignment={confirmWaitingAssignment}
+                        setWaitingAssignmentInput={setWaitingAssignmentInput}
                         DEFAULT_PROJECT_COLOR={DEFAULT_PROJECT_COLOR}
+                    />
+                    <MarkdownFormatToolbar
+                        selection={descriptionEditor.descriptionSelection}
+                        onSelectionChange={descriptionEditor.setDescriptionSelection}
+                        inputRef={descriptionEditor.descriptionInputRef}
+                        t={t}
+                        tc={tc}
+                        visible={
+                            descriptionEditor.isDescriptionInputFocused
+                            && editTab === 'task'
+                            && !showDescriptionPreview
+                            && !descriptionEditor.descriptionExpanded
+                        }
+                        canUndo={descriptionEditor.descriptionUndoDepth > 0}
+                        onUndo={descriptionEditor.handleDescriptionUndo}
+                        onApplyAction={descriptionEditor.handleDescriptionApplyAction}
+                        onInteractionStart={() => {
+                            descriptionToolbarInteractionUntilRef.current = Date.now() + 300;
+                            descriptionEditor.setIsDescriptionInputFocused(true);
+                        }}
                     />
                 </SafeAreaView>
             </KeyboardAccessoryHost>

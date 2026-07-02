@@ -1,0 +1,3 @@
+- Les rappels repetes peuvent relancer les taches avec heure jusqu'a completion ou report.
+- Bulk Quick Add, imports TickTick et Obsidian, Apple Shortcuts, widgets, groupes Focus et filtres tableau sont plus fluides.
+- Dictee locale, reparation sync, popups clavier, longs titres et edition des taches sont plus fiables.

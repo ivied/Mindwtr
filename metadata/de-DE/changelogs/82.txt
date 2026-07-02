@@ -1,0 +1,4 @@
+- Wiederhol-Erinnerungen fuer Aufgaben mit genauer Uhrzeit.
+- Bulk Quick Add sowie sicherere TickTick- und Obsidian-Importe.
+- Board-/Projektfilter, lokale Diktatmodell-Downloads und relative Startzeiten.
+- Besserer WebDAV-Sync, klarere Erledigt-Sichtbarkeit, Tastaturverhalten, Suche und lange Aufgabentitel.

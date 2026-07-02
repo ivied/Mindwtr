@@ -93,6 +93,7 @@ export function buildTasksWidgetTree(
                 key: 'content',
                 style: {
                     width: 'match_parent',
+                    height: 0,
                     flex: 1,
                 },
             },
@@ -112,6 +113,8 @@ export function buildTasksWidgetTree(
                 borderRadius: 999,
                 textAlign: 'center',
             },
+            maxLines: 1,
+            truncate: 'END',
             clickAction: 'OPEN_URI',
             clickActionData: { uri: quickCaptureUri },
         })

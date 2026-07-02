@@ -6,11 +6,13 @@ const {
   applyGradleCompatPatchToSource,
   applyAlarmPendingIntentPatchToSource,
   applyAlarmDuplicateToastPatchToSource,
+  applyAlarmTimingPatchToSource,
   applyAlarmReminderBehaviorPatchToSource,
   applyAlarmAudioInterfacePatchToSource,
   applyAlarmDismissReceiverPatchToSource,
   applyAlarmReceiverPatchToSource,
   applyAlarmCompleteConstantsPatchToSource,
+  applyAlarmTaskOpenIntentPatchToSource,
   applyAlarmCompleteUtilPatchToSource,
   applyAlarmCompleteReceiverPatchToSource,
   applyAlarmIosCompleteActionPatchToSource,
@@ -52,6 +54,61 @@ describe('patch-alarm-notification-gradle', () => {
     expect(output).not.toContain('Toast.makeText');
     expect(output).toContain('Duplicate alarms are reported to JS via promise rejection');
     expect(output).toContain('return contain;');
+  });
+
+  it('patches Android task reminder timing for exact delivery and sane snooze', () => {
+    const input = `class AlarmUtil {
+    private AlarmManager getAlarmManager() {
+        return (AlarmManager) mContext.getSystemService(Context.ALARM_SERVICE);
+    }
+
+    void setAlarm(Alarm alarm, AlarmManager alarmManager, Calendar calendar, PendingIntent alarmIntent) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, calendar.getTimeInMillis(), alarmIntent);
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            alarmManager.setExact(AlarmManager.RTC_WAKEUP, calendar.getTimeInMillis(), alarmIntent);
+        } else {
+            alarmManager.set(AlarmManager.RTC_WAKEUP, calendar.getTimeInMillis(), alarmIntent);
+        }
+    }
+
+    void snoozeAlarm(AlarmModel alarm) {
+        Calendar calendar = getCalendarFromAlarm(alarm);
+
+        this.stopAlarmSound();
+
+        calendar.add(Calendar.MINUTE, alarm.getSnoozeInterval());
+
+        setAlarmFromCalendar(alarm, calendar);
+
+        long time = System.currentTimeMillis() / 1000;
+
+        alarm.setAlarmId((int) time);
+
+        getAlarmDB().update(alarm);
+
+        Log.e(TAG, "snooze data - " + alarm.toString());
+    }
+}`;
+
+    const output = applyAlarmTimingPatchToSource(input);
+
+    expect(output).toContain('private void setExactOrAllowWhileIdle');
+    expect(output).toContain('alarmManager.canScheduleExactAlarms()');
+    expect(output).toContain('alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, alarmIntent);');
+    expect(output).toContain('alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, alarmIntent);');
+    expect(output).toContain('setExactOrAllowWhileIdle(alarmManager, calendar.getTimeInMillis(), alarmIntent);');
+    expect(output).not.toContain('alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, calendar.getTimeInMillis(), alarmIntent);');
+    expect(output).toContain('Calendar calendar = Calendar.getInstance();');
+    expect(output).not.toContain('Calendar calendar = getCalendarFromAlarm(alarm);');
+    expect(output).toContain('int firedNotificationId = alarm.getAlarmId();');
+    expect(output).toContain('getNotificationManager().cancel(firedNotificationId);');
+    expect(output.indexOf('int firedNotificationId = alarm.getAlarmId();')).toBeLessThan(output.indexOf('alarm.setAlarmId((int) time);'));
+    // Snooze schedules an independent alarm row so the JS reschedule cycle cannot reap it.
+    expect(output).toContain('int snoozedAlarmRowId = getAlarmDB().insert(alarm);');
+    expect(output).toContain('alarm.setId(snoozedAlarmRowId);');
+    expect(output).not.toContain('getAlarmDB().update(alarm);');
+    expect(output.indexOf('getNotificationManager().cancel(firedNotificationId);')).toBeGreaterThan(output.indexOf('int snoozedAlarmRowId = getAlarmDB().insert(alarm);'));
   });
 
   it('patches AlarmUtil reminder behavior away from alarm semantics', () => {
@@ -143,6 +200,19 @@ describe('patch-alarm-notification-gradle', () => {
 }`);
     expect(constants).toContain('NOTIFICATION_ACTION_COMPLETE');
 
+    const openIntent = applyAlarmTaskOpenIntentPatchToSource(`import android.media.MediaPlayer;
+class AlarmUtil {
+    void send(Alarm alarm, Bundle bundle, Intent intent, Context mContext, int notificationID) {
+            PendingIntent pendingIntent = PendingIntent.getActivity(mContext, notificationID, intent, getUpdateCurrentImmutableFlags());
+    }
+}`);
+    expect(openIntent).toContain('import android.net.Uri;');
+    expect(openIntent).toContain('String taskId = bundle.getString("taskId")');
+    expect(openIntent).toContain('intent.setAction(Intent.ACTION_VIEW)');
+    expect(openIntent).toContain('Uri.parse("mindwtr:///focus")');
+    expect(openIntent).toContain('.appendQueryParameter("taskId", taskId)');
+    expect(openIntent).toContain('.appendQueryParameter("taskTab", "view")');
+
     const util = applyAlarmCompleteUtilPatchToSource(`import static com.emekalites.react.alarm.notification.Constants.NOTIFICATION_ACTION_DISMISS;
 import static com.emekalites.react.alarm.notification.Constants.NOTIFICATION_ACTION_SNOOZE;
 class AlarmUtil {
@@ -179,6 +249,7 @@ class AlarmReceiver {
 }`);
     expect(receiver).toContain('case Constants.NOTIFICATION_ACTION_COMPLETE');
     expect(receiver).toContain('payload.putString("actionIdentifier", "complete")');
+    expect(receiver).toContain('NotificationOpenPayloadStore.cache(pendingPayload)');
     expect(receiver).toContain('emit("OnNotificationOpened"');
   });
 
@@ -279,8 +350,20 @@ API_AVAILABLE(ios(10.0)) {
 
   it('keeps the Gradle compatibility rewrite in place', () => {
     const input = `apply plugin: 'maven'
+buildscript {
+  dependencies {
+    classpath 'com.android.tools.build:gradle:3.4.1'
+  }
+}
+
 android {
   compileSdkVersion safeExtGet('compileSdkVersion', DEFAULT_COMPILE_SDK_VERSION)
+}
+
+dependencies {
+    //noinspection GradleDynamicVersion
+    implementation 'com.facebook.react:react-native:+'  // From node_modules
+    implementation 'com.google.code.gson:gson:2.8.6'
 }
 
 afterEvaluate { project ->
@@ -292,5 +375,10 @@ afterEvaluate { project ->
     expect(output).not.toContain("apply plugin: 'maven'");
     expect(output).toContain("compileSdk safeExtGet('compileSdkVersion', DEFAULT_COMPILE_SDK_VERSION)");
     expect(output).not.toContain('afterEvaluate { project ->');
+    expect(output.slice(0, output.indexOf('android {'))).not.toContain('notification-open-intents');
+    expect(output).toContain("classpath 'com.android.tools.build:gradle:3.4.1'");
+    expect(output).toContain("implementation project(':notification-open-intents')");
+    expect(output.indexOf("classpath 'com.android.tools.build:gradle:3.4.1'")).toBeLessThan(output.indexOf("implementation project(':notification-open-intents')"));
+    expect(applyGradleCompatPatchToSource(output).match(/notification-open-intents/g)).toHaveLength(2);
   });
 });

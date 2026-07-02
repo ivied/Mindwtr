@@ -143,6 +143,12 @@ To connect your Mindwtr clients (Desktop or Mobile) to this self-hosted cloud:
 
 For private LAN HTTP, use a local/private address such as `http://192.168.1.20:8787`. For public URLs, use the Caddy HTTPS setup above.
 
+### Dropbox Sync and the Docker PWA
+
+The Docker `mindwtr-app` image serves the browser/PWA build. Native Dropbox OAuth sync is not available in this runtime because Dropbox connection is implemented by the native desktop and mobile apps. Adding `VITE_DROPBOX_APP_KEY` or `DROPBOX_APP_KEY` through `.env`, `env_file`, compose runtime environment, or a Docker build argument will not enable Dropbox in Docker.
+
+For Docker-hosted sync, use the bundled self-hosted cloud server or WebDAV. If the self-hosted endpoint is behind Authelia or another interactive SSO proxy, configure the proxy to let the Mindwtr sync/API path use Mindwtr's bearer token directly; the mobile app cannot complete an Authelia browser login in front of `/v1/data`.
+
 ### Task Automation API
 
 The same `mindwtr-cloud` container also exposes the REST API for task automation. It uses the same base URL and the same bearer token as sync.

@@ -2,7 +2,11 @@ import type { TimeEstimate } from '../types';
 
 export type AIProviderId = 'gemini' | 'openai' | 'anthropic';
 
-export type AIReasoningEffort = 'low' | 'medium' | 'high';
+// 'minimal' minimizes reasoning tokens for the fastest time-to-first-token on
+// latency-sensitive paths (e.g. the copilot type-ahead) on GPT-5 reasoning models.
+export type AIReasoningEffort = 'minimal' | 'low' | 'medium' | 'high';
+
+export type AIRequestExtraBodyParams = Record<string, unknown>;
 
 export type AudioCaptureMode = 'smart_parse' | 'transcribe_only';
 
@@ -15,6 +19,9 @@ export interface ReviewSnapshotItem {
     title: string;
     daysStale: number;
     status: 'next' | 'waiting' | 'project';
+    startTime?: string;
+    dueDate?: string;
+    reviewAt?: string;
 }
 
 export interface ReviewSuggestion {
@@ -68,6 +75,9 @@ export interface BreakdownResponse {
 export interface ClarifyInput {
     title: string;
     contexts?: string[];
+    startTime?: string;
+    dueDate?: string;
+    reviewAt?: string;
     projectTitle?: string;
     projectTasks?: string[];
 }
@@ -84,8 +94,10 @@ export interface AIProviderConfig {
     apiKey: string;
     model: string;
     endpoint?: string;
+    fetcher?: typeof fetch;
     reasoningEffort?: AIReasoningEffort;
     thinkingBudget?: number;
+    extraBodyParams?: AIRequestExtraBodyParams;
     timeoutMs?: number;
 }
 

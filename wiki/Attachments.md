@@ -56,6 +56,7 @@ sudo dnf install gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plug
 - Attachment metadata syncs with tasks/projects.
 - Actual files sync after metadata.
 - If a file is missing locally, the attachment stays visible and can be re-downloaded when available.
+- Cleanup checks references known to the current device. If another device has not synced yet, shared remote attachment files are not globally reference-counted.
 
 > Tip: Large files can slow sync. Prefer smaller attachments or links when possible.
 

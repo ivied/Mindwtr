@@ -51,6 +51,9 @@ export const expandedMarkdownEditorStyles = StyleSheet.create({
         flex: 1,
         padding: 16,
     },
+    contentWithToolbar: {
+        paddingBottom: 64,
+    },
     editorInput: {
         flex: 1,
         borderWidth: 1,

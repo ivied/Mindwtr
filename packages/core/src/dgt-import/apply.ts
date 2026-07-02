@@ -31,6 +31,7 @@ export const applyDgtImport = (
     projects: [...currentData.projects],
     sections: [...currentData.sections],
     areas: [...currentData.areas],
+    people: [...(currentData.people ?? [])],
     settings,
   };
 

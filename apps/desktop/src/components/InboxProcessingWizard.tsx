@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import { ArrowRight, BookOpen, CheckCircle, ChevronLeft, ClipboardList, Clock, Trash2, User, X } from 'lucide-react';
-import { DEFAULT_PROJECT_COLOR, safeFormatDate, safeParseDate, tFallback, type Area, type Project, type Task, type TaskPriority, type TimeEstimate } from '@mindwtr/core';
+import { DEFAULT_PROJECT_COLOR, filterProjectsBySelectedArea, safeFormatDate, safeParseDate, tFallback, type Area, type Project, type Task, type TaskPriority, type TimeEstimate } from '@mindwtr/core';
 
 import { cn } from '../lib/utils';
 import {
@@ -8,11 +8,11 @@ import {
     type InboxProcessingScheduleFieldKey,
     type InboxProcessingScheduleFieldsControls,
 } from './InboxProcessingScheduleFields';
+import { TokenAutocompleteInput } from './Task/TokenAutocompleteInput';
 import { ProjectSelector } from './ui/ProjectSelector';
-import { AssignedToPicker } from './AssignedToPicker';
 import { QuickDateChips } from './QuickDateChips';
 
-export type ProcessingStep = 'refine' | 'actionable' | 'projectcheck' | 'twomin' | 'decide' | 'context' | 'project' | 'delegate';
+export type ProcessingStep = 'refine' | 'actionable' | 'projectcheck' | 'twomin' | 'decide' | 'context' | 'reference' | 'project' | 'delegate';
 
 export type InboxProcessingWizardProps = {
     t: (key: string) => string;
@@ -48,6 +48,7 @@ export type InboxProcessingWizardProps = {
     handleDelegateBack: () => void;
     handleSendDelegateRequest: () => void;
     handleConfirmWaiting: () => void;
+    handleConfirmReference: () => void;
     selectedContexts: string[];
     selectedTags: string[];
     selectedEnergyLevel?: Task['energyLevel'];
@@ -66,12 +67,13 @@ export type InboxProcessingWizardProps = {
     selectedPriority?: TaskPriority;
     setSelectedPriority: (value: TaskPriority | undefined) => void;
     allContexts: string[];
+    allTags: string[];
     customContext: string;
     setCustomContext: (value: string) => void;
-    addCustomContext: () => void;
+    addCustomContext: (value?: string) => void;
     customTag: string;
     setCustomTag: (value: string) => void;
-    addCustomTag: () => void;
+    addCustomTag: (value?: string) => void;
     toggleContext: (ctx: string) => void;
     toggleTag: (tag: string) => void;
     suggestedContexts: string[];
@@ -89,7 +91,7 @@ export type InboxProcessingWizardProps = {
     projects: Project[];
     areas: Area[];
     filteredProjects: Project[];
-    addProject: (title: string, color: string) => Promise<Project | null>;
+    addProject: (title: string, color: string, initialProps?: Partial<Project>) => Promise<Project | null>;
     handleSetProject: (projectId: string | null) => void;
     hasExactProjectMatch: boolean;
     areaById: Map<string, Area>;
@@ -154,6 +156,7 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
     handleDelegateBack,
     handleSendDelegateRequest,
     handleConfirmWaiting,
+    handleConfirmReference,
     selectedContexts,
     selectedTags,
     selectedEnergyLevel,
@@ -172,6 +175,7 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
     selectedPriority,
     setSelectedPriority,
     allContexts,
+    allTags,
     customContext,
     setCustomContext,
     addCustomContext,
@@ -218,6 +222,13 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
         : null;
     const laterLabel = tFallback(t, 'process.later', 'Later');
     const laterHint = tFallback(t, 'process.laterHint', 'Set a start date and move this to Next.');
+    const isReferenceOrganizationStep = processingStep === 'reference';
+    const selectedOrganizationCount = selectedContexts.length + selectedTags.length;
+    const compareLabels = (left: string, right: string) =>
+        left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' });
+    const sortedProjects = [...projects].sort((a, b) => compareLabels(a.title, b.title));
+    const projectFilterAreaId = selectedAreaId || undefined;
+    const areaFilteredProjects = filterProjectsBySelectedArea(sortedProjects, projectFilterAreaId);
 
     const stepLabel: Record<ProcessingStep, string> = {
         refine: t('process.refineTitle'),
@@ -226,12 +237,13 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
         twomin: t('process.twoMin'),
         decide: t('process.nextStep'),
         context: t('process.context'),
+        reference: t('process.reference'),
         project: t('process.project'),
         delegate: t('process.delegateTitle'),
     };
 
     return (
-        <div className="bg-card border border-border rounded-xl animate-in fade-in overflow-hidden">
+        <div className="bg-card border border-border rounded-xl animate-in fade-in overflow-visible">
             {/* Header */}
             <div className="flex items-center justify-between px-5 py-3.5">
                 <div className="flex items-center gap-2.5">
@@ -333,35 +345,11 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
                                 rows={2}
                             />
                         </div>
-                        {showProjectInRefine && showProjectField && (
-                            <div className="space-y-1">
-                                <label className="text-[11px] text-muted-foreground font-medium">{t('taskEdit.projectLabel')}</label>
-                                <ProjectSelector
-                                    projects={projects}
-                                    value={selectedProjectId ?? ''}
-                                    onChange={(value) => {
-                                        const nextProjectId = value || null;
-                                        setSelectedProjectId(nextProjectId);
-                                        if (nextProjectId) {
-                                            setSelectedAreaId(null);
-                                        }
-                                    }}
-                                    onCreateProject={async (title) => {
-                                        const created = await addProject(title, DEFAULT_PROJECT_COLOR);
-                                        return created?.id ?? null;
-                                    }}
-                                    placeholder={t('process.project')}
-                                    noProjectLabel={t('process.noProject')}
-                                    searchPlaceholder={t('projects.search')}
-                                    noMatchesLabel={t('common.noMatches')}
-                                    createProjectLabel={t('projects.create')}
-                                />
-                            </div>
-                        )}
                         {showProjectInRefine && showAreaField && !selectedProjectId && (
                             <div className="space-y-1">
                                 <label className="text-[11px] text-muted-foreground font-medium">{t('taskEdit.areaLabel')}</label>
                                 <select
+                                    aria-label={t('taskEdit.areaLabel')}
                                     value={selectedAreaId ?? ''}
                                     onChange={(event) => setSelectedAreaId(event.target.value || null)}
                                     className="w-full bg-muted/50 border border-border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary/40 focus:outline-none"
@@ -373,6 +361,39 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
                                         </option>
                                     ))}
                                 </select>
+                            </div>
+                        )}
+                        {showProjectInRefine && showProjectField && (
+                            <div className="space-y-1">
+                                <label className="text-[11px] text-muted-foreground font-medium">{t('taskEdit.projectLabel')}</label>
+                                <ProjectSelector
+                                    projects={areaFilteredProjects}
+                                    allProjects={sortedProjects}
+                                    value={selectedProjectId ?? ''}
+                                    onChange={(value) => {
+                                        const nextProjectId = value || null;
+                                        setSelectedProjectId(nextProjectId);
+                                        if (nextProjectId) {
+                                            setSelectedAreaId(null);
+                                        }
+                                    }}
+                                    onCreateProject={async (title) => {
+                                        const created = await addProject(
+                                            title,
+                                            DEFAULT_PROJECT_COLOR,
+                                            projectFilterAreaId ? { areaId: projectFilterAreaId } : undefined,
+                                        );
+                                        return created?.id ?? null;
+                                    }}
+                                    placeholder={t('process.project')}
+                                    noProjectLabel={t('process.noProject')}
+                                    searchPlaceholder={t('projects.search')}
+                                    noMatchesLabel={t('common.noMatches')}
+                                    emptyLabel={projectFilterAreaId ? t('projects.noProjectsInArea') : undefined}
+                                    createProjectLabel={t('projects.create')}
+                                    controlClassName="rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary/40 focus:outline-none"
+                                    menuClassName="text-sm"
+                                />
                             </div>
                         )}
                     </div>
@@ -590,7 +611,7 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
                 </div>
             )}
 
-            {processingStep === 'context' && (
+            {(processingStep === 'context' || processingStep === 'reference') && (
                 <div className="space-y-4">
                     <p className="text-center text-sm text-muted-foreground">
                         {t('process.contextDesc')} {t('process.selectMultipleHint')}
@@ -623,11 +644,13 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
                     {showContextsField ? (
                         <>
                             <div className="flex gap-2">
-                                <input
-                                    type="text"
+                                <TokenAutocompleteInput
                                     placeholder="@home"
                                     value={customContext}
-                                    onChange={(e) => setCustomContext(e.target.value)}
+                                    onChange={setCustomContext}
+                                    suggestions={[...suggestedContexts, ...allContexts]}
+                                    prefix="@"
+                                    onAcceptToken={(token) => addCustomContext(token)}
                                     className="flex-1 bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary"
                                     onKeyDown={(e) => {
                                         if (e.key === 'Enter') {
@@ -636,7 +659,7 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
                                     }}
                                 />
                                 <button
-                                    onClick={addCustomContext}
+                                    onClick={() => addCustomContext()}
                                     disabled={!customContext.trim()}
                                     className="px-4 py-2 bg-secondary text-secondary-foreground rounded-lg text-sm font-medium hover:bg-secondary/80 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
@@ -667,25 +690,6 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
                                     </div>
                                 </div>
                             )}
-
-                            {allContexts.length > 0 && (
-                                <div className="flex flex-wrap gap-2 justify-center">
-                                    {allContexts.filter((ctx) => !suggestedContexts.includes(ctx)).map(ctx => (
-                                        <button
-                                            key={ctx}
-                                            onClick={() => toggleContext(ctx)}
-                                            className={cn(
-                                                'px-4 py-2 rounded-full text-sm font-medium transition-colors',
-                                                selectedContexts.includes(ctx)
-                                                    ? 'bg-primary text-primary-foreground'
-                                                    : 'bg-muted hover:bg-muted/80'
-                                            )}
-                                        >
-                                            {ctx}
-                                        </button>
-                                    ))}
-                                </div>
-                            )}
                         </>
                     ) : null}
 
@@ -695,11 +699,13 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
                                 {t('taskEdit.tagsLabel')}
                             </div>
                             <div className="flex gap-2">
-                                <input
-                                    type="text"
+                                <TokenAutocompleteInput
                                     placeholder="#deep-work"
                                     value={customTag}
-                                    onChange={(e) => setCustomTag(e.target.value)}
+                                    onChange={setCustomTag}
+                                    suggestions={[...suggestedTags, ...allTags]}
+                                    prefix="#"
+                                    onAcceptToken={(token) => addCustomTag(token)}
                                     className="flex-1 bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary"
                                     onKeyDown={(e) => {
                                         if (e.key === 'Enter') {
@@ -708,7 +714,7 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
                                     }}
                                 />
                                 <button
-                                    onClick={addCustomTag}
+                                    onClick={() => addCustomTag()}
                                     disabled={!customTag.trim()}
                                     className="px-4 py-2 bg-secondary text-secondary-foreground rounded-lg text-sm font-medium hover:bg-secondary/80 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
@@ -736,7 +742,7 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
                         </div>
                     ) : null}
 
-                    {showPriorityField && (
+                    {!isReferenceOrganizationStep && showPriorityField && (
                         <div className="space-y-2">
                             <div className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">
                                 {t('taskEdit.priorityLabel')}
@@ -763,7 +769,7 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
                         </div>
                     )}
 
-                    {(showEnergyLevelField || showAssignedToField || showTimeEstimateField) && (
+                    {!isReferenceOrganizationStep && (showEnergyLevelField || showAssignedToField || showTimeEstimateField) && (
                         <div className="grid gap-3 md:grid-cols-2">
                             {showEnergyLevelField && (
                                 <div className="space-y-2">
@@ -810,12 +816,12 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
                                     <div className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">
                                         {t('taskEdit.assignedTo')}
                                     </div>
-                                    <AssignedToPicker
-                                        ariaLabel={t('taskEdit.assignedTo')}
+                                    <input
+                                        aria-label={t('taskEdit.assignedTo')}
                                         value={selectedAssignedTo}
-                                        onChange={setSelectedAssignedTo}
+                                        onChange={(event) => setSelectedAssignedTo(event.target.value)}
                                         placeholder={t('taskEdit.assignedToPlaceholder')}
-                                        className="bg-muted border border-border rounded-lg [&>input]:bg-transparent [&>input]:border-0 [&>input]:px-3 [&>input]:py-2"
+                                        className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary/40 focus:outline-none"
                                     />
                                 </div>
                             )}
@@ -823,11 +829,11 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
                     )}
 
                     <button
-                        onClick={handleConfirmContexts}
+                        onClick={isReferenceOrganizationStep ? handleConfirmReference : handleConfirmContexts}
                         className="w-full py-3 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90"
                     >
-                        {selectedContexts.length > 0
-                            ? `${t('process.next')} → (${selectedContexts.length})`
+                        {selectedOrganizationCount > 0
+                            ? `${t('process.next')} → (${selectedOrganizationCount})`
                             : `${t('process.next')} → (${t('process.noContext')})`}
                     </button>
                 </div>
@@ -872,6 +878,24 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
 
                     {convertToProject ? (
                         <div className="space-y-3">
+                            {showAreaField ? (
+                                <div className="space-y-1">
+                                    <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.areaLabel')}</label>
+                                    <select
+                                        aria-label={t('taskEdit.areaLabel')}
+                                        value={selectedAreaId ?? ''}
+                                        onChange={(event) => setSelectedAreaId(event.target.value || null)}
+                                        className="w-full bg-card border border-border rounded-lg py-2 px-3 text-sm focus:ring-2 focus:ring-primary focus:border-transparent"
+                                    >
+                                        <option value="">{t('projects.noArea')}</option>
+                                        {areas.map((area) => (
+                                            <option key={area.id} value={area.id}>
+                                                {area.name}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                            ) : null}
                             <div className="space-y-1">
                                 <label className="text-xs text-muted-foreground font-medium">{t('projects.title')}</label>
                                 <input
@@ -903,6 +927,7 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
                                 <div className="space-y-1">
                                     <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.areaLabel')}</label>
                                     <select
+                                        aria-label={t('taskEdit.areaLabel')}
                                         value={selectedAreaId ?? ''}
                                         onChange={(event) => setSelectedAreaId(event.target.value || null)}
                                         className="w-full bg-card border border-border rounded-lg py-2 px-3 text-sm focus:ring-2 focus:ring-primary focus:border-transparent"
@@ -927,12 +952,16 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
                                                 if (!projectSearch.trim()) return;
                                                 e.preventDefault();
                                                 const title = projectSearch.trim();
-                                                const existing = projects.find((project) => project.title.toLowerCase() === title.toLowerCase());
+                                                const existing = filteredProjects.find((project) => project.title.toLowerCase() === title.toLowerCase());
                                                 if (existing) {
                                                     handleSetProject(existing.id);
                                                     return;
                                                 }
-                                                const created = await addProject(title, DEFAULT_PROJECT_COLOR);
+                                                const created = await addProject(
+                                                    title,
+                                                    DEFAULT_PROJECT_COLOR,
+                                                    projectFilterAreaId ? { areaId: projectFilterAreaId } : undefined,
+                                                );
                                                 if (!created) return;
                                                 handleSetProject(created.id);
                                                 setProjectSearch('');
@@ -946,7 +975,11 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
                                                 onClick={async () => {
                                                     const title = projectSearch.trim();
                                                     if (!title) return;
-                                                    const created = await addProject(title, DEFAULT_PROJECT_COLOR);
+                                                    const created = await addProject(
+                                                        title,
+                                                        DEFAULT_PROJECT_COLOR,
+                                                        projectFilterAreaId ? { areaId: projectFilterAreaId } : undefined,
+                                                    );
                                                     if (!created) return;
                                                     handleSetProject(created.id);
                                                     setProjectSearch('');

@@ -1,4 +1,5 @@
 import {
+  getDueReminderRepeatTimes,
   getNextScheduledAt,
   getSystemDefaultLanguage,
   getTranslations,
@@ -12,7 +13,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeEventEmitter, NativeModules, PermissionsAndroid, Platform } from 'react-native';
 
-import { logWarn } from './app-log';
+import { logInfo, logWarn } from './app-log';
 import {
   areDueDateRemindersEnabled,
   areStartDateRemindersEnabled,
@@ -20,6 +21,7 @@ import {
   hasActiveMobileNotificationFeature,
   isWeeklyReviewReminderEnabled,
 } from './mobile-notification-settings';
+import { ensureReminderNotificationChannel } from '@/modules/notification-open-intents';
 import { getDuplicateAlarmRetryFireAt } from './notification-service-local-utils';
 
 type NotificationOpenPayload = {
@@ -27,6 +29,7 @@ type NotificationOpenPayload = {
   actionIdentifier?: string;
   taskId?: string;
   projectId?: string;
+  context?: string;
   kind?: string;
 };
 
@@ -59,6 +62,11 @@ type LocalAlarmMapEntry = {
   signature?: string;
 };
 
+type PomodoroAlarmEntry = {
+  id: AlarmId;
+  fireAtMs?: number;
+};
+
 type LocalAlarmMap = Record<string, LocalAlarmMapEntry>;
 
 type LocalAlarmConfig = {
@@ -76,7 +84,9 @@ type NativeEmitterSubscription = {
 };
 
 const LOCAL_ALARM_MAP_KEY = 'mindwtr:local:alarms:v1';
-const LOCAL_ALARM_CHANNEL = 'mindwtr_reminders_v2';
+const LOCAL_POMODORO_ALARM_KEY = 'mindwtr:local:pomodoro-alarm:v1';
+const LOCAL_NOTIFICATION_CHANNEL = 'mindwtr_reminders_v2';
+const LOCAL_NOTIFICATION_CHANNEL_NAME = 'Mindwtr reminders';
 const LOCAL_NOTIFICATION_COLOR = '#3b82f6';
 const LOCAL_SMALL_ICON = 'ic_launcher';
 const LOCAL_DIGEST_MORNING_KEY = 'digest:morning';
@@ -91,6 +101,7 @@ const ALARM_SCHEDULE_BATCH_SIZE = 10;
 const ONE_SHOT_TOP_UP_DELAY_MS = 5_000;
 const MAX_SETTIMEOUT_DELAY_MS = 24 * 60 * 60 * 1000;
 const NOTIFICATION_EVENT_RESCHEDULE_DEBOUNCE_MS = 250;
+const TASK_REMINDER_SNOOZE_MINUTES = 10;
 
 let started = false;
 let alarmApi: AlarmNotificationsApi | null = null;
@@ -121,8 +132,50 @@ const logNotificationError = (message: string, error?: unknown) => {
   void logWarn(`[Local Notifications] ${message}`, { scope: 'notifications', extra });
 };
 
+const logNotificationInfo = (message: string, extra?: Record<string, unknown>) => {
+  void logInfo(`[Local Notifications] ${message}`, { scope: 'notifications', extra });
+};
+
+async function loadPomodoroAlarmEntry(): Promise<PomodoroAlarmEntry | null> {
+  try {
+    const raw = await AsyncStorage.getItem(LOCAL_POMODORO_ALARM_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PomodoroAlarmEntry>;
+    const id = Number(parsed?.id);
+    if (!Number.isFinite(id)) return null;
+    const fireAtMs = Number(parsed?.fireAtMs);
+    return {
+      id: Math.floor(id),
+      ...(Number.isFinite(fireAtMs) ? { fireAtMs } : {}),
+    };
+  } catch (error) {
+    logNotificationError('Failed to load pomodoro alarm', error);
+    return null;
+  }
+}
+
+async function savePomodoroAlarmEntry(entry: PomodoroAlarmEntry): Promise<void> {
+  try {
+    await AsyncStorage.setItem(LOCAL_POMODORO_ALARM_KEY, JSON.stringify(entry));
+  } catch (error) {
+    logNotificationError('Failed to persist pomodoro alarm', error);
+  }
+}
+
+async function clearPomodoroAlarmEntry(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(LOCAL_POMODORO_ALARM_KEY);
+  } catch (error) {
+    logNotificationError('Failed to clear pomodoro alarm', error);
+  }
+}
+
 function getTaskKey(taskId: string): string {
   return `${LOCAL_TASK_KEY_PREFIX}${taskId}`;
+}
+
+function getTaskRepeatKey(taskId: string, index: number): string {
+  return `${getTaskKey(taskId)}:r${index}`;
 }
 
 function getProjectKey(projectId: string): string {
@@ -176,6 +229,17 @@ async function getAndroidNotificationPermissionStatus(): Promise<NotificationPer
   }
 }
 
+async function ensureLocalReminderNotificationChannel(): Promise<void> {
+  try {
+    await ensureReminderNotificationChannel(LOCAL_NOTIFICATION_CHANNEL, LOCAL_NOTIFICATION_CHANNEL_NAME);
+    logNotificationInfo('Android reminder notification channel ensured', {
+      channel: LOCAL_NOTIFICATION_CHANNEL,
+    });
+  } catch (error) {
+    logNotificationError('Failed to ensure local notification channel', error);
+  }
+}
+
 async function loadAlarmApi(): Promise<AlarmNotificationsApi | null> {
   if (alarmApi) return alarmApi;
   try {
@@ -195,6 +259,8 @@ async function loadAlarmApi(): Promise<AlarmNotificationsApi | null> {
 
 async function clearScheduledAlarms(api: AlarmNotificationsApi | null): Promise<void> {
   await loadAlarmMapIfNeeded();
+  await cancelLocalPomodoroCompletionNotification(api, { removeFired: true });
+  const scheduledAlarmCount = alarmMap.size;
 
   if (api) {
     for (const entry of alarmMap.values()) {
@@ -217,6 +283,7 @@ async function clearScheduledAlarms(api: AlarmNotificationsApi | null): Promise<
   alarmMap.clear();
   await saveAlarmMap();
   loadedAlarmMap = false;
+  logNotificationInfo('Scheduled alarms cleared', { scheduledAlarmCount });
 }
 
 function serializeAlarmMap(map: Map<string, LocalAlarmMapEntry>): LocalAlarmMap {
@@ -365,6 +432,7 @@ function attachNativeEventListeners(): void {
         actionIdentifier: data.actionIdentifier || 'open',
         taskId: data.taskId,
         projectId: data.projectId,
+        context: data.context,
         kind: data.kind,
       });
     } catch (error) {
@@ -429,6 +497,7 @@ async function cancelAlarmByKey(api: AlarmNotificationsApi, key: string): Promis
   }
   alarmMap.delete(key);
   configByKey.delete(key);
+  logNotificationInfo('Alarm canceled', { alarmKey: key, alarmId: entry.id });
   return true;
 }
 
@@ -449,7 +518,7 @@ async function scheduleAlarmForKey(api: AlarmNotificationsApi, key: string, conf
   const detailsBase: Record<string, unknown> = {
     title: config.title,
     message: normalizeNotificationMessage(config.title, config.message),
-    channel: LOCAL_ALARM_CHANNEL,
+    channel: LOCAL_NOTIFICATION_CHANNEL,
     auto_cancel: true,
     small_icon: LOCAL_SMALL_ICON,
     color: LOCAL_NOTIFICATION_COLOR,
@@ -467,6 +536,7 @@ async function scheduleAlarmForKey(api: AlarmNotificationsApi, key: string, conf
       alarmKey: key,
       ...(config.hasCompleteAction === true ? { notificationActionComplete: 'true' } : {}),
     },
+    ...(config.hasSnoozeAction === true ? { snooze_interval: TASK_REMINDER_SNOOZE_MINUTES } : {}),
   };
 
   let scheduledId: number | null = null;
@@ -486,12 +556,20 @@ async function scheduleAlarmForKey(api: AlarmNotificationsApi, key: string, conf
         return;
       }
       scheduledId = Math.floor(id);
+      logNotificationInfo('Alarm scheduled', {
+        alarmKey: key,
+        alarmId: scheduledId,
+        fireAt: fireAt.toISOString(),
+        retryCount: retry,
+        scheduleType: config.repeatInterval ? 'repeat' : 'once',
+      });
       break;
     } catch (error) {
       lastError = error;
       if (isDuplicateAlarmError(error) && retry < MAX_DUPLICATE_ALARM_RETRIES) {
         continue;
       }
+      logNotificationError(`Failed to schedule alarm (${key})`, error);
       throw error;
     }
   }
@@ -543,13 +621,32 @@ async function runRescheduleCycle(api: AlarmNotificationsApi): Promise<void> {
   const includeStartTime = areStartDateRemindersEnabled(settings);
   const includeDueDate = areDueDateRemindersEnabled(settings);
   const weeklyReviewEnabled = isWeeklyReviewReminderEnabled(settings);
+  const activeFeature = hasActiveMobileNotificationFeature(settings);
 
-  if (!hasActiveMobileNotificationFeature(settings)) {
+  logNotificationInfo('Reschedule cycle started', {
+    taskCount: tasks.length,
+    projectCount: projects.length,
+    existingAlarmCount: alarmMap.size,
+    activeFeature,
+    taskRemindersEnabled,
+    includeStartTime,
+    includeDueDate,
+    includeReviewAt: taskRemindersEnabled && settings.reviewAtNotificationsEnabled !== false,
+    weeklyReviewEnabled,
+  });
+
+  if (!activeFeature) {
     clearOneShotTopUpTimer();
     for (const key of Array.from(alarmMap.keys())) {
       await cancelAlarmByKey(api, key);
     }
     await saveAlarmMap();
+    logNotificationInfo('Reschedule cycle complete', {
+      activeFeature,
+      scheduledAlarmCount: alarmMap.size,
+      oneShotReminderCount: 0,
+      scheduledOneShotReminderCount: 0,
+    });
     return;
   }
 
@@ -602,9 +699,88 @@ async function runRescheduleCycle(api: AlarmNotificationsApi): Promise<void> {
   const nowMs = now.getTime();
   const includeReviewAt = taskRemindersEnabled && settings.reviewAtNotificationsEnabled !== false;
   const oneShotReminders: OneShotReminderRequest[] = [];
+  let dateOnlyDueDateCount = 0;
+  let futureDueDateReminderCount = 0;
+  let pastDueDateReminderCount = 0;
+  let dateOnlyStartTimeCount = 0;
+  let futureStartTimeReminderCount = 0;
+  let pastStartTimeReminderCount = 0;
+  let futureTaskReviewReminderCount = 0;
+  let pastTaskReviewReminderCount = 0;
+  let suppressedTaskReminderCount = 0;
+  let taskReminderCount = 0;
+  let taskReviewReminderCount = 0;
+  let projectReviewReminderCount = 0;
 
   if (taskRemindersEnabled) {
     for (const task of tasks) {
+      const suppressTaskReminders = task.suppressMindwtrReminders === true;
+      const hasSuppressedTaskReminder = (includeDueDate && hasTimeComponent(task.dueDate))
+        || (includeStartTime && hasTimeComponent(task.startTime));
+      if (suppressTaskReminders && hasSuppressedTaskReminder) {
+        suppressedTaskReminderCount += 1;
+      }
+      if (!suppressTaskReminders && includeDueDate && task.dueDate) {
+        if (hasTimeComponent(task.dueDate)) {
+          const dueAt = safeParseDate(task.dueDate);
+          const dueAtMs = dueAt?.getTime() ?? NaN;
+          if (Number.isFinite(dueAtMs) && dueAtMs > nowMs) {
+            futureDueDateReminderCount += 1;
+          } else if (Number.isFinite(dueAtMs)) {
+            pastDueDateReminderCount += 1;
+          }
+        } else {
+          dateOnlyDueDateCount += 1;
+        }
+      }
+      if (!suppressTaskReminders && includeStartTime && task.startTime) {
+        if (hasTimeComponent(task.startTime)) {
+          const startAt = safeParseDate(task.startTime);
+          const startAtMs = startAt?.getTime() ?? NaN;
+          if (Number.isFinite(startAtMs) && startAtMs > nowMs) {
+            futureStartTimeReminderCount += 1;
+          } else if (Number.isFinite(startAtMs)) {
+            pastStartTimeReminderCount += 1;
+          }
+        } else {
+          dateOnlyStartTimeCount += 1;
+        }
+      }
+      if (includeReviewAt && task.reviewAt && hasTimeComponent(task.reviewAt)) {
+        const reviewAt = safeParseDate(task.reviewAt);
+        const reviewAtMs = reviewAt?.getTime() ?? NaN;
+        if (Number.isFinite(reviewAtMs) && reviewAtMs > nowMs) {
+          futureTaskReviewReminderCount += 1;
+        } else if (Number.isFinite(reviewAtMs)) {
+          pastTaskReviewReminderCount += 1;
+        }
+      }
+
+      // Bounded due-time repeat occurrences (after the due moment). Scheduled independently of the
+      // base reminder below: a task whose due time already passed has no future `next`, but its
+      // remaining repeat occurrences must still fire. Past occurrences are reaped via activeKeys.
+      const repeatTimes = getDueReminderRepeatTimes(task, { includeStartTime, includeDueDate, includeReviewAt });
+      for (let repeatIndex = 0; repeatIndex < repeatTimes.length; repeatIndex += 1) {
+        const repeatFireAt = repeatTimes[repeatIndex];
+        const repeatFireAtMs = repeatFireAt.getTime();
+        if (repeatFireAtMs <= nowMs) continue;
+        oneShotReminders.push({
+          key: getTaskRepeatKey(task.id, repeatIndex + 1), // 1-based: repeatTimes[0] = due + N => :r1
+          fireAtMs: repeatFireAtMs,
+          config: {
+            title: task.title,
+            message: task.description || '',
+            fireAt: repeatFireAt,
+            hasSnoozeAction: true,
+            hasCompleteAction: true,
+            data: {
+              kind: 'task-reminder',
+              taskId: task.id,
+            },
+          },
+        });
+      }
+
       const next = getNextScheduledAt(task, now, { includeStartTime, includeDueDate, includeReviewAt });
       const fireAtMs = next?.getTime() ?? NaN;
       if (!next || fireAtMs <= nowMs) continue;
@@ -612,6 +788,11 @@ async function runRescheduleCycle(api: AlarmNotificationsApi): Promise<void> {
         ? safeParseDate(task.reviewAt)
         : null;
       const kind = isSameScheduleTime(next, reviewAt) ? 'task-review' : 'task-reminder';
+      if (kind === 'task-review') {
+        taskReviewReminderCount += 1;
+      } else {
+        taskReminderCount += 1;
+      }
       const key = getTaskKey(task.id);
       oneShotReminders.push({
         key,
@@ -643,6 +824,7 @@ async function runRescheduleCycle(api: AlarmNotificationsApi): Promise<void> {
       }
       const fireAtMs = reviewAt.getTime();
       if (fireAtMs <= nowMs) continue;
+      projectReviewReminderCount += 1;
       const key = getProjectKey(project.id);
       oneShotReminders.push({
         key,
@@ -670,6 +852,26 @@ async function runRescheduleCycle(api: AlarmNotificationsApi): Promise<void> {
 
   await cancelInactiveKeys(api, activeKeys);
   await saveAlarmMap();
+  logNotificationInfo('Reschedule cycle complete', {
+    activeFeature,
+    scheduledAlarmCount: alarmMap.size,
+    oneShotReminderCount: oneShotReminders.length,
+    scheduledOneShotReminderCount: cappedOneShotReminders.length,
+    maxPendingOneShotReminderAlarms: getMaxPendingOneShotReminderAlarms(),
+    nextOneShotFireAt: cappedOneShotReminders[0]?.config.fireAt.toISOString() ?? '',
+    taskReminderCount,
+    taskReviewReminderCount,
+    projectReviewReminderCount,
+    dateOnlyDueDateCount,
+    futureDueDateReminderCount,
+    pastDueDateReminderCount,
+    dateOnlyStartTimeCount,
+    futureStartTimeReminderCount,
+    pastStartTimeReminderCount,
+    futureTaskReviewReminderCount,
+    pastTaskReviewReminderCount,
+    suppressedTaskReminderCount,
+  });
 }
 
 function enqueueReschedule(api: AlarmNotificationsApi): void {
@@ -699,13 +901,17 @@ export function setLocalNotificationOpenHandler(handler: NotificationOpenHandler
 export async function requestLocalNotificationPermission(): Promise<NotificationPermissionResult> {
   if (Platform.OS === 'android') {
     const currentStatus = await getAndroidNotificationPermissionStatus();
+    logNotificationInfo('Android notification permission checked', currentStatus);
     if (currentStatus.granted) {
+      await ensureLocalReminderNotificationChannel();
       return currentStatus;
     }
 
     try {
       const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+      logNotificationInfo('Android notification permission requested', { result });
       if (result === PermissionsAndroid.RESULTS.GRANTED) {
+        await ensureLocalReminderNotificationChannel();
         return { granted: true, canAskAgain: true };
       }
       if (result === PermissionsAndroid.RESULTS.NEVER_ASK_AGAIN) {
@@ -751,7 +957,7 @@ export async function sendLocalMobileNotification(
     const details = {
       title: trimmedTitle,
       message: normalizeNotificationMessage(trimmedTitle, message),
-      channel: LOCAL_ALARM_CHANNEL,
+      channel: LOCAL_NOTIFICATION_CHANNEL,
       auto_cancel: true,
       small_icon: LOCAL_SMALL_ICON,
       color: LOCAL_NOTIFICATION_COLOR,
@@ -781,18 +987,108 @@ export async function sendLocalMobileNotification(
   }
 }
 
+export async function cancelLocalPomodoroCompletionNotification(
+  loadedApi?: AlarmNotificationsApi | null,
+  options: { removeFired?: boolean } = {},
+): Promise<void> {
+  const api = loadedApi ?? await loadAlarmApi();
+  const entry = await loadPomodoroAlarmEntry();
+  if (api && entry) {
+    try {
+      api.deleteAlarm(entry.id);
+      api.deleteRepeatingAlarm(entry.id);
+      const shouldRemoveFired = options.removeFired ?? (!entry.fireAtMs || entry.fireAtMs > Date.now());
+      if (shouldRemoveFired) {
+        api.removeFiredNotification(entry.id);
+      }
+    } catch (error) {
+      logNotificationError('Failed to cancel pomodoro alarm', error);
+    }
+  }
+  await clearPomodoroAlarmEntry();
+}
+
+export async function scheduleLocalPomodoroCompletionNotification(
+  title: string,
+  message: string,
+  fireAt: Date,
+  data?: Record<string, string>,
+): Promise<void> {
+  const trimmedTitle = String(title || '').trim();
+  if (!trimmedTitle) return;
+
+  const fireAtMs = fireAt.getTime();
+  if (!Number.isFinite(fireAtMs)) return;
+
+  const api = await loadAlarmApi();
+  if (!api) return;
+
+  const permission = await requestLocalNotificationPermission();
+  if (!permission.granted) return;
+
+  await cancelLocalPomodoroCompletionNotification(api);
+
+  if (fireAtMs <= Date.now() + 1000) {
+    await sendLocalMobileNotification(trimmedTitle, message, data);
+    return;
+  }
+
+  try {
+    const result = await api.scheduleAlarm({
+      title: trimmedTitle,
+      message: normalizeNotificationMessage(trimmedTitle, message),
+      channel: LOCAL_NOTIFICATION_CHANNEL,
+      auto_cancel: true,
+      small_icon: LOCAL_SMALL_ICON,
+      color: LOCAL_NOTIFICATION_COLOR,
+      has_button: false,
+      loop_sound: false,
+      play_sound: true,
+      schedule_type: 'once',
+      use_big_text: true,
+      vibrate: false,
+      fire_date: toAlarmFireDate(api, fireAt),
+      data: {
+        kind: 'pomodoro',
+        ...(data ?? {}),
+      },
+    });
+    const id = Number(result?.id);
+    if (!Number.isFinite(id)) {
+      logNotificationError('Pomodoro alarm returned invalid id');
+      return;
+    }
+    await savePomodoroAlarmEntry({ id: Math.floor(id), fireAtMs });
+  } catch (error) {
+    logNotificationError('Failed to schedule pomodoro alarm', error);
+  }
+}
+
 export async function startLocalMobileNotifications(): Promise<void> {
-  if (started) return;
+  if (started) {
+    logNotificationInfo('Start requested while service is already running; rescheduling current reminders');
+    const api = await loadAlarmApi();
+    if (api) {
+      await runRescheduleCycle(api);
+    }
+    return;
+  }
   started = true;
+  logNotificationInfo('Start requested', {
+    platform: Platform.OS,
+    platformVersion: String(Platform.Version),
+  });
 
   const api = await loadAlarmApi();
   if (!api) {
+    logNotificationInfo('Start aborted; alarm API unavailable');
     started = false;
     return;
   }
 
   const permission = await requestLocalNotificationPermission();
   if (!permission.granted) {
+    logNotificationInfo('Start aborted; notification permission not granted', permission);
     await clearScheduledAlarms(api);
     started = false;
     return;
@@ -800,6 +1096,7 @@ export async function startLocalMobileNotifications(): Promise<void> {
 
   attachNativeEventListeners();
   await runRescheduleCycle(api);
+  logNotificationInfo('Service started');
 
   storeSubscription?.();
   storeSubscription = useTaskStore.subscribe(() => {
@@ -812,6 +1109,7 @@ export async function startLocalMobileNotifications(): Promise<void> {
 }
 
 export async function stopLocalMobileNotifications(): Promise<void> {
+  logNotificationInfo('Stop requested');
   clearRescheduleTimer();
   clearNotificationEventRescheduleTimer();
 
@@ -829,6 +1127,7 @@ export async function stopLocalMobileNotifications(): Promise<void> {
   await clearScheduledAlarms(api);
   resetRuntimeState();
   started = false;
+  logNotificationInfo('Service stopped');
 }
 
 export async function getLocalNotificationPermissionStatus(): Promise<NotificationPermissionResult> {

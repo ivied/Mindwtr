@@ -1,8 +1,9 @@
-import { getDailyDigestSummary, getNextScheduledAt, stripMarkdown, type Language, Task, parseTimeOfDay, getTranslationsSync, loadTranslations, loadStoredLanguageSync, safeParseDate, hasTimeComponent, getSystemDefaultLanguage } from '@mindwtr/core';
+import { getDailyDigestSummary, getDueReminderRepeatTimes, getNextScheduledAt, stripMarkdown, type Language, Task, parseTimeOfDay, getTranslationsSync, loadTranslations, loadStoredLanguageSync, safeParseDate, hasTimeComponent, getSystemDefaultLanguage } from '@mindwtr/core';
 import { useTaskStore } from '@mindwtr/core';
-import { isTauriRuntime } from './runtime';
+import { isFlatpakRuntime, isTauriRuntime } from './runtime';
 
 const notifiedAtByTask = new Map<string, string>();
+const repeatNotifiedByTask = new Map<string, string>();
 const notifiedAtByProject = new Map<string, string>();
 const digestSentOnByKind = new Map<'morning' | 'evening', string>();
 let weeklyReviewSentOnDate: string | null = null;
@@ -22,6 +23,39 @@ type TauriNotificationApi = {
 let tauriNotificationApi: TauriNotificationApi | null = null;
 
 const CHECK_INTERVAL_MS = 15_000;
+const REPEAT_CATCH_UP_MS = CHECK_INTERVAL_MS;
+type TaskReminderKind = 'start' | 'due' | 'review' | 'task';
+
+/**
+ * Picks the due-time repeat occurrence to fire on this poll tick, or null.
+ *
+ * Repeat occurrences are in the past (the due time already fired the single reminder), so they are
+ * resolved here rather than via the future-only `getNextScheduledAt`. Only an occurrence reached
+ * within the last poll window fires; one missed while the app was not polling is skipped, which is
+ * how desktop repeats inherit the "only fires while the app is open" limitation. Dedup key embeds
+ * the due ISO, so editing the due time invalidates prior-occurrence keys automatically.
+ */
+export function resolveDueRepeatToFire(
+    task: Task,
+    now: Date,
+    alreadyNotifiedKey: string | undefined,
+    options: { includeDueDate: boolean },
+): { key: string; index: number } | null {
+    const times = getDueReminderRepeatTimes(task, { includeDueDate: options.includeDueDate });
+    if (times.length === 0) return null;
+    const nowMs = now.getTime();
+    let chosenIndex = -1;
+    for (let i = 0; i < times.length; i += 1) {
+        const t = times[i].getTime();
+        if (t <= nowMs && nowMs - t <= REPEAT_CATCH_UP_MS) {
+            chosenIndex = i + 1; // occurrence index is 1-based (times[0] = due + N)
+        }
+    }
+    if (chosenIndex === -1) return null;
+    const key = `${task.dueDate}#${chosenIndex}`;
+    if (alreadyNotifiedKey === key) return null;
+    return { key, index: chosenIndex };
+}
 
 function getCurrentLanguage(): Language {
     if (typeof localStorage === 'undefined') return 'en';
@@ -33,6 +67,41 @@ function localDateKey(date: Date): string {
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
     return `${year}-${month}-${day}`;
+}
+
+function isSameScheduleTime(left: Date | null, right: Date | null): boolean {
+    if (!left || !right) return false;
+    return Math.abs(left.getTime() - right.getTime()) < 1_000;
+}
+
+export function resolveDesktopTaskReminderKind(task: Task, scheduledAt: Date): TaskReminderKind {
+    const start = hasTimeComponent(task.startTime) ? safeParseDate(task.startTime) : null;
+    if (isSameScheduleTime(scheduledAt, start)) return 'start';
+
+    const due = hasTimeComponent(task.dueDate) ? safeParseDate(task.dueDate) : null;
+    if (isSameScheduleTime(scheduledAt, due)) return 'due';
+
+    const review = hasTimeComponent(task.reviewAt) ? safeParseDate(task.reviewAt) : null;
+    if (isSameScheduleTime(scheduledAt, review)) return 'review';
+
+    return 'task';
+}
+
+export function buildDesktopTaskNotificationBody(
+    task: Task,
+    scheduledAt: Date,
+    translations: Record<string, string>
+): string | undefined {
+    const kind = resolveDesktopTaskReminderKind(task, scheduledAt);
+    const reminderLabel = kind === 'start'
+        ? (translations['settings.startDateNotifications'] ?? 'Start date reminder')
+        : kind === 'due'
+            ? (translations['settings.dueDateNotifications'] ?? 'Due date reminder')
+            : kind === 'review'
+                ? (translations['settings.reviewAtNotifications'] ?? 'Review date reminder')
+                : (translations['settings.notifications'] ?? 'Task reminder');
+    const description = stripMarkdown(task.description || '').trim();
+    return description ? `${reminderLabel}\n${description}` : reminderLabel;
 }
 
 async function loadTauriNotificationApi(): Promise<TauriNotificationApi | null> {
@@ -86,13 +155,36 @@ export async function sendDesktopImmediateNotification(title: string, body?: str
     if (settings.notificationsEnabled === false) return;
     await ensurePermission();
     await loadTauriNotificationApi();
-    sendNotification(title, body);
+    await sendNotification(title, body);
 }
 
-function sendNotification(title: string, body?: string) {
-    if (tauriNotificationApi?.sendNotification) {
-        tauriNotificationApi.sendNotification({ title, body });
+async function sendFlatpakPortalNotification(title: string, body?: string): Promise<boolean> {
+    if (!isTauriRuntime() || !isFlatpakRuntime()) return false;
+
+    try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('send_flatpak_notification', {
+            title,
+            body: body?.trim() ? body : undefined,
+        });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+async function sendNotification(title: string, body?: string) {
+    if (await sendFlatpakPortalNotification(title, body)) {
         return;
+    }
+
+    if (tauriNotificationApi?.sendNotification) {
+        try {
+            tauriNotificationApi.sendNotification({ title, body });
+            return;
+        } catch {
+            // Fall back to Web Notifications below.
+        }
     }
 
     if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
@@ -110,10 +202,22 @@ function checkDueAndNotify() {
 
     if (settings.notificationsEnabled === false) return;
 
+    const dateKey = localDateKey(now);
+    const lang = getCurrentLanguage();
+    void loadTranslations(lang);
+    const tr = getTranslationsSync(lang);
+
     const includeStartTime = settings.startDateNotificationsEnabled !== false;
     const includeDueDate = settings.dueDateNotificationsEnabled !== false;
     const includeReviewAt = settings.reviewAtNotificationsEnabled !== false;
     tasks.forEach((task: Task) => {
+        const repeat = resolveDueRepeatToFire(task, now, repeatNotifiedByTask.get(task.id), { includeDueDate });
+        if (repeat) {
+            const dueAt = safeParseDate(task.dueDate);
+            void sendNotification(task.title, dueAt ? buildDesktopTaskNotificationBody(task, dueAt, tr) : task.title);
+            repeatNotifiedByTask.set(task.id, repeat.key);
+        }
+
         const next = getNextScheduledAt(task, now, { includeStartTime, includeDueDate, includeReviewAt });
         if (!next) return;
         const diffMs = next.getTime() - now.getTime();
@@ -122,14 +226,9 @@ function checkDueAndNotify() {
         const key = next.toISOString();
         if (notifiedAtByTask.get(task.id) === key) return;
 
-        sendNotification(task.title, stripMarkdown(task.description || '') || undefined);
+        void sendNotification(task.title, buildDesktopTaskNotificationBody(task, next, tr));
         notifiedAtByTask.set(task.id, key);
     });
-
-    const dateKey = localDateKey(now);
-    const lang = getCurrentLanguage();
-    void loadTranslations(lang);
-    const tr = getTranslationsSync(lang);
 
     if (includeReviewAt) {
         projects.forEach((project) => {
@@ -144,7 +243,7 @@ function checkDueAndNotify() {
             if (diffMs < 0 || diffMs > CHECK_INTERVAL_MS) return;
             const key = review.toISOString();
             if (notifiedAtByProject.get(project.id) === key) return;
-            sendNotification(project.title, tr['review.projectsStep'] ?? 'Review project');
+            void sendNotification(project.title, tr['review.projectsStep'] ?? 'Review project');
             notifiedAtByProject.set(project.id, key);
         });
     }
@@ -179,7 +278,7 @@ function checkDueAndNotify() {
                 ].join(' • ')
                 : tr['digest.noItems'];
 
-            sendNotification(tr['digest.morningTitle'], body);
+            void sendNotification(tr['digest.morningTitle'], body);
             digestSentOnByKind.set('morning', dateKey);
         }
     }
@@ -187,7 +286,7 @@ function checkDueAndNotify() {
     if (eveningEnabled) {
         const target = eveningHour * 60 + eveningMinute;
         if (nowMinutes >= target && digestSentOnByKind.get('evening') !== dateKey) {
-            sendNotification(tr['digest.eveningTitle'], tr['digest.eveningBody']);
+            void sendNotification(tr['digest.eveningTitle'], tr['digest.eveningBody']);
             digestSentOnByKind.set('evening', dateKey);
         }
     }
@@ -195,7 +294,7 @@ function checkDueAndNotify() {
     if (weeklyReviewEnabled) {
         const target = weeklyHour * 60 + weeklyMinute;
         if (now.getDay() === weeklyReviewDay && nowMinutes >= target && weeklyReviewSentOnDate !== dateKey) {
-            sendNotification(tr['digest.weeklyReviewTitle'], tr['digest.weeklyReviewBody']);
+            void sendNotification(tr['digest.weeklyReviewTitle'], tr['digest.weeklyReviewBody']);
             weeklyReviewSentOnDate = dateKey;
         }
     }
@@ -259,6 +358,7 @@ export function stopDesktopNotifications() {
     storeSubscription = null;
 
     notifiedAtByTask.clear();
+    repeatNotifiedByTask.clear();
     notifiedAtByProject.clear();
     digestSentOnByKind.clear();
     weeklyReviewSentOnDate = null;

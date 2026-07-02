@@ -9,7 +9,7 @@ import {
     type PointerEvent as ReactPointerEvent,
 } from 'react';
 import { ErrorBoundary } from '../ErrorBoundary';
-import { tFallback, useTaskStore, Task, type Project } from '@mindwtr/core';
+import { tFallback, useTaskStore, type Task, type Project } from '@mindwtr/core';
 import { useLanguage } from '../../contexts/language-context';
 import { PromptModal } from '../PromptModal';
 import { ProjectsSidebar } from './projects/ProjectsSidebar';
@@ -24,12 +24,13 @@ import {
 import { usePerformanceMonitor } from '../../hooks/usePerformanceMonitor';
 import { checkBudget } from '../../config/performanceBudgets';
 import { useUiStore } from '../../store/ui-store';
-import { AREA_FILTER_ALL, AREA_FILTER_NONE, projectMatchesAreaFilter } from '../../lib/area-filter';
+import { AREA_FILTER_ALL, AREA_FILTER_NONE, projectMatchesAreaFilter } from '@mindwtr/core';
 import { reportError } from '../../lib/report-error';
 import { useAreaSidebarState } from './projects/useAreaSidebarState';
 import { useProjectsViewStore } from './projects/useProjectsViewStore';
 import { splitProjectsForSidebar } from './projects/project-sidebar-grouping';
 import {
+    PROJECTS_SIDEBAR_COLLAPSED_WIDTH,
     PROJECTS_SIDEBAR_DEFAULT_WIDTH,
     PROJECTS_SIDEBAR_MIN_WIDTH,
     clampProjectsSidebarWidth,
@@ -48,18 +49,23 @@ import { usePersistedViewState } from '../../hooks/usePersistedViewState';
 
 const COLLAPSED_AREAS_STORAGE_KEY = 'mindwtr:projects:collapsedAreas';
 const PROJECTS_VIEW_STATE_STORAGE_KEY = 'mindwtr:view:projects:v1';
+const PROJECTS_LAYOUT_SIDEBAR_EXTRA_MULTIPLIER = 3;
 const ALL_TAGS = '__all__';
 const NO_TAGS = '__none__';
 
 type ProjectsPersistedViewState = {
+    projectsSidebarCollapsed: boolean;
     showDeferredProjects: boolean;
     showArchivedProjects: boolean;
+    showCompletedProjectTasks: boolean;
     selectedTag: string;
 };
 
 const DEFAULT_PROJECTS_VIEW_STATE: ProjectsPersistedViewState = {
+    projectsSidebarCollapsed: false,
     showDeferredProjects: false,
     showArchivedProjects: false,
+    showCompletedProjectTasks: false,
     selectedTag: ALL_TAGS,
 };
 
@@ -68,12 +74,18 @@ function sanitizeProjectsViewState(value: unknown, fallback: ProjectsPersistedVi
         ? value as Partial<ProjectsPersistedViewState>
         : {};
     return {
+        projectsSidebarCollapsed: typeof parsed.projectsSidebarCollapsed === 'boolean'
+            ? parsed.projectsSidebarCollapsed
+            : fallback.projectsSidebarCollapsed,
         showDeferredProjects: typeof parsed.showDeferredProjects === 'boolean'
             ? parsed.showDeferredProjects
             : fallback.showDeferredProjects,
         showArchivedProjects: typeof parsed.showArchivedProjects === 'boolean'
             ? parsed.showArchivedProjects
             : fallback.showArchivedProjects,
+        showCompletedProjectTasks: typeof parsed.showCompletedProjectTasks === 'boolean'
+            ? parsed.showCompletedProjectTasks
+            : fallback.showCompletedProjectTasks,
         selectedTag: typeof parsed.selectedTag === 'string' && parsed.selectedTag.trim()
             ? parsed.selectedTag
             : fallback.selectedTag,
@@ -91,6 +103,8 @@ function loadCollapsedAreas(): Record<string, boolean> {
         return {};
     }
 }
+
+const EMPTY_PROJECT_TASKS: readonly Task[] = [];
 
 function saveCollapsedAreas(state: Record<string, boolean>) {
     if (typeof window === 'undefined') return;
@@ -113,6 +127,7 @@ export function ProjectsView() {
         deleteArea,
         reorderAreas,
         reorderProjects,
+        reorderSections,
         reorderProjectTasks,
         addProject,
         updateProject,
@@ -120,10 +135,12 @@ export function ProjectsView() {
         restoreProject,
         duplicateProject,
         updateTask,
+        batchMoveTasks,
+        batchDeleteTasks,
+        batchUpdateTasks,
         addSection,
         updateSection,
         deleteSection,
-        addTask,
         toggleProjectFocus,
         allTasks,
         highlightTaskId,
@@ -132,7 +149,7 @@ export function ProjectsView() {
         getDerivedState,
         focusedProjectCount,
     } = useProjectsViewStore();
-    const { allContexts, allTags } = getDerivedState();
+    const { allContexts, allTags, tasksByProjectId } = getDerivedState();
     const allTokens = useMemo(
         () => Array.from(new Set([...allContexts, ...allTags])).sort(),
         [allContexts, allTags],
@@ -153,8 +170,10 @@ export function ProjectsView() {
         DEFAULT_PROJECTS_VIEW_STATE,
         sanitizeProjectsViewState
     );
+    const projectsSidebarCollapsed = persistedViewState.projectsSidebarCollapsed;
     const showDeferredProjects = persistedViewState.showDeferredProjects;
     const showArchivedProjects = persistedViewState.showArchivedProjects;
+    const showCompletedProjectTasks = persistedViewState.showCompletedProjectTasks;
     const selectedTag = persistedViewState.selectedTag;
     const [collapsedAreas, setCollapsedAreas] = useState<Record<string, boolean>>(loadCollapsedAreas);
     useEffect(() => { saveCollapsedAreas(collapsedAreas); }, [collapsedAreas]);
@@ -185,10 +204,22 @@ export function ProjectsView() {
             showArchivedProjects: typeof value === 'function' ? value(current.showArchivedProjects) : value,
         }));
     }, [setPersistedViewState]);
+    const setShowCompletedProjectTasks = useCallback((value: boolean | ((current: boolean) => boolean)) => {
+        setPersistedViewState((current) => ({
+            ...current,
+            showCompletedProjectTasks: typeof value === 'function' ? value(current.showCompletedProjectTasks) : value,
+        }));
+    }, [setPersistedViewState]);
     const setSelectedTag = useCallback((value: string) => {
         setPersistedViewState((current) => ({
             ...current,
             selectedTag: value,
+        }));
+    }, [setPersistedViewState]);
+    const toggleProjectsSidebarCollapsed = useCallback(() => {
+        setPersistedViewState((current) => ({
+            ...current,
+            projectsSidebarCollapsed: !current.projectsSidebarCollapsed,
         }));
     }, [setPersistedViewState]);
 
@@ -201,14 +232,18 @@ export function ProjectsView() {
 
     const projectsLayoutMaxWidth = useMemo(() => {
         const baseMaxWidth = getProjectsBaseMaxWidth();
-        const desiredMaxWidth = baseMaxWidth + Math.max(0, sidebarWidth - PROJECTS_SIDEBAR_DEFAULT_WIDTH);
+        const desiredMaxWidth = projectsSidebarCollapsed
+            ? baseMaxWidth + Math.max(0, sidebarWidth - PROJECTS_SIDEBAR_COLLAPSED_WIDTH)
+            : baseMaxWidth
+                + Math.max(0, sidebarWidth - PROJECTS_SIDEBAR_DEFAULT_WIDTH)
+                * PROJECTS_LAYOUT_SIDEBAR_EXTRA_MULTIPLIER;
 
         if (typeof availableProjectsWidth !== 'number' || !Number.isFinite(availableProjectsWidth)) {
             return desiredMaxWidth;
         }
 
         return Math.min(desiredMaxWidth, availableProjectsWidth);
-    }, [availableProjectsWidth, getProjectsBaseMaxWidth, sidebarWidth]);
+    }, [availableProjectsWidth, getProjectsBaseMaxWidth, projectsSidebarCollapsed, sidebarWidth]);
 
     const sidebarMaxWidth = useMemo(
         () => getProjectsSidebarMaxWidth(availableProjectsWidth ?? projectsLayoutMaxWidth),
@@ -277,6 +312,7 @@ export function ProjectsView() {
     }, []);
 
     const resizeSidebarLabel = tFallback(t, 'projects.resizeSidebar', 'Resize projects panel');
+    const collapseProjectsSidebarLabel = tFallback(t, 'projects.collapseSidebar', 'Collapse projects panel');
 
     const handleSidebarResizePointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
         if (event.button !== 0) return;
@@ -507,6 +543,10 @@ export function ProjectsView() {
     };
 
     const selectedProject = projects.find(p => p.id === selectedProjectId);
+    const selectedProjectTasks = useMemo(
+        () => (selectedProjectId ? tasksByProjectId.get(selectedProjectId) ?? EMPTY_PROJECT_TASKS : EMPTY_PROJECT_TASKS),
+        [selectedProjectId, tasksByProjectId]
+    );
 
     useEffect(() => {
         if (selectedProject?.status === 'archived') {
@@ -526,86 +566,91 @@ export function ProjectsView() {
             <div className="h-full px-4 py-3">
                 <div
                     ref={projectsLayoutRef}
-                    className="flex h-full w-full min-w-0 gap-5 xl:gap-6"
+                    className="mx-auto flex h-full w-full min-w-0 gap-5 xl:gap-6"
                     style={{ maxWidth: `${projectsLayoutMaxWidth}px` }}
                 >
-                    <div className="relative min-h-0 flex-none" style={{ width: `${sidebarWidth}px` }}>
-                        <div id="projects-sidebar-panel" className="h-full min-w-0">
-                            <ProjectsSidebar
-                                t={t}
-                                areaFilterLabel={areaFilterLabel ?? undefined}
-                                selectedTag={selectedTag}
-                                noAreaId={NO_AREA}
-                                allTagsId={ALL_TAGS}
-                                noTagsId={NO_TAGS}
-                                tagOptions={tagOptions}
-                                isCreating={isCreating}
-                                isCreatingProject={isCreatingProject}
-                                newProjectTitle={newProjectTitle}
-                                onStartCreate={() => setIsCreating(true)}
-                                onCancelCreate={() => setIsCreating(false)}
-                                onCreateProject={handleCreateProject}
-                                onChangeNewProjectTitle={setNewProjectTitle}
-                                onSelectTag={setSelectedTag}
-                                groupedActiveProjects={groupedActiveProjects}
-                                groupedDeferredProjects={groupedDeferredProjects}
-                                groupedArchivedProjects={groupedArchivedProjects}
-                                areaById={areaById}
-                                collapsedAreas={collapsedAreas}
-                                onToggleAreaCollapse={toggleAreaCollapse}
-                                showDeferredProjects={showDeferredProjects}
-                                onToggleDeferredProjects={() => setShowDeferredProjects((prev) => !prev)}
-                                showArchivedProjects={showArchivedProjects}
-                                onToggleArchivedProjects={() => setShowArchivedProjects((prev) => !prev)}
-                                selectedProjectId={selectedProjectId}
-                                onSelectProject={setSelectedProjectId}
-                                getProjectColor={getProjectColorForTask}
-                                tasksByProject={tasksByProject}
-                                projects={projects}
-                                focusedProjectCount={focusedProjectCount}
-                                toggleProjectFocus={toggleProjectFocus}
-                                updateProject={updateProject}
-                                reorderProjects={reorderProjects}
-                                onDuplicateProject={handleDuplicateProject}
-                                showToast={showToast}
-                            />
-                        </div>
+                    {!projectsSidebarCollapsed && (
                         <div
-                            role="separator"
-                            aria-controls="projects-sidebar-panel"
-                            aria-label={resizeSidebarLabel}
-                            aria-orientation="vertical"
-                            aria-valuemin={PROJECTS_SIDEBAR_MIN_WIDTH}
-                            aria-valuemax={sidebarMaxWidth}
-                            aria-valuenow={sidebarWidth}
-                            title={resizeSidebarLabel}
-                            tabIndex={0}
-                            onPointerDown={handleSidebarResizePointerDown}
-                            onKeyDown={handleSidebarResizeKeyDown}
-                            className="group absolute -right-3 bottom-0 top-0 z-10 flex w-6 items-start justify-center cursor-col-resize touch-none rounded-full pt-20 outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                            className="relative min-h-0 flex-none transition-[width] duration-150"
+                            style={{ width: `${sidebarWidth}px` }}
                         >
-                            <span
-                                aria-hidden="true"
-                                className={`absolute inset-y-0 left-1/2 w-px -translate-x-1/2 transition-colors ${
-                                    isSidebarResizing
-                                        ? 'bg-primary/40'
-                                        : 'bg-border/45 group-hover:bg-primary/25'
-                                }`}
-                            />
-                            <span
-                                className={`relative h-16 w-1 rounded-full transition-colors ${
-                                    isSidebarResizing
-                                        ? 'bg-primary/70'
-                                        : 'bg-border/80 group-hover:bg-primary/45'
-                                }`}
-                            />
+                            <div id="projects-sidebar-panel" className="h-full min-w-0">
+                                <ProjectsSidebar
+                                    t={t}
+                                    areaFilterLabel={areaFilterLabel ?? undefined}
+                                    selectedTag={selectedTag}
+                                    noAreaId={NO_AREA}
+                                    allTagsId={ALL_TAGS}
+                                    noTagsId={NO_TAGS}
+                                    tagOptions={tagOptions}
+                                    isCreating={isCreating}
+                                    isCreatingProject={isCreatingProject}
+                                    newProjectTitle={newProjectTitle}
+                                    onStartCreate={() => setIsCreating(true)}
+                                    onCancelCreate={() => setIsCreating(false)}
+                                    onCreateProject={handleCreateProject}
+                                    onChangeNewProjectTitle={setNewProjectTitle}
+                                    onSelectTag={setSelectedTag}
+                                    groupedActiveProjects={groupedActiveProjects}
+                                    groupedDeferredProjects={groupedDeferredProjects}
+                                    groupedArchivedProjects={groupedArchivedProjects}
+                                    areaById={areaById}
+                                    collapsedAreas={collapsedAreas}
+                                    onToggleAreaCollapse={toggleAreaCollapse}
+                                    showDeferredProjects={showDeferredProjects}
+                                    onToggleDeferredProjects={() => setShowDeferredProjects((prev) => !prev)}
+                                    showArchivedProjects={showArchivedProjects}
+                                    onToggleArchivedProjects={() => setShowArchivedProjects((prev) => !prev)}
+                                    selectedProjectId={selectedProjectId}
+                                    onSelectProject={setSelectedProjectId}
+                                    getProjectColor={getProjectColorForTask}
+                                    tasksByProject={tasksByProject}
+                                    projects={projects}
+                                    focusedProjectCount={focusedProjectCount}
+                                    toggleProjectFocus={toggleProjectFocus}
+                                    updateProject={updateProject}
+                                    reorderProjects={reorderProjects}
+                                    onDuplicateProject={handleDuplicateProject}
+                                    showToast={showToast}
+                                    collapseLabel={collapseProjectsSidebarLabel}
+                                    onToggleCollapsed={toggleProjectsSidebarCollapsed}
+                                />
+                            </div>
+                            <div
+                                role="separator"
+                                aria-controls="projects-sidebar-panel"
+                                aria-label={resizeSidebarLabel}
+                                aria-orientation="vertical"
+                                aria-valuemin={PROJECTS_SIDEBAR_MIN_WIDTH}
+                                aria-valuemax={sidebarMaxWidth}
+                                aria-valuenow={sidebarWidth}
+                                title={resizeSidebarLabel}
+                                tabIndex={0}
+                                onPointerDown={handleSidebarResizePointerDown}
+                                onKeyDown={handleSidebarResizeKeyDown}
+                                className="group absolute -right-3 bottom-0 top-0 z-10 flex w-6 items-start justify-center cursor-col-resize touch-none rounded-full pt-20 outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                            >
+                                <span
+                                    aria-hidden="true"
+                                    className={`absolute inset-y-0 left-1/2 w-px -translate-x-1/2 transition-colors ${
+                                        isSidebarResizing
+                                            ? 'bg-primary/40'
+                                            : 'bg-border/45 group-hover:bg-primary/25'
+                                    }`}
+                                />
+                                <span
+                                    className={`relative h-16 w-1 rounded-full transition-colors ${
+                                        isSidebarResizing
+                                            ? 'bg-primary/70'
+                                            : 'bg-border/80 group-hover:bg-primary/45'
+                                    }`}
+                                />
+                            </div>
                         </div>
-                    </div>
+                    )}
 
                     <ProjectWorkspace
-                        addProject={addProject}
                         addSection={addSection}
-                        addTask={addTask}
                         allTasks={allTasks}
                         allTokens={allTokens}
                         areaById={areaById}
@@ -624,18 +669,27 @@ export function ProjectsView() {
                             setShowQuickAreaPrompt(true);
                         }}
                         projects={projects}
+                        reorderSections={reorderSections}
                         reorderProjectTasks={reorderProjectTasks}
                         requestConfirmation={requestConfirmation}
                         restoreProject={restoreProject}
                         sections={sections}
                         selectedProject={selectedProject}
                         selectedProjectId={selectedProjectId}
+                        selectedProjectTasks={selectedProjectTasks}
                         setHighlightTask={setHighlightTask}
                         setSelectedProjectId={setSelectedProjectId}
+                        showCompletedTasks={showCompletedProjectTasks}
                         showToast={showToast}
                         sortedAreas={sortedAreas}
                         t={t}
+                        projectsSidebarCollapsed={projectsSidebarCollapsed}
+                        onToggleProjectsSidebar={toggleProjectsSidebarCollapsed}
+                        onToggleShowCompletedTasks={() => setShowCompletedProjectTasks((prev) => !prev)}
                         undoNotificationsEnabled={settings?.undoNotificationsEnabled !== false}
+                        batchMoveTasks={batchMoveTasks}
+                        batchDeleteTasks={batchDeleteTasks}
+                        batchUpdateTasks={batchUpdateTasks}
                         updateProject={updateProject}
                         updateSection={updateSection}
                         updateTask={updateTask}

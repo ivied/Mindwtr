@@ -2,10 +2,15 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from './file-system';
 import { Directory as ExpoDirectory, File as ExpoFile } from 'expo-file-system';
-import { AppData } from '@mindwtr/core';
+import { AppData, decodeUriSafe, LEGACY_SYNC_FILE_NAME, sleep, SYNC_FILE_NAME } from '@mindwtr/core';
 import { Platform } from 'react-native';
 import { logError, logInfo, logWarn } from './app-log';
-import { createSyncPathBookmark } from './sync-path-bookmarks';
+import {
+    createSyncPathBookmark,
+    readBookmarkedSyncFileText,
+    supportsBookmarkedSyncFileIO,
+    writeBookmarkedSyncFileText,
+} from './sync-path-bookmarks';
 
 // StorageAccessFramework is part of the legacy FileSystem module
 const StorageAccessFramework = FileSystem.StorageAccessFramework;
@@ -17,9 +22,7 @@ interface PickResult extends AppData {
     __icloud?: boolean;
 }
 
-const SYNC_FILE_NAME = 'data.json';
 const BACKUP_FILE_NAME = 'data.json.bak';
-const LEGACY_SYNC_FILE_NAME = 'mindwtr-sync.json';
 const READONLY_FOLDER_MESSAGE = 'Selected folder is read-only. Please choose a writable folder or make it available offline.';
 const ICLOUD_EVICTED_MESSAGE =
     'Sync file has been offloaded by iCloud Optimize Storage. ' +
@@ -37,10 +40,6 @@ const isPickerCanceledError = (error: unknown): boolean => {
     return /cancel/i.test(message);
 };
 
-function sleep(ms: number) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 const normalizeDirectoryUri = (uri: string): string => uri.replace(/\/+$/, '');
 
 const buildSyncFileUri = (directoryUri: string, fileName = SYNC_FILE_NAME): string =>
@@ -56,14 +55,6 @@ const emptyPickResult = (fileUri: string, fileBookmark?: string | null): PickRes
     __fileBookmark: fileBookmark?.trim() || undefined,
     __icloud: isICloudUri(fileUri),
 });
-
-const decodeUriSafe = (value: string): string => {
-    try {
-        return decodeURIComponent(value);
-    } catch {
-        return value;
-    }
-};
 
 const isLikelySyncFileUri = (uri: string): boolean => {
     const decoded = decodeUriSafe(uri);
@@ -185,6 +176,21 @@ function sanitizeJsonText(raw: string): string {
     text = text.replace(/\u0000+$/g, '').trim();
     return text;
 }
+
+const getUtf8ByteLength = (value: string): number => {
+    if (typeof TextEncoder === 'function') {
+        return new TextEncoder().encode(value).byteLength;
+    }
+    return unescape(encodeURIComponent(value)).length;
+};
+
+const padForNonTruncatingOverwrite = (content: string, previousContent: string | null): string => {
+    if (!previousContent) return content;
+    const previousBytes = getUtf8ByteLength(previousContent);
+    const nextBytes = getUtf8ByteLength(content);
+    if (nextBytes >= previousBytes) return content;
+    return `${content}${' '.repeat(previousBytes - nextBytes)}`;
+};
 
 function parseAppData(text: string): AppData {
     const sanitized = sanitizeJsonText(text);
@@ -418,18 +424,24 @@ const pickAndParseIosSyncFolder = async (): Promise<PickResult | null> => {
         }
 
         await assertIosFileWritable(pickedFileUri);
+        const fileBookmark = await createSyncPathBookmark(pickedFileUri);
 
         const pickedContent = await readFileText(pickedFileUri);
         if (pickedContent) {
             try {
                 const data = parseAppData(pickedContent);
-                return { ...data, __fileUri: pickedFileUri, __icloud: isICloudUri(pickedFileUri) };
+                return {
+                    ...data,
+                    __fileUri: pickedFileUri,
+                    __fileBookmark: fileBookmark ?? undefined,
+                    __icloud: isICloudUri(pickedFileUri),
+                };
             } catch {
                 throw new Error('Selected JSON file is not a Mindwtr backup. Please select a Mindwtr backup JSON file in the target folder.');
             }
         }
 
-        return emptyPickResult(pickedFileUri);
+        return emptyPickResult(pickedFileUri, fileBookmark);
     };
 
     try {
@@ -512,9 +524,36 @@ export const pickAndParseSyncFolder = async (): Promise<PickResult | null> => {
     }
 };
 
+export interface SyncFileAccessOptions {
+    /** iOS security-scoped bookmark for the sync file or its folder. */
+    bookmark?: string | null;
+}
+
 // Read sync file from a stored path
-export const readSyncFile = async (fileUri: string): Promise<AppData | null> => {
+export const readSyncFile = async (fileUri: string, options?: SyncFileAccessOptions): Promise<AppData | null> => {
     try {
+        const bookmark = options?.bookmark?.trim() || null;
+        if (bookmark && Platform.OS === 'ios' && supportsBookmarkedSyncFileIO()) {
+            let fileContent: string | null | undefined;
+            try {
+                fileContent = await readBookmarkedSyncFileText(bookmark);
+            } catch (error) {
+                void logWarn('Bookmarked sync read failed; falling back to direct file access', {
+                    scope: 'sync',
+                    extra: { error: error instanceof Error ? error.message : String(error) },
+                });
+            }
+            if (typeof fileContent === 'string') {
+                if (!fileContent) return null;
+                return parseAppData(fileContent);
+            }
+            if (fileContent === null) {
+                void logWarn('Bookmarked sync read returned no content; falling back to direct file access', {
+                    scope: 'sync',
+                });
+            }
+        }
+
         const resolvedUri = await resolveSyncFileUri(fileUri, { createIfMissing: false });
         if (resolvedUri !== fileUri) {
             void logInfo('Resolved sync path from directory URI to file URI', { scope: 'sync' });
@@ -568,9 +607,10 @@ export const readSyncFile = async (fileUri: string): Promise<AppData | null> => 
 };
 
 // Write merged data back to sync file
-export const writeSyncFile = async (fileUri: string, data: AppData): Promise<void> => {
+export const writeSyncFile = async (fileUri: string, data: AppData, options?: SyncFileAccessOptions): Promise<void> => {
     try {
         const content = JSON.stringify(data, null, 2);
+        const bookmark = options?.bookmark?.trim() || null;
         const resolvedUri = await resolveSyncFileUri(fileUri, { createIfMissing: true });
 
         // Warn if writing to an iCloud-evicted target — the placeholder may get corrupted.
@@ -580,7 +620,16 @@ export const writeSyncFile = async (fileUri: string, data: AppData): Promise<voi
 
         // SAF URIs (content://) require special handling on Android
         if (resolvedUri.startsWith('content://') && StorageAccessFramework) {
-            await StorageAccessFramework.writeAsStringAsync(resolvedUri, content);
+            const previousContent = await readFileText(resolvedUri).catch(() => null);
+            await StorageAccessFramework.writeAsStringAsync(
+                resolvedUri,
+                padForNonTruncatingOverwrite(content, previousContent)
+            );
+            const writtenContent = await readFileText(resolvedUri);
+            if (!writtenContent) {
+                throw new Error('Sync file write verification failed: file is empty after write.');
+            }
+            parseAppData(writtenContent);
             void logInfo('Written sync file via SAF', { scope: 'sync', extra: { fileUri: resolvedUri } });
         } else {
             // Best-effort backup before overwriting, for recovery.
@@ -601,6 +650,22 @@ export const writeSyncFile = async (fileUri: string, data: AppData): Promise<voi
                 }
             } catch {
                 // Backup is best-effort; don't block the write.
+            }
+
+            if (bookmark && Platform.OS === 'ios' && supportsBookmarkedSyncFileIO()) {
+                try {
+                    await writeBookmarkedSyncFileText(bookmark, content);
+                    void logInfo('Written sync file via bookmarked scoped access', { scope: 'sync', extra: { fileUri: resolvedUri } });
+                    return;
+                } catch (error) {
+                    if (isReadOnlyError(error)) {
+                        throw new Error(READONLY_FOLDER_MESSAGE);
+                    }
+                    void logWarn('Bookmarked sync write failed; falling back to direct file access', {
+                        scope: 'sync',
+                        extra: { error: error instanceof Error ? error.message : String(error) },
+                    });
+                }
             }
 
             if (Platform.OS === 'ios' && resolvedUri.startsWith('file://')) {

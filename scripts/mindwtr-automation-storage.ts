@@ -153,11 +153,11 @@ export function createMindwtrAutomationStorage(options: AutomationStorageOptions
                 const taskOrder = Number.isFinite(task.order) ? task.order : task.orderNum;
                 writeDb.prepare(
                     `INSERT INTO tasks (
-                        id, title, status, priority, taskMode, startTime, dueDate, recurrence, pushCount,
+                        id, title, status, priority, taskMode, startTime, dueDate, recurrence, showFutureRecurrence, pushCount,
                         tags, contexts, checklist, description, textDirection, attachments, location,
                         projectId, sectionId, areaId, orderNum, isFocusedToday, timeEstimate, reviewAt,
                         completedAt, rev, revBy, createdAt, updatedAt, deletedAt, purgedAt
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         title = excluded.title,
                         status = excluded.status,
@@ -166,6 +166,7 @@ export function createMindwtrAutomationStorage(options: AutomationStorageOptions
                         startTime = excluded.startTime,
                         dueDate = excluded.dueDate,
                         recurrence = excluded.recurrence,
+                        showFutureRecurrence = excluded.showFutureRecurrence,
                         pushCount = excluded.pushCount,
                         tags = excluded.tags,
                         contexts = excluded.contexts,
@@ -197,6 +198,7 @@ export function createMindwtrAutomationStorage(options: AutomationStorageOptions
                     task.startTime ?? null,
                     task.dueDate ?? null,
                     toJson(task.recurrence),
+                    toBool(task.showFutureRecurrence),
                     task.pushCount ?? null,
                     toJson(task.tags ?? []),
                     toJson(task.contexts ?? []),

@@ -6,9 +6,9 @@ import { LanguageProvider } from './language-context';
 import { KeybindingProvider } from './keybinding-context';
 import { useKeybindings } from './keybinding-context';
 import { useUiStore } from '../store/ui-store';
-import { AREA_FILTER_ALL } from '../lib/area-filter';
+import { AREA_FILTER_ALL } from '@mindwtr/core';
 
-const DummyList = () => {
+const DummyList = ({ focusAddInput }: { focusAddInput?: () => void } = {}) => {
     const { registerTaskListScope } = useKeybindings();
     const [selectedIndex, setSelectedIndex] = useState(0);
     const ids = ['1', '2'];
@@ -34,9 +34,10 @@ const DummyList = () => {
             editSelected: vi.fn(),
             toggleDoneSelected: vi.fn(),
             deleteSelected: vi.fn(),
+            focusAddInput,
         });
         return () => registerTaskListScope(null);
-    }, [registerTaskListScope, selectNext, selectPrev, selectFirst, selectLast]);
+    }, [focusAddInput, registerTaskListScope, selectNext, selectPrev, selectFirst, selectLast]);
 
     return (
         <div>
@@ -177,6 +178,51 @@ describe('KeybindingProvider (vim)', () => {
         window.removeEventListener('mindwtr:quick-add', quickAddListener);
     });
 
+    it.each(['vim', 'emacs'] as const)('opens app-scoped quick add with a in %s style', (style) => {
+        const focusAddInput = vi.fn();
+        const quickAddListener = vi.fn();
+        window.addEventListener('mindwtr:quick-add', quickAddListener);
+        useTaskStore.setState((state) => ({
+            settings: {
+                ...state.settings,
+                keybindingStyle: style,
+            },
+        }));
+
+        render(
+            <LanguageProvider>
+                <KeybindingProvider currentView="inbox" onNavigate={vi.fn()}>
+                    <DummyList focusAddInput={focusAddInput} />
+                </KeybindingProvider>
+            </LanguageProvider>
+        );
+
+        fireEvent.keyDown(window, { key: 'a' });
+
+        expect(quickAddListener).toHaveBeenCalledTimes(1);
+        expect((quickAddListener.mock.calls[0]?.[0] as CustomEvent).detail).toBeUndefined();
+        expect(focusAddInput).not.toHaveBeenCalled();
+        window.removeEventListener('mindwtr:quick-add', quickAddListener);
+    });
+
+    it('does not use o as an add-task shortcut', () => {
+        const quickAddListener = vi.fn();
+        window.addEventListener('mindwtr:quick-add', quickAddListener);
+
+        render(
+            <LanguageProvider>
+                <KeybindingProvider currentView="inbox" onNavigate={vi.fn()}>
+                    <DummyList />
+                </KeybindingProvider>
+            </LanguageProvider>
+        );
+
+        fireEvent.keyDown(window, { key: 'o' });
+
+        expect(quickAddListener).not.toHaveBeenCalled();
+        window.removeEventListener('mindwtr:quick-add', quickAddListener);
+    });
+
     it('opens settings with Cmd+,', () => {
         const onNavigate = vi.fn();
         render(
@@ -216,7 +262,7 @@ describe('KeybindingProvider (vim)', () => {
     it('switches the global area filter with a number chord in sidebar order', async () => {
         useTaskStore.setState((state) => ({
             ...state,
-            areas: [
+            _allAreas: [
                 { id: 'area-work', name: 'Work', order: 2, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
                 { id: 'area-home', name: 'Home', order: 0, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
                 { id: 'area-errands', name: 'Errands', order: 1, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
@@ -238,7 +284,7 @@ describe('KeybindingProvider (vim)', () => {
             </LanguageProvider>
         );
 
-        fireEvent.keyDown(window, { key: 'a' });
+        fireEvent.keyDown(window, { key: 'A', shiftKey: true });
         fireEvent.keyDown(window, { key: '2' });
 
         await waitFor(() => {
@@ -246,10 +292,10 @@ describe('KeybindingProvider (vim)', () => {
         });
     });
 
-    it('clears the global area filter with a0', async () => {
+    it('clears the global area filter with A0', async () => {
         useTaskStore.setState((state) => ({
             ...state,
-            areas: [
+            _allAreas: [
                 { id: 'area-home', name: 'Home', order: 0, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
             ],
             settings: {
@@ -269,7 +315,85 @@ describe('KeybindingProvider (vim)', () => {
             </LanguageProvider>
         );
 
-        fireEvent.keyDown(window, { key: 'a' });
+        fireEvent.keyDown(window, { key: 'A', shiftKey: true });
+        fireEvent.keyDown(window, { key: '0' });
+
+        await waitFor(() => {
+            expect(useTaskStore.getState().settings?.filters?.areaId).toBe(AREA_FILTER_ALL);
+        });
+    });
+
+    it('starts the area filter chord when Shift+a reports lowercase a', async () => {
+        useTaskStore.setState((state) => ({
+            ...state,
+            _allAreas: [
+                { id: 'area-home', name: 'Home', order: 0, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
+                { id: 'area-work', name: 'Work', order: 1, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
+            ],
+            settings: {
+                ...state.settings,
+                filters: {
+                    ...(state.settings?.filters ?? {}),
+                    areaId: AREA_FILTER_ALL,
+                },
+            },
+        }));
+
+        render(
+            <LanguageProvider>
+                <KeybindingProvider currentView="inbox" onNavigate={vi.fn()}>
+                    <DummyList />
+                </KeybindingProvider>
+            </LanguageProvider>
+        );
+
+        fireEvent.keyDown(window, { key: 'a', shiftKey: true });
+        fireEvent.keyDown(window, { key: '2' });
+
+        await waitFor(() => {
+            expect(useTaskStore.getState().settings?.filters?.areaId).toBe('area-work');
+        });
+    });
+
+    it('can switch area filters repeatedly with A number chords', async () => {
+        useTaskStore.setState((state) => ({
+            ...state,
+            _allAreas: [
+                { id: 'area-home', name: 'Home', order: 0, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
+                { id: 'area-work', name: 'Work', order: 1, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' },
+            ],
+            settings: {
+                ...state.settings,
+                filters: {
+                    ...(state.settings?.filters ?? {}),
+                    areaId: AREA_FILTER_ALL,
+                },
+            },
+        }));
+
+        render(
+            <LanguageProvider>
+                <KeybindingProvider currentView="inbox" onNavigate={vi.fn()}>
+                    <DummyList />
+                </KeybindingProvider>
+            </LanguageProvider>
+        );
+
+        fireEvent.keyDown(window, { key: 'A', shiftKey: true });
+        fireEvent.keyDown(window, { key: '1' });
+
+        await waitFor(() => {
+            expect(useTaskStore.getState().settings?.filters?.areaId).toBe('area-home');
+        });
+
+        fireEvent.keyDown(window, { key: 'A', shiftKey: true });
+        fireEvent.keyDown(window, { key: '2' });
+
+        await waitFor(() => {
+            expect(useTaskStore.getState().settings?.filters?.areaId).toBe('area-work');
+        });
+
+        fireEvent.keyDown(window, { key: 'A', shiftKey: true });
         fireEvent.keyDown(window, { key: '0' });
 
         await waitFor(() => {
@@ -288,11 +412,6 @@ describe('KeybindingProvider (vim)', () => {
                 </KeybindingProvider>
             </LanguageProvider>
         );
-
-        fireEvent.keyDown(window, { key: 'o' });
-        expect(document.activeElement?.getAttribute('data-view-filter-input')).not.toBeNull();
-        fireEvent.keyDown(window, { key: 'Escape' });
-        expect(document.activeElement?.getAttribute('data-view-filter-input')).toBeNull();
 
         fireEvent.keyDown(window, { key: 'j' });
         fireEvent.keyDown(window, { key: 'e' });
@@ -328,7 +447,7 @@ describe('KeybindingProvider (vim)', () => {
         useUiStore.setState({ showToast });
         useTaskStore.setState((state) => ({
             ...state,
-            tasks: [{
+            _allTasks: [{
                 id: '1',
                 title: 'Task 1',
                 status: 'next',

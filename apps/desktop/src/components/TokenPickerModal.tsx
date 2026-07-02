@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useState } from 'react';
 import { useLanguage } from '../contexts/language-context';
 import { cn } from '../lib/utils';
+import { ModalPortal } from './ModalPortal';
 
 interface TokenPickerModalProps {
     isOpen: boolean;
@@ -53,6 +54,7 @@ export function TokenPickerModal({
     if (!isOpen) return null;
 
     return (
+        <ModalPortal>
         <div
             className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[16vh]"
             role="dialog"
@@ -152,5 +154,6 @@ export function TokenPickerModal({
                 </div>
             </div>
         </div>
+        </ModalPortal>
     );
 }

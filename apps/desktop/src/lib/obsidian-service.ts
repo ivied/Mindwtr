@@ -1,5 +1,5 @@
 import type { ObsidianSourceRef } from '@mindwtr/core';
-import { isTauriRuntime } from './runtime';
+import { getDesktopTimerHost, isTauriRuntime } from './runtime';
 import { reportError } from './report-error';
 import { logWarn } from './app-log';
 import {
@@ -14,6 +14,7 @@ import {
 } from './obsidian-scanner';
 
 const OBSIDIAN_CONFIG_KEY = 'mindwtr-obsidian-config';
+const FORBIDDEN_PATH_RETRY_DELAYS_MS = [75, 250, 500];
 
 export type ObsidianFilesChangedPayload = {
     changed: string[];
@@ -52,6 +53,23 @@ const writeStoredConfig = (config: ObsidianConfig): void => {
     localStorage.setItem(OBSIDIAN_CONFIG_KEY, JSON.stringify(config));
 };
 
+const toErrorText = (error: unknown): string => {
+    if (error instanceof Error && error.message.trim()) return error.message.trim();
+    return String(error || '').trim();
+};
+
+const isForbiddenPathError = (error: unknown): boolean => {
+    return /forbidden path/i.test(toErrorText(error));
+};
+
+const sleep = (delayMs: number): Promise<void> => {
+    if (delayMs <= 0) return Promise.resolve();
+    const timers = getDesktopTimerHost();
+    return new Promise((resolve) => {
+        timers.setTimeout(resolve, delayMs);
+    });
+};
+
 export const parseScanFoldersInput = (input: string): string[] => {
     const parts = input
         .split(/\r?\n|,/)
@@ -72,6 +90,37 @@ export class ObsidianService {
     private static watcherStop: (() => void) | null = null;
 
     private static watcherVaultPath: string | null = null;
+
+    private static async expandVaultScope(vaultPath: string | null): Promise<void> {
+        const trimmed = String(vaultPath || '').trim();
+        if (!trimmed || !isTauriRuntime()) return;
+        try {
+            await tauriInvoke<boolean>('expand_obsidian_vault_scope', { vaultPath: trimmed });
+        } catch (error) {
+            void logWarn('Failed to expand Obsidian vault filesystem scope', {
+                scope: 'obsidian',
+                extra: {
+                    vaultPath: trimmed,
+                    error: toErrorText(error),
+                },
+            });
+        }
+    }
+
+    private static async withForbiddenPathRetry<T>(vaultPath: string | null, work: () => Promise<T>): Promise<T> {
+        for (let attempt = 0; ; attempt += 1) {
+            try {
+                return await work();
+            } catch (error) {
+                const delayMs = FORBIDDEN_PATH_RETRY_DELAYS_MS[attempt];
+                if (!isForbiddenPathError(error) || delayMs === undefined) {
+                    throw error;
+                }
+                await ObsidianService.expandVaultScope(vaultPath);
+                await sleep(delayMs);
+            }
+        }
+    }
 
     static async getConfig(): Promise<ObsidianConfig> {
         if (!isTauriRuntime()) {
@@ -150,20 +199,23 @@ export class ObsidianService {
             };
         }
 
-        const { exists, readDir, readTextFile, stat } = await import('@tauri-apps/plugin-fs');
-        return scanObsidianVault(config, {
-            exists: (path) => exists(path),
-            readDir: (path) => readDir(path),
-            readTextFile: (path) => readTextFile(path),
-            stat: async (path) => {
-                const fileInfo = await stat(path);
-                return {
-                    mtime: fileInfo.mtime,
-                    size: fileInfo.size,
-                    isFile: fileInfo.isFile,
-                    isDirectory: fileInfo.isDirectory,
-                };
-            },
+        const normalizedConfig = normalizeObsidianConfig(config);
+        return ObsidianService.withForbiddenPathRetry(normalizedConfig.vaultPath, async () => {
+            const { exists, readDir, readTextFile, stat } = await import('@tauri-apps/plugin-fs');
+            return scanObsidianVault(normalizedConfig, {
+                exists: (path) => exists(path),
+                readDir: (path) => readDir(path),
+                readTextFile: (path) => readTextFile(path),
+                stat: async (path) => {
+                    const fileInfo = await stat(path);
+                    return {
+                        mtime: fileInfo.mtime,
+                        size: fileInfo.size,
+                        isFile: fileInfo.isFile,
+                        isDirectory: fileInfo.isDirectory,
+                    };
+                },
+            });
         });
     }
 
@@ -178,19 +230,22 @@ export class ObsidianService {
             };
         }
 
-        const { exists, readTextFile, stat } = await import('@tauri-apps/plugin-fs');
-        return scanObsidianFile(config, relativeFilePath, {
-            exists: (path) => exists(path),
-            readTextFile: (path) => readTextFile(path),
-            stat: async (path) => {
-                const fileInfo = await stat(path);
-                return {
-                    mtime: fileInfo.mtime,
-                    size: fileInfo.size,
-                    isFile: fileInfo.isFile,
-                    isDirectory: fileInfo.isDirectory,
-                };
-            },
+        const normalizedConfig = normalizeObsidianConfig(config);
+        return ObsidianService.withForbiddenPathRetry(normalizedConfig.vaultPath, async () => {
+            const { exists, readTextFile, stat } = await import('@tauri-apps/plugin-fs');
+            return scanObsidianFile(normalizedConfig, relativeFilePath, {
+                exists: (path) => exists(path),
+                readTextFile: (path) => readTextFile(path),
+                stat: async (path) => {
+                    const fileInfo = await stat(path);
+                    return {
+                        mtime: fileInfo.mtime,
+                        size: fileInfo.size,
+                        isFile: fileInfo.isFile,
+                        isDirectory: fileInfo.isDirectory,
+                    };
+                },
+            });
         });
     }
 

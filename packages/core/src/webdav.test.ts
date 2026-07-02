@@ -4,6 +4,9 @@ import { consoleLogger, setLogger, type LogPayload } from './logger';
 
 const makeResponse = (overrides: Partial<Response> & { status: number; ok: boolean }): Response => ({
     statusText: '',
+    headers: {
+        get: () => null,
+    } as unknown as Headers,
     text: async () => '',
     ...overrides,
 }) as Response;
@@ -95,6 +98,56 @@ describe('webdav http helpers', () => {
         await expect(webdavGetJson<{ ok: boolean }>('https://example.com/data.json', { fetcher })).resolves.toEqual({ ok: true });
     });
 
+    it('bypasses HTTP caches for JSON and metadata reads without URL cache busting', async () => {
+        const getFetcher = vi.fn(
+            async () =>
+                ({
+                    ok: true,
+                    status: 200,
+                    statusText: 'OK',
+                    text: async () => '{"ok":true}',
+                }) as Response,
+        );
+
+        await expect(webdavGetJson<{ ok: boolean }>('https://example.com/data.json', { fetcher: getFetcher })).resolves.toEqual({ ok: true });
+        expect(getFetcher.mock.calls[0]?.[1]).toMatchObject({
+            method: 'GET',
+            headers: {
+                'Cache-Control': 'no-cache',
+                Pragma: 'no-cache',
+            },
+        });
+        expect(getFetcher.mock.calls[0]?.[1]).not.toHaveProperty('cache');
+
+        const headFetcher = vi.fn(
+            async () =>
+                ({
+                    ok: true,
+                    status: 200,
+                    statusText: 'OK',
+                    headers: {
+                        get: (name: string) => ({
+                            etag: '"rev-1"',
+                        }[name.toLowerCase()] ?? null),
+                    },
+                    text: async () => '',
+                }) as unknown as Response,
+        );
+
+        await expect(webdavHeadFile('https://example.com/data.json', { fetcher: headFetcher })).resolves.toMatchObject({
+            exists: true,
+            fingerprint: 'webdav:v1:etag="rev-1"',
+        });
+        expect(headFetcher.mock.calls[0]?.[1]).toMatchObject({
+            method: 'HEAD',
+            headers: {
+                'Cache-Control': 'no-cache',
+                Pragma: 'no-cache',
+            },
+        });
+        expect(headFetcher.mock.calls[0]?.[1]).not.toHaveProperty('cache');
+    });
+
     it('reads HEAD metadata for fast sync checks', async () => {
         const fetcher = vi.fn(
             async () =>
@@ -115,7 +168,7 @@ describe('webdav http helpers', () => {
 
         await expect(webdavHeadFile('https://example.com/data.json', { fetcher })).resolves.toMatchObject({
             exists: true,
-            fingerprint: 'webdav:v1:etag="rev-1":mtime=Thu, 07 May 2026 10:00:00 GMT:len=42',
+            fingerprint: 'webdav:v1:etag="rev-1"',
             etag: '"rev-1"',
             contentLength: '42',
         });
@@ -229,7 +282,7 @@ describe('webdav http helpers', () => {
 
         await expect(
             webdavPutJson('https://example.com/remote.php/dav/files/user/mindwtr/nested/data.json', { ok: true }, { fetcher }),
-        ).resolves.toBeUndefined();
+        ).resolves.toMatchObject({ exists: true, fingerprint: null });
 
         expect(fetcher.mock.calls[0]?.[1]?.headers).toMatchObject({ 'X-NC-WebDAV-AutoMkcol': '1' });
         expect(fetcher.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
@@ -240,6 +293,27 @@ describe('webdav http helpers', () => {
             ['https://example.com/remote.php/dav/files/user/mindwtr/nested/', 'MKCOL'],
             ['https://example.com/remote.php/dav/files/user/mindwtr/nested/data.json', 'PUT'],
         ]);
+    });
+
+    it('returns JSON PUT response metadata for fast sync recording', async () => {
+        const fetcher = vi.fn().mockResolvedValueOnce(makeResponse({
+            ok: true,
+            status: 204,
+            statusText: 'No Content',
+            headers: {
+                get: (name: string) => ({
+                    etag: '"put-rev"',
+                }[name.toLowerCase()] ?? null),
+            } as unknown as Headers,
+        }));
+
+        await expect(
+            webdavPutJson('https://example.com/mindwtr/data.json', { ok: true }, { fetcher }),
+        ).resolves.toMatchObject({
+            exists: true,
+            fingerprint: 'webdav:v1:etag="put-rev"',
+            etag: '"put-rev"',
+        });
     });
 
     it('creates missing parent collections before retrying a file PUT', async () => {
@@ -279,7 +353,7 @@ describe('webdav http helpers', () => {
 
         await expect(
             webdavPutJson('https://example.com/remote.php/dav/files/user/mindwtr/data.json', { ok: true }, { fetcher }),
-        ).resolves.toBeUndefined();
+        ).resolves.toMatchObject({ exists: true, fingerprint: null });
 
         expect(fetcher.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
             ['https://example.com/remote.php/dav/files/user/mindwtr/data.json', 'PUT'],
@@ -304,7 +378,7 @@ describe('webdav http helpers', () => {
 
         await expect(
             webdavPutJson('https://example.com/mindwtr/data.json', { ok: true }, { fetcher }),
-        ).resolves.toBeUndefined();
+        ).resolves.toMatchObject({ exists: true, fingerprint: null });
 
         expect(fetcher.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
             ['https://example.com/mindwtr/data.json', 'PUT'],

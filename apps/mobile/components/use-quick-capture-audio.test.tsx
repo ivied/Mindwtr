@@ -1,0 +1,288 @@
+import React from 'react';
+import { act, create } from 'react-test-renderer';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const storeMocks = vi.hoisted(() => {
+  const updateTask = vi.fn();
+  const deleteTask = vi.fn();
+  const addProject = vi.fn();
+  const state = {
+    addProject,
+    areas: [],
+    projects: [],
+    settings: {},
+    tasks: [] as { id: string; title: string; [key: string]: unknown }[],
+    updateTask,
+    deleteTask,
+  };
+  const useTaskStore = vi.fn((selector?: (value: typeof state) => unknown) => (
+    selector ? selector(state) : state
+  )) as unknown as {
+    (selector?: (value: typeof state) => unknown): unknown;
+    getState: () => typeof state;
+  };
+  useTaskStore.getState = () => state;
+  return {
+    addProject,
+    deleteTask,
+    state,
+    updateTask,
+    useTaskStore,
+  };
+});
+
+const speechMocks = vi.hoisted(() => ({
+  ensureWhisperModelPathForConfigAsync: vi.fn(),
+  prepareAudioForLocalWhisper: vi.fn(),
+  preloadWhisperContext: vi.fn(),
+  processAudioCapture: vi.fn(),
+  startWhisperRealtimeCapture: vi.fn(),
+  transcribeLocalWhisper: vi.fn(),
+}));
+
+const audioMocks = vi.hoisted(() => ({
+  audioRecorder: {
+    prepareToRecordAsync: vi.fn(),
+    record: vi.fn(),
+    stop: vi.fn(),
+    uri: 'file:///recording.m4a',
+  },
+  requestRecordingPermissionsAsync: vi.fn(),
+  setAudioModeAsync: vi.fn(),
+}));
+
+const attachmentMocks = vi.hoisted(() => ({
+  getAttachmentsDir: vi.fn(),
+  persistAttachmentLocally: vi.fn(),
+}));
+
+const appLogMock = vi.hoisted(() => ({
+  logInfo: vi.fn(),
+}));
+
+const toastMock = vi.hoisted(() => ({
+  showToast: vi.fn(),
+}));
+
+vi.mock('react-native', () => ({
+  Alert: { alert: vi.fn() },
+  Platform: { OS: 'ios' },
+}));
+
+vi.mock('expo-audio', () => ({
+  RecordingPresets: { HIGH_QUALITY: {} },
+  requestRecordingPermissionsAsync: audioMocks.requestRecordingPermissionsAsync,
+  setAudioModeAsync: audioMocks.setAudioModeAsync,
+  useAudioRecorder: () => audioMocks.audioRecorder,
+}));
+
+vi.mock('expo-file-system', () => ({
+  Directory: class MockDirectory {
+    uri: string;
+
+    constructor(uri: string) {
+      this.uri = uri;
+    }
+
+    get exists() {
+      return true;
+    }
+
+    create() {
+      return undefined;
+    }
+  },
+  File: class MockFile {
+    uri: string;
+
+    constructor(uri: string) {
+      this.uri = uri;
+    }
+
+    info() {
+      return {
+        exists: true,
+        isDirectory: false,
+        size: this.uri.endsWith('.wav') ? 154668 : 77704715,
+      };
+    }
+
+    delete() {
+      return undefined;
+    }
+  },
+  Paths: {
+    cache: { uri: 'file:///cache/' },
+    document: { uri: 'file:///document/' },
+    info: vi.fn(() => ({ exists: true, isDirectory: false, size: 154668 })),
+  },
+}));
+
+vi.mock('@mindwtr/core', () => ({
+  DEFAULT_PROJECT_COLOR: '#3B82F6',
+  buildTaskUpdatesFromSpeechResult: (_task: unknown, result: { transcript?: string }) => ({
+    updates: { description: result.transcript },
+    suggestedProjectTitle: null,
+  }),
+  findSelectableProjectByTitleAndArea: vi.fn(),
+  generateUUID: () => 'attachment-1',
+  safeFormatDate: (_value: Date | string, format: string) => {
+    if (format === 'yyyyMMdd-HHmmss') return '20260629-090027';
+    if (format === 'Pp') return '06/29/2026, 9:00 AM';
+    return '2026-06-29';
+  },
+  useTaskStore: storeMocks.useTaskStore,
+}));
+
+vi.mock('../lib/ai-config', () => ({
+  loadAIKey: vi.fn().mockResolvedValue(''),
+}));
+
+vi.mock('../lib/app-log', () => appLogMock);
+
+vi.mock('../lib/attachment-sync', () => ({
+  persistAttachmentLocally: attachmentMocks.persistAttachmentLocally,
+}));
+
+vi.mock('../lib/attachment-sync-utils', () => ({
+  getAttachmentsDir: attachmentMocks.getAttachmentsDir,
+}));
+
+vi.mock('../contexts/toast-context', () => ({
+  useToast: () => toastMock,
+}));
+
+vi.mock('../lib/speech-to-text', () => ({
+  ensureWhisperModelPathForConfigAsync: speechMocks.ensureWhisperModelPathForConfigAsync,
+  prepareAudioForLocalWhisper: speechMocks.prepareAudioForLocalWhisper,
+  preloadWhisperContext: speechMocks.preloadWhisperContext,
+  processAudioCapture: speechMocks.processAudioCapture,
+  resolveSpeechToTextRuntimeSettings: (speech: Record<string, unknown> | undefined) => ({
+    enabled: speech?.enabled === true,
+    fieldStrategy: 'smart',
+    isFossBuild: false,
+    language: 'en',
+    mode: 'smart_parse',
+    model: String(speech?.model ?? 'whisper-tiny.en'),
+    modelPath: String(speech?.offlineModelPath ?? ''),
+    provider: speech?.provider ?? 'whisper',
+  }),
+  startWhisperRealtimeCapture: speechMocks.startWhisperRealtimeCapture,
+  transcribeLocalWhisper: speechMocks.transcribeLocalWhisper,
+}));
+
+// eslint-disable-next-line import/first
+import { useQuickCaptureAudio } from './use-quick-capture-audio';
+
+const flushPromises = async () => {
+  await Promise.resolve();
+  await Promise.resolve();
+};
+
+describe('useQuickCaptureAudio', () => {
+  let latest: ReturnType<typeof useQuickCaptureAudio> | null = null;
+  const addTask = vi.fn();
+  const buildTaskProps = vi.fn();
+  const handleClose = vi.fn();
+  const onError = vi.fn();
+  const onWarn = vi.fn();
+  const updateSpeechSettings = vi.fn();
+
+  const settings = {
+    ai: {
+      speechToText: {
+        enabled: true,
+        provider: 'whisper',
+        model: 'whisper-tiny.en',
+        offlineModelPath: 'file:///document/whisper-models/ggml-tiny.en.bin',
+        language: 'en',
+      },
+    },
+    gtd: {
+      saveAudioAttachments: true,
+    },
+  } as const;
+
+  function Harness() {
+    latest = useQuickCaptureAudio({
+      addTask,
+      buildTaskProps,
+      handleClose,
+      onError,
+      onWarn,
+      settings,
+      t: (key: string) => key,
+      updateSpeechSettings,
+      visible: true,
+    });
+    return null;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    latest = null;
+    storeMocks.state.areas = [];
+    storeMocks.state.projects = [];
+    storeMocks.state.settings = settings;
+    storeMocks.state.tasks = [];
+    audioMocks.requestRecordingPermissionsAsync.mockResolvedValue({ granted: true });
+    audioMocks.setAudioModeAsync.mockResolvedValue(undefined);
+    attachmentMocks.getAttachmentsDir.mockResolvedValue('file:///document/attachments/');
+    attachmentMocks.persistAttachmentLocally.mockImplementation(async (attachment: { uri: string }) => ({
+      ...attachment,
+      uri: 'file:///document/attachments/attachment-1.wav',
+    }));
+    buildTaskProps.mockImplementation(async (fallbackTitle: string, extraProps?: Record<string, unknown>) => ({
+      title: fallbackTitle,
+      props: extraProps ?? {},
+      invalidDateCommands: [],
+    }));
+    addTask.mockImplementation(async (title: string, props?: Record<string, unknown>) => {
+      storeMocks.state.tasks.push({ id: 'task-1', title, ...(props ?? {}) });
+      return { success: true, id: 'task-1' };
+    });
+    storeMocks.updateTask.mockResolvedValue(undefined);
+    speechMocks.ensureWhisperModelPathForConfigAsync.mockResolvedValue({
+      exists: true,
+      path: '/document/whisper-models/ggml-tiny.en.bin',
+      uri: 'file:///document/whisper-models/ggml-tiny.en.bin',
+      size: 77704715,
+    });
+    speechMocks.prepareAudioForLocalWhisper.mockResolvedValue({
+      uri: 'file:///document/audio-captures/mindwtr-audio-20260629-090027.wav',
+      format: 'wav-pcm',
+      sampleRate: 16000,
+      channels: 1,
+      bitsPerSample: 16,
+      bytes: 154668,
+      durationMs: 4832,
+    });
+    speechMocks.startWhisperRealtimeCapture.mockResolvedValue({
+      stop: vi.fn().mockResolvedValue(undefined),
+      result: Promise.resolve({ transcript: 'Buy milk' }),
+      hasRealtimeTranscript: true,
+    });
+    speechMocks.transcribeLocalWhisper.mockRejectedValue(new Error('duplicate native transcription'));
+  });
+
+  it('uses a successful iOS realtime Whisper result without starting duplicate file transcription', async () => {
+    await act(async () => {
+      create(<Harness />);
+      await flushPromises();
+    });
+
+    await act(async () => {
+      await latest?.startRecording();
+      await flushPromises();
+    });
+
+    await act(async () => {
+      await latest?.stopRecording({ saveTask: true });
+      await flushPromises();
+    });
+
+    expect(speechMocks.transcribeLocalWhisper).not.toHaveBeenCalled();
+    expect(storeMocks.updateTask).toHaveBeenCalledWith('task-1', { description: 'Buy milk' });
+    expect(handleClose).toHaveBeenCalledOnce();
+  });
+});

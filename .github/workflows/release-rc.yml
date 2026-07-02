@@ -1,0 +1,427 @@
+name: Release Candidate
+
+on:
+  push:
+    tags:
+      - 'v*-rc.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'RC tag to publish (e.g., v1.1.0-rc.1)'
+        required: true
+        type: string
+      play_track:
+        description: 'Additional Google Play testing tracks for the normal RC AAB (comma-separated; use beta for open testing). Internal is always published as a profileable build when Play testing runs.'
+        required: false
+        default: 'none'
+        type: string
+      run_play_testing:
+        description: 'Upload the Android AAB to the configured Google Play testing tracks'
+        required: false
+        default: true
+        type: boolean
+      run_ios_testflight:
+        description: 'Upload and distribute the iOS build to the configured external TestFlight group'
+        required: false
+        default: false
+        type: boolean
+      run_macos_testflight:
+        description: 'Upload and distribute the macOS App Store build to the configured external TestFlight group'
+        required: false
+        default: false
+        type: boolean
+      run_flathub_beta:
+        description: 'Open a Flathub beta branch PR for the RC'
+        required: false
+        default: true
+        type: boolean
+      run_aur_beta:
+        description: 'Update the mindwtr-bin-beta AUR package for the RC'
+        required: false
+        default: true
+        type: boolean
+      testflight_group:
+        description: 'External TestFlight group used only when manual distribution is enabled'
+        required: false
+        default: 'external_testing'
+        type: string
+
+concurrency:
+  group: release-rc-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    name: Validate RC Tag
+    permissions:
+      actions: read
+      contents: read
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      base_version: ${{ steps.base.outputs.base_version }}
+      retag_recovery: ${{ steps.retag.outputs.retag_recovery }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          GITHUB_EVENT_INPUTS_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || '' }}
+        run: |
+          set -euo pipefail
+          scripts/ci/resolve-release-version.sh "$INPUT_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Validate RC naming
+        id: base
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
+            echo "Expected RC tag like v1.1.0-rc.1, got: $TAG" >&2
+            exit 1
+          fi
+          BASE_VERSION="${VERSION%%-*}"
+          echo "base_version=$BASE_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Detect retag recovery push
+        id: retag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          TAG: ${{ steps.version.outputs.tag }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "push" ]; then
+            echo "retag_recovery=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          prior_count="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/release-rc.yml/runs?event=push&per_page=100" \
+            --jq '[.workflow_runs[] | select(.head_branch == env.TAG and ((.id | tostring) != env.CURRENT_RUN_ID))] | length')"
+          if [ "$prior_count" -gt 0 ]; then
+            echo "retag_recovery=true" >> "$GITHUB_OUTPUT"
+            echo "Existing RC tag-push run(s) found for $TAG. Skipping publication on this automatic retag run; dispatch release-rc.yml manually with explicit upload flags."
+          else
+            echo "retag_recovery=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify app versions use the stable base version
+        env:
+          BASE_VERSION: ${{ steps.base.outputs.base_version }}
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('fs');
+          const base = process.env.BASE_VERSION;
+          const checks = [
+            ['package.json', json => json.version],
+            ['apps/desktop/package.json', json => json.version],
+            ['apps/mobile/package.json', json => json.version],
+            ['apps/cloud/package.json', json => json.version],
+            ['apps/mcp-server/package.json', json => json.version],
+            ['apps/mcp-server/server.json', json => json.version],
+            ['packages/core/package.json', json => json.version],
+            ['apps/mobile/app.json', json => json.expo && json.expo.version],
+            ['apps/desktop/src-tauri/tauri.conf.json', json => json.version],
+          ];
+          const failures = [];
+          for (const [file, getter] of checks) {
+            const json = JSON.parse(fs.readFileSync(file, 'utf8'));
+            const value = getter(json);
+            if (value !== base) {
+              failures.push(`${file}: expected ${base}, got ${value || '<missing>'}`);
+            }
+            if (file === 'apps/mcp-server/server.json' && Array.isArray(json.packages)) {
+              for (const pkg of json.packages) {
+                if (pkg.version !== base) {
+                  failures.push(`${file} package ${pkg.identifier || pkg.name || '<unknown>'}: expected ${base}, got ${pkg.version || '<missing>'}`);
+                }
+              }
+            }
+          }
+          if (failures.length) {
+            console.error('RC tags carry the -rc suffix, but app/package versions must stay on the stable base version for store compatibility.');
+            console.error(failures.join('\n'));
+            process.exit(1);
+          }
+          console.log(`Verified app/package versions use stable base ${base}.`);
+          NODE
+
+      - name: Verify RC tag points at this commit
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
+          TAG_SHA="$(git rev-list -n 1 "$TAG")"
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$TAG_SHA" != "$HEAD_SHA" ]; then
+            echo "RC workflow must be dispatched from the commit pointed to by $TAG." >&2
+            echo "$TAG -> $TAG_SHA" >&2
+            echo "workflow HEAD -> $HEAD_SHA" >&2
+            exit 1
+          fi
+          echo "Verified $TAG points at $HEAD_SHA."
+
+  linux:
+    if: ${{ needs.validate.outputs.retag_recovery != 'true' }}
+    needs: validate
+    uses: ./.github/workflows/release-linux.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag }}
+    secrets: inherit
+
+  macos:
+    if: ${{ needs.validate.outputs.retag_recovery != 'true' }}
+    needs: validate
+    uses: ./.github/workflows/release-macos.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag }}
+    secrets: inherit
+
+  windows:
+    if: ${{ needs.validate.outputs.retag_recovery != 'true' }}
+    needs: validate
+    uses: ./.github/workflows/release-windows.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag }}
+      run_msstore: false
+    secrets: inherit
+
+  android:
+    if: ${{ needs.validate.outputs.retag_recovery != 'true' }}
+    needs: validate
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/release-android.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag }}
+      play_track: ${{ github.event_name != 'workflow_dispatch' && 'internal' || (inputs.run_play_testing && format('internal,{0}', inputs.play_track) || 'none') }}
+      internal_test_release: false
+      release_notes: 'Mindwtr release candidate. Please test launch, capture, task editing, task completion, sync settings, and upgrade from the previous stable release.'
+      retention_days: '28'
+    secrets: inherit
+
+  android-foss:
+    if: ${{ always() && needs.validate.outputs.retag_recovery != 'true' && needs.validate.result == 'success' && needs.android.result == 'success' }}
+    needs: [validate, android]
+    uses: ./.github/workflows/release-android-foss.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag }}
+      version_code: ${{ needs.android.outputs.version_code }}
+    secrets: inherit
+
+  ios-appstore:
+    if: ${{ needs.validate.outputs.retag_recovery != 'true' && github.event_name == 'workflow_dispatch' && inputs.run_ios_testflight }}
+    needs: validate
+    uses: ./.github/workflows/release-ios-appstore.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag }}
+      upload: true
+      submit_for_review: false
+      distribute_testflight: true
+      testflight_group: ${{ github.event_name == 'workflow_dispatch' && inputs.testflight_group || 'external_testing' }}
+      skip_screenshots: true
+    secrets: inherit
+
+  macos-appstore:
+    if: ${{ needs.validate.outputs.retag_recovery != 'true' && github.event_name == 'workflow_dispatch' && inputs.run_macos_testflight }}
+    needs: validate
+    uses: ./.github/workflows/release-macos-appstore.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag }}
+      upload: true
+      submit_for_review: false
+      distribute_testflight: true
+      testflight_group: ${{ github.event_name == 'workflow_dispatch' && inputs.testflight_group || 'external_testing' }}
+      skip_screenshots: true
+    secrets: inherit
+
+  retag-recovery-notice:
+    if: ${{ needs.validate.outputs.retag_recovery == 'true' }}
+    needs: validate
+    runs-on: ubuntu-latest
+    name: Retag Recovery Notice
+    timeout-minutes: 5
+    steps:
+      - name: Explain skipped publication
+        run: |
+          echo "This was a repeated RC tag push for ${{ needs.validate.outputs.tag }}."
+          echo "RC publication was skipped to avoid repeating Play/TestFlight uploads during recovery."
+          echo "Dispatch release-rc.yml manually with explicit channel flags when ready."
+
+  prerelease:
+    if: ${{ always() && needs.validate.result == 'success' && needs.linux.result == 'success' && needs.macos.result == 'success' && needs.windows.result == 'success' && needs.android.result == 'success' && needs.android-foss.result == 'success' && (needs.ios-appstore.result == 'success' || needs.ios-appstore.result == 'skipped') && (needs.macos-appstore.result == 'success' || needs.macos-appstore.result == 'skipped') }}
+    needs: [validate, linux, macos, windows, android, android-foss, ios-appstore, macos-appstore]
+    runs-on: ubuntu-latest
+    name: Create GitHub Prerelease
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Download RC artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tmp_dir="$(mktemp -d)"
+          mkdir -p ./release-assets
+          cleanup() { rm -rf "$tmp_dir"; }
+          trap cleanup EXIT
+
+          artifact_names="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" --paginate --jq '.artifacts[] | select(.expired == false and (.name | startswith("release-"))) | .name')"
+          if [ -z "$artifact_names" ]; then
+            echo "No release-* artifacts found for run ${GITHUB_RUN_ID}." >&2
+            exit 1
+          fi
+
+          while IFS= read -r artifact_name; do
+            [ -n "$artifact_name" ] || continue
+            artifact_dir="${tmp_dir}/${artifact_name}"
+            mkdir -p "$artifact_dir"
+            gh run download "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" -n "$artifact_name" -D "$artifact_dir"
+            find "$artifact_dir" -type f -print0 | while IFS= read -r -d '' file; do
+              cp "$file" ./release-assets/
+            done
+          done <<< "$artifact_names"
+
+      - name: Validate RC assets
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.validate.outputs.version }}"
+          count="$(find ./release-assets -maxdepth 1 -type f | wc -l | tr -d ' ')"
+          if [ "${count}" -eq 0 ]; then
+            echo "No release artifacts were downloaded. Aborting prerelease creation."
+            exit 1
+          fi
+
+          while IFS= read -r -d '' file; do
+            if [ ! -s "$file" ]; then
+              echo "Artifact has zero size: $file" >&2
+              exit 1
+            fi
+          done < <(find ./release-assets -maxdepth 1 -type f -print0)
+
+          while IFS= read -r -d '' file; do
+            base="$(basename "$file")"
+            if [[ "$base" != *"${VERSION}"* ]]; then
+              echo "RC artifact name must include the full prerelease version ${VERSION}: ${base}" >&2
+              exit 1
+            fi
+          done < <(find ./release-assets -maxdepth 1 -type f ! -name 'SHA256SUMS' -print0)
+
+          has_match() {
+            local pattern="$1"
+            find ./release-assets -maxdepth 1 -type f -name "$pattern" -print -quit | grep -q .
+          }
+
+          missing=0
+          if ! has_match "*.apk"; then
+            echo "Missing Android artifact (*.apk)." >&2
+            missing=1
+          fi
+          if ! has_match "*-foss.apk"; then
+            echo "Missing Android FOSS artifact (*-foss.apk)." >&2
+            missing=1
+          fi
+          if ! has_match "*.dmg"; then
+            echo "Missing macOS artifact (*.dmg)." >&2
+            missing=1
+          fi
+          if ! has_match "*.exe"; then
+            echo "Missing Windows artifact (*.exe)." >&2
+            missing=1
+          fi
+          if ! has_match "*.AppImage" && ! has_match "*.deb" && ! has_match "*.rpm" && ! has_match "*.snap"; then
+            echo "Missing Linux artifact (*.AppImage, *.deb, *.rpm, or *.snap)." >&2
+            missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+          (
+            cd ./release-assets
+            sha256sum * > SHA256SUMS
+          )
+          ls -la ./release-assets
+
+      - name: Resolve RC notes
+        id: release_notes
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.validate.outputs.tag }}"
+          VERSION="${{ needs.validate.outputs.version }}"
+          for path in \
+            "docs/release-notes/${TAG}.md" \
+            "docs/release-notes/${VERSION}.md"; do
+            if [ -f "$path" ]; then
+              first_heading="$(grep -m 1 '^# ' "$path" || true)"
+              if [[ "$first_heading" != *"$VERSION"* && "$first_heading" != *"$TAG"* ]]; then
+                echo "RC release notes heading must include ${VERSION} or ${TAG}: $path" >&2
+                exit 1
+              fi
+              echo "Using release notes at $path"
+              echo "body_path=$path" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "Missing RC release notes. Expected docs/release-notes/${VERSION}.md or docs/release-notes/${TAG}.md." >&2
+          exit 1
+
+      - name: Create GitHub prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.validate.outputs.tag }}"
+          NOTES_FILE="${{ steps.release_notes.outputs.body_path }}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --draft=false \
+              --prerelease \
+              --notes-file "$NOTES_FILE"
+            gh release upload "$TAG" ./release-assets/* --clobber
+          else
+            gh release create "$TAG" ./release-assets/* \
+              --draft=false \
+              --prerelease \
+              --notes-file "$NOTES_FILE"
+          fi
+
+  flathub-beta:
+    if: ${{ always() && needs.validate.outputs.retag_recovery != 'true' && needs.prerelease.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.run_flathub_beta) }}
+    needs: [validate, prerelease]
+    name: Update Flathub Beta
+    uses: ./.github/workflows/update-flathub.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag }}
+      channel: beta
+    secrets: inherit
+
+  aur-beta:
+    if: ${{ always() && needs.validate.outputs.retag_recovery != 'true' && needs.prerelease.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.run_aur_beta) }}
+    needs: [validate, prerelease]
+    name: Update AUR Beta (mindwtr-bin-beta)
+    uses: ./.github/workflows/update-aur-beta.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag }}
+    secrets: inherit

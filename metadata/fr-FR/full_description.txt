@@ -1,0 +1,24 @@
+Mindwtr (prononcé "mind water") est un gestionnaire de tâches gratuit et open source conçu pour Getting Things Done (GTD).
+
+Il est local-first et axé sur la confidentialité par défaut. Aucun compte requis. Aucune dépendance au cloud. Vos données restent sur votre appareil sauf si vous choisissez de les synchroniser, les exporter ou les sauvegarder.
+
+Utilisez Mindwtr comme liste de tâches hors ligne pour toute votre vie : capturez les éléments dans l'Inbox, clarifiez les prochaines actions, organisez les projets et passez en revue ce qui compte sans confier vos données personnelles à une entreprise.
+
+FONCTIONNALITÉS CLÉS:
+
+- Gestionnaire de tâches GTD: Inbox, Next, Waiting, Someday, Projects, Areas et Contexts suivent le flux Getting Things Done.
+- Liste de tâches et tâches hors ligne: fonctionne sans connexion Internet, avec un stockage local rapide.
+- Tableau Kanban: visualisez le travail avec la vue tableau et le glisser-déposer.
+- Projets et Areas: organisez les objectifs complexes sans transformer chaque tâche en événement de calendrier.
+- Revue: les outils de revue quotidienne et hebdomadaire aident à garder vos engagements à jour.
+- Synchronisation et sauvegarde optionnelles: vous choisissez si et où les données se synchronisent.
+- Open source: code transparent, sans compte imposé ni abonnement requis.
+
+CONFIDENTIALITÉ PAR CONCEPTION:
+
+- Aucun compte requis.
+- Aucune dépendance au cloud.
+- Vos données restent sur votre appareil.
+- Mindwtr ne vend pas vos données de tâches.
+
+Que vous utilisiez déjà GTD, que vous construisiez une liste de tâches privée ou que vous cherchiez un gestionnaire de tâches hors ligne avec tableau Kanban, Mindwtr vous aide à atteindre un esprit clair.

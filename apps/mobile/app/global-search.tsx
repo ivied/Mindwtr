@@ -1,5 +1,18 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
-import { View, Text, TextInput, FlatList, TouchableOpacity, StyleSheet, Modal, ActivityIndicator, ScrollView } from 'react-native';
+import {
+    View,
+    Text,
+    TextInput,
+    FlatList,
+    TouchableOpacity,
+    StyleSheet,
+    Modal,
+    ActivityIndicator,
+    ScrollView,
+    KeyboardAvoidingView,
+    Platform,
+    Pressable,
+} from 'react-native';
 import {
     useTaskStore,
     searchAll,
@@ -8,12 +21,15 @@ import {
     SearchProjectResult,
     SearchResults,
     SearchTaskResult,
+    Task,
     getStorageAdapter,
     TaskStatus,
     PRESET_CONTEXTS,
     PRESET_TAGS,
+    getWeekStartsOnIndex,
     matchesHierarchicalToken,
     safeParseDueDate,
+    shallow,
     shouldShowTaskForStart,
     translateWithFallback,
 } from '@mindwtr/core';
@@ -22,6 +38,8 @@ import { useLanguage } from '../contexts/language-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Search, X, Folder, CheckCircle, ChevronRight, SlidersHorizontal } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { TaskEditModal } from '@/components/task-edit-modal';
+import { openContextsScreen, openProjectScreen } from '@/lib/task-meta-navigation';
 
 const firstSearchParam = (value: string | string[] | undefined): string => {
     if (Array.isArray(value)) return value[0] ?? '';
@@ -39,7 +57,15 @@ const decodeSearchParam = (value: string | string[] | undefined): string => {
 };
 
 export default function SearchScreen() {
-    const { _allTasks, projects, areas, settings, updateSettings, setHighlightTask } = useTaskStore();
+    const { _allTasks, projects, areas, settings, updateSettings, updateTask, setHighlightTask } = useTaskStore((state) => ({
+        _allTasks: state._allTasks,
+        projects: state.projects,
+        areas: state.areas,
+        settings: state.settings,
+        updateSettings: state.updateSettings,
+        updateTask: state.updateTask,
+        setHighlightTask: state.setHighlightTask,
+    }), shallow);
     const tc = useThemeColors();
     const { t } = useLanguage();
     const router = useRouter();
@@ -58,8 +84,10 @@ export default function SearchScreen() {
     const [selectedStatuses, setSelectedStatuses] = useState<TaskStatus[]>([]);
     const [selectedArea, setSelectedArea] = useState<'all' | 'none' | string>('all');
     const [selectedTokens, setSelectedTokens] = useState<string[]>([]);
+    const [locationQuery, setLocationQuery] = useState('');
     const [duePreset, setDuePreset] = useState<'any' | 'overdue' | 'today' | 'tomorrow' | 'this_week' | 'next_week' | 'none'>('any');
     const [scope, setScope] = useState<'all' | 'projects' | 'tasks' | 'project_tasks'>('all');
+    const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
     const inputRef = useRef<TextInput>(null);
 
     useEffect(() => {
@@ -75,6 +103,22 @@ export default function SearchScreen() {
 
   const trimmedQuery = query.trim();
   const shouldUseFts = debouncedQuery.length > 0 && !/\b\w+:/i.test(debouncedQuery);
+
+  const hasTaskOnlyFilters = (
+    selectedStatuses.length > 0
+    || selectedTokens.length > 0
+    || locationQuery.trim().length > 0
+    || duePreset !== 'any'
+    || !includeReference
+    || hideFutureTasks
+  );
+  const hasActiveFilters = (
+    hasTaskOnlyFilters
+    || selectedArea !== 'all'
+    || scope !== 'all'
+    || includeCompleted
+  );
+  const hasActiveSearch = trimmedQuery !== '' || hasActiveFilters;
 
   useEffect(() => {
     const handle = setTimeout(() => setDebouncedQuery(trimmedQuery), 200);
@@ -110,12 +154,33 @@ export default function SearchScreen() {
     };
   }, [debouncedQuery, shouldUseFts]);
 
+  const filterOnlyResults = useMemo<SearchResults>(() => {
+    if (!hasActiveFilters) return { tasks: [], projects: [] };
+    return {
+      tasks: _allTasks.filter((task) => !task.deletedAt),
+      projects: hasTaskOnlyFilters ? [] : projects,
+    };
+  }, [_allTasks, hasActiveFilters, hasTaskOnlyFilters, projects]);
   const fallbackResults = trimmedQuery === ''
-    ? { tasks: [] as SearchTaskResult[], projects: [] as SearchProjectResult[] }
+    ? filterOnlyResults
     : searchAll(_allTasks, projects, trimmedQuery);
-  const effectiveResults = ftsResults && (ftsResults.tasks.length + ftsResults.projects.length) > 0
-    ? ftsResults
-    : fallbackResults;
+  const effectiveResults = useMemo(() => {
+    if (!ftsResults || (ftsResults.tasks.length + ftsResults.projects.length) === 0) {
+      return fallbackResults;
+    }
+    const seenTaskIds = new Set(ftsResults.tasks.map((task) => task.id));
+    const seenProjectIds = new Set(ftsResults.projects.map((project) => project.id));
+    const fallbackOnlyTasks = fallbackResults.tasks.filter((task) => !seenTaskIds.has(task.id));
+    const fallbackOnlyProjects = fallbackResults.projects.filter((project) => !seenProjectIds.has(project.id));
+    const limited = ftsResults.limited === true || fallbackResults.limited === true;
+    const limit = ftsResults.limit ?? fallbackResults.limit;
+    return {
+      tasks: [...ftsResults.tasks, ...fallbackOnlyTasks],
+      projects: [...ftsResults.projects, ...fallbackOnlyProjects],
+      limited: limited || undefined,
+      limit: limited ? limit : undefined,
+    };
+  }, [fallbackResults, ftsResults]);
   const { tasks: taskResults, projects: projectResults } = effectiveResults;
     const sourceLimited = effectiveResults.limited === true;
     const sourceLimit = effectiveResults.limit ?? 200;
@@ -141,12 +206,17 @@ export default function SearchScreen() {
             taskTokens.some((taskToken) => matchesHierarchicalToken(token, taskToken))
         );
     };
+    const normalizedLocationQuery = locationQuery.trim().toLowerCase();
+    const matchesLocation = (task: SearchTaskResult) => {
+        if (!normalizedLocationQuery) return true;
+        return String(task.location ?? '').toLowerCase().includes(normalizedLocationQuery);
+    };
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const weekStart = settings?.weekStart === 'monday' ? 1 : 0;
+    const weekStart = getWeekStartsOnIndex(settings?.weekStart);
     const startOfWeek = new Date(startOfToday);
     const weekday = startOfWeek.getDay();
-    const diffToWeekStart = weekStart === 1 ? (weekday + 6) % 7 : weekday;
+    const diffToWeekStart = (weekday - weekStart + 7) % 7;
     startOfWeek.setDate(startOfWeek.getDate() - diffToWeekStart);
     const endOfWeek = new Date(startOfWeek);
     endOfWeek.setDate(endOfWeek.getDate() + 7);
@@ -181,26 +251,40 @@ export default function SearchScreen() {
         if (scope === 'project_tasks' && !task.projectId) return false;
         if (!matchesTaskArea(task)) return false;
         if (!matchesTokens(task)) return false;
+        if (!matchesLocation(task)) return false;
         if (!matchesDue(task)) return false;
         return true;
     });
     const filteredProjects = projectResults.filter((project) => {
+        if (normalizedLocationQuery) return false;
         if (!includeCompleted && project.status === 'archived') return false;
         if (!matchesArea(project.areaId ?? null)) return false;
         return true;
     });
+    const editingTask = useMemo<Task | null>(
+        () => editingTaskId
+            ? _allTasks.find((task) => task.id === editingTaskId && !task.deletedAt) ?? null
+            : null,
+        [_allTasks, editingTaskId]
+    );
     const scopedProjects = scope === 'tasks' || scope === 'project_tasks' ? [] : filteredProjects;
     const scopedTasks = scope === 'projects' ? [] : filteredTasks;
     const totalResults = scopedProjects.length + scopedTasks.length;
     const totalResultsLabel = sourceLimited ? `${sourceLimit}+` : String(totalResults);
-    const results = trimmedQuery === '' ? [] : [
+    const results = !hasActiveSearch ? [] : [
         ...scopedProjects.map(p => ({ type: 'project' as const, item: p })),
         ...scopedTasks.map(t => ({ type: 'task' as const, item: t })),
     ].slice(0, 50);
     const isTruncated = totalResults > results.length || sourceLimited;
+    const noResultsLabel = trimmedQuery ? t('search.noResults') + ' "' + trimmedQuery + '"' : t('search.noResults');
 
     const savedSearches = settings?.savedSearches || [];
     const canSave = trimmedQuery.length > 0;
+
+    const openFilters = () => {
+        inputRef.current?.blur();
+        setFiltersOpen(true);
+    };
 
     const openSaveModal = () => {
         setSaveName(trimmedQuery);
@@ -228,13 +312,7 @@ export default function SearchScreen() {
         router.push(`/saved-search/${newSearch.id}`);
     };
 
-    const handleSelect = (result: { type: 'project'; item: SearchProjectResult } | { type: 'task'; item: SearchTaskResult }) => {
-        if (result.type === 'project') {
-            router.push({ pathname: '/projects-screen', params: { projectId: result.item.id } });
-            return;
-        }
-
-        const task = result.item;
+    const navigateToTaskList = (task: SearchTaskResult) => {
         const status = task.status;
         setHighlightTask(task.id);
         if (status === 'done') {
@@ -259,7 +337,23 @@ export default function SearchScreen() {
         else router.push('/focus');
     };
 
-    const statusOptions: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'reference', 'done', 'archived'];
+    const handleSelect = (result: { type: 'project'; item: SearchProjectResult } | { type: 'task'; item: SearchTaskResult }) => {
+        if (result.type === 'project') {
+            router.push({ pathname: '/projects-screen', params: { projectId: result.item.id } });
+            return;
+        }
+
+        const task = _allTasks.find((item) => item.id === result.item.id && !item.deletedAt);
+        if (!task) {
+            navigateToTaskList(result.item);
+            return;
+        }
+
+        setHighlightTask(task.id);
+        setEditingTaskId(task.id);
+    };
+
+    const statusOptions: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'done', 'reference', 'archived'];
     const allTokens = useMemo(() => {
         const tokens = new Set<string>([...PRESET_CONTEXTS, ...PRESET_TAGS]);
         _allTasks.forEach((task) => {
@@ -297,22 +391,13 @@ export default function SearchScreen() {
         setSelectedStatuses([]);
         setSelectedArea('all');
         setSelectedTokens([]);
+        setLocationQuery('');
         setDuePreset('any');
         setScope('all');
         setIncludeCompleted(false);
         setIncludeReference(true);
         setHideFutureTasks(false);
     };
-    const hasActiveFilters = (
-        selectedStatuses.length > 0
-        || selectedArea !== 'all'
-        || selectedTokens.length > 0
-        || duePreset !== 'any'
-        || scope !== 'all'
-        || includeCompleted
-        || !includeReference
-        || hideFutureTasks
-    );
     const activeChips: { key: string; label: string; onPress: () => void }[] = [];
     selectedStatuses.forEach((status) => {
         activeChips.push({
@@ -338,6 +423,13 @@ export default function SearchScreen() {
             onPress: () => toggleToken(token),
         });
     });
+    if (locationQuery.trim()) {
+        activeChips.push({
+            key: 'location',
+            label: `${t('taskEdit.locationLabel')}: ${locationQuery.trim()}`,
+            onPress: () => setLocationQuery(''),
+        });
+    }
     if (duePreset !== 'any') {
         activeChips.push({
             key: `due:${duePreset}`,
@@ -357,6 +449,14 @@ export default function SearchScreen() {
             key: 'includeCompleted',
             label: t('search.includeCompleted'),
             onPress: () => setIncludeCompleted(false),
+        });
+    }
+    const hideLabel = translateWithFallback(t, 'filters.hide', 'Hide');
+    if (!includeReference) {
+        activeChips.push({
+            key: 'hideReference',
+            label: `${hideLabel}: ${t('status.reference') || 'Reference'}`,
+            onPress: () => setIncludeReference(true),
         });
     }
     const hideFutureTasksLabel = translateWithFallback(t, 'filters.hideFutureTasks', 'Hide future tasks');
@@ -415,7 +515,9 @@ export default function SearchScreen() {
                     </TouchableOpacity>
                 )}
                 <TouchableOpacity
-                    onPress={() => setFiltersOpen((prev) => !prev)}
+                    accessibilityLabel={t('filters.label')}
+                    accessibilityRole="button"
+                    onPress={openFilters}
                     style={[
                         styles.filterButton,
                         {
@@ -447,102 +549,149 @@ export default function SearchScreen() {
                     {activeChips.map((chip) => renderChip(chip.label, true, chip.onPress))}
                 </ScrollView>
             )}
-            {filtersOpen && (
-                <View style={[styles.filtersPanel, { borderColor: tc.border, backgroundColor: tc.cardBg }]}>
-                    <View style={styles.filtersHeader}>
-                        <Text style={[styles.filtersTitle, { color: tc.text }]}>{t('filters.label')}</Text>
-                        {hasActiveFilters && (
-                            <TouchableOpacity onPress={clearFilters}>
-                                <Text style={[styles.clearFiltersText, { color: tc.tint }]}>{t('common.clear')}</Text>
-                            </TouchableOpacity>
-                        )}
+            <Modal
+                animationType="fade"
+                accessibilityViewIsModal
+                onRequestClose={() => setFiltersOpen(false)}
+                transparent
+                visible={filtersOpen}
+            >
+                <KeyboardAvoidingView
+                    behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                    style={styles.filtersSheetRoot}
+                >
+                    <Pressable
+                        accessibilityLabel={t('common.close')}
+                        accessibilityRole="button"
+                        onPress={() => setFiltersOpen(false)}
+                        style={styles.filtersSheetBackdrop}
+                    />
+                    <View style={[styles.filtersSheet, { borderColor: tc.border, backgroundColor: tc.cardBg }]}>
+                        <View style={styles.filtersHeader}>
+                            <Text style={[styles.filtersTitle, { color: tc.text }]}>{t('filters.label')}</Text>
+                            <View style={styles.filtersHeaderActions}>
+                                {hasActiveFilters && (
+                                    <TouchableOpacity
+                                        accessibilityRole="button"
+                                        onPress={clearFilters}
+                                        style={styles.filtersTextButton}
+                                    >
+                                        <Text style={[styles.clearFiltersText, { color: tc.tint }]}>{t('common.clear')}</Text>
+                                    </TouchableOpacity>
+                                )}
+                                <TouchableOpacity
+                                    accessibilityLabel={t('common.close')}
+                                    accessibilityRole="button"
+                                    onPress={() => setFiltersOpen(false)}
+                                    style={styles.filtersIconButton}
+                                >
+                                    <X size={18} color={tc.secondaryText} />
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                        <ScrollView
+                            style={styles.filtersScroll}
+                            contentContainerStyle={styles.filtersContent}
+                            keyboardShouldPersistTaps="handled"
+                            showsVerticalScrollIndicator={false}
+                        >
+                            <Text style={[styles.sectionLabel, { color: tc.secondaryText }]}>
+                                {t('search.due.label') || 'Due date'}
+                            </Text>
+                            <View style={styles.chipRow}>
+                                {(['any', 'overdue', 'today', 'tomorrow', 'this_week', 'next_week', 'none'] as const).map((value) =>
+                                    renderChip(dueLabels[value], duePreset === value, () => setDuePreset(value))
+                                )}
+                            </View>
+
+                            <Text style={[styles.sectionLabel, { color: tc.secondaryText }]}>
+                                {t('taskEdit.locationLabel') || 'Location'}
+                            </Text>
+                            <TextInput
+                                accessibilityLabel={t('taskEdit.locationLabel') || 'Location'}
+                                autoCapitalize="none"
+                                autoCorrect={false}
+                                style={[styles.filterInput, { color: tc.text, borderColor: tc.border, backgroundColor: tc.filterBg }]}
+                                value={locationQuery}
+                                onChangeText={setLocationQuery}
+                                placeholder={t('taskEdit.locationPlaceholder') || 'e.g. Office'}
+                                placeholderTextColor={tc.secondaryText}
+                                returnKeyType="done"
+                            />
+
+                            <Text style={[styles.sectionLabel, { color: tc.secondaryText }]}>
+                                {t('filters.contexts') || 'Contexts & tags'}
+                            </Text>
+                            <View style={styles.chipRow}>
+                                {allTokens.map((token) => renderChip(token, selectedTokens.includes(token), () => toggleToken(token)))}
+                            </View>
+
+                            <Text style={[styles.sectionLabel, { color: tc.secondaryText }]}>
+                                {t('search.include.label') || 'Include'}
+                            </Text>
+                            <View style={styles.chipRow}>
+                                {renderChip(
+                                    t('search.includeCompleted'),
+                                    includeCompleted,
+                                    () => setIncludeCompleted((prev) => !prev)
+                                )}
+                                {renderChip(
+                                    t('search.includeReference'),
+                                    includeReference,
+                                    () => setIncludeReference((prev) => !prev)
+                                )}
+                                {renderChip(
+                                    hideFutureTasksLabel,
+                                    hideFutureTasks,
+                                    () => setHideFutureTasks((prev) => !prev)
+                                )}
+                            </View>
+
+                            <Text style={[styles.sectionLabel, { color: tc.secondaryText }]}>
+                                {t('taskEdit.statusLabel') || 'Status'}
+                            </Text>
+                            <View style={styles.chipRow}>
+                                {statusOptions.map((status) =>
+                                    renderChip(
+                                        t(`status.${status}`) || status,
+                                        selectedStatuses.includes(status),
+                                        () => toggleStatus(status)
+                                    )
+                                )}
+                            </View>
+
+                            <Text style={[styles.sectionLabel, { color: tc.secondaryText }]}>
+                                {t('search.scope.label') || 'Scope'}
+                            </Text>
+                            <View style={styles.chipRow}>
+                                {(['all', 'projects', 'tasks', 'project_tasks'] as const).map((value) =>
+                                    renderChip(scopeLabels[value], scope === value, () => setScope(value))
+                                )}
+                            </View>
+
+                            <Text style={[styles.sectionLabel, { color: tc.secondaryText }]}>
+                                {t('taskEdit.areaLabel') || 'Area'}
+                            </Text>
+                            <View style={styles.chipRow}>
+                                {renderChip(
+                                    `${t('common.all')} ${t('taskEdit.areaLabel') || 'Area'}`,
+                                    selectedArea === 'all',
+                                    () => setSelectedArea('all')
+                                )}
+                                {renderChip(
+                                    t('taskEdit.noAreaOption') || 'No Area',
+                                    selectedArea === 'none',
+                                    () => setSelectedArea('none')
+                                )}
+                                {areas.map((area) =>
+                                    renderChip(area.name, selectedArea === area.id, () => setSelectedArea(area.id))
+                                )}
+                            </View>
+                        </ScrollView>
                     </View>
-                    <ScrollView
-                        style={styles.filtersScroll}
-                        contentContainerStyle={styles.filtersContent}
-                        showsVerticalScrollIndicator={false}
-                    >
-                        <Text style={[styles.sectionLabel, { color: tc.secondaryText }]}>
-                            {t('taskEdit.statusLabel') || 'Status'}
-                        </Text>
-                        <View style={styles.chipRow}>
-                            {statusOptions.map((status) =>
-                                renderChip(
-                                    t(`status.${status}`) || status,
-                                    selectedStatuses.includes(status),
-                                    () => toggleStatus(status)
-                                )
-                            )}
-                        </View>
-
-                        <Text style={[styles.sectionLabel, { color: tc.secondaryText }]}>
-                            {t('search.scope.label') || 'Scope'}
-                        </Text>
-                        <View style={styles.chipRow}>
-                            {(['all', 'projects', 'tasks', 'project_tasks'] as const).map((value) =>
-                                renderChip(scopeLabels[value], scope === value, () => setScope(value))
-                            )}
-                        </View>
-
-                        <Text style={[styles.sectionLabel, { color: tc.secondaryText }]}>
-                            {t('taskEdit.areaLabel') || 'Area'}
-                        </Text>
-                        <View style={styles.chipRow}>
-                            {renderChip(
-                                `${t('common.all')} ${t('taskEdit.areaLabel') || 'Area'}`,
-                                selectedArea === 'all',
-                                () => setSelectedArea('all')
-                            )}
-                            {renderChip(
-                                t('taskEdit.noAreaOption') || 'No Area',
-                                selectedArea === 'none',
-                                () => setSelectedArea('none')
-                            )}
-                            {areas.map((area) =>
-                                renderChip(area.name, selectedArea === area.id, () => setSelectedArea(area.id))
-                            )}
-                        </View>
-
-                        <Text style={[styles.sectionLabel, { color: tc.secondaryText }]}>
-                            {t('filters.contexts') || 'Contexts & tags'}
-                        </Text>
-                        <View style={styles.chipRow}>
-                            {allTokens.map((token) => renderChip(token, selectedTokens.includes(token), () => toggleToken(token)))}
-                        </View>
-
-                        <Text style={[styles.sectionLabel, { color: tc.secondaryText }]}>
-                            {t('search.due.label') || 'Due date'}
-                        </Text>
-                        <View style={styles.chipRow}>
-                            {(['any', 'overdue', 'today', 'tomorrow', 'this_week', 'next_week', 'none'] as const).map((value) =>
-                                renderChip(dueLabels[value], duePreset === value, () => setDuePreset(value))
-                            )}
-                        </View>
-
-                        <Text style={[styles.sectionLabel, { color: tc.secondaryText }]}>
-                            {t('search.include.label') || 'Include'}
-                        </Text>
-                        <View style={styles.chipRow}>
-                            {renderChip(
-                                t('search.includeCompleted'),
-                                includeCompleted,
-                                () => setIncludeCompleted((prev) => !prev)
-                            )}
-                            {renderChip(
-                                t('search.includeReference'),
-                                includeReference,
-                                () => setIncludeReference((prev) => !prev)
-                            )}
-                            {renderChip(
-                                hideFutureTasksLabel,
-                                hideFutureTasks,
-                                () => setHideFutureTasks((prev) => !prev)
-                            )}
-                        </View>
-                    </ScrollView>
-                </View>
-            )}
-            {trimmedQuery !== '' && isTruncated && (
+                </KeyboardAvoidingView>
+            </Modal>
+            {hasActiveSearch && isTruncated && (
                 <Text style={[styles.helpText, { color: tc.secondaryText }]}>
                     {t('search.showingFirst')
                         .replace('{shown}', String(results.length))
@@ -564,10 +713,10 @@ export default function SearchScreen() {
                 contentContainerStyle={styles.listContent}
                 keyboardShouldPersistTaps="handled"
                 ListEmptyComponent={
-                    trimmedQuery !== '' && !ftsLoading ? (
+                    hasActiveSearch && !ftsLoading ? (
                         <View style={styles.emptyContainer}>
                             <Text style={[styles.emptyText, { color: tc.secondaryText }]}>
-                                {t('search.noResults')} {'"'}{trimmedQuery}{'"'}
+                                {noResultsLabel}
                             </Text>
                         </View>
                     ) : null
@@ -595,6 +744,7 @@ export default function SearchScreen() {
                         <ChevronRight size={20} color={tc.secondaryText} />
                     </TouchableOpacity>
                 )}
+              removeClippedSubviews={false}
             />
 
             <Modal
@@ -625,6 +775,23 @@ export default function SearchScreen() {
                     </View>
                 </View>
             </Modal>
+            <TaskEditModal
+                visible={Boolean(editingTask)}
+                task={editingTask}
+                onClose={() => setEditingTaskId(null)}
+                onSave={(taskId, updates) => {
+                    updateTask(taskId, updates);
+                    setEditingTaskId(null);
+                }}
+                defaultTab="view"
+                onProjectNavigate={openProjectScreen}
+                onContextNavigate={openContextsScreen}
+                onTagNavigate={openContextsScreen}
+                onFocusMode={(taskId) => {
+                    setEditingTaskId(null);
+                    router.push(`/check-focus?id=${taskId}`);
+                }}
+            />
         </SafeAreaView>
     );
 }
@@ -682,11 +849,20 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: 8,
     },
-    filtersPanel: {
-        marginHorizontal: 16,
-        marginTop: 10,
+    filtersSheetRoot: {
+        flex: 1,
+        justifyContent: 'flex-end',
+    },
+    filtersSheetBackdrop: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: 'rgba(0,0,0,0.45)',
+    },
+    filtersSheet: {
+        maxHeight: '82%',
+        marginHorizontal: 12,
+        marginBottom: 12,
         padding: 12,
-        borderRadius: 12,
+        borderRadius: 16,
         borderWidth: 1,
         gap: 12,
     },
@@ -695,20 +871,36 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'space-between',
     },
+    filtersHeaderActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
     filtersTitle: {
         fontSize: 14,
         fontWeight: '600',
+    },
+    filtersTextButton: {
+        minHeight: 36,
+        justifyContent: 'center',
+        paddingHorizontal: 8,
+    },
+    filtersIconButton: {
+        minWidth: 36,
+        minHeight: 36,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
     clearFiltersText: {
         fontSize: 12,
         fontWeight: '600',
     },
     filtersScroll: {
-        maxHeight: 280,
+        flexGrow: 0,
     },
     filtersContent: {
         gap: 12,
-        paddingBottom: 4,
+        paddingBottom: 12,
     },
     sectionLabel: {
         fontSize: 12,
@@ -730,6 +922,13 @@ const styles = StyleSheet.create({
     chipText: {
         fontSize: 12,
         fontWeight: '600',
+    },
+    filterInput: {
+        borderWidth: 1,
+        borderRadius: 8,
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+        fontSize: 13,
     },
     listContent: {
         padding: 16,

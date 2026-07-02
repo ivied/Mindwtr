@@ -43,7 +43,12 @@ export function NotificationsSettingsScreen() {
     const systemLocale = typeof Intl !== 'undefined' && typeof Intl.DateTimeFormat === 'function'
         ? Intl.DateTimeFormat().resolvedOptions().locale
         : '';
-    const locale = resolveDateLocaleTag({ language, dateFormat, systemLocale });
+    const locale = resolveDateLocaleTag({
+        language,
+        dateFormat,
+        calendarSystem: settings.calendarSystem,
+        systemLocale,
+    });
 
     const toTimePickerDate = (time: string) => {
         const [hours, minutes] = time.split(':').map((v) => parseInt(v, 10));

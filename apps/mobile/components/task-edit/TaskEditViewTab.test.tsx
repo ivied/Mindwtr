@@ -14,6 +14,7 @@ vi.mock('../task-status-badge', () => ({
 }));
 
 vi.mock('../markdown-text', () => ({
+  MarkdownInlineText: (props: any) => React.createElement('MarkdownInlineText', props),
   MarkdownText: (props: any) => React.createElement('MarkdownText', props),
 }));
 
@@ -37,6 +38,57 @@ describe('TaskEditViewTab', () => {
       textAlign: 'left',
       width: '100%',
     });
+  });
+
+  it('shows the full task title as a wrapping field at the top of the read-only preview', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(
+        <TaskEditViewTab
+          t={(key) => ({ 'taskEdit.titleLabel': 'Title' }[key] ?? key)}
+          tc={{
+            text: '#fff',
+            secondaryText: '#aaa',
+            inputBg: '#111',
+            border: '#222',
+            cardBg: '#000',
+            tint: '#3b82f6',
+          } as any}
+          styles={taskEditStyles as any}
+          mergedTask={{
+            id: 'task-1',
+            title: 'A very long task title that would otherwise be truncated in the header',
+            status: 'next',
+            tags: [],
+            contexts: [],
+            createdAt: '2026-04-01T00:00:00.000Z',
+            updatedAt: '2026-04-01T00:00:00.000Z',
+          }}
+          projects={[]}
+          sections={[]}
+          areas={[]}
+          prioritiesEnabled={false}
+          timeEstimatesEnabled={false}
+          formatTimeEstimateLabel={(value) => String(value)}
+          formatDate={(value) => value}
+          formatDueDate={(value) => value}
+          getRecurrenceRuleValue={() => ''}
+          getRecurrenceStrategyValue={() => 'strict'}
+          applyChecklistUpdate={vi.fn()}
+          visibleAttachments={[]}
+          openAttachment={vi.fn()}
+          isImageAttachment={() => false}
+          textDirectionStyle={{}}
+          resolvedDirection="ltr"
+          showStatusField={false}
+        />
+      );
+    });
+
+    const titleNode = tree.root.findByProps({
+      children: 'A very long task title that would otherwise be truncated in the header',
+    });
+    expect(titleNode.props.numberOfLines).toBeUndefined();
   });
 
   it('renders an interactive status badge and forwards updates', () => {
@@ -119,5 +171,159 @@ describe('TaskEditViewTab', () => {
     });
 
     expect(onStatusUpdate).toHaveBeenCalledWith('done');
+  });
+
+  it('shows the projected recurrence date in the read-only preview', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(
+        <TaskEditViewTab
+          t={(key) =>
+            ({
+              'taskEdit.recurrenceLabel': 'Recurrence',
+              'status.next': 'Next',
+              'recurrence.monthly': 'Monthly',
+              'recurrence.nextCalendarPreview': 'Next calendar preview',
+            }[key] ?? key)
+          }
+          tc={{
+            text: '#fff',
+            secondaryText: '#aaa',
+            inputBg: '#111',
+            border: '#222',
+            cardBg: '#000',
+            tint: '#3b82f6',
+          } as any}
+          styles={{
+            content: {},
+            contentContainer: {},
+            viewRow: {},
+            viewLabel: {},
+            viewValue: {},
+            viewSection: {},
+            viewPillRow: {},
+            viewPill: {},
+            viewPillText: {},
+            viewCard: {},
+            viewChecklist: {},
+            viewChecklistItem: {},
+            viewChecklistText: {},
+            viewAttachmentGrid: {},
+            viewAttachmentCard: {},
+            viewAttachmentText: {},
+            viewAttachmentSubtext: {},
+            viewAttachmentImage: {},
+          }}
+          mergedTask={{
+            id: 'task-1',
+            title: 'Preview task',
+            status: 'next',
+            tags: [],
+            contexts: [],
+            dueDate: '2026-06-09',
+            recurrence: {
+              rule: 'monthly',
+              strategy: 'strict',
+              byMonthDay: [9],
+              rrule: 'FREQ=MONTHLY;BYMONTHDAY=9',
+            },
+            showFutureRecurrence: true,
+            createdAt: '2026-04-01T00:00:00.000Z',
+            updatedAt: '2026-04-01T00:00:00.000Z',
+          }}
+          projects={[]}
+          sections={[]}
+          areas={[]}
+          prioritiesEnabled={false}
+          timeEstimatesEnabled={false}
+          formatTimeEstimateLabel={(value) => String(value)}
+          formatDate={(value) => `formatted ${value}`}
+          formatDueDate={(value) => value}
+          getRecurrenceRuleValue={() => 'monthly'}
+          getRecurrenceStrategyValue={() => 'strict'}
+          applyChecklistUpdate={vi.fn()}
+          visibleAttachments={[]}
+          openAttachment={vi.fn()}
+          isImageAttachment={() => false}
+          textDirectionStyle={{}}
+          resolvedDirection="ltr"
+        />
+      );
+    });
+
+    expect(tree.root.findByProps({ children: 'Monthly · Next calendar preview: formatted 2026-07-09' })).toBeTruthy();
+  });
+
+  it('hides the status row when the task editor layout hides status', () => {
+    let tree!: renderer.ReactTestRenderer;
+    renderer.act(() => {
+      tree = renderer.create(
+        <TaskEditViewTab
+          t={(key) =>
+            ({
+              'taskEdit.statusLabel': 'Status',
+              'status.next': 'Next',
+            }[key] ?? key)
+          }
+          tc={{
+            text: '#fff',
+            secondaryText: '#aaa',
+            inputBg: '#111',
+            border: '#222',
+            cardBg: '#000',
+            tint: '#3b82f6',
+          } as any}
+          styles={{
+            content: {},
+            contentContainer: {},
+            viewRow: {},
+            viewLabel: {},
+            viewValue: {},
+            viewSection: {},
+            viewPillRow: {},
+            viewPill: {},
+            viewPillText: {},
+            viewCard: {},
+            viewChecklist: {},
+            viewChecklistItem: {},
+            viewChecklistText: {},
+            viewAttachmentGrid: {},
+            viewAttachmentCard: {},
+            viewAttachmentText: {},
+            viewAttachmentSubtext: {},
+            viewAttachmentImage: {},
+          }}
+          mergedTask={{
+            id: 'task-1',
+            title: 'Preview task',
+            status: 'next',
+            tags: [],
+            contexts: [],
+            createdAt: '2026-04-01T00:00:00.000Z',
+            updatedAt: '2026-04-01T00:00:00.000Z',
+          }}
+          projects={[]}
+          sections={[]}
+          areas={[]}
+          prioritiesEnabled={false}
+          timeEstimatesEnabled={false}
+          formatTimeEstimateLabel={(value) => String(value)}
+          formatDate={(value) => value}
+          formatDueDate={(value) => value}
+          getRecurrenceRuleValue={() => ''}
+          getRecurrenceStrategyValue={() => 'strict'}
+          applyChecklistUpdate={vi.fn()}
+          visibleAttachments={[]}
+          openAttachment={vi.fn()}
+          isImageAttachment={() => false}
+          textDirectionStyle={{}}
+          resolvedDirection="ltr"
+          onStatusUpdate={vi.fn()}
+          showStatusField={false}
+        />
+      );
+    });
+
+    expect(tree.root.findAllByType(MockTaskStatusBadge)).toHaveLength(0);
   });
 });

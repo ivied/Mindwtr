@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
+    ArrowRight,
     BookOpen,
     CalendarDays,
     CheckSquare2,
@@ -15,7 +16,7 @@ import {
     Tags,
 } from 'lucide-react';
 
-import { DEFAULT_TASKNOTES_FOLDER, safeFormatDate, translateWithFallback, type ObsidianTask } from '@mindwtr/core';
+import { DEFAULT_TASKNOTES_FOLDER, generateUUID, safeFormatDate, translateWithFallback, useTaskStore, type ObsidianTask, type Task } from '@mindwtr/core';
 
 import { ObsidianService } from '../../lib/obsidian-service';
 import { dispatchNavigateEvent } from '../../lib/navigation-events';
@@ -81,9 +82,59 @@ const formatTaskNotesDate = (value: string | null | undefined): string | null =>
     return safeFormatDate(value, value.includes('T') ? 'PPp' : 'PP', value);
 };
 
+
+const uniqueNonEmptyStrings = (items: Array<string | null | undefined>): string[] => {
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const item of items) {
+        const trimmed = item?.trim();
+        if (!trimmed || seen.has(trimmed)) continue;
+        seen.add(trimmed);
+        result.push(trimmed);
+    }
+    return result;
+};
+
+const normalizeImportedContext = (value: string): string | null => {
+    const trimmed = value.trim().replace(/^@+/, '');
+    return trimmed ? `@${trimmed}` : null;
+};
+
+const buildMindwtrTaskInitialProps = (task: ObsidianTask, sourceUri: string, sourceTitle: string): Partial<Task> => {
+    const metadata = task.taskNotesData ?? task.dataviewData;
+    const now = new Date().toISOString();
+    const status = task.completed ? 'done' : (task.taskNotesData?.mindwtrStatus ?? 'inbox');
+    const attachment = {
+        id: generateUUID(),
+        kind: 'link' as const,
+        title: sourceTitle,
+        uri: sourceUri,
+        createdAt: now,
+        updatedAt: now,
+    };
+
+    return {
+        status,
+        priority: metadata?.priority ?? undefined,
+        dueDate: metadata?.dueDate ?? undefined,
+        startTime: metadata?.scheduledDate ?? undefined,
+        completedAt: task.completed ? (task.taskNotesData?.completedDate ?? now) : undefined,
+        contexts: uniqueNonEmptyStrings((metadata?.contexts ?? []).map(normalizeImportedContext)),
+        tags: uniqueNonEmptyStrings([...task.tags, ...(task.dataviewData?.tags ?? [])]),
+        attachments: [attachment],
+    };
+};
+
+const hasObsidianSourceAttachment = (task: Task, sourceUri: string): boolean => (
+    !task.deletedAt
+    && task.attachments?.some((attachment) => !attachment.deletedAt && attachment.kind === 'link' && attachment.uri === sourceUri) === true
+);
+
 export function ObsidianView() {
     const { t } = useLanguage();
     const showToast = useUiStore((state) => state.showToast);
+    const addTask = useTaskStore((state) => state.addTask);
+    const mindwtrTasks = useTaskStore((state) => state._allTasks);
     const config = useObsidianStore((state) => state.config);
     const tasks = useObsidianStore((state) => state.tasks);
     const scannedFileCount = useObsidianStore((state) => state.scannedFileCount);
@@ -102,6 +153,7 @@ export function ObsidianView() {
     const [newTaskText, setNewTaskText] = useState('');
     const [isCreatingTask, setIsCreatingTask] = useState(false);
     const [pendingTaskIds, setPendingTaskIds] = useState<Record<string, true>>({});
+    const [pendingMindwtrTaskIds, setPendingMindwtrTaskIds] = useState<Record<string, true>>({});
     const [persistedViewState, setPersistedViewState] = usePersistedViewState(
         OBSIDIAN_VIEW_STATE_STORAGE_KEY,
         DEFAULT_OBSIDIAN_VIEW_STATE,
@@ -184,6 +236,44 @@ export function ObsidianView() {
             );
         }
     }, [resolveText, showToast]);
+
+
+    const handleBringIntoMindwtr = useCallback(async (task: typeof tasks[number]) => {
+        const sourceUri = ObsidianService.buildObsidianUri(task.source);
+        if (mindwtrTasks.some((existingTask) => hasObsidianSourceAttachment(existingTask, sourceUri))) {
+            showToast(resolveText('obsidian.bringIntoMindwtrAlreadyExists', 'Task already exists in Mindwtr.'), 'info');
+            return;
+        }
+        setPendingMindwtrTaskIds((current) => ({ ...current, [task.id]: true }));
+        try {
+            const result = await addTask(
+                task.text,
+                buildMindwtrTaskInitialProps(
+                    task,
+                    sourceUri,
+                    resolveText('obsidian.sourceAttachmentTitle', 'Obsidian source')
+                )
+            );
+            if (!result.success) {
+                throw new Error(result.error || resolveText('obsidian.bringIntoMindwtrFailed', 'Could not add the task to Mindwtr.'));
+            }
+            showToast(resolveText('obsidian.bringIntoMindwtrSuccess', 'Task added to Mindwtr.'), 'success');
+        } catch (bringError) {
+            showToast(
+                bringError instanceof Error && bringError.message.trim()
+                    ? bringError.message
+                    : resolveText('obsidian.bringIntoMindwtrFailed', 'Could not add the task to Mindwtr.'),
+                'error',
+                5000
+            );
+        } finally {
+            setPendingMindwtrTaskIds((current) => {
+                const next = { ...current };
+                delete next[task.id];
+                return next;
+            });
+        }
+    }, [addTask, mindwtrTasks, resolveText, showToast]);
 
     const handleToggleTask = useCallback(async (task: typeof tasks[number]) => {
         if (!config.vaultPath) return;
@@ -295,12 +385,12 @@ export function ObsidianView() {
                             </div>
                             <div className="space-y-2">
                                 <h1 className="text-3xl font-semibold tracking-tight">
-                                    {resolveText('obsidian.title', 'Vault Tasks')}
+                                    {resolveText('obsidian.title', 'Obsidian Tasks')}
                                 </h1>
                                 <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
                                     {resolveText(
                                         'obsidian.description',
-                                        'Read tasks from your Obsidian vault, keep the source note visible, and jump back into Obsidian when you need more context.'
+                                        'Import tasks from your Obsidian vault, keep the source note visible, and bring real commitments into Mindwtr when needed.'
                                     )}
                                 </p>
                             </div>
@@ -562,9 +652,12 @@ export function ObsidianView() {
                     <section className="space-y-3">
                         {visibleTasks.map((task) => {
                             const isPending = Boolean(pendingTaskIds[task.id]);
+                            const isBringingIntoMindwtr = Boolean(pendingMindwtrTaskIds[task.id]);
                             const taskNotesData = task.taskNotesData;
-                            const dueLabel = formatTaskNotesDate(taskNotesData?.dueDate);
-                            const scheduledLabel = formatTaskNotesDate(taskNotesData?.scheduledDate);
+                            const dataviewData = task.dataviewData;
+                            const metadata = taskNotesData ?? dataviewData;
+                            const dueLabel = formatTaskNotesDate(metadata?.dueDate);
+                            const scheduledLabel = formatTaskNotesDate(metadata?.scheduledDate);
                             const completedLabel = formatTaskNotesDate(taskNotesData?.completedDate);
                             return (
                                 <article
@@ -601,9 +694,14 @@ export function ObsidianView() {
                                                                 {taskNotesData.mindwtrStatus}
                                                             </span>
                                                         )}
-                                                        {taskNotesData?.priority && (
+                                                        {dataviewData && (
+                                                            <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+                                                                {resolveText('obsidian.dataviewBadge', 'Dataview')}
+                                                            </span>
+                                                        )}
+                                                        {metadata?.priority && (
                                                             <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-                                                                {taskNotesData.priority}
+                                                                {metadata.priority}
                                                             </span>
                                                         )}
                                                     </div>
@@ -618,9 +716,9 @@ export function ObsidianView() {
                                                             ? task.source.relativeFilePath
                                                             : `${task.source.relativeFilePath}:${task.source.lineNumber}`}
                                                     </p>
-                                                    {taskNotesData && (
+                                                    {metadata && (
                                                         <div className="mt-3 space-y-2">
-                                                            {(dueLabel || scheduledLabel || completedLabel || taskNotesData.timeEstimateMinutes) && (
+                                                            {(dueLabel || scheduledLabel || completedLabel || metadata.timeEstimateMinutes) && (
                                                                 <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
                                                                     {dueLabel && (
                                                                         <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-1">
@@ -640,17 +738,17 @@ export function ObsidianView() {
                                                                             {resolveText('obsidian.completed', 'Completed')}: {completedLabel}
                                                                         </span>
                                                                     )}
-                                                                    {taskNotesData.timeEstimateMinutes && (
+                                                                    {metadata.timeEstimateMinutes && (
                                                                         <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-1">
                                                                             <Clock3 className="h-3 w-3" />
-                                                                            {taskNotesData.timeEstimateMinutes}m
+                                                                            {metadata.timeEstimateMinutes}m
                                                                         </span>
                                                                     )}
                                                                 </div>
                                                             )}
-                                                            {(taskNotesData.contexts.length > 0 || taskNotesData.projects.length > 0) && (
+                                                            {(metadata.contexts.length > 0 || metadata.projects.length > 0) && (
                                                                 <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                                                                    {taskNotesData.contexts.map((context) => (
+                                                                    {metadata.contexts.map((context) => (
                                                                         <span
                                                                             key={`${task.id}-context-${context}`}
                                                                             className="rounded-full border border-border/70 bg-background px-2.5 py-1"
@@ -658,7 +756,7 @@ export function ObsidianView() {
                                                                             @{context}
                                                                         </span>
                                                                     ))}
-                                                                    {taskNotesData.projects.map((project) => (
+                                                                    {metadata.projects.map((project) => (
                                                                         <span
                                                                             key={`${task.id}-project-${project}`}
                                                                             className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-background px-2.5 py-1"
@@ -669,7 +767,7 @@ export function ObsidianView() {
                                                                     ))}
                                                                 </div>
                                                             )}
-                                                            {taskNotesData.bodyPreview && (
+                                                            {taskNotesData?.bodyPreview && (
                                                                 <p className="text-xs leading-5 text-muted-foreground">
                                                                     {taskNotesData.bodyPreview}
                                                                 </p>
@@ -701,6 +799,21 @@ export function ObsidianView() {
                                         </div>
 
                                         <div className="flex flex-wrap items-center justify-end gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => void handleBringIntoMindwtr(task)}
+                                                disabled={isBringingIntoMindwtr}
+                                                className="inline-flex items-center gap-2 rounded-xl border border-border bg-background px-3 py-2 text-sm font-medium transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                                {isBringingIntoMindwtr ? (
+                                                    <Loader2 className="h-4 w-4 animate-spin" />
+                                                ) : (
+                                                    <ArrowRight className="h-4 w-4" />
+                                                )}
+                                                {isBringingIntoMindwtr
+                                                    ? resolveText('common.saving', 'Saving...')
+                                                    : resolveText('obsidian.bringIntoMindwtr', 'Bring into Mindwtr')}
+                                            </button>
                                             <button
                                                 type="button"
                                                 onClick={() => void handleToggleTask(task)}

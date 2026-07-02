@@ -2,6 +2,7 @@ import { useId } from 'react';
 import { translateWithFallback, type RecurrenceWeekday } from '@mindwtr/core';
 
 import { cn } from '../../lib/utils';
+import { ModalPortal } from '../ModalPortal';
 
 type TaskItemRecurrenceModalProps = {
     t: (key: string) => string;
@@ -65,6 +66,7 @@ export function TaskItemRecurrenceModal({
     const weekdaySelectLabel = resolveText('recurrence.weekdaySelectLabel', 'Recurrence weekday');
 
     return (
+        <ModalPortal>
         <div
             className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
             onClick={onClose}
@@ -193,5 +195,6 @@ export function TaskItemRecurrenceModal({
                 </div>
             </div>
         </div>
+        </ModalPortal>
     );
 }

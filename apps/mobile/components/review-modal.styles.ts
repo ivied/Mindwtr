@@ -49,6 +49,44 @@ export const styles = StyleSheet.create({
         height: '100%',
         backgroundColor: '#3B82F6',
     },
+    stepRail: {
+        borderBottomWidth: 1,
+        maxHeight: 48,
+    },
+    stepRailContent: {
+        gap: 8,
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+    },
+    stepRailItem: {
+        minWidth: 104,
+        maxWidth: 148,
+        height: 32,
+        borderRadius: 999,
+        borderWidth: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: 8,
+    },
+    stepRailBadge: {
+        width: 18,
+        height: 18,
+        borderRadius: 9,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    stepRailBadgeText: {
+        color: '#FFFFFF',
+        fontSize: 10,
+        fontWeight: '800',
+    },
+    stepRailText: {
+        flex: 1,
+        minWidth: 0,
+        fontSize: 12,
+        fontWeight: '700',
+    },
     content: {
         flex: 1,
         padding: 20,
@@ -108,6 +146,38 @@ export const styles = StyleSheet.create({
         fontSize: 14,
         lineHeight: 20,
         marginTop: 4,
+    },
+    mindSweepNudge: {
+        borderWidth: 1,
+        borderRadius: 12,
+        padding: 12,
+        marginBottom: 16,
+        gap: 10,
+    },
+    mindSweepNudgeText: {
+        gap: 4,
+    },
+    mindSweepNudgeTitle: {
+        fontSize: 15,
+        fontWeight: '700',
+    },
+    mindSweepNudgeBody: {
+        fontSize: 13,
+        lineHeight: 19,
+    },
+    mindSweepNudgeButton: {
+        alignSelf: 'flex-start',
+        minHeight: 36,
+        borderWidth: 1,
+        borderRadius: 18,
+        paddingHorizontal: 12,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    mindSweepNudgeButtonText: {
+        fontSize: 13,
+        fontWeight: '700',
     },
     emptyState: {
         flex: 1,
@@ -211,6 +281,20 @@ export const styles = StyleSheet.create({
     reviewAddTaskButtonText: {
         fontSize: 13,
         fontWeight: '600',
+    },
+    processButton: {
+        alignSelf: 'flex-start',
+        borderRadius: 999,
+        paddingHorizontal: 14,
+        paddingVertical: 8,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    processButtonText: {
+        color: '#FFFFFF',
+        fontSize: 12,
+        fontWeight: '700',
     },
     projectItem: {
         padding: 12,

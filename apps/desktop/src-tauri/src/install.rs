@@ -292,6 +292,56 @@ fn detect_install_source() -> String {
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MicrosoftStoreUpdateInfo {
+    has_update: bool,
+    latest_version: Option<String>,
+}
+
+#[cfg(target_os = "windows")]
+fn package_version_string(version: windows::ApplicationModel::PackageVersion) -> String {
+    format!(
+        "{}.{}.{}.{}",
+        version.Major, version.Minor, version.Build, version.Revision
+    )
+}
+
+#[tauri::command]
+pub(crate) async fn check_microsoft_store_update() -> Result<MicrosoftStoreUpdateInfo, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use windows::Services::Store::StoreContext;
+
+        let context = StoreContext::GetDefault().map_err(|error| error.to_string())?;
+        let updates = context
+            .GetAppAndOptionalStorePackageUpdatesAsync()
+            .map_err(|error| error.to_string())?
+            .get()
+            .map_err(|error| error.to_string())?;
+        let count = updates.Size().map_err(|error| error.to_string())?;
+        let mut latest_version: Option<String> = None;
+
+        for index in 0..count {
+            let update = updates.GetAt(index).map_err(|error| error.to_string())?;
+            let package = update.Package().map_err(|error| error.to_string())?;
+            let id = package.Id().map_err(|error| error.to_string())?;
+            let version = id.Version().map_err(|error| error.to_string())?;
+            latest_version = Some(package_version_string(version));
+        }
+
+        Ok(MicrosoftStoreUpdateInfo {
+            has_update: count > 0,
+            latest_version,
+        })
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Microsoft Store update checks are only available on Windows.".to_string())
+    }
+}
+
 #[tauri::command]
 pub(crate) async fn get_install_source() -> String {
     tauri::async_runtime::spawn_blocking(detect_install_source)

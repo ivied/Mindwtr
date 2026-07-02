@@ -14,6 +14,7 @@
   * [[Desktop Keyboard Shortcuts]]
 * [[User Guide Mobile]]
   * [[Mobile Installation]]
+  * [[Apple Shortcuts]]
 * [[Pomodoro Focus]]
 * [[Docker Deployment]]
 
@@ -51,6 +52,8 @@
 ---
 
 **Imports & Migrations**
+* [[Importing Data From Other Apps]]
+* [[TickTick Import]]
 * [[Todoist Import]]
 * [[DGT GTD Import]]
 * [[OmniFocus Import]]
@@ -59,6 +62,7 @@
 
 **Developer Docs**
 * [[Developer Guide]]
+* [[Engineering Principles]]
 * [[Developer Troubleshooting]]
 * [[Architecture]]
 * [[Core API]]
@@ -71,6 +75,8 @@
 ---
 
 **Links**
+* [Website](https://mindwtr.app/)
+* [Official Docs](https://docs.mindwtr.app/)
 * [GitHub Repository](https://github.com/dongdongbh/Mindwtr)
 * [Releases](https://github.com/dongdongbh/Mindwtr/releases)
 * [Report Issue](https://github.com/dongdongbh/Mindwtr/issues)

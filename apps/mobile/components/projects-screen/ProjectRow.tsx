@@ -1,10 +1,13 @@
-import React from 'react';
-import { Alert, Text, TouchableOpacity, View } from 'react-native';
-import { type Area, type Project, type Task } from '@mindwtr/core';
+import React, { useRef } from 'react';
+import { Alert, Pressable, Text, TouchableOpacity, View } from 'react-native';
+import { type Project } from '@mindwtr/core';
 import * as Haptics from 'expo-haptics';
-import { Trash2, Star, AlertTriangle } from 'lucide-react-native';
+import { Copy, Trash2, AlertTriangle } from 'lucide-react-native';
+import { Swipeable } from 'react-native-gesture-handler';
 
+import { FocusStarIcon } from '@/components/FocusStarIcon';
 import { projectsScreenStyles as styles } from '@/components/projects-screen/projects-screen.styles';
+import type { ProjectTaskSummary } from './project-list-model';
 
 type ThemeColors = {
     cardBg: string;
@@ -17,18 +20,21 @@ type StatusPalette = Record<Project['status'], { text: string; bg: string; borde
 
 type ProjectRowProps = {
     project: Project;
-    tasks: Task[];
-    areaById: Map<string, Area>;
+    taskSummary?: ProjectTaskSummary;
     tc: ThemeColors;
     focusedCount: number;
     statusPalette: StatusPalette;
     t: (key: string) => string;
     onDeleteProject: (projectId: string) => void;
+    onDuplicateProject: (projectId: string) => void;
     onOpenProject: (project: Project) => void;
     onToggleProjectFocus: (projectId: string) => void;
 };
 
 const ROW_ACTION_HIT_SLOP = { top: 12, bottom: 12, left: 12, right: 12 } as const;
+const PROJECT_SWIPE_FRICTION = 1.25;
+const PROJECT_SWIPE_OPEN_THRESHOLD = 72;
+const PROJECT_SWIPE_DRAG_OFFSET = 28;
 
 function getStatusLabel(status: Project['status'], t: (key: string) => string) {
     if (status === 'active') return t('status.active');
@@ -39,27 +45,75 @@ function getStatusLabel(status: Project['status'], t: (key: string) => string) {
 
 export function ProjectRow({
     project,
-    tasks,
-    areaById,
+    taskSummary,
     tc,
     focusedCount,
     statusPalette,
     t,
     onDeleteProject,
+    onDuplicateProject,
     onOpenProject,
     onToggleProjectFocus,
 }: ProjectRowProps) {
-    const projectTasks = tasks.filter((task) => (
-        task.projectId === project.id
-        && task.status !== 'done'
-        && task.status !== 'reference'
-        && !task.deletedAt
-    ));
-    const nextAction = projectTasks.find((task) => task.status === 'next');
-    const showFocusedWarning = project.isFocused && !nextAction && projectTasks.length > 0;
-    const projectColor = project.areaId ? areaById.get(project.areaId)?.color : undefined;
+    const nextAction = taskSummary?.nextAction;
+    const taskCount = taskSummary?.activeTaskCount ?? 0;
+    const taskCountLabel = `${taskCount} ${t('common.tasks')}`;
+    const showFocusedWarning = project.isFocused && !nextAction && taskCount > 0;
+    const swipeableRef = useRef<Swipeable>(null);
 
-    return (
+    const handleDuplicate = () => {
+        swipeableRef.current?.close();
+        void Haptics.selectionAsync().catch(() => {});
+        onDuplicateProject(project.id);
+    };
+
+    const confirmDelete = () => {
+        swipeableRef.current?.close();
+        void Haptics.selectionAsync().catch(() => {});
+        Alert.alert(
+            t('projects.title'),
+            t('projects.deleteConfirm'),
+            [
+                { text: t('common.cancel'), style: 'cancel' },
+                {
+                    text: t('common.delete'),
+                    style: 'destructive',
+                    onPress: () => {
+                        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+                        onDeleteProject(project.id);
+                    },
+                },
+            ],
+        );
+    };
+
+    const renderLeftActions = () => (
+        <Pressable
+            testID={`project-row-duplicate-${project.id}`}
+            onPress={handleDuplicate}
+            style={[styles.projectSwipeAction, styles.projectSwipeDuplicateAction]}
+            accessibilityRole="button"
+            accessibilityLabel={t('projects.duplicate')}
+        >
+            <Copy size={20} color="#FFFFFF" />
+            <Text style={styles.projectSwipeActionText}>{t('projects.duplicate')}</Text>
+        </Pressable>
+    );
+
+    const renderRightActions = () => (
+        <Pressable
+            testID={`project-row-delete-${project.id}`}
+            onPress={confirmDelete}
+            style={[styles.projectSwipeAction, styles.projectSwipeDeleteAction]}
+            accessibilityRole="button"
+            accessibilityLabel={t('common.delete')}
+        >
+            <Trash2 size={20} color="#FFFFFF" />
+            <Text style={styles.projectSwipeActionText}>{t('common.delete')}</Text>
+        </Pressable>
+    );
+
+    const rowContent = (
         <View
             style={[
                 styles.projectItem,
@@ -80,32 +134,48 @@ export function ProjectRow({
                 accessibilityState={{ selected: project.isFocused, disabled: !project.isFocused && focusedCount >= 5 }}
                 hitSlop={ROW_ACTION_HIT_SLOP}
             >
-                <Star
-                    size={22}
-                    color={project.isFocused ? '#F59E0B' : tc.secondaryText}
-                    fill={project.isFocused ? '#F59E0B' : 'transparent'}
-                    strokeWidth={2}
-                    style={{ opacity: project.isFocused ? 1 : focusedCount >= 5 ? 0.3 : 0.6 }}
+                <FocusStarIcon
+                    focused={project.isFocused === true}
+                    inactiveColor={tc.secondaryText}
+                    disabled={!project.isFocused && focusedCount >= 5}
                 />
             </TouchableOpacity>
             <TouchableOpacity
                 style={styles.projectTouchArea}
                 onPress={() => onOpenProject(project)}
             >
-                <View style={[styles.projectColor, { backgroundColor: projectColor || '#6B7280' }]} />
                 <View style={styles.projectContent}>
                     <View style={styles.projectTitleRow}>
-                        <Text style={[styles.projectTitle, { color: tc.text }]}>{project.title}</Text>
-                        {project.tagIds?.length ? (
-                            <View style={styles.projectTagDots}>
-                                {project.tagIds.slice(0, 4).map((tag) => (
-                                    <View
-                                        key={tag}
-                                        style={[styles.projectTagDot, { backgroundColor: tc.secondaryText }]}
-                                    />
-                                ))}
-                            </View>
-                        ) : null}
+                        <View style={styles.projectTitleContent}>
+                            <Text style={[styles.projectTitle, { color: tc.text }]} numberOfLines={1}>
+                                {project.title}
+                            </Text>
+                            {project.tagIds?.length ? (
+                                <View style={styles.projectTagDots}>
+                                    {project.tagIds.slice(0, 4).map((tag) => (
+                                        <View
+                                            key={tag}
+                                            style={[styles.projectTagDot, { backgroundColor: tc.secondaryText }]}
+                                        />
+                                    ))}
+                                </View>
+                            ) : null}
+                        </View>
+                        <View
+                            accessible
+                            accessibilityLabel={taskCountLabel}
+                            style={[
+                                styles.projectTaskCountBadge,
+                                {
+                                    backgroundColor: `${tc.secondaryText}20`,
+                                    borderColor: `${tc.secondaryText}40`,
+                                },
+                            ]}
+                        >
+                            <Text style={[styles.projectTaskCountText, { color: tc.secondaryText }]}>
+                                {taskCount}
+                            </Text>
+                        </View>
                     </View>
                     {nextAction ? (
                         <Text style={[styles.projectMeta, { color: tc.secondaryText }]} numberOfLines={1}>
@@ -128,31 +198,23 @@ export function ProjectRow({
                     )}
                 </View>
             </TouchableOpacity>
-            <TouchableOpacity
-                testID={`project-row-delete-${project.id}`}
-                onPress={() => {
-                    void Haptics.selectionAsync().catch(() => {});
-                    Alert.alert(
-                        t('projects.title'),
-                        t('projects.deleteConfirm'),
-                        [
-                            { text: t('common.cancel'), style: 'cancel' },
-                            {
-                                text: t('common.delete'),
-                                style: 'destructive',
-                                onPress: () => {
-                                    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
-                                    onDeleteProject(project.id);
-                                },
-                            },
-                        ],
-                    );
-                }}
-                style={styles.deleteButton}
-                hitSlop={ROW_ACTION_HIT_SLOP}
-            >
-                <Trash2 size={18} color={tc.secondaryText} />
-            </TouchableOpacity>
         </View>
+    );
+
+    return (
+        <Swipeable
+            ref={swipeableRef}
+            renderLeftActions={renderLeftActions}
+            renderRightActions={renderRightActions}
+            friction={PROJECT_SWIPE_FRICTION}
+            leftThreshold={PROJECT_SWIPE_OPEN_THRESHOLD}
+            rightThreshold={PROJECT_SWIPE_OPEN_THRESHOLD}
+            dragOffsetFromLeftEdge={PROJECT_SWIPE_DRAG_OFFSET}
+            dragOffsetFromRightEdge={PROJECT_SWIPE_DRAG_OFFSET}
+            overshootLeft={false}
+            overshootRight={false}
+        >
+            {rowContent}
+        </Swipeable>
     );
 }

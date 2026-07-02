@@ -1,7 +1,7 @@
 import { Link, Tabs, useRouter } from 'expo-router';
 import { CommonActions } from '@react-navigation/native';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import { Search, Inbox, ArrowRightCircle, Calendar, Circle, ClipboardCheck, Folder, Menu, Mic, Plus } from 'lucide-react-native';
+import { Search, Inbox, Calendar, Circle, ClipboardCheck, Folder, Menu, Mic, Plus, Target } from 'lucide-react-native';
 import { Animated, Dimensions, PanResponder, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -9,19 +9,21 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { HapticTab } from '@/components/haptic-tab';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { MobileAreaSwitcher } from '@/components/mobile-area-switcher';
-import { MobileHeaderSyncBar } from '@/components/mobile-header-sync-bar';
 import { useMobileAreaFilter } from '@/hooks/use-mobile-area-filter';
 import { useMobileSyncBadge } from '@/hooks/use-mobile-sync-badge';
 import { useThemeColors } from '@/hooks/use-theme-colors';
+import { useThemeTokens } from '@/hooks/use-theme-tokens';
+import { MOBILE_HOME_TAB_ROUTE } from '@/lib/home-route';
 import { useLanguage } from '../../../contexts/language-context';
 import { QuickCaptureSheet } from '@/components/quick-capture-sheet';
 import { QuickCaptureProvider } from '../../../contexts/quick-capture-context';
-import { useTaskStore, type MobileQuickAccessView, type SavedSearch, type Task } from '@mindwtr/core';
+import { getDefaultTaskAreaMode, useTaskStore, type MobileQuickAccessView, type SavedSearch, type Task } from '@mindwtr/core';
 import {
   coerceMobileQuickAccessView,
   MOBILE_QUICK_ACCESS_STACK_ROUTE,
   MOBILE_QUICK_ACCESS_TAB_ROUTE,
 } from '@/lib/mobile-quick-access-view';
+import { COMPACT_NAV_TEXT_MAX_SCALE } from '@/constants/text-scale';
 
 type IconSymbolName = Parameters<typeof IconSymbol>[0]['name'];
 type Translate = (key: string) => string;
@@ -71,7 +73,13 @@ function MoreSheetTile({
       <View style={[styles.moreTileIcon, { backgroundColor: tc.filterBg }]}>
         <IconSymbol name={item.icon} size={24} color={item.iconColor} />
       </View>
-      <Text style={[styles.moreTileLabel, { color: tc.text }]} numberOfLines={1}>
+      <Text
+        style={[styles.moreTileLabel, { color: tc.text }]}
+        numberOfLines={2}
+        adjustsFontSizeToFit
+        minimumFontScale={0.78}
+        maxFontSizeMultiplier={COMPACT_NAV_TEXT_MAX_SCALE}
+      >
         {item.displayLabel ?? item.label}
       </Text>
     </Pressable>
@@ -109,7 +117,13 @@ function MoreSheetCompactItem({
       <View style={styles.moreCompactIcon}>
         <IconSymbol name={item.icon} size={18} color={item.iconColor} />
       </View>
-      <Text style={[styles.moreCompactLabel, { color: tc.secondaryText }]} numberOfLines={1}>
+      <Text
+        style={[styles.moreCompactLabel, { color: tc.secondaryText }]}
+        numberOfLines={2}
+        adjustsFontSizeToFit
+        minimumFontScale={0.72}
+        maxFontSizeMultiplier={1}
+      >
         {item.displayLabel ?? item.label}
       </Text>
     </Pressable>
@@ -247,7 +261,7 @@ function MoreNavigationSheet({
     { id: 'trash', label: t('nav.trash'), icon: 'trash.fill', iconColor: iconColors.trash, route: '/trash' },
     { id: 'archived', label: t('nav.archived'), icon: 'archivebox.fill', iconColor: iconColors.archived, route: '/archived' },
     { id: 'done', label: t('nav.done'), icon: 'checkmark.circle.fill', iconColor: iconColors.done, route: '/done' },
-    { id: 'reference', label: t('nav.reference'), displayLabel: 'Refer', icon: 'book.closed.fill', iconColor: iconColors.reference, route: '/reference' },
+    { id: 'reference', label: t('nav.reference'), icon: 'book.closed.fill', iconColor: iconColors.reference, route: '/reference' },
     { id: 'settings', label: t('nav.settings'), icon: 'gearshape.fill', iconColor: iconColors.settings, route: '/settings' },
   ];
 
@@ -341,6 +355,9 @@ function NativeTabBar({
   iconTint,
   inactiveTint,
   tc,
+  captureBg,
+  captureFg,
+  captureRadius,
   tabBarHeight,
   tabBarBottomInset,
   tabBarBottomOffset,
@@ -359,6 +376,9 @@ function NativeTabBar({
   iconTint: string;
   inactiveTint: string;
   tc: { cardBg: string; border: string; onTint: string; tint: string };
+  captureBg: string;
+  captureFg: string;
+  captureRadius: number;
   tabBarHeight: number;
   tabBarBottomInset: number;
   tabBarBottomOffset: number;
@@ -424,11 +444,11 @@ function NativeTabBar({
                 { paddingTop: iconLift, transform: [{ translateY: tabItemTopOffset }] },
               ]}
             >
-              <View style={[styles.captureButtonInner, { backgroundColor: tc.tint }]}>
+              <View style={[styles.captureButtonInner, { backgroundColor: captureBg, borderRadius: captureRadius }]}>
                 {defaultAutoRecord ? (
-                  <Mic size={24} color={tc.onTint} strokeWidth={2.5} />
+                  <Mic size={22} color={captureFg} strokeWidth={2.5} />
                 ) : (
-                  <Plus size={24} color={tc.onTint} strokeWidth={3} />
+                  <Plus size={22} color={captureFg} strokeWidth={3} />
                 )}
               </View>
             </TouchableOpacity>
@@ -506,10 +526,13 @@ function NativeTabBar({
 
 export default function TabLayout() {
   const tc = useThemeColors();
+  const tokens = useThemeTokens();
   const { t } = useLanguage();
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { settings } = useTaskStore();
+  const { selectedAreaIdForNewTasks } = useMobileAreaFilter();
+  const defaultAreaMode = getDefaultTaskAreaMode(settings);
   const androidNavInset = Platform.OS === 'android' && insets.bottom >= 20
     ? Math.max(0, insets.bottom - 12)
     : 0;
@@ -537,15 +560,15 @@ export default function TabLayout() {
   const [moreSheetVisible, setMoreSheetVisible] = useState(false);
   const [moreSheetCloseRequestId, setMoreSheetCloseRequestId] = useState(0);
   const longPressRef = useRef(false);
-  const { selectedAreaIdForNewTasks } = useMobileAreaFilter();
-
   const withSelectedArea = useCallback((initialProps?: Partial<Task> | null): Partial<Task> | undefined => {
     const nextInitialProps = initialProps ? { ...initialProps } : {};
-    if (!nextInitialProps.projectId && !nextInitialProps.areaId && selectedAreaIdForNewTasks) {
+    const hasProject = typeof nextInitialProps.projectId === 'string' && nextInitialProps.projectId.trim().length > 0;
+    const hasArea = Object.prototype.hasOwnProperty.call(nextInitialProps, 'areaId');
+    if (!hasProject && !hasArea && defaultAreaMode === 'active' && selectedAreaIdForNewTasks) {
       nextInitialProps.areaId = selectedAreaIdForNewTasks;
     }
     return Object.keys(nextInitialProps).length > 0 ? nextInitialProps : undefined;
-  }, [selectedAreaIdForNewTasks]);
+  }, [defaultAreaMode, selectedAreaIdForNewTasks]);
 
   const openQuickCapture = useCallback((options?: { initialValue?: string; initialProps?: Partial<Task>; autoRecord?: boolean }) => {
     setCaptureState((prev) => ({
@@ -581,7 +604,14 @@ export default function TabLayout() {
 
   const iconTint = tc.tabIconSelected;
   const inactiveTint = tc.tabIconDefault;
-  const captureColor = tc.tint;
+  // Material 3: capture is Mindwtr's most important action, so the FAB uses the
+  // high-emphasis M3 FAB role (primary/onPrimary) rather than the deliberately
+  // subdued primaryContainer — keeping it the visual top of the action hierarchy.
+  // Other primary buttons stay primaryContainer (canonical). Non-Material themes
+  // keep today's primary tint + 10px radius. M3 also applies the "large" radius.
+  const captureBg = tokens.isMaterial && tokens.roles ? tokens.roles.primary : tc.tint;
+  const captureFg = tokens.isMaterial && tokens.roles ? tokens.roles.onPrimary : tc.onTint;
+  const captureRadius = tokens.isMaterial ? tokens.shape.large : 10;
   const defaultCapture = settings.gtd?.defaultCaptureMethod ?? 'text';
   const defaultAutoRecord = defaultCapture === 'audio';
   const quickAccessView = coerceMobileQuickAccessView(settings.appearance?.mobileQuickAccessView);
@@ -591,13 +621,16 @@ export default function TabLayout() {
   return (
     <QuickCaptureProvider value={{ openQuickCapture }}>
       <Tabs
-        initialRouteName="inbox"
+        initialRouteName={MOBILE_HOME_TAB_ROUTE}
         tabBar={(props) => (
           <NativeTabBar
             {...props}
             iconTint={iconTint}
             inactiveTint={inactiveTint}
             tc={{ cardBg: tc.cardBg, border: tc.border, onTint: tc.onTint, tint: tc.tint }}
+            captureBg={captureBg}
+            captureFg={captureFg}
+            captureRadius={captureRadius}
             tabBarHeight={tabBarHeight}
             tabBarBottomInset={tabBarBottomInset}
             tabBarBottomOffset={tabBarBottomOffset}
@@ -635,15 +668,24 @@ export default function TabLayout() {
                 borderBottomColor: tc.border,
               },
             ]}
-          >
-            <MobileHeaderSyncBar />
-          </View>
+          />
         ),
         headerLeft: () => <MobileAreaSwitcher />,
         headerLeftContainerStyle: {
           paddingLeft: 16,
         },
         headerTintColor: tc.text,
+        headerTitle: ({ children }) => (
+          <Text
+            style={[styles.headerTitle, { color: tc.text }]}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            minimumFontScale={0.72}
+            maxFontSizeMultiplier={COMPACT_NAV_TEXT_MAX_SCALE}
+          >
+            {children}
+          </Text>
+        ),
         headerTitleStyle: {
           fontSize: 17,
           fontWeight: '700',
@@ -671,21 +713,21 @@ export default function TabLayout() {
         ),
       })}
       >
-        <Tabs.Screen
+      <Tabs.Screen
+        name={MOBILE_HOME_TAB_ROUTE}
+        options={{
+          title: t('tab.next'),
+          tabBarIcon: ({ color, focused }) => (
+            <Target size={focused ? 26 : 24} color={color} strokeWidth={2} opacity={focused ? 1 : 0.8} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="inbox"
         options={{
           title: t('tab.inbox'),
           tabBarIcon: ({ color, focused }) => (
             <Inbox size={focused ? 26 : 24} color={color} strokeWidth={2} opacity={focused ? 1 : 0.8} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="focus"
-        options={{
-          title: t('tab.next'),
-          tabBarIcon: ({ color, focused }) => (
-            <ArrowRightCircle size={focused ? 26 : 24} color={color} strokeWidth={2} opacity={focused ? 1 : 0.8} />
           ),
         }}
       />
@@ -713,11 +755,11 @@ export default function TabLayout() {
               accessibilityLabel={defaultAutoRecord ? t('quickAdd.audioCaptureLabel') : t('nav.addTask')}
               style={styles.captureButton}
             >
-              <View style={[styles.captureButtonInner, { backgroundColor: captureColor }]}>
+              <View style={[styles.captureButtonInner, { backgroundColor: captureBg, borderRadius: captureRadius }]}>
                 {defaultAutoRecord ? (
-                  <Mic size={24} color={tc.onTint} strokeWidth={2.5} />
+                  <Mic size={22} color={captureFg} strokeWidth={2.5} />
                 ) : (
-                  <Plus size={24} color={tc.onTint} strokeWidth={3} />
+                  <Plus size={22} color={captureFg} strokeWidth={3} />
                 )}
               </View>
             </TouchableOpacity>
@@ -841,23 +883,29 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  headerTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    textAlign: 'center',
+    minWidth: 0,
+  },
   captureButton: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
   captureButtonInner: {
-    width: 52,
-    height: 44,
-    borderRadius: 12,
+    width: 40,
+    height: 34,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: -4,
+    marginTop: -2,
     shadowColor: '#000',
-    shadowOpacity: 0.12,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 4,
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
   },
   moreOverlayContainer: {
     ...StyleSheet.absoluteFillObject,
@@ -908,7 +956,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     flexBasis: '31%',
     flexGrow: 1,
-    minHeight: 86,
+    minHeight: 104,
     paddingHorizontal: 8,
     paddingVertical: 12,
   },
@@ -923,8 +971,8 @@ const styles = StyleSheet.create({
   moreTileLabel: {
     fontSize: 12,
     fontWeight: '700',
+    includeFontPadding: false,
     lineHeight: 15,
-    minHeight: 15,
     textAlign: 'center',
   },
   moreDivider: {
@@ -944,7 +992,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 48,
+    minHeight: 58,
     paddingHorizontal: 2,
     paddingVertical: 4,
   },
@@ -963,7 +1011,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     lineHeight: 12,
     marginTop: 4,
-    minHeight: 24,
+    minHeight: 16,
     textAlign: 'center',
   },
   moreSavedSection: {

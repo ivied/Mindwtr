@@ -13,6 +13,8 @@ interface SwipeableTaskItemStatusMenuProps {
     visible: boolean;
 }
 
+const QUICK_STATUS_OPTIONS: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'done', 'reference'];
+
 export function SwipeableTaskItemStatusMenu({
     onClose,
     onStatusChange,
@@ -21,10 +23,6 @@ export function SwipeableTaskItemStatusMenu({
     t,
     visible,
 }: SwipeableTaskItemStatusMenuProps) {
-    const quickStatusOptions: TaskStatus[] = taskStatus === 'reference'
-        ? ['inbox', 'next', 'waiting', 'someday', 'reference', 'done']
-        : ['inbox', 'next', 'waiting', 'someday', 'done'];
-
     return (
         <Modal
             visible={visible}
@@ -39,7 +37,7 @@ export function SwipeableTaskItemStatusMenu({
                         {t('taskStatus.changeStatus')}
                     </Text>
                     <View style={styles.menuGrid}>
-                        {quickStatusOptions.map((status) => {
+                        {QUICK_STATUS_OPTIONS.map((status) => {
                             const colors = getStatusColor(status);
                             return (
                                 <Pressable

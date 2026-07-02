@@ -6,17 +6,18 @@ import {
   bytesToBase64,
   collectAttachments,
   copyFileSafely,
+  createAttachmentLocalMigrationLimiter,
   DEFAULT_CONTENT_TYPE,
   extractExtension,
   FILE_BACKEND_VALIDATION_CONFIG,
   fileExists,
-  findSafEntry,
   getAttachmentByteSize,
   getAttachmentLocalStatus,
   getAttachmentsDir,
   isContentAttachmentUri,
   isHttpAttachmentUri,
   logAttachmentWarn,
+  readSafDirectoryEntriesByName,
   readFileAsBytes,
   resolveFileSyncDir,
   StorageAccessFramework,
@@ -38,12 +39,25 @@ export const syncFileAttachments = async (
   if (!attachmentsDir) return false;
 
   const attachmentsById = collectAttachments(appData);
+  const migrateAttachmentLocally = createAttachmentLocalMigrationLimiter();
+  let safEntriesByName: Map<string, string> | null = null;
+  const getSafEntriesByName = async (): Promise<Map<string, string>> => {
+    if (!safEntriesByName) {
+      safEntriesByName = await readSafDirectoryEntriesByName(syncDir.attachmentsDirUri);
+    }
+    return safEntriesByName;
+  };
 
   let didMutate = false;
   for (const attachment of attachmentsById.values()) {
     if (attachment.kind !== 'file') continue;
     if (attachment.deletedAt) continue;
     assertAttachmentSyncNotAborted(signal);
+    const localMigration = await migrateAttachmentLocally(attachment);
+    if (localMigration.migrated) {
+      didMutate = true;
+    }
+    if (localMigration.skipped) continue;
 
     const uri = attachment.uri || '';
     const isHttp = isHttpAttachmentUri(uri);
@@ -63,7 +77,8 @@ export const syncFileAttachments = async (
         const targetUri = `${syncDir.attachmentsDirUri}${filename}`;
         remoteExists = await fileExists(targetUri);
       } else {
-        remoteExists = Boolean(await findSafEntry(syncDir.attachmentsDirUri, filename));
+        const safEntries = await getSafEntriesByName();
+        remoteExists = safEntries.has(filename);
       }
       if (!remoteExists) {
         try {
@@ -89,10 +104,14 @@ export const syncFileAttachments = async (
           } else {
             const base64 = await readFileAsBytes(uri).then(bytesToBase64);
             assertAttachmentSyncNotAborted(signal);
-            let targetUri = await findSafEntry(syncDir.attachmentsDirUri, filename);
+            const safEntries = await getSafEntriesByName();
+            let targetUri = safEntries.get(filename) ?? null;
             if (!targetUri && StorageAccessFramework?.createFileAsync) {
               assertAttachmentSyncNotAborted(signal);
               targetUri = await StorageAccessFramework.createFileAsync(syncDir.attachmentsDirUri, filename, attachment.mimeType || DEFAULT_CONTENT_TYPE);
+              if (targetUri) {
+                safEntries.set(filename, targetUri);
+              }
             }
             if (targetUri && StorageAccessFramework?.writeAsStringAsync) {
               assertAttachmentSyncNotAborted(signal);

@@ -44,6 +44,25 @@ const section = (updates: Partial<Section> = {}): Section => ({
 });
 
 describe('sync signatures', () => {
+    it('omits repeatReminderMinutes from the task signature when off, includes it when set', () => {
+        const undef = toComparableSignature(normalizeTaskForContentComparison(task()));
+        const zero = toComparableSignature(normalizeTaskForContentComparison(task({ repeatReminderMinutes: 0 })));
+        const set15 = toComparableSignature(normalizeTaskForContentComparison(task({ repeatReminderMinutes: 15 })));
+        expect(zero).toBe(undef);
+        expect(set15).not.toBe(undef);
+    });
+
+    it('ignores unknown legacy task fields in content signatures', () => {
+        const base = normalizeTaskForContentComparison(task());
+        const withLegacyField = normalizeTaskForContentComparison({
+            ...task(),
+            removedLegacyField: 'stale remote value',
+        } as Task & Record<string, unknown>);
+
+        expect(toComparableSignature(withLegacyField)).toBe(toComparableSignature(base));
+        expect(withLegacyField).not.toHaveProperty('removedLegacyField');
+    });
+
     it('normalizes area default color and ordering for content comparison', () => {
         const local = normalizeAreaForContentComparison(area({
             color: '#6B7280',
@@ -117,6 +136,27 @@ describe('sync signatures', () => {
 
         expect(toComparableSignature(local)).toBe(toComparableSignature(incoming));
         expect(chooseDeterministicWinner(local, incoming)).toBe(incoming);
+    });
+
+    it('ignores stale recurrence preview flags on non-recurring tasks', () => {
+        const local = normalizeTaskForContentComparison(task({
+            showFutureRecurrence: true,
+        }));
+        const incoming = normalizeTaskForContentComparison(task());
+
+        expect(toComparableSignature(local)).toBe(toComparableSignature(incoming));
+    });
+
+    it('keeps recurrence preview flags meaningful for recurring tasks', () => {
+        const local = normalizeTaskForContentComparison(task({
+            recurrence: { rule: 'weekly' },
+            showFutureRecurrence: true,
+        }));
+        const incoming = normalizeTaskForContentComparison(task({
+            recurrence: { rule: 'weekly' },
+        }));
+
+        expect(toComparableSignature(local)).not.toBe(toComparableSignature(incoming));
     });
 
     it('ignores project archive section sidecars in comparable signatures', () => {

@@ -1,7 +1,8 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import {
     addBreadcrumb,
     DEFAULT_PROJECT_COLOR,
+    isTaskInActiveProject,
     parseQuickAddDateCommands,
     tFallback,
     type AppData,
@@ -20,16 +21,19 @@ import {
 } from './inbox-processing-utils';
 import { useInboxProcessingState } from './useInboxProcessingState';
 
+const formatTokenListInput = (tokens: string[]): string => tokens.join(', ');
+
 type UseInboxProcessingControllerParams = {
     t: (key: string) => string;
     tasks: Task[];
     projects: Project[];
     areas: Area[];
     settings?: AppData['settings'];
-    addProject: (title: string, color: string) => Promise<Project | null>;
+    addProject: (title: string, color: string, initialProps?: Partial<Project>) => Promise<Project | null>;
     updateTask: (id: string, updates: Partial<Task>) => Promise<unknown>;
     deleteTask: (id: string) => Promise<unknown>;
     allContexts: string[];
+    allTags: string[];
     isProcessing: boolean;
     setIsProcessing: (value: boolean) => void;
 };
@@ -52,6 +56,7 @@ export function useInboxProcessingController({
     updateTask,
     deleteTask,
     allContexts,
+    allTags,
     isProcessing,
     setIsProcessing,
 }: UseInboxProcessingControllerParams): UseInboxProcessingControllerResult {
@@ -73,8 +78,12 @@ export function useInboxProcessingController({
         setQuickExecutionChoice,
         selectedContexts,
         setSelectedContexts,
+        contextsDraft,
+        setContextsDraft,
         selectedTags,
         setSelectedTags,
+        tagsDraft,
+        setTagsDraft,
         selectedEnergyLevel,
         setSelectedEnergyLevel,
         selectedAssignedTo,
@@ -158,6 +167,16 @@ export function useInboxProcessingController({
         areas,
         settings,
     });
+    const projectMap = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
+
+    const handleSetSelectedAreaId = useCallback((areaId: string | null) => {
+        setSelectedAreaId(areaId);
+        setSelectedProjectId((currentProjectId) => {
+            if (!currentProjectId || !areaId) return currentProjectId;
+            const project = projectMap.get(currentProjectId);
+            return project?.areaId === areaId ? currentProjectId : null;
+        });
+    }, [projectMap, setSelectedAreaId, setSelectedProjectId]);
 
     useEffect(() => {
         if (isProcessing) return;
@@ -165,12 +184,17 @@ export function useInboxProcessingController({
     }, [isProcessing, resetProcessingSession]);
 
     const startProcessing = useCallback(() => {
-        const inboxTasks = tasks.filter((task) => task.status === 'inbox' && matchesAreaFilter(task));
+        const inboxTasks = tasks.filter((task) => (
+            task.status === 'inbox'
+            && !task.deletedAt
+            && isTaskInActiveProject(task, projectMap)
+            && matchesAreaFilter(task)
+        ));
         if (inboxTasks.length === 0) return;
         hydrateProcessingTask(inboxTasks[0]);
         addBreadcrumb('inbox:start');
         setIsProcessing(true);
-    }, [tasks, hydrateProcessingTask, setIsProcessing, matchesAreaFilter]);
+    }, [tasks, hydrateProcessingTask, setIsProcessing, projectMap, matchesAreaFilter]);
 
     const closeProcessing = useCallback(() => {
         setIsProcessing(false);
@@ -180,8 +204,10 @@ export function useInboxProcessingController({
         const currentTaskId = processingTask?.id;
         const inboxTasks = tasks.filter((task) =>
             task.status === 'inbox'
+            && !task.deletedAt
             && task.id !== currentTaskId
             && !skippedIds.has(task.id)
+            && isTaskInActiveProject(task, projectMap)
             && matchesAreaFilter(task)
         );
         if (inboxTasks.length > 0) {
@@ -192,12 +218,30 @@ export function useInboxProcessingController({
         setIsProcessing(false);
         setProcessingTask(null);
         setSelectedContexts([]);
+        setContextsDraft('');
         setSelectedTags([]);
+        setTagsDraft('');
         setSelectedEnergyLevel(undefined);
         setSelectedAssignedTo('');
         setSelectedPriority(undefined);
         setSelectedTimeEstimate(undefined);
-    }, [hydrateProcessingTask, processingTask?.id, tasks, setIsProcessing, skippedIds, matchesAreaFilter]);
+    }, [
+        hydrateProcessingTask,
+        matchesAreaFilter,
+        processingTask?.id,
+        projectMap,
+        setContextsDraft,
+        setIsProcessing,
+        setSelectedAssignedTo,
+        setSelectedContexts,
+        setSelectedEnergyLevel,
+        setSelectedPriority,
+        setSelectedTags,
+        setSelectedTimeEstimate,
+        setTagsDraft,
+        skippedIds,
+        tasks,
+    ]);
 
     const handleSkip = useCallback(() => {
         if (processingTask) {
@@ -241,6 +285,7 @@ export function useInboxProcessingController({
         const { title: parsedTitle, props: parsedDateProps, invalidDateCommands } = parseQuickAddDateCommands(
             titleInput,
             new Date(),
+            { preserveText: settings?.quickAddAutoClean !== true },
         );
         if (invalidDateCommands && invalidDateCommands.length > 0) {
             showToast(`${t('quickAdd.invalidDateCommand')}: ${invalidDateCommands.join(', ')}`, 'error');
@@ -256,7 +301,29 @@ export function useInboxProcessingController({
             ...parsedDateProps,
         });
         return true;
-    }, [processingDescription, processingTask, processingTitle, showToast, t, updateTask]);
+    }, [processingDescription, processingTask, processingTitle, settings?.quickAddAutoClean, showToast, t, updateTask]);
+
+    const goToStep = useCallback((nextStep: ProcessingStep) => {
+        setStepHistory((prev) => [...prev, processingStep]);
+        setProcessingStep(nextStep);
+    }, [processingStep]);
+
+    const goBack = useCallback(() => {
+        setStepHistory((prev) => {
+            if (prev.length === 0) return prev;
+            const next = [...prev];
+            const last = next.pop();
+            if (last) setProcessingStep(last);
+            return next;
+        });
+    }, []);
+
+    const buildReferenceUpdates = useCallback((): Partial<Task> => {
+        const updates: Partial<Task> = { status: 'reference' };
+        if (showContextsField) updates.contexts = selectedContexts;
+        if (showTagsField) updates.tags = selectedTags;
+        return updates;
+    }, [selectedContexts, selectedTags, showContextsField, showTagsField]);
 
     const handleNotActionable = useCallback((action: 'trash' | 'someday' | 'reference') => {
         if (!processingTask) return;
@@ -265,13 +332,40 @@ export function useInboxProcessingController({
             processNext();
             return;
         }
-        const applied = action === 'someday'
-            ? applyProcessingEdits({ status: 'someday' })
-            : applyProcessingEdits({ status: 'reference' });
+        if (action === 'reference') {
+            if (processingMode === 'guided' && (showContextsField || showTagsField)) {
+                goToStep('reference');
+                return;
+            }
+            const applied = applyProcessingEdits(buildReferenceUpdates());
+            if (applied) {
+                processNext();
+            }
+            return;
+        }
+        const applied = applyProcessingEdits({ status: 'someday' });
         if (applied) {
             processNext();
         }
-    }, [applyProcessingEdits, deleteTask, processNext, processingTask]);
+    }, [
+        applyProcessingEdits,
+        buildReferenceUpdates,
+        deleteTask,
+        goToStep,
+        processNext,
+        processingMode,
+        processingTask,
+        showContextsField,
+        showTagsField,
+    ]);
+
+    const handleConfirmReference = useCallback(() => {
+        if (!processingTask) return;
+        const applied = applyProcessingEdits(buildReferenceUpdates());
+        if (applied) {
+            processNext();
+        }
+    }, [applyProcessingEdits, buildReferenceUpdates, processNext, processingTask]);
 
     const handleLater = useCallback(() => {
         if (!processingTask) return;
@@ -313,21 +407,6 @@ export function useInboxProcessingController({
         t,
     ]);
 
-    const goToStep = useCallback((nextStep: ProcessingStep) => {
-        setStepHistory((prev) => [...prev, processingStep]);
-        setProcessingStep(nextStep);
-    }, [processingStep]);
-
-    const goBack = useCallback(() => {
-        setStepHistory((prev) => {
-            if (prev.length === 0) return prev;
-            const next = [...prev];
-            const last = next.pop();
-            if (last) setProcessingStep(last);
-            return next;
-        });
-    }, []);
-
     const getInitialGuidedStep = useCallback<() => ProcessingStep>(() => (
         twoMinuteEnabled && twoMinuteFirst ? 'twomin' : 'actionable'
     ), [twoMinuteEnabled, twoMinuteFirst]);
@@ -349,13 +428,15 @@ export function useInboxProcessingController({
     }, [continueFromProjectCheck]);
 
     const handleProjectCheckYes = useCallback(() => {
-        const { title: parsedTitle } = parseQuickAddDateCommands(processingTitle, new Date());
+        const { title: parsedTitle } = parseQuickAddDateCommands(processingTitle, new Date(), {
+            preserveText: settings?.quickAddAutoClean !== true,
+        });
         const baseTitle = parsedTitle.trim() || processingTitle.trim() || processingTask?.title || '';
         setConvertToProject(true);
         setProjectTitleDraft(baseTitle);
         setNextActionDraft(baseTitle);
         goToStep('project');
-    }, [goToStep, processingTask?.title, processingTitle]);
+    }, [goToStep, processingTask?.title, processingTitle, settings?.quickAddAutoClean]);
 
     const handleTwoMinDone = useCallback(() => {
         if (!processingTask) return;
@@ -432,42 +513,49 @@ export function useInboxProcessingController({
         window.open(mailto);
     }, [delegateWho, processingDescription, processingTask, processingTitle]);
 
+    const updateSelectedContexts = useCallback((contexts: string[]) => {
+        setSelectedContexts(contexts);
+        setContextsDraft(formatTokenListInput(contexts));
+    }, [setContextsDraft, setSelectedContexts]);
+
+    const updateSelectedTags = useCallback((tags: string[]) => {
+        setSelectedTags(tags);
+        setTagsDraft(formatTokenListInput(tags));
+    }, [setSelectedTags, setTagsDraft]);
+
     const toggleTag = useCallback((tag: string) => {
-        setSelectedTags((prev) =>
-            prev.includes(tag) ? prev.filter((item) => item !== tag) : [...prev, tag]
-        );
-    }, []);
+        const nextTags = selectedTags.includes(tag)
+            ? selectedTags.filter((item) => item !== tag)
+            : [...selectedTags, tag];
+        updateSelectedTags(nextTags);
+    }, [selectedTags, updateSelectedTags]);
 
     const toggleContext = useCallback((ctx: string) => {
         if (ctx.startsWith('#')) {
             toggleTag(ctx);
             return;
         }
-        setSelectedContexts((prev) =>
-            prev.includes(ctx) ? prev.filter((item) => item !== ctx) : [...prev, ctx]
-        );
-    }, [toggleTag]);
+        const nextContexts = selectedContexts.includes(ctx)
+            ? selectedContexts.filter((item) => item !== ctx)
+            : [...selectedContexts, ctx];
+        updateSelectedContexts(nextContexts);
+    }, [selectedContexts, toggleTag, updateSelectedContexts]);
 
-    const addCustomContext = useCallback(() => {
-        const trimmed = customContext.trim();
-        if (!trimmed) return;
-        const raw = trimmed.replace(/^@/, '');
-        const ctx = `@${raw.replace(/^@/, '').trim()}`;
-        if (ctx.length > 1 && !selectedContexts.includes(ctx)) {
-            setSelectedContexts((prev) => [...prev, ctx]);
+    const addCustomContext = useCallback((value?: string) => {
+        const contexts = parseTokenListInput(value ?? customContext, '@');
+        if (contexts.length > 0) {
+            updateSelectedContexts(Array.from(new Set([...selectedContexts, ...contexts])));
         }
         setCustomContext('');
-    }, [customContext, selectedContexts]);
+    }, [customContext, selectedContexts, setCustomContext, updateSelectedContexts]);
 
-    const addCustomTag = useCallback(() => {
-        const trimmed = customTag.trim();
-        if (!trimmed) return;
-        const tag = `#${trimmed.replace(/^#+/, '').trim()}`;
-        if (tag.length > 1 && !selectedTags.includes(tag)) {
-            setSelectedTags((prev) => [...prev, tag]);
+    const addCustomTag = useCallback((value?: string) => {
+        const tags = parseTokenListInput(value ?? customTag, '#');
+        if (tags.length > 0) {
+            updateSelectedTags(Array.from(new Set([...selectedTags, ...tags])));
         }
         setCustomTag('');
-    }, [customTag, selectedTags]);
+    }, [customTag, selectedTags, setCustomTag, updateSelectedTags]);
 
     const handleSetProject = useCallback((projectId: string | null) => {
         if (!processingTask) return;
@@ -518,8 +606,10 @@ export function useInboxProcessingController({
 
     const handleDefer = useCallback(() => {
         if (showOrganizationStep) {
-            setSelectedContexts(processingTask?.contexts ?? []);
-            setSelectedTags(processingTask?.tags ?? []);
+            const taskContexts = processingTask?.contexts ?? [];
+            const taskTags = processingTask?.tags ?? [];
+            updateSelectedContexts(taskContexts);
+            updateSelectedTags(taskTags);
             goToStep('context');
             return;
         }
@@ -541,6 +631,8 @@ export function useInboxProcessingController({
         selectedProjectId,
         showOrganizationStep,
         showProjectStep,
+        updateSelectedContexts,
+        updateSelectedTags,
     ]);
 
     const handleConvertToProject = useCallback(async () => {
@@ -554,7 +646,11 @@ export function useInboxProcessingController({
         }
         try {
             const existing = projects.find((project) => project.title.toLowerCase() === projectTitle.toLowerCase());
-            const project = existing ?? await addProject(projectTitle, DEFAULT_PROJECT_COLOR);
+            const project = existing ?? await addProject(
+                projectTitle,
+                DEFAULT_PROJECT_COLOR,
+                showAreaField && selectedAreaId ? { areaId: selectedAreaId } : undefined,
+            );
             if (!project) return;
             const applied = applyProcessingEdits({
                 status: 'next',
@@ -585,12 +681,14 @@ export function useInboxProcessingController({
         processNext,
         projectTitleDraft,
         projects,
+        selectedAreaId,
         selectedAssignedTo,
         selectedContexts,
         selectedEnergyLevel,
         selectedPriority,
         selectedTimeEstimate,
         selectedTags,
+        showAreaField,
         showContextsField,
         showTagsField,
         showToast,
@@ -602,12 +700,14 @@ export function useInboxProcessingController({
     }, [getInitialGuidedStep, goToStep]);
 
     const handleContextsInputChange = useCallback((value: string) => {
+        setContextsDraft(value);
         setSelectedContexts(parseTokenListInput(value, '@'));
-    }, []);
+    }, [setContextsDraft, setSelectedContexts]);
 
     const handleTagsInputChange = useCallback((value: string) => {
+        setTagsDraft(value);
         setSelectedTags(parseTokenListInput(value, '#'));
-    }, []);
+    }, [setSelectedTags, setTagsDraft]);
 
     const handleQuickSubmit = useCallback(async () => {
         handleScheduleTimeCommit();
@@ -682,7 +782,9 @@ export function useInboxProcessingController({
             setDelegateFollowUp,
             onSendDelegateRequest: handleSendDelegateRequest,
             selectedContexts,
+            contextsDraft,
             selectedTags,
+            tagsDraft,
             selectedEnergyLevel,
             setSelectedEnergyLevel,
             selectedAssignedTo,
@@ -704,12 +806,14 @@ export function useInboxProcessingController({
             toggleTag,
             suggestedContexts,
             suggestedTags,
+            allContexts,
+            allTags,
             projects,
             areas: activeAreas,
             selectedProjectId,
             setSelectedProjectId,
             selectedAreaId,
-            setSelectedAreaId,
+            setSelectedAreaId: handleSetSelectedAreaId,
             showProjectField,
             showAreaField,
             convertToProject,
@@ -757,6 +861,7 @@ export function useInboxProcessingController({
         handleDelegateBack,
         handleSendDelegateRequest,
         handleConfirmWaiting,
+        handleConfirmReference,
         selectedContexts,
         selectedTags,
         selectedEnergyLevel,
@@ -775,6 +880,7 @@ export function useInboxProcessingController({
         selectedPriority,
         setSelectedPriority,
         allContexts,
+        allTags,
         customContext,
         setCustomContext,
         addCustomContext,
@@ -807,7 +913,7 @@ export function useInboxProcessingController({
         selectedProjectId,
         setSelectedProjectId,
         selectedAreaId,
-        setSelectedAreaId,
+        setSelectedAreaId: handleSetSelectedAreaId,
         showProjectField,
         showAreaField,
         showScheduleFields,

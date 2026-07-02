@@ -1,5 +1,5 @@
 import React, { useLayoutEffect, useRef } from 'react';
-import { useTaskById } from '@mindwtr/core';
+import { type RangeSelectionOptions, useTaskById } from '@mindwtr/core';
 import { cn } from '../../../lib/utils';
 import { StoreTaskItem } from './StoreTaskItem';
 
@@ -11,7 +11,7 @@ type VirtualTaskRowProps = {
     selectionMode?: boolean;
     isMultiSelected?: boolean;
     onSelectIndex?: (index: number) => void;
-    onToggleSelectId: (id: string) => void;
+    onToggleSelectId: (id: string, options?: RangeSelectionOptions) => void;
     onMeasure: (id: string, height: number) => void;
     showQuickDone?: boolean;
     readOnly?: boolean;

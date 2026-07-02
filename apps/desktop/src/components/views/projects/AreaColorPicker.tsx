@@ -42,7 +42,11 @@ export function AreaColorPicker({
     }, [open]);
 
     return (
-        <div ref={rootRef} className="relative shrink-0">
+        <div
+            ref={rootRef}
+            className={`relative shrink-0 ${open ? 'z-50' : ''}`}
+            data-testid="area-color-picker-root"
+        >
             <button
                 type="button"
                 onClick={() => setOpen((current) => !current)}
@@ -58,9 +62,10 @@ export function AreaColorPicker({
             </button>
             {open ? (
                 <div
-                    className={`absolute z-20 mt-2 flex gap-2 rounded-lg border border-border bg-popover p-2 shadow-lg ${
+                    className={`absolute z-50 mt-2 flex gap-2 rounded-lg border border-border bg-popover p-2 shadow-lg ${
                         align === 'right' ? 'right-0' : 'left-0'
                     }`}
+                    data-testid="area-color-picker-menu"
                 >
                     {AREA_PRESET_COLORS.map((color) => {
                         const selected = resolvedValue === color;

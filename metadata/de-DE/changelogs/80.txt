@@ -1,0 +1,4 @@
+- Sync und Backups erhalten Personen- und Verantwortlichen-Daten zuverlaessiger, mit Fixes fuer doppelte Personen und sicherere Projektloeschungen.
+- Gemeinsame Anhangsdateien bleiben erhalten, und Anhangsmetadaten duplizierter Projekte werden bereinigt.
+- Quick-Capture-Tastatur, Kalender/Projekte, Android-Icons und grosse Listen laufen ruhiger.
+- Die FOSS-App-Konfiguration ist konsistenter.

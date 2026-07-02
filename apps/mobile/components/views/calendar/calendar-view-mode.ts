@@ -25,7 +25,7 @@ export const coerceCalendarViewMode = (value?: string | null): CalendarViewMode 
 );
 
 export const needsCalendarSelectedDate = (viewMode: CalendarViewMode): boolean => (
-  viewMode === 'day' || viewMode === 'week'
+  viewMode === 'day' || viewMode === 'week' || viewMode === 'schedule'
 );
 
 export const getInitialCalendarSelectedDate = (

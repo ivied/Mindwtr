@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
     buildTaskEditorPresetConfig,
+    DEFAULT_TASK_EDITOR_VISIBLE,
     getTaskEditTabOffset,
     getTaskEditorSectionAssignments,
     getTaskEditorSectionOpenDefaults,
@@ -71,7 +72,7 @@ describe('task-edit-modal pager sync', () => {
             dueDate: 'scheduling',
             tags: 'details',
             section: 'basic',
-            contexts: 'organization',
+            contexts: 'basic',
         });
     });
 
@@ -87,6 +88,56 @@ describe('task-edit-modal pager sync', () => {
             organization: false,
             details: false,
         });
+    });
+
+    it('keeps optional sections collapsed by default', () => {
+        expect(getTaskEditorSectionOpenDefaults(undefined)).toEqual({
+            basic: true,
+            scheduling: false,
+            organization: false,
+            details: false,
+        });
+    });
+
+    it('keeps the standard preset shallow while leaving collapsed sections discoverable', () => {
+        expect(DEFAULT_TASK_EDITOR_VISIBLE).toEqual(expect.arrayContaining([
+            'status',
+            'project',
+            'area',
+            'contexts',
+            'dueDate',
+            'recurrence',
+            'startTime',
+            'reviewAt',
+            'tags',
+            'description',
+            'attachments',
+            'checklist',
+        ]));
+        expect(DEFAULT_TASK_EDITOR_VISIBLE).not.toEqual(expect.arrayContaining([
+            'section',
+            'priority',
+            'energyLevel',
+            'timeEstimate',
+            'assignedTo',
+            'location',
+        ]));
+        const standardPreset = buildTaskEditorPresetConfig('standard');
+        expect(standardPreset.hidden).not.toEqual(expect.arrayContaining([
+            'recurrence',
+            'startTime',
+            'reviewAt',
+            'tags',
+            'attachments',
+        ]));
+        expect(standardPreset.hidden).toEqual(expect.arrayContaining([
+            'section',
+            'priority',
+            'energyLevel',
+            'timeEstimate',
+            'assignedTo',
+            'location',
+        ]));
     });
 
     it('builds the full preset with expanded optional sections', () => {

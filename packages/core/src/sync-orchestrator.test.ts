@@ -51,6 +51,32 @@ describe('sync orchestrator', () => {
         expect(args).toEqual(['first', 'third']);
     });
 
+    it('can clear a queued follow-up before the in-flight cycle drains', async () => {
+        const calls: string[] = [];
+        const orchestrator = createSyncOrchestrator<string, string>({
+            runCycle: async (arg) => {
+                calls.push(arg);
+                if (arg === 'first') {
+                    await new Promise((resolve) => setTimeout(resolve, 20));
+                }
+                return arg;
+            },
+        });
+
+        const first = orchestrator.run('first');
+        const second = orchestrator.run('second');
+        expect(orchestrator.getState()).toEqual({ inFlight: true, queued: true });
+
+        orchestrator.clearFollowUp();
+        expect(orchestrator.getState()).toEqual({ inFlight: true, queued: false });
+
+        await expect(first).resolves.toBe('first');
+        await expect(second).resolves.toBe('first');
+        await new Promise((resolve) => setTimeout(resolve, 30));
+
+        expect(calls).toEqual(['first']);
+    });
+
     it('supports requesting follow-up from inside a running cycle', async () => {
         let calls = 0;
         const orchestrator = createSyncOrchestrator<string | undefined, number>({

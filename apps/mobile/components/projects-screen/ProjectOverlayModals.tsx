@@ -3,6 +3,7 @@ import { Image, Modal, Pressable, Text, TextInput, TouchableOpacity, View } from
 import { type Attachment } from '@mindwtr/core';
 
 import { projectsScreenStyles as styles } from '@/components/projects-screen/projects-screen.styles';
+import { useAndroidKeyboardInset } from '../../lib/use-android-keyboard-inset';
 
 type ThemeColors = {
     border: string;
@@ -40,6 +41,7 @@ export function ProjectLinkModal({
     onClose,
     onSave,
 }: ProjectLinkModalProps) {
+    const keyboardInset = useAndroidKeyboardInset(visible);
     return (
         <Modal
             visible={visible}
@@ -48,7 +50,7 @@ export function ProjectLinkModal({
             presentationStyle={presentationStyle}
             onRequestClose={onClose}
         >
-            <View style={styles.overlay}>
+            <View style={keyboardInset > 0 ? [styles.overlay, { paddingBottom: keyboardInset }] : styles.overlay}>
                 <View style={[styles.linkModalCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>
                     <Text style={[styles.linkModalTitle, { color: tc.text }]}>{t('attachments.addLink')}</Text>
                     <TextInput
@@ -158,6 +160,7 @@ export function ProjectTagPickerModal({
     onClose,
     onToggleTag,
 }: ProjectTagPickerModalProps) {
+    const keyboardInset = useAndroidKeyboardInset(visible);
     return (
         <Modal
             visible={visible}
@@ -166,7 +169,10 @@ export function ProjectTagPickerModal({
             presentationStyle={presentationStyle}
             onRequestClose={onClose}
         >
-            <Pressable style={styles.overlay} onPress={onClose}>
+            <Pressable
+                style={keyboardInset > 0 ? [styles.overlay, { paddingBottom: keyboardInset }] : styles.overlay}
+                onPress={onClose}
+            >
                 <Pressable
                     style={[styles.pickerCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}
                     onPress={(event) => event.stopPropagation()}

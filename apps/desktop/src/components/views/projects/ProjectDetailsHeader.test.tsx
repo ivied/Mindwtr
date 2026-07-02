@@ -12,6 +12,8 @@ const translations: Record<string, string> = {
     'projects.duplicate': 'Duplicate',
     'projects.noActiveTasks': 'No active tasks',
     'projects.parallel': 'Parallel',
+    'projects.projectTypeHelpLabel': 'Project type help',
+    'projects.projectTypeHelpText': 'Sequential projects surface one available action at a time. Parallel projects can surface multiple independent Next tasks.',
     'projects.reviewAt': 'Review Date',
     'projects.reactivate': 'Reactivate',
     'projects.sequential': 'Sequential',
@@ -73,13 +75,17 @@ describe('ProjectDetailsHeader', () => {
         );
 
         expect(screen.getByRole('button', { name: /details/i })).toHaveAttribute('aria-expanded', 'false');
-        screen.getByDisplayValue('Launch site');
+        expect(screen.getByDisplayValue('Launch site')).toHaveAttribute('title', 'Launch site');
+        expect(screen.getByDisplayValue('Launch site').tagName).toBe('TEXTAREA');
         screen.getByText('Waiting');
         screen.getByText('Ops');
         screen.getByText('Sequential');
         screen.getByText('Due Date: Mar 28');
         screen.getByText('Review Date: Mar 30');
         screen.getByText('#client');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Project type help' }));
+        expect(screen.getByText('Sequential projects surface one available action at a time. Parallel projects can surface multiple independent Next tasks.')).toBeInTheDocument();
 
         fireEvent.click(screen.getByRole('button', { name: /details/i }));
         expect(onToggleDetails).toHaveBeenCalledTimes(1);
@@ -114,5 +120,38 @@ describe('ProjectDetailsHeader', () => {
         expect(screen.queryByText('Ops')).not.toBeInTheDocument();
         expect(screen.queryByText(/Due Date:/i)).not.toBeInTheDocument();
         expect(screen.queryByText(/Review Date:/i)).not.toBeInTheDocument();
+    });
+
+    it('uses a container-responsive header layout so actions cannot hide long project titles', () => {
+        render(
+            <ProjectDetailsHeader
+                project={buildProject()}
+                projectColor="#2563eb"
+                isSequential={false}
+                dueDate={undefined}
+                editTitle="A very long project name that should keep the whole details-column width"
+                onEditTitleChange={vi.fn()}
+                onCommitTitle={vi.fn()}
+                onResetTitle={vi.fn()}
+                detailsExpanded={false}
+                onToggleDetails={vi.fn()}
+                onDuplicate={vi.fn()}
+                onArchive={vi.fn()}
+                onReactivate={vi.fn()}
+                onDelete={vi.fn()}
+                t={t}
+            />
+        );
+
+        const title = screen.getByDisplayValue('A very long project name that should keep the whole details-column width');
+        const header = title.closest('.project-details-header');
+        const actions = header?.querySelector('.project-details-header__actions');
+
+        expect(header).not.toBeNull();
+        expect(header).toHaveClass('project-details-header');
+        expect(title).toHaveClass('project-details-header__titleInput');
+        expect(title).toHaveClass('break-words');
+        expect(title).not.toHaveClass('truncate');
+        expect(actions).not.toBeNull();
     });
 });

@@ -6,8 +6,8 @@ if [ -z "${FASTLANE_METADATA_DIR:-}" ]; then
   exit 1
 fi
 
-APP_SUPPORT_URL="${APP_SUPPORT_URL:-https://github.com/dongdongbh/Mindwtr/issues}"
-APP_MARKETING_URL="${APP_MARKETING_URL:-https://github.com/dongdongbh/Mindwtr}"
+APP_SUPPORT_URL="${APP_SUPPORT_URL:-https://mindwtr.app/support}"
+APP_MARKETING_URL="${APP_MARKETING_URL:-https://mindwtr.app/}"
 
 rm -rf "${FASTLANE_METADATA_DIR}"
 mkdir -p "${FASTLANE_METADATA_DIR}"
@@ -95,7 +95,9 @@ map_metadata() {
 }
 
 map_metadata "en-US" "en-US"
+map_metadata "de-DE" "de-DE"
 map_metadata "es-ES" "es-ES"
+map_metadata "fr-FR" "fr-FR"
 map_metadata "zh-CN" "zh-Hans"
 
 python3 scripts/ci/validate-fastlane-metadata.py "${FASTLANE_METADATA_DIR}"

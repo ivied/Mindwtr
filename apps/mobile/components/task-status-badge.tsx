@@ -17,6 +17,8 @@ interface TaskStatusBadgeProps {
     onUpdate: (status: TaskStatus) => void;
 }
 
+const QUICK_STATUS_OPTIONS: TaskStatus[] = ['inbox', 'next', 'waiting', 'someday', 'done', 'reference'];
+
 export function TaskStatusBadge({ status, onUpdate }: TaskStatusBadgeProps) {
     const [modalVisible, setModalVisible] = useState(false);
     const colors = getStatusColor(status);
@@ -25,14 +27,8 @@ export function TaskStatusBadge({ status, onUpdate }: TaskStatusBadgeProps) {
     const getStatusLabel = (s: TaskStatus) => t(`status.${s}`);
 
     const handlePress = () => {
-        // Determine relevant options based on current status
-        // Always showing full list for flexibility, but could prioritize
-        const options: TaskStatus[] = status === 'reference'
-            ? ['inbox', 'next', 'waiting', 'someday', 'reference', 'done']
-            : ['inbox', 'next', 'waiting', 'someday', 'done'];
-
         if (Platform.OS === 'ios') {
-            const labels = options.map(s => getStatusLabel(s));
+            const labels = QUICK_STATUS_OPTIONS.map(s => getStatusLabel(s));
             const cancelIndex = labels.length;
             ActionSheetIOS.showActionSheetWithOptions(
                 {
@@ -40,8 +36,8 @@ export function TaskStatusBadge({ status, onUpdate }: TaskStatusBadgeProps) {
                     cancelButtonIndex: cancelIndex,
                 },
                 (buttonIndex) => {
-                    if (buttonIndex < options.length) {
-                        onUpdate(options[buttonIndex]);
+                    if (buttonIndex < QUICK_STATUS_OPTIONS.length) {
+                        onUpdate(QUICK_STATUS_OPTIONS[buttonIndex]);
                     }
                 }
             );
@@ -54,10 +50,6 @@ export function TaskStatusBadge({ status, onUpdate }: TaskStatusBadgeProps) {
         onUpdate(selectedStatus);
         setModalVisible(false);
     };
-
-    const ANDROID_OPTIONS: TaskStatus[] = status === 'reference'
-        ? ['inbox', 'next', 'waiting', 'someday', 'reference', 'done']
-        : ['inbox', 'next', 'waiting', 'someday', 'done'];
 
     return (
         <>
@@ -92,7 +84,7 @@ export function TaskStatusBadge({ status, onUpdate }: TaskStatusBadgeProps) {
                     >
                         <Text style={styles.modalTitle}>{t('taskStatus.changeStatus')}</Text>
                         <ScrollView contentContainerStyle={styles.optionsList}>
-                            {ANDROID_OPTIONS.map((opt) => {
+                            {QUICK_STATUS_OPTIONS.map((opt) => {
                                 const optColors = getStatusColor(opt);
                                 return (
                                     <Pressable

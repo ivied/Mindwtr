@@ -62,6 +62,32 @@ describe('sendDailyHeartbeat', () => {
         expect(store.dump()[HEARTBEAT_LAST_SENT_DAY_KEY]).toBe('2026-02-19');
     });
 
+
+    it('preserves prerelease versions in the heartbeat payload', async () => {
+        const store = createMemoryStore();
+        const fetcher = vi.fn().mockResolvedValue({ ok: true });
+
+        const sent = await sendDailyHeartbeat({
+            enabled: true,
+            endpointUrl: 'https://analytics.example.com/heartbeat',
+            distinctId: 'device-rc',
+            platform: 'android',
+            channel: 'beta',
+            appVersion: '1.0.5-rc.1',
+            storage: store,
+            now: () => fixedDate,
+            fetcher,
+        });
+
+        expect(sent).toBe(true);
+        const call = fetcher.mock.calls[0]?.[1] as RequestInit;
+        const body = JSON.parse(String(call.body));
+        expect(body).toMatchObject({
+            app_version: '1.0.5-rc.1',
+            version: '1.0.5-rc.1',
+        });
+    });
+
     it('skips when heartbeat was already sent today', async () => {
         const store = createMemoryStore({
             [HEARTBEAT_LAST_SENT_DAY_KEY]: '2026-02-19',

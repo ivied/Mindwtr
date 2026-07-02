@@ -50,7 +50,7 @@ export function useListCopilot({ settings, newTaskTitle, allContexts, allTags }:
         let cancelled = false;
         const handle = setTimeout(async () => {
             try {
-                const provider = createAIProvider(buildCopilotConfig(settings, aiKey));
+                const provider = createAIProvider(await buildCopilotConfig(settings, aiKey));
                 if (copilotAbortRef.current) copilotAbortRef.current.abort();
                 const abortController = typeof AbortController === 'function' ? new AbortController() : null;
                 copilotAbortRef.current = abortController;

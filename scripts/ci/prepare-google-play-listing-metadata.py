@@ -15,6 +15,7 @@ REQUIRED_FILES = {
     "shortDescription": "short_description.txt",
     "fullDescription": "full_description.txt",
 }
+REQUIRED_LOCALES = {"en-US", "de-DE", "es-ES", "fr-FR", "zh-CN"}
 
 
 def read_text(path: Path) -> str:
@@ -76,6 +77,14 @@ def load_listing(locale_dir: Path) -> dict[str, str]:
 def collect_listings(metadata_root: Path) -> list[dict[str, str]]:
     if not metadata_root.is_dir():
         raise ValueError(f"Missing metadata directory: {metadata_root}")
+
+    missing_locales = sorted(
+        locale for locale in REQUIRED_LOCALES if not (metadata_root / locale).is_dir()
+    )
+    if missing_locales:
+        raise ValueError(
+            f"Missing required Google Play metadata locales: {', '.join(missing_locales)}"
+        )
 
     listings = []
     for locale_dir in sorted(path for path in metadata_root.iterdir() if path.is_dir()):

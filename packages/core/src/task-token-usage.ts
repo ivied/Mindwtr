@@ -69,7 +69,10 @@ export const getUsedTaskTokens = (
     selector: TaskTokenSelector,
     options?: TaskTokenOptions
 ): string[] =>
-    collectTaskTokenUsage(tasks, selector, options)
+    getUsedTaskTokensFromUsage(collectTaskTokenUsage(tasks, selector, options));
+
+export const getUsedTaskTokensFromUsage = (usage: readonly TaskTokenUsage[]): string[] =>
+    usage
         .map((entry) => entry.token)
         .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
 
@@ -79,7 +82,13 @@ export const getFrequentTaskTokens = (
     limit: number,
     options?: TaskTokenOptions
 ): string[] =>
-    collectTaskTokenUsage(tasks, selector, options)
+    getFrequentTaskTokensFromUsage(collectTaskTokenUsage(tasks, selector, options), limit);
+
+export const getFrequentTaskTokensFromUsage = (
+    usage: readonly TaskTokenUsage[],
+    limit: number
+): string[] =>
+    [...usage]
         .sort((a, b) =>
             b.count - a.count
             || b.lastUsedAt - a.lastUsedAt

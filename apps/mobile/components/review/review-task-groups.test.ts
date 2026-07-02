@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { Area, Project, Task } from '@mindwtr/core';
+import { AREA_FILTER_ALL, type Area, type Project, type Task } from '@mindwtr/core';
 
-import { buildReviewTaskGroups } from './review-task-groups';
+import { buildReviewTaskGroups, getReviewOverviewTasks } from './review-task-groups';
 
 const task = (id: string, title: string, updates: Partial<Task> = {}): Task => ({
   id,
@@ -74,5 +74,30 @@ describe('buildReviewTaskGroups', () => {
       ['Active Project', true],
       ['Stuck Project', false],
     ]);
+  });
+
+  it('keeps completed tasks out of the review overview', () => {
+    const workArea = area('area-work', 'Work', '#94a3b8');
+    const activeProject = project('project-active', 'Active Project', { areaId: workArea.id });
+    const inactiveProject = project('project-someday', 'Later Project', { areaId: workArea.id, status: 'someday' });
+    const visibleTask = task('visible', 'Visible task', { projectId: activeProject.id, status: 'waiting' });
+
+    const tasks = getReviewOverviewTasks({
+      areaById: new Map([[workArea.id, workArea]]),
+      projectById: new Map([
+        [activeProject.id, activeProject],
+        [inactiveProject.id, inactiveProject],
+      ]),
+      resolvedAreaFilter: AREA_FILTER_ALL,
+      tasks: [
+        visibleTask,
+        task('done', 'Completed task', { projectId: activeProject.id, status: 'done' }),
+        task('reference', 'Reference task', { projectId: activeProject.id, status: 'reference' }),
+        task('deleted', 'Deleted task', { projectId: activeProject.id, deletedAt: '2026-01-02T00:00:00.000Z' }),
+        task('inactive-project', 'Someday project task', { projectId: inactiveProject.id }),
+      ],
+    });
+
+    expect(tasks.map((item) => item.id)).toEqual(['visible']);
   });
 });

@@ -9,7 +9,9 @@ const {
   appState,
   appStateListeners,
   asyncStorageGetItem,
+  computeSyncPayloadFingerprint,
   flushPendingSave,
+  getInMemoryAppDataSnapshot,
   getCalendarPushEnabled,
   hasActiveMobileNotificationFeature,
   performMobileSync,
@@ -22,11 +24,13 @@ const {
   appState: { currentState: 'active' },
   appStateListeners: new Set<(state: 'active' | 'background' | 'inactive') => void>(),
   asyncStorageGetItem: vi.fn(async () => 'cloud'),
+  computeSyncPayloadFingerprint: vi.fn((_data?: unknown) => 'sync-payload:initial'),
   flushPendingSave: vi.fn(async () => undefined),
+  getInMemoryAppDataSnapshot: vi.fn(() => ({ tasks: [], projects: [], sections: [], areas: [], settings: {} })),
   getCalendarPushEnabled: vi.fn(async () => false),
   hasActiveMobileNotificationFeature: vi.fn(() => false),
   performMobileSync: vi.fn(async () => ({ success: true })),
-  storeSubscribe: vi.fn(() => vi.fn()),
+  storeSubscribe: vi.fn((..._args: unknown[]) => vi.fn()),
   syncMobileBackgroundSyncRegistration: vi.fn(async () => undefined),
   subscribeToCloudKitChanges: vi.fn(() => vi.fn()),
   updateMobileWidgetFromStore: vi.fn(async () => true),
@@ -61,7 +65,9 @@ vi.mock('@react-native-async-storage/async-storage', () => ({
 }));
 
 vi.mock('@mindwtr/core', () => ({
+  computeSyncPayloadFingerprint,
   flushPendingSave,
+  getInMemoryAppDataSnapshot,
   useTaskStore: {
     getState: () => ({ settings: {} }),
     subscribe: storeSubscribe,
@@ -137,7 +143,11 @@ describe('useRootLayoutSyncEffects', () => {
     appStateListeners.clear();
     asyncStorageGetItem.mockClear();
     asyncStorageGetItem.mockResolvedValue('cloud');
+    computeSyncPayloadFingerprint.mockClear();
+    computeSyncPayloadFingerprint.mockReturnValue('sync-payload:initial');
     flushPendingSave.mockClear();
+    getInMemoryAppDataSnapshot.mockClear();
+    getInMemoryAppDataSnapshot.mockReturnValue({ tasks: [], projects: [], sections: [], areas: [], settings: {} });
     getCalendarPushEnabled.mockClear();
     getCalendarPushEnabled.mockResolvedValue(false);
     hasActiveMobileNotificationFeature.mockClear();
@@ -176,5 +186,189 @@ describe('useRootLayoutSyncEffects', () => {
     await act(async () => {
       tree.unmount();
     });
+  });
+
+  it('does not auto-sync for local-only store changes that leave the sync payload unchanged', async () => {
+    vi.useFakeTimers();
+    const storeListeners: Array<(state: { lastDataChangeAt: number }, prevState: { lastDataChangeAt: number }) => void> = [];
+    storeSubscribe.mockImplementation((...args: unknown[]) => {
+      const callback = args[0] as (state: { lastDataChangeAt: number }, prevState: { lastDataChangeAt: number }) => void;
+      storeListeners.push(callback);
+      return vi.fn();
+    });
+
+    let tree: ReturnType<typeof create>;
+    await act(async () => {
+      tree = create(<TestHarness />);
+      await flushMicrotasks();
+    });
+    performMobileSync.mockClear();
+    const storeListener = storeListeners.find((callback) => callback.length >= 2);
+    expect(storeListener).toBeTypeOf('function');
+
+    await act(async () => {
+      storeListener?.({ lastDataChangeAt: 2 }, { lastDataChangeAt: 1 });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flushMicrotasks();
+    });
+
+    expect(performMobileSync).not.toHaveBeenCalled();
+
+    await act(async () => {
+      tree.unmount();
+    });
+    vi.useRealTimers();
+  });
+
+  it('strips sync bookkeeping fields before comparing auto-sync payload fingerprints', async () => {
+    vi.useFakeTimers();
+    const storeListeners: Array<(state: { lastDataChangeAt: number }, prevState: { lastDataChangeAt: number }) => void> = [];
+    storeSubscribe.mockImplementation((...args: unknown[]) => {
+      const callback = args[0] as (state: { lastDataChangeAt: number }, prevState: { lastDataChangeAt: number }) => void;
+      storeListeners.push(callback);
+      return vi.fn();
+    });
+
+    let snapshot = {
+      tasks: [],
+      projects: [],
+      sections: [],
+      areas: [],
+      people: [],
+      settings: {
+        lastSyncAt: '2026-01-01T00:00:00.000Z',
+        lastSyncStatus: 'success',
+        pendingRemoteWriteAt: '2026-01-01T00:00:01.000Z',
+        theme: 'dark',
+      },
+    };
+    getInMemoryAppDataSnapshot.mockImplementation(() => snapshot);
+    computeSyncPayloadFingerprint.mockImplementation((data?: unknown) => JSON.stringify(data));
+
+    let tree: ReturnType<typeof create>;
+    await act(async () => {
+      tree = create(<TestHarness />);
+      await flushMicrotasks();
+    });
+    performMobileSync.mockClear();
+    const storeListener = storeListeners.find((callback) => callback.length >= 2);
+    expect(storeListener).toBeTypeOf('function');
+
+    snapshot = {
+      ...snapshot,
+      settings: {
+        lastSyncAt: '2026-01-01T00:05:00.000Z',
+        lastSyncStatus: 'success',
+        pendingRemoteWriteAt: '2026-01-01T00:05:01.000Z',
+        theme: 'dark',
+      },
+    };
+
+    await act(async () => {
+      storeListener?.({ lastDataChangeAt: 2 }, { lastDataChangeAt: 1 });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flushMicrotasks();
+    });
+
+    expect(performMobileSync).not.toHaveBeenCalled();
+    expect(computeSyncPayloadFingerprint).toHaveBeenLastCalledWith(expect.objectContaining({
+      settings: { theme: 'dark' },
+    }));
+
+    await act(async () => {
+      tree.unmount();
+    });
+    vi.useRealTimers();
+  });
+
+  it('auto-syncs when the sync payload fingerprint changes', async () => {
+    vi.useFakeTimers();
+    const storeListeners: Array<(state: { lastDataChangeAt: number }, prevState: { lastDataChangeAt: number }) => void> = [];
+    storeSubscribe.mockImplementation((...args: unknown[]) => {
+      const callback = args[0] as (state: { lastDataChangeAt: number }, prevState: { lastDataChangeAt: number }) => void;
+      storeListeners.push(callback);
+      return vi.fn();
+    });
+
+    let tree: ReturnType<typeof create>;
+    await act(async () => {
+      tree = create(<TestHarness />);
+      await flushMicrotasks();
+    });
+    performMobileSync.mockClear();
+    computeSyncPayloadFingerprint.mockReturnValue('sync-payload:changed');
+    const storeListener = storeListeners.find((callback) => callback.length >= 2);
+    expect(storeListener).toBeTypeOf('function');
+
+    await act(async () => {
+      storeListener?.({ lastDataChangeAt: 2 }, { lastDataChangeAt: 1 });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await flushMicrotasks();
+    });
+
+    expect(performMobileSync).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      tree.unmount();
+    });
+    vi.useRealTimers();
+  });
+
+  it('dedupes rapid unchanged app-state sync triggers', async () => {
+    vi.useFakeTimers();
+    let tree: ReturnType<typeof create>;
+    await act(async () => {
+      tree = create(<TestHarness />);
+      await flushMicrotasks();
+    });
+    performMobileSync.mockClear();
+    const listener = Array.from(appStateListeners)[0];
+    expect(listener).toBeTypeOf('function');
+
+    await act(async () => {
+      listener('background');
+      await flushMicrotasks();
+      listener('active');
+      await flushMicrotasks();
+      listener('background');
+      await flushMicrotasks();
+      listener('active');
+      await flushMicrotasks();
+    });
+
+    expect(performMobileSync).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      tree.unmount();
+    });
+    vi.useRealTimers();
+  });
+
+  it('does not queue duplicate foreground syncs for repeated active AppState events', async () => {
+    vi.useFakeTimers();
+    let tree: ReturnType<typeof create>;
+    await act(async () => {
+      tree = create(<TestHarness />);
+      await flushMicrotasks();
+    });
+    performMobileSync.mockClear();
+    const listener = Array.from(appStateListeners)[0];
+    expect(listener).toBeTypeOf('function');
+
+    await act(async () => {
+      listener('background');
+      await flushMicrotasks();
+      listener('active');
+      listener('active');
+      await vi.advanceTimersByTimeAsync(45_000);
+      await flushMicrotasks();
+    });
+
+    expect(performMobileSync).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      tree.unmount();
+    });
+    vi.useRealTimers();
   });
 });

@@ -10,6 +10,7 @@ describe('useUiStore list options', () => {
         window.localStorage.setItem('mindwtr:list-options:v1', JSON.stringify({
             showDetails: true,
             nextGroupBy: 'project',
+            referenceGroupBy: 'context',
             focusTop3Only: true,
         }));
 
@@ -18,6 +19,7 @@ describe('useUiStore list options', () => {
         expect(useUiStore.getState().listOptions).toEqual({
             showDetails: true,
             nextGroupBy: 'project',
+            referenceGroupBy: 'context',
             focusTop3Only: true,
         });
     });
@@ -28,12 +30,14 @@ describe('useUiStore list options', () => {
         useUiStore.getState().setListOptions({
             showDetails: true,
             nextGroupBy: 'project',
+            referenceGroupBy: 'tag',
             focusTop3Only: true,
         });
 
         expect(JSON.parse(window.localStorage.getItem(LIST_OPTIONS_STORAGE_KEY) || '{}')).toEqual({
             showDetails: true,
             nextGroupBy: 'project',
+            referenceGroupBy: 'tag',
             focusTop3Only: true,
         });
     });

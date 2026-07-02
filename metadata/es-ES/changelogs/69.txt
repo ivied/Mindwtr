@@ -1,0 +1,5 @@
+Las ubicaciones de tareas se pueden editar, filtrar y encontrar desde busqueda.
+Markdown conserva lineas en blanco y copia bloques de codigo con la API de portapapeles compatible.
+Sync de calendario conserva ubicaciones, elimina tareas de referencia antiguas y maneja mejor fechas sin hora.
+Sync movil evita comprobaciones obsoletas de sin cambios y muestra un estado inactivo mas tranquilo.
+Los arreglos Android/FOSS mantienen builds locales de F-Droid alineadas con los targets JVM.

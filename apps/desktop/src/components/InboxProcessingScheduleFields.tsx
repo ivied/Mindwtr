@@ -7,10 +7,12 @@ import { QuickDateChips } from './QuickDateChips';
 export type InboxProcessingScheduleFieldControl = {
     date: string;
     timeDraft: string;
+    hasTime: boolean;
     onDateChange: (value: string) => void;
     onTimeDraftChange: (value: string) => void;
     onTimeCommit: () => void;
     onClear: () => void;
+    onDateOnly: () => void;
 };
 
 export type InboxProcessingScheduleFieldsControls = {
@@ -54,6 +56,7 @@ export function InboxProcessingScheduleFields({
 }: InboxProcessingScheduleFieldsProps) {
     const compact = variant === 'quick';
     const clearText = tFallback(t, 'common.clear', 'Clear');
+    const dateOnlyText = t('taskEdit.dateOnly');
     const renderedFieldConfig = visibleFieldKeys?.length
         ? FIELD_CONFIG.filter(({ key }) => visibleFieldKeys.includes(key))
         : FIELD_CONFIG;
@@ -97,6 +100,19 @@ export function InboxProcessingScheduleFields({
                                     compact ? 'px-3 py-2 text-sm' : 'px-2 py-1 text-xs'
                                 )}
                             />
+                            {field.hasTime ? (
+                                <button
+                                    type="button"
+                                    onClick={field.onDateOnly}
+                                    className={cn(
+                                        'shrink-0 whitespace-nowrap rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+                                        compact ? 'px-2 py-2 text-xs' : 'px-1.5 py-1 text-[11px]'
+                                    )}
+                                    aria-label={`${dateOnlyText}: ${label}`}
+                                >
+                                    {dateOnlyText}
+                                </button>
+                            ) : null}
                             {showClear ? (
                                 <button
                                     type="button"

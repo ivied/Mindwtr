@@ -1,8 +1,9 @@
-import { Link2, Paperclip } from 'lucide-react';
+import { BookOpen, Edit3, Link2, Paperclip } from 'lucide-react';
 import type { Attachment } from '@mindwtr/core';
 import { getAttachmentDisplayTitle } from '../../../lib/attachment-utils';
 import { isImageAttachment } from '../task-item-attachment-utils';
 import { AttachmentImage } from '../AttachmentImage';
+import { taskEditorLabelClassName } from '../task-editor-label';
 
 type AttachmentsFieldProps = {
     t: (key: string) => string;
@@ -10,6 +11,9 @@ type AttachmentsFieldProps = {
     visibleEditAttachments: Attachment[];
     addFileAttachment: () => void;
     addLinkAttachment: () => void;
+    addObsidianNoteAttachment: () => void;
+    showObsidianNoteAttachment: boolean;
+    editLinkAttachment: (attachment: Attachment) => void;
     openAttachment: (attachment: Attachment) => void;
     removeAttachment: (id: string) => void;
 };
@@ -20,6 +24,9 @@ export function AttachmentsField({
     visibleEditAttachments,
     addFileAttachment,
     addLinkAttachment,
+    addObsidianNoteAttachment,
+    showObsidianNoteAttachment,
+    editLinkAttachment,
     openAttachment,
     removeAttachment,
 }: AttachmentsFieldProps) {
@@ -38,7 +45,7 @@ export function AttachmentsField({
     return (
         <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
-                <label className="text-xs text-muted-foreground font-medium">{t('attachments.title')}</label>
+                <label className={taskEditorLabelClassName}>{t('attachments.title')}</label>
                 <div className="flex items-center gap-2">
                     <button
                         type="button"
@@ -56,6 +63,16 @@ export function AttachmentsField({
                         <Link2 className="w-3 h-3" />
                         {t('attachments.addLink')}
                     </button>
+                    {showObsidianNoteAttachment && (
+                        <button
+                            type="button"
+                            onClick={addObsidianNoteAttachment}
+                            className="text-xs px-2 py-1 rounded bg-muted/50 hover:bg-muted transition-colors flex items-center gap-1"
+                        >
+                            <BookOpen className="w-3 h-3" />
+                            {t('attachments.attachObsidianNote')}
+                        </button>
+                    )}
                 </div>
             </div>
             {attachmentError && (
@@ -102,13 +119,25 @@ export function AttachmentsField({
                                             >
                                                 {displayTitle}
                                             </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => removeAttachment(attachment.id)}
-                                                className="shrink-0 text-muted-foreground hover:text-foreground"
-                                            >
-                                                {t('attachments.remove')}
-                                            </button>
+                                            <div className="flex shrink-0 items-center gap-2">
+                                                {attachment.kind === 'link' && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => editLinkAttachment(attachment)}
+                                                        className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                                                    >
+                                                        <Edit3 className="h-3 w-3" />
+                                                        {t('common.edit')}
+                                                    </button>
+                                                )}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => removeAttachment(attachment.id)}
+                                                    className="text-muted-foreground hover:text-foreground"
+                                                >
+                                                    {t('attachments.remove')}
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
                                 );
@@ -132,13 +161,25 @@ export function AttachmentsField({
                                 >
                                     {displayTitle}
                                 </button>
-                                <button
-                                    type="button"
-                                    onClick={() => removeAttachment(attachment.id)}
-                                    className="text-muted-foreground hover:text-foreground"
-                                >
-                                    {t('attachments.remove')}
-                                </button>
+                                <div className="flex shrink-0 items-center gap-2">
+                                    {attachment.kind === 'link' && (
+                                        <button
+                                            type="button"
+                                            onClick={() => editLinkAttachment(attachment)}
+                                            className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
+                                        >
+                                            <Edit3 className="h-3 w-3" />
+                                            {t('common.edit')}
+                                        </button>
+                                    )}
+                                    <button
+                                        type="button"
+                                        onClick={() => removeAttachment(attachment.id)}
+                                        className="text-muted-foreground hover:text-foreground"
+                                    >
+                                        {t('attachments.remove')}
+                                    </button>
+                                </div>
                             </div>
                         );
                     })}

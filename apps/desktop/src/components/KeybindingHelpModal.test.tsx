@@ -20,14 +20,18 @@ describe('KeybindingHelpModal', () => {
         const { getByText, queryByText } = renderModal('vim');
 
         expect(getByText('Ctrl+, / Cmd+,')).toBeInTheDocument();
+        expect(getByText('Ctrl+Alt+S / Cmd+Option+S')).toBeInTheDocument();
         expect(getByText('Ctrl-b / Cmd-b')).toBeInTheDocument();
         expect(getByText('Ctrl+\\ / Cmd+\\')).toBeInTheDocument();
         expect(getByText('Ctrl+Shift+D / Cmd+Shift+D')).toBeInTheDocument();
         expect(getByText('Ctrl+Shift+C / Cmd+Shift+C')).toBeInTheDocument();
         expect(getByText('F11')).toBeInTheDocument();
+        expect(getByText('a')).toBeInTheDocument();
+        expect(getByText('Global quick add')).toBeInTheDocument();
+        expect(getByText('In-app quick add')).toBeInTheDocument();
         expect(getByText('gi')).toBeInTheDocument();
-        expect(getByText('a1-a9')).toBeInTheDocument();
-        expect(getByText('a0')).toBeInTheDocument();
+        expect(getByText('A1-A9')).toBeInTheDocument();
+        expect(getByText('A0')).toBeInTheDocument();
         expect(getByText('dd')).toBeInTheDocument();
         expect(queryByText('Alt-i')).not.toBeInTheDocument();
     });
@@ -36,7 +40,11 @@ describe('KeybindingHelpModal', () => {
         const { getByText, queryByText } = renderModal('emacs');
 
         expect(getByText('Ctrl+, / Cmd+,')).toBeInTheDocument();
+        expect(getByText('Ctrl+Alt+S / Cmd+Option+S')).toBeInTheDocument();
         expect(getByText('Ctrl-h / Ctrl-?')).toBeInTheDocument();
+        expect(getByText('a')).toBeInTheDocument();
+        expect(getByText('Global quick add')).toBeInTheDocument();
+        expect(getByText('In-app quick add')).toBeInTheDocument();
         expect(getByText('Alt-i')).toBeInTheDocument();
         expect(getByText('Alt-A')).toBeInTheDocument();
         expect(getByText('Ctrl-n / Ctrl-p / ↑ / ↓')).toBeInTheDocument();

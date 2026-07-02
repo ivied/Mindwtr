@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { type Task } from '@mindwtr/core';
+import { type Section, type Task } from '@mindwtr/core';
 
 import { asTaskStatus, createMindwtrAutomationService } from './mindwtr-automation-core';
 
@@ -63,10 +63,13 @@ function errorResponse(message: string, status = 400) {
 
 function taskErrorResponse(error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
-    if (message === 'Task not found' || message.startsWith('Task not found:')) {
-        return errorResponse('Task not found', 404);
-    }
-    return errorResponse(message || 'Bad request', 400);
+  if (message === 'Task not found' || message.startsWith('Task not found:')) {
+    return errorResponse('Task not found', 404);
+  }
+  if (message === 'Section not found' || message.startsWith('Section not found:')) {
+    return errorResponse('Section not found', 404);
+  }
+  return errorResponse(message || 'Bad request', 400);
 }
 
 function requireAuth(req: Request): Response | null {
@@ -168,6 +171,38 @@ async function main() {
                 return jsonResponse({ areas: await service.listAreas() });
             }
 
+            if (req.method === 'GET' && (pathname === '/sections' || pathname === '/v1/sections')) {
+                const projectId = url.searchParams.get('projectId') || undefined;
+                return jsonResponse({ sections: await service.listSections(projectId) });
+            }
+
+            if (req.method === 'POST' && (pathname === '/sections' || pathname === '/v1/sections')) {
+                const body = await readJsonBody(req);
+                if (body && typeof body === 'object' && '__mindwtrError' in body) {
+                    const err = (body as any).__mindwtrError;
+                    return errorResponse(String(err?.message || 'Payload too large'), Number(err?.status) || 413);
+                }
+                if (!body || typeof body !== 'object') return errorResponse('Invalid JSON body');
+                return withWriteLock(async () => {
+                    const payload = body as any;
+                    const propsInput = typeof payload.props === 'object' && payload.props ? payload.props : {};
+                    const props: Partial<Section> = { ...propsInput };
+                    if ('description' in payload) props.description = payload.description ?? undefined;
+                    if ('order' in payload) props.order = payload.order;
+                    if ('isCollapsed' in payload) props.isCollapsed = payload.isCollapsed;
+                    try {
+                        const section = await service.createSection({
+                            projectId: typeof payload.projectId === 'string' ? payload.projectId : '',
+                            title: typeof payload.title === 'string' ? payload.title : '',
+                            props,
+                        });
+                        return jsonResponse({ section }, { status: 201 });
+                    } catch (error) {
+                        return taskErrorResponse(error);
+                    }
+                });
+            }
+
             if (req.method === 'GET' && pathname === '/search') {
                 const query = url.searchParams.get('query') || '';
                 return jsonResponse(await service.search(query));
@@ -184,7 +219,9 @@ async function main() {
                 return withWriteLock(async () => {
                     const input = typeof (body as any).input === 'string' ? String((body as any).input) : '';
                     const title = typeof (body as any).title === 'string' ? String((body as any).title) : '';
-                    const props = typeof (body as any).props === 'object' && (body as any).props ? (body as any).props : {};
+                    const payload = body as any;
+                    const props = typeof payload.props === 'object' && payload.props ? { ...payload.props } : {};
+                    if ('sectionId' in payload) props.sectionId = payload.sectionId ?? undefined;
                     try {
                         const task = await service.createTask({ input, title, props: props as Partial<Task> });
                         return jsonResponse({ task }, { status: 201 });
@@ -192,6 +229,47 @@ async function main() {
                         return taskErrorResponse(error);
                     }
                 });
+            }
+
+            const sectionMatch = pathname.match(/^\/(?:v1\/)?sections\/([^/]+)$/);
+            if (sectionMatch) {
+                const sectionId = decodeURIComponent(sectionMatch[1]);
+
+                if (req.method === 'GET') {
+                    try {
+                        return jsonResponse({ section: await service.getSection(sectionId) });
+                    } catch (error) {
+                        return taskErrorResponse(error);
+                    }
+                }
+
+                if (req.method === 'PATCH') {
+                    const body = await readJsonBody(req);
+                    if (body && typeof body === 'object' && '__mindwtrError' in body) {
+                        const err = (body as any).__mindwtrError;
+                        return errorResponse(String(err?.message || 'Payload too large'), Number(err?.status) || 413);
+                    }
+                    if (!body || typeof body !== 'object') return errorResponse('Invalid JSON body');
+                    return withWriteLock(async () => {
+                        try {
+                            const section = await service.updateSection(sectionId, body as Partial<Section>);
+                            return jsonResponse({ section });
+                        } catch (error) {
+                            return taskErrorResponse(error);
+                        }
+                    });
+                }
+
+                if (req.method === 'DELETE') {
+                    return withWriteLock(async () => {
+                        try {
+                            await service.deleteSection(sectionId);
+                            return jsonResponse({ ok: true });
+                        } catch (error) {
+                            return taskErrorResponse(error);
+                        }
+                    });
+                }
             }
 
             const taskMatch = pathname.match(/^\/tasks\/([^/]+)$/);

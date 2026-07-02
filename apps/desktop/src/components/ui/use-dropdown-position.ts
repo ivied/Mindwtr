@@ -1,4 +1,4 @@
-import { RefObject, useEffect, useState } from 'react';
+import { RefObject, useLayoutEffect, useState, type CSSProperties } from 'react';
 
 type UseDropdownPositionOptions = {
     open: boolean;
@@ -9,13 +9,21 @@ type UseDropdownPositionOptions = {
 const MIN_LIST_HEIGHT = 120;
 const MAX_LIST_HEIGHT = 320;
 const VIEWPORT_MARGIN_PX = 8;
+const DROPDOWN_GAP_PX = 4;
 const DROPDOWN_CHROME_PX = 84;
+const MIN_DROPDOWN_SPACE = MIN_LIST_HEIGHT + DROPDOWN_CHROME_PX;
 
 export function useDropdownPosition({ open, containerRef, dropdownRef }: UseDropdownPositionOptions) {
     const [openUpward, setOpenUpward] = useState(false);
     const [listMaxHeight, setListMaxHeight] = useState(192);
+    const [fixedDropdownStyle, setFixedDropdownStyle] = useState<CSSProperties>({
+        position: 'fixed',
+        left: 0,
+        top: 0,
+        width: 0,
+    });
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         if (!open) return;
 
         const updatePosition = () => {
@@ -24,13 +32,17 @@ export function useDropdownPosition({ open, containerRef, dropdownRef }: UseDrop
             if (!trigger || !dropdown) return;
 
             const triggerRect = trigger.getBoundingClientRect();
-            const dropdownRect = dropdown.getBoundingClientRect();
-            const estimatedHeight = dropdownRect.height || 260;
-
             const spaceAbove = triggerRect.top - VIEWPORT_MARGIN_PX;
             const spaceBelow = window.innerHeight - triggerRect.bottom - VIEWPORT_MARGIN_PX;
-            const shouldOpenUp = spaceBelow < estimatedHeight && spaceAbove > spaceBelow;
+            const shouldOpenUp = spaceBelow < MIN_DROPDOWN_SPACE && spaceAbove > spaceBelow;
             setOpenUpward(shouldOpenUp);
+            setFixedDropdownStyle({
+                position: 'fixed',
+                left: triggerRect.left,
+                top: shouldOpenUp ? 'auto' : triggerRect.bottom + DROPDOWN_GAP_PX,
+                bottom: shouldOpenUp ? window.innerHeight - triggerRect.top + DROPDOWN_GAP_PX : 'auto',
+                width: triggerRect.width,
+            });
 
             const availableSpace = shouldOpenUp ? spaceAbove : spaceBelow;
             const nextListHeight = Math.max(
@@ -51,6 +63,7 @@ export function useDropdownPosition({ open, containerRef, dropdownRef }: UseDrop
 
     return {
         dropdownClassName: openUpward ? 'bottom-full mb-1' : 'top-full mt-1',
+        fixedDropdownStyle,
         listMaxHeight,
     };
 }

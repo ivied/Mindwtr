@@ -1,14 +1,27 @@
 import React from 'react';
-import { TextInput } from 'react-native';
+import { TextInput, type NativeSyntheticEvent, type TextInputKeyPressEventData } from 'react-native';
 import {
+    applyMarkdownKeyboardShortcut,
     applyMarkdownToolbarAction,
     continueMarkdownOnTextChange,
+    isMarkdownEditorAssistEnabled,
+    useTaskStore,
     type MarkdownSelection,
     type MarkdownToolbarActionId,
     type MarkdownToolbarResult,
     type Task,
 } from '@mindwtr/core';
 
+import {
+    applyMarkdownPairKeyPressWithSelectionFallback,
+    applyMarkdownPairInsertionWithSelectionFallback,
+    applyMarkdownUrlPasteWithSelectionFallback,
+    createIgnoredNativePairChange,
+    shouldIgnoreNativePairKeyPress,
+    shouldIgnoreNativePairChange,
+    type IgnoredNativePairChange,
+    isRangeSelection,
+} from '../markdown-selection-utils';
 import type { SetEditedTask } from './use-task-edit-state';
 
 const selectionsEqual = (left: MarkdownSelection, right: MarkdownSelection) => (
@@ -45,32 +58,63 @@ export function useTaskDescriptionEditor({
     const descriptionUndoRef = React.useRef<Array<{ value: string; selection: MarkdownSelection }>>([]);
     const [descriptionUndoDepth, setDescriptionUndoDepth] = React.useState(0);
     const [isDescriptionInputFocused, setIsDescriptionInputFocused] = React.useState(false);
+    const [descriptionSelectionRestorePending, setDescriptionSelectionRestorePending] = React.useState(false);
     const [descriptionSelection, setDescriptionSelection] = React.useState<MarkdownSelection>({
         start: descriptionDraft.length,
         end: descriptionDraft.length,
     });
     const descriptionSelectionRef = React.useRef(descriptionSelection);
+    const lastDescriptionRangeRef = React.useRef<MarkdownSelection | null>(isRangeSelection(descriptionSelection) ? descriptionSelection : null);
     const pendingDescriptionSelectionRef = React.useRef<MarkdownSelection | null>(null);
+    const ignoredNativePairChangeRef = React.useRef<IgnoredNativePairChange | null>(null);
 
     React.useEffect(() => {
         descriptionSelectionRef.current = descriptionSelection;
+        if (isRangeSelection(descriptionSelection)) {
+            lastDescriptionRangeRef.current = descriptionSelection;
+        }
     }, [descriptionSelection]);
 
     const restoreDescriptionSelection = React.useCallback((selection: MarkdownSelection) => {
         pendingDescriptionSelectionRef.current = selection;
+        setDescriptionSelectionRestorePending(true);
         const applySelection = () => {
+            descriptionInputRef.current?.focus?.();
             descriptionInputRef.current?.setNativeProps?.({ selection });
         };
-        requestAnimationFrame(applySelection);
-        setTimeout(() => {
+        if (typeof requestAnimationFrame === 'function') {
+            requestAnimationFrame(applySelection);
+        } else {
+            setTimeout(applySelection, 0);
+        }
+        const applyDelayedSelection = (shouldClearPending: boolean) => {
             applySelection();
             if (
-                pendingDescriptionSelectionRef.current
+                shouldClearPending
+                && pendingDescriptionSelectionRef.current
                 && selectionsEqual(pendingDescriptionSelectionRef.current, selection)
             ) {
                 pendingDescriptionSelectionRef.current = null;
             }
+            if (
+                shouldClearPending
+                && (
+                    !pendingDescriptionSelectionRef.current
+                    || selectionsEqual(pendingDescriptionSelectionRef.current, selection)
+                )
+            ) {
+                setDescriptionSelectionRestorePending(false);
+            }
+        };
+        setTimeout(() => {
+            applyDelayedSelection(false);
         }, 40);
+        setTimeout(() => {
+            applyDelayedSelection(false);
+        }, 140);
+        setTimeout(() => {
+            applyDelayedSelection(true);
+        }, 300);
     }, []);
 
     React.useEffect(() => {
@@ -91,6 +135,9 @@ export function useTaskDescriptionEditor({
         setDescriptionExpanded(false);
         const resetSelection = { start: 0, end: 0 };
         pendingDescriptionSelectionRef.current = null;
+        lastDescriptionRangeRef.current = null;
+        ignoredNativePairChangeRef.current = null;
+        setDescriptionSelectionRestorePending(false);
         descriptionSelectionRef.current = resetSelection;
         setDescriptionSelection(resetSelection);
     }, [task?.id]);
@@ -127,6 +174,7 @@ export function useTaskDescriptionEditor({
         descriptionDraftRef.current = text;
         if (options?.nextSelection) {
             descriptionSelectionRef.current = options.nextSelection;
+            lastDescriptionRangeRef.current = isRangeSelection(options.nextSelection) ? options.nextSelection : null;
             setDescriptionSelection(options.nextSelection);
         }
         resetCopilotDraft();
@@ -146,12 +194,61 @@ export function useTaskDescriptionEditor({
     ]);
 
     const handleDescriptionChange = React.useCallback((text: string) => {
+        const ignoredNativeChange = ignoredNativePairChangeRef.current;
+        if (ignoredNativeChange) {
+            if (shouldIgnoreNativePairChange(text, descriptionDraftRef.current, ignoredNativeChange)) {
+                restoreDescriptionSelection(ignoredNativeChange.selection);
+                return;
+            }
+            ignoredNativePairChangeRef.current = null;
+        }
+
+        const currentSelection = descriptionSelectionRef.current;
+        const previousValue = descriptionDraftRef.current;
+        const fallbackSelection = lastDescriptionRangeRef.current;
+        const assistEnabled = isMarkdownEditorAssistEnabled(useTaskStore.getState().settings);
+        const pastedUrl = applyMarkdownUrlPasteWithSelectionFallback(
+            previousValue,
+            text,
+            currentSelection,
+            fallbackSelection,
+            { assist: assistEnabled },
+        );
+        if (pastedUrl) {
+            lastDescriptionRangeRef.current = null;
+            applyDescriptionValue(pastedUrl.result.value, {
+                baseSelection: pastedUrl.baseSelection,
+                nextSelection: pastedUrl.result.selection,
+            });
+            restoreDescriptionSelection(pastedUrl.result.selection);
+            return;
+        }
+        const pairedInsertion = applyMarkdownPairInsertionWithSelectionFallback(
+            previousValue,
+            text,
+            currentSelection,
+            fallbackSelection,
+            { assist: assistEnabled },
+        );
+        if (pairedInsertion) {
+            lastDescriptionRangeRef.current = isRangeSelection(pairedInsertion.result.selection)
+                ? pairedInsertion.result.selection
+                : null;
+            applyDescriptionValue(pairedInsertion.result.value, {
+                baseSelection: pairedInsertion.baseSelection,
+                nextSelection: pairedInsertion.result.selection,
+            });
+            restoreDescriptionSelection(pairedInsertion.result.selection);
+            return;
+        }
         const continued = continueMarkdownOnTextChange(
             descriptionDraftRef.current,
             text,
             descriptionSelectionRef.current,
+            { assist: assistEnabled },
         );
         if (continued) {
+            lastDescriptionRangeRef.current = null;
             applyDescriptionValue(continued.value, {
                 baseSelection: descriptionSelectionRef.current,
                 nextSelection: continued.selection,
@@ -159,8 +256,62 @@ export function useTaskDescriptionEditor({
             restoreDescriptionSelection(continued.selection);
             return;
         }
+        lastDescriptionRangeRef.current = null;
         applyDescriptionValue(text);
-    }, [applyDescriptionValue, restoreDescriptionSelection]);
+    }, [applyDescriptionValue, descriptionDraftRef, restoreDescriptionSelection]);
+
+    const handleDescriptionKeyPress = React.useCallback((event: NativeSyntheticEvent<TextInputKeyPressEventData>) => {
+        const ignoredNativeChange = ignoredNativePairChangeRef.current;
+        if (
+            ignoredNativeChange
+            && shouldIgnoreNativePairKeyPress(event.nativeEvent.key, descriptionDraftRef.current, ignoredNativeChange)
+        ) {
+            ignoredNativeChange.duplicateKeyPressHandled = true;
+            event.preventDefault?.();
+            restoreDescriptionSelection(ignoredNativeChange.selection);
+            return;
+        }
+
+        const assistEnabled = isMarkdownEditorAssistEnabled(useTaskStore.getState().settings);
+        const pairedInsertion = applyMarkdownPairKeyPressWithSelectionFallback(
+            descriptionDraftRef.current,
+            event.nativeEvent.key,
+            descriptionSelectionRef.current,
+            lastDescriptionRangeRef.current,
+            { assist: assistEnabled },
+        );
+        if (pairedInsertion) {
+            event.preventDefault?.();
+            ignoredNativePairChangeRef.current = createIgnoredNativePairChange(
+                descriptionDraftRef.current,
+                event.nativeEvent.key,
+                pairedInsertion.baseSelection,
+                pairedInsertion.result,
+            );
+            lastDescriptionRangeRef.current = isRangeSelection(pairedInsertion.result.selection)
+                ? pairedInsertion.result.selection
+                : null;
+            applyDescriptionValue(pairedInsertion.result.value, {
+                baseSelection: pairedInsertion.baseSelection,
+                nextSelection: pairedInsertion.result.selection,
+            });
+            restoreDescriptionSelection(pairedInsertion.result.selection);
+            return;
+        }
+
+        const next = applyMarkdownKeyboardShortcut(
+            descriptionDraftRef.current,
+            descriptionSelectionRef.current,
+            { key: event.nativeEvent.key },
+        );
+        if (!next) return;
+        event.preventDefault?.();
+        applyDescriptionValue(next.value, {
+            baseSelection: descriptionSelectionRef.current,
+            nextSelection: next.selection,
+        });
+        restoreDescriptionSelection(next.selection);
+    }, [applyDescriptionValue, descriptionDraftRef, restoreDescriptionSelection]);
 
     const handleDescriptionSelectionChange = React.useCallback((selection: MarkdownSelection) => {
         const pendingSelection = pendingDescriptionSelectionRef.current;
@@ -169,8 +320,14 @@ export function useTaskDescriptionEditor({
                 return;
             }
             pendingDescriptionSelectionRef.current = null;
+            setDescriptionSelectionRestorePending(false);
         }
         descriptionSelectionRef.current = selection;
+        if (isRangeSelection(selection)) {
+            lastDescriptionRangeRef.current = selection;
+        } else {
+            lastDescriptionRangeRef.current = null;
+        }
         setDescriptionSelection(selection);
     }, []);
 
@@ -179,6 +336,7 @@ export function useTaskDescriptionEditor({
         if (!previousEntry) return undefined;
         descriptionUndoRef.current = descriptionUndoRef.current.slice(0, -1);
         setDescriptionUndoDepth(descriptionUndoRef.current.length);
+        lastDescriptionRangeRef.current = null;
         applyDescriptionValue(previousEntry.value, {
             nextSelection: previousEntry.selection,
             recordUndo: false,
@@ -188,6 +346,7 @@ export function useTaskDescriptionEditor({
 
     const handleDescriptionApplyAction = React.useCallback((actionId: MarkdownToolbarActionId, selection: MarkdownSelection): MarkdownToolbarResult => {
         const next = applyMarkdownToolbarAction(descriptionDraftRef.current, selection, actionId);
+        lastDescriptionRangeRef.current = null;
         applyDescriptionValue(next.value, {
             baseSelection: selection,
             nextSelection: next.selection,
@@ -195,6 +354,7 @@ export function useTaskDescriptionEditor({
         return next;
     }, [applyDescriptionValue, descriptionDraftRef]);
     const applyDescriptionResult = React.useCallback((next: MarkdownToolbarResult) => {
+        lastDescriptionRangeRef.current = null;
         applyDescriptionValue(next.value, {
             baseSelection: descriptionSelectionRef.current,
             nextSelection: next.selection,
@@ -219,11 +379,13 @@ export function useTaskDescriptionEditor({
         descriptionExpanded,
         descriptionInputRef,
         descriptionSelection,
+        descriptionSelectionRestorePending,
         setDescriptionSelection: handleDescriptionSelectionChange,
         descriptionUndoDepth,
         isDescriptionInputFocused,
         setIsDescriptionInputFocused,
         handleDescriptionChange,
+        handleDescriptionKeyPress,
         handleDescriptionUndo,
         handleDescriptionApplyAction,
         applyDescriptionResult,

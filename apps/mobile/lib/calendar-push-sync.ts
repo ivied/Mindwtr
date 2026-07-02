@@ -9,7 +9,20 @@
 import * as Calendar from 'expo-calendar';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { hasTimeComponent, safeParseDate, useTaskStore, type Task } from '@mindwtr/core';
+import {
+    buildCalendarPushEventFields,
+    expandCalendarRecurringTasks,
+    getProjectedRecurringTaskId,
+    getTaskCalendarOccurrenceDate,
+    hasTimeComponent,
+    isProjectedRecurringTask,
+    isProjectedRecurringTaskId,
+    safeFormatDate,
+    safeParseDate,
+    timeEstimateToMinutes,
+    useTaskStore,
+    type Task,
+} from '@mindwtr/core';
 
 import { logInfo, logWarn, logError } from './app-log';
 import {
@@ -24,11 +37,25 @@ import {
 const CALENDAR_PUSH_ENABLED_KEY = 'mindwtr:calendar-push-sync:enabled';
 const CALENDAR_ID_KEY = 'mindwtr:calendar-push-sync:calendar-id';
 const CALENDAR_TARGET_ID_KEY = 'mindwtr:calendar-push-sync:target-calendar-id';
+const CALENDAR_COLOR_KEY = 'mindwtr:calendar-push-sync:color';
 const PLATFORM = Platform.OS;
 const SYNC_DEBOUNCE_MS = 2500;
+const CALENDAR_SYNC_CONCURRENCY = 4;
 const MANAGED_CALENDAR_TITLE = 'Mindwtr';
 const MANAGED_CALENDAR_NAME = 'mindwtr';
-const ACCOUNT_TARGET_TITLE_PREFIX = 'Mindwtr: ';
+const DEFAULT_MANAGED_CALENDAR_COLOR = '#3B82F6';
+const PROJECTED_RECURRENCE_EVENT_DATE_FORMAT = 'PP';
+
+export const CALENDAR_PUSH_COLOR_OPTIONS = [
+    '#3B82F6',
+    '#2563EB',
+    '#7C3AED',
+    '#DB2777',
+    '#EA580C',
+    '#059669',
+    '#0891B2',
+    '#65A30D',
+] as const;
 
 export type CalendarPushTargetCalendar = {
     id: string;
@@ -42,8 +69,14 @@ export type CalendarPushTargetCalendar = {
 
 type CalendarPushTarget = {
     id: string;
-    shouldPrefixTitles: boolean;
 };
+
+function normalizeCalendarColor(value: string | null | undefined): string {
+    const trimmed = value?.trim().toUpperCase() ?? '';
+    return CALENDAR_PUSH_COLOR_OPTIONS.includes(trimmed as typeof CALENDAR_PUSH_COLOR_OPTIONS[number])
+        ? trimmed
+        : DEFAULT_MANAGED_CALENDAR_COLOR;
+}
 
 function isReadableAccountName(value: string): boolean {
     const normalized = value.trim().toLowerCase();
@@ -118,6 +151,17 @@ export const setCalendarPushTargetCalendarId = async (calendarId: string | null)
     await AsyncStorage.setItem(CALENDAR_TARGET_ID_KEY, trimmed);
 };
 
+export const getCalendarPushColor = async (): Promise<string> => {
+    const value = await AsyncStorage.getItem(CALENDAR_COLOR_KEY);
+    return normalizeCalendarColor(value);
+};
+
+export const setCalendarPushColor = async (color: string): Promise<string> => {
+    const normalized = normalizeCalendarColor(color);
+    await AsyncStorage.setItem(CALENDAR_COLOR_KEY, normalized);
+    return normalized;
+};
+
 // MARK: - Permission
 
 export const requestCalendarWritePermission = async (): Promise<boolean> => {
@@ -182,6 +226,12 @@ function isStoredMindwtrManagedCalendar(calendar: Calendar.Calendar, storedCalen
     return Boolean(storedCalendarId && calendar.id === storedCalendarId);
 }
 
+function isAppCreatedMindwtrCalendar(calendar: Calendar.Calendar): boolean {
+    const title = getCalendarDisplayName(calendar).trim().toLowerCase();
+    const name = typeof calendar.name === 'string' ? calendar.name.trim().toLowerCase() : '';
+    return title === MANAGED_CALENDAR_TITLE.toLowerCase() && name === MANAGED_CALENDAR_NAME;
+}
+
 export const getCalendarPushTargetCalendars = async (): Promise<CalendarPushTargetCalendar[]> => {
     try {
         const [storedCalendarId, calendars] = await Promise.all([
@@ -218,7 +268,8 @@ export const getCalendarPushTargetCalendars = async (): Promise<CalendarPushTarg
 };
 
 function getAndroidManagedCalendarSeed(
-    calendars: Awaited<ReturnType<typeof Calendar.getCalendarsAsync>>
+    calendars: Awaited<ReturnType<typeof Calendar.getCalendarsAsync>>,
+    color: string
 ): Parameters<typeof Calendar.createCalendarAsync>[0] | null {
     const ownedCalendar = calendars.find((calendar) =>
         calendar.accessLevel === Calendar.CalendarAccessLevel.OWNER
@@ -240,7 +291,7 @@ function getAndroidManagedCalendarSeed(
 
     return {
         title: MANAGED_CALENDAR_TITLE,
-        color: '#3B82F6',
+        color,
         entityType: Calendar.EntityTypes.EVENT,
         name: MANAGED_CALENDAR_NAME,
         ownerAccount: ownedCalendar.ownerAccount,
@@ -270,12 +321,13 @@ export const ensureMindwtrCalendar = async (): Promise<string | null> => {
             // Calendar was deleted externally — fall through to recreate
         }
 
+        const color = await getCalendarPushColor();
         let calendarDetails: Parameters<typeof Calendar.createCalendarAsync>[0];
 
         if (Platform.OS === 'android') {
             // Android calendars need to be attached to a real device account/source
             // or some calendar providers will keep them hidden from the OS calendar app.
-            const androidSeed = getAndroidManagedCalendarSeed(allCalendars);
+            const androidSeed = getAndroidManagedCalendarSeed(allCalendars, color);
             if (!androidSeed) {
                 void logWarn('No owned Android calendar source available; cannot create Mindwtr calendar', {
                     scope: 'calendar-push',
@@ -301,7 +353,7 @@ export const ensureMindwtrCalendar = async (): Promise<string | null> => {
 
             calendarDetails = {
                 title: MANAGED_CALENDAR_TITLE,
-                color: '#3B82F6',
+                color,
                 entityType: Calendar.EntityTypes.EVENT,
                 sourceId: source.id,
                 source,
@@ -322,6 +374,55 @@ export const ensureMindwtrCalendar = async (): Promise<string | null> => {
     }
 };
 
+export const updateMindwtrCalendarColor = async (color: string): Promise<boolean> => {
+    const normalized = await setCalendarPushColor(color);
+    try {
+        if (typeof Calendar.updateCalendarAsync !== 'function') return false;
+        const storedCalendarId = await getStoredCalendarId();
+        const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+        const target = calendars.find((calendar) => storedCalendarId && calendar.id === storedCalendarId)
+            ?? calendars.find(isAppCreatedMindwtrCalendar);
+        if (!target || !isWritableCalendar(target)) return false;
+
+        // Android's CalendarProvider only stores a calendar's color at creation
+        // time, and expo-calendar's update path never writes CALENDAR_COLOR, so
+        // updating it in place never reaches third-party calendar apps (#726).
+        // Recreate the managed calendar with the freshly stored color instead.
+        if (Platform.OS === 'android') {
+            return await recreateManagedMindwtrCalendar();
+        }
+
+        await Calendar.updateCalendarAsync(target.id, { color: normalized });
+        return true;
+    } catch (error) {
+        void logWarn('Failed to update Mindwtr calendar color', {
+            scope: 'calendar-push',
+            extra: { error: getCalendarErrorMessage(error) },
+        });
+        return false;
+    }
+};
+
+/**
+ * Deletes and recreates the managed "Mindwtr" calendar so a color change takes
+ * effect on Android. The provider ignores post-creation color updates, so the
+ * only way to change the color third-party calendar apps render is to drop the
+ * calendar and create a fresh one with the already-stored color, then re-push
+ * its events. Serialized on the calendar sync queue so it cannot race a
+ * concurrent push and duplicate events (#743). Returns true when a new managed
+ * calendar was created.
+ */
+async function recreateManagedMindwtrCalendar(): Promise<boolean> {
+    let recreatedId: string | null = null;
+    await enqueueCalendarSync(async () => {
+        await deleteMindwtrCalendar();
+        recreatedId = await ensureMindwtrCalendar();
+        if (!recreatedId) return;
+        await runFullCalendarSyncUnsafe();
+    });
+    return recreatedId !== null;
+}
+
 async function resolveCalendarPushTarget(): Promise<CalendarPushTarget | null> {
     const selectedId = await getCalendarPushTargetCalendarId();
     if (selectedId) {
@@ -329,10 +430,7 @@ async function resolveCalendarPushTarget(): Promise<CalendarPushTarget | null> {
             const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
             const selected = calendars.find((calendar) => calendar.id === selectedId);
             if (selected && isWritableCalendar(selected)) {
-                return {
-                    id: selectedId,
-                    shouldPrefixTitles: !isMindwtrNamedCalendar(selected),
-                };
+                return { id: selectedId };
             }
             await setCalendarPushTargetCalendarId(null);
             void logWarn('Selected calendar push target is unavailable; falling back to Mindwtr calendar', {
@@ -345,7 +443,7 @@ async function resolveCalendarPushTarget(): Promise<CalendarPushTarget | null> {
     }
 
     const managedId = await ensureMindwtrCalendar();
-    return managedId ? { id: managedId, shouldPrefixTitles: false } : null;
+    return managedId ? { id: managedId } : null;
 }
 
 /**
@@ -354,53 +452,112 @@ async function resolveCalendarPushTarget(): Promise<CalendarPushTarget | null> {
  */
 export const deleteMindwtrCalendar = async (): Promise<void> => {
     const storedId = await getStoredCalendarId();
-    if (!storedId) return;
     const selectedTargetId = await getCalendarPushTargetCalendarId();
+    const calendarIdsToDelete = new Set<string>();
+    if (storedId) {
+        calendarIdsToDelete.add(storedId);
+    }
+
     try {
-        await Calendar.deleteCalendarAsync(storedId);
+        const calendars = await Calendar.getCalendarsAsync(Calendar.EntityTypes.EVENT);
+        calendars.forEach((calendar) => {
+            if (isAppCreatedMindwtrCalendar(calendar)) {
+                calendarIdsToDelete.add(calendar.id);
+            }
+        });
+    } catch (error) {
+        void logWarn('Failed to inspect calendars before deleting Mindwtr calendar', {
+            scope: 'calendar-push',
+            extra: { error: String(error) },
+        });
+    }
+
+    if (calendarIdsToDelete.size === 0) {
+        await AsyncStorage.removeItem(CALENDAR_ID_KEY);
+        if (selectedTargetId) {
+            const targets = await getCalendarPushTargetCalendars();
+            if (!targets.some((target) => target.id === selectedTargetId)) {
+                await setCalendarPushTargetCalendarId(null);
+            }
+        }
+        void logInfo('Deleted Mindwtr calendar', {
+            scope: 'calendar-push',
+            extra: { deletedCalendars: '0' },
+        });
+        return;
+    }
+
+    try {
+        await Promise.allSettled(
+            Array.from(calendarIdsToDelete).map((calendarId) => Calendar.deleteCalendarAsync(calendarId))
+        );
     } catch {
         // Already deleted or not found — ignore
     }
+
     await AsyncStorage.removeItem(CALENDAR_ID_KEY);
-    if (selectedTargetId === storedId) {
+    if (selectedTargetId && calendarIdsToDelete.has(selectedTargetId)) {
         await setCalendarPushTargetCalendarId(null);
     }
-    void logInfo('Deleted Mindwtr calendar', { scope: 'calendar-push' });
+
+    try {
+        const syncedEntries = await getAllCalendarSyncEntries(PLATFORM);
+        const deletedEntries = syncedEntries.filter((entry) => calendarIdsToDelete.has(entry.calendarId));
+        await Promise.allSettled(
+            deletedEntries.map((entry) => deleteCalendarSyncEntry(entry.taskId, PLATFORM))
+        );
+    } catch (error) {
+        void logWarn('Failed to clear deleted Mindwtr calendar sync entries', {
+            scope: 'calendar-push',
+            extra: { error: String(error) },
+        });
+    }
+
+    void logInfo('Deleted Mindwtr calendar', {
+        scope: 'calendar-push',
+        extra: { deletedCalendars: String(calendarIdsToDelete.size) },
+    });
 };
 
 // MARK: - Per-task sync
 
-function timeEstimateToMinutes(estimate: Task['timeEstimate']): number {
-    switch (estimate) {
-        case '5min': return 5;
-        case '10min': return 10;
-        case '15min': return 15;
-        case '30min': return 30;
-        case '1hr': return 60;
-        case '2hr': return 120;
-        case '3hr': return 180;
-        case '4hr':
-        case '4hr+': return 240;
-        default: return 30;
-    }
+function formatProjectedRecurrenceEventDate(task: Task): string {
+    return safeFormatDate(getTaskCalendarOccurrenceDate(task), PROJECTED_RECURRENCE_EVENT_DATE_FORMAT);
 }
 
-function formatCalendarEventTitle(title: string, shouldPrefixTitle: boolean): string {
-    if (!shouldPrefixTitle) return title;
-    const trimmed = title.trim();
-    if (trimmed.toLowerCase().startsWith(ACCOUNT_TARGET_TITLE_PREFIX.toLowerCase())) {
-        return title;
-    }
-    return `${ACCOUNT_TARGET_TITLE_PREFIX}${trimmed || title}`;
+function formatCalendarEventTitle(title: string, occurrenceDateLabel = ''): string {
+    const trimmed = title.trim() || 'Task';
+    return occurrenceDateLabel ? `${trimmed} (${occurrenceDateLabel})` : trimmed;
 }
 
-function buildEventDetails(task: Task, shouldPrefixTitle: boolean) {
+function formatProjectedRecurrenceNote(task: Task): string {
+    const occurrenceDateLabel = formatProjectedRecurrenceEventDate(task);
+    return occurrenceDateLabel
+        ? `Projected recurring occurrence for ${occurrenceDateLabel}. Complete the current Mindwtr task to create the real next task.`
+        : 'Projected recurring occurrence. Complete the current Mindwtr task to create the real next task.';
+}
+
+function buildEventDetails(task: Task) {
     // safeParseDate parses YYYY-MM-DD as local midnight, avoiding the UTC
     // shift that `new Date(dateString)` produces for date-only strings.
     const dateValue = task.startTime ?? task.dueDate;
     const parsed = safeParseDate(dateValue);
     const startDate = parsed ?? new Date();
-    const title = formatCalendarEventTitle(task.title, shouldPrefixTitle);
+    const projectedOccurrenceDateLabel = isProjectedRecurringTask(task)
+        ? formatProjectedRecurrenceEventDate(task)
+        : '';
+    const title = formatCalendarEventTitle(task.title, projectedOccurrenceDateLabel);
+    const location = typeof task.location === 'string' ? task.location.trim() : '';
+    const { projects, sections } = useTaskStore.getState();
+    const projectName = task.projectId
+        ? projects.find((project) => project.id === task.projectId)?.title
+        : undefined;
+    const sectionName = task.sectionId
+        ? sections.find((section) => section.id === task.sectionId)?.title
+        : undefined;
+    const leadingNote = isProjectedRecurringTask(task) ? formatProjectedRecurrenceNote(task) : undefined;
+    const { notes, url } = buildCalendarPushEventFields(task, { projectName, sectionName, leadingNote });
+
     if (hasTimeComponent(dateValue)) {
         const endDate = new Date(startDate.getTime() + timeEstimateToMinutes(task.timeEstimate) * 60 * 1000);
         return {
@@ -408,36 +565,90 @@ function buildEventDetails(task: Task, shouldPrefixTitle: boolean) {
             startDate,
             endDate,
             allDay: false,
-            notes: task.description ?? '',
+            notes,
+            location,
+            ...(url ? { url } : {}),
         };
     }
 
-    startDate.setHours(0, 0, 0, 0);
-    const endDate = new Date(startDate);
-    endDate.setHours(23, 59, 59, 999);
+    const startDateOnly = buildAllDayBoundary(startDate);
+    const endDate = buildAllDayBoundary(startDate, 1);
     return {
         title,
-        startDate,
+        startDate: startDateOnly,
         endDate,
         allDay: true,
-        notes: task.description ?? '',
+        notes,
+        location,
+        ...(url ? { url } : {}),
+        ...(Platform.OS === 'android' ? { timeZone: 'UTC', endTimeZone: 'UTC' } : {}),
     };
+}
+
+function buildAllDayBoundary(date: Date, dayOffset = 0): Date {
+    if (Platform.OS === 'android') {
+        return new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate() + dayOffset));
+    }
+    const boundary = new Date(date);
+    boundary.setHours(0, 0, 0, 0);
+    boundary.setDate(boundary.getDate() + dayOffset);
+    return boundary;
+}
+
+function getCalendarErrorMessage(error: unknown): string {
+    if (error instanceof Error) return error.message;
+    if (typeof error === 'string') return error;
+    if (error && typeof error === 'object') {
+        const value = error as { code?: unknown; message?: unknown; name?: unknown };
+        return [value.name, value.code, value.message]
+            .filter((part): part is string => typeof part === 'string' && part.trim().length > 0)
+            .join(' ');
+    }
+    return String(error);
+}
+
+function isCalendarEventMissingError(error: unknown): boolean {
+    const message = getCalendarErrorMessage(error).toLowerCase();
+    return message.includes('event-not-found')
+        || message.includes('calendar event not found')
+        || message.includes('event not found')
+        || message.includes('event does not exist')
+        || message.includes('event already deleted')
+        || (message.includes('event') && message.includes('not found'));
+}
+
+async function deleteCalendarEventAndMapping(entry: { taskId: string; calendarEventId: string }): Promise<void> {
+    try {
+        await Calendar.deleteEventAsync(entry.calendarEventId);
+    } catch (error) {
+        if (!isCalendarEventMissingError(error)) {
+            void logWarn('Failed to delete calendar event; keeping local sync mapping for retry', {
+                scope: 'calendar-push',
+                extra: {
+                    taskId: entry.taskId,
+                    eventId: entry.calendarEventId,
+                    error: getCalendarErrorMessage(error),
+                },
+            });
+            throw error;
+        }
+    }
+    await deleteCalendarSyncEntry(entry.taskId, PLATFORM);
 }
 
 async function removeTaskFromCalendar(taskId: string): Promise<void> {
     const entry = await getCalendarSyncEntry(taskId, PLATFORM);
     if (!entry) return;
-    try {
-        await Calendar.deleteEventAsync(entry.calendarEventId);
-    } catch {
-        // Event may already be deleted
-    }
-    await deleteCalendarSyncEntry(taskId, PLATFORM);
+    await deleteCalendarEventAndMapping(entry);
 }
 
 /** Returns true for tasks that should not have a calendar event. */
 function shouldRemoveFromCalendar(task: Task): boolean {
-    return (!task.dueDate && !task.startTime) || !!task.deletedAt || task.status === 'done' || task.status === 'archived';
+    return (!task.dueDate && !task.startTime)
+        || !!task.deletedAt
+        || task.status === 'done'
+        || task.status === 'archived'
+        || task.status === 'reference';
 }
 
 async function syncTaskToCalendar(task: Task, target: CalendarPushTarget): Promise<void> {
@@ -446,7 +657,7 @@ async function syncTaskToCalendar(task: Task, target: CalendarPushTarget): Promi
         return;
     }
 
-    const details = buildEventDetails(task, target.shouldPrefixTitles);
+    const details = buildEventDetails(task);
     const calendarId = target.id;
     const existing = await getCalendarSyncEntry(task.id, PLATFORM);
 
@@ -461,15 +672,22 @@ async function syncTaskToCalendar(task: Task, target: CalendarPushTarget): Promi
                 lastSyncedAt: new Date().toISOString(),
             });
             return;
-        } catch {
-            // Event deleted externally — fall through to create
+        } catch (error) {
+            if (!isCalendarEventMissingError(error)) {
+                void logWarn('Failed to update calendar event; keeping local sync mapping for retry', {
+                    scope: 'calendar-push',
+                    extra: {
+                        taskId: task.id,
+                        eventId: existing.calendarEventId,
+                        error: getCalendarErrorMessage(error),
+                    },
+                });
+                throw error;
+            }
+            await deleteCalendarSyncEntry(task.id, PLATFORM);
         }
     } else if (existing) {
-        try {
-            await Calendar.deleteEventAsync(existing.calendarEventId);
-        } catch {
-            // Event may already be deleted or belong to an unavailable calendar
-        }
+        await deleteCalendarEventAndMapping(existing);
     }
 
     const eventId = await Calendar.createEventAsync(calendarId, { ...details, calendarId });
@@ -482,37 +700,77 @@ async function syncTaskToCalendar(task: Task, target: CalendarPushTarget): Promi
     });
 }
 
+function getCalendarPushTasks(tasks: Task[]): Task[] {
+    const projectedAtIso = new Date().toISOString();
+    return tasks.flatMap((task) => expandCalendarRecurringTasks(task, projectedAtIso));
+}
+
+async function runLimitedSettled<T>(
+    items: T[],
+    runner: (item: T) => Promise<void>
+): Promise<PromiseSettledResult<void>[]> {
+    if (items.length === 0) return [];
+    const results: PromiseSettledResult<void>[] = new Array(items.length);
+    let cursor = 0;
+    const workerCount = Math.min(CALENDAR_SYNC_CONCURRENCY, items.length);
+    const workers = Array.from({ length: workerCount }, async () => {
+        while (cursor < items.length) {
+            const index = cursor;
+            cursor += 1;
+            try {
+                await runner(items[index]!);
+                results[index] = { status: 'fulfilled', value: undefined };
+            } catch (reason) {
+                results[index] = { status: 'rejected', reason };
+            }
+        }
+    });
+    await Promise.all(workers);
+    return results;
+}
+
 // MARK: - Full sync
 
-export const runFullCalendarSync = async (): Promise<void> => {
+// Serialize all calendar writes so a full sync and the debounced partial sync
+// (or two rapid manual refreshes) cannot race on the check-then-create path and
+// create duplicate events (#743).
+let calendarSyncQueue: Promise<void> = Promise.resolve();
+function enqueueCalendarSync(run: () => Promise<void>): Promise<void> {
+    const next = calendarSyncQueue.catch(() => undefined).then(run);
+    calendarSyncQueue = next.catch(() => undefined);
+    return next;
+}
+
+export const runFullCalendarSync = (): Promise<void> => enqueueCalendarSync(runFullCalendarSyncUnsafe);
+
+const runFullCalendarSyncUnsafe = async (): Promise<void> => {
     const enabled = await getCalendarPushEnabled();
     if (!enabled) return;
 
     const target = await resolveCalendarPushTarget();
     if (!target) return;
 
-    const { tasks } = useTaskStore.getState();
+    const { _allTasks } = useTaskStore.getState();
+    const calendarTasks = getCalendarPushTasks(_allTasks as Task[]);
 
     // Sync all tasks currently in the store
-    const results = await Promise.allSettled(
-        tasks.map((task) => syncTaskToCalendar(task, target))
-    );
+    const results = await runLimitedSettled(calendarTasks, (task) => syncTaskToCalendar(task, target));
 
     // Reconcile: remove stale calendar_sync entries for tasks that are no
     // longer in the store or that should not have an event (completed between
     // sessions, archived, etc.)
     const activeEventIds = new Set(
-        tasks.filter((t) => !shouldRemoveFromCalendar(t)).map((t) => t.id)
+        calendarTasks.filter((task) => !shouldRemoveFromCalendar(task)).map((task) => task.id)
     );
     const syncedEntries = await getAllCalendarSyncEntries(PLATFORM);
     const staleEntries = syncedEntries.filter((e) => !activeEventIds.has(e.taskId));
-    await Promise.allSettled(staleEntries.map((e) => removeTaskFromCalendar(e.taskId)));
+    await runLimitedSettled(staleEntries, (entry) => removeTaskFromCalendar(entry.taskId));
 
     const failed = results.filter((r) => r.status === 'rejected').length;
     void logInfo('Full calendar sync complete', {
         scope: 'calendar-push',
         extra: {
-            total: String(tasks.length),
+            total: String(calendarTasks.length),
             failed: String(failed),
             stale: String(staleEntries.length),
         },
@@ -535,7 +793,10 @@ export const scheduleSyncDebounced = (taskIds: string[]): void => {
     }, SYNC_DEBOUNCE_MS);
 };
 
-const runPartialCalendarSync = async (taskIds: string[]): Promise<void> => {
+const runPartialCalendarSync = (taskIds: string[]): Promise<void> =>
+    enqueueCalendarSync(() => runPartialCalendarSyncUnsafe(taskIds));
+
+const runPartialCalendarSyncUnsafe = async (taskIds: string[]): Promise<void> => {
     const enabled = await getCalendarPushEnabled();
     if (!enabled) return;
 
@@ -543,12 +804,25 @@ const runPartialCalendarSync = async (taskIds: string[]): Promise<void> => {
     if (!target) return;
 
     const { _tasksById } = useTaskStore.getState();
-    const targets = taskIds
-        .map((id) => _tasksById.get(id))
-        .filter((task): task is Task => !!task);
+    const targets: Task[] = [];
+    const removedIds: string[] = [];
 
-    // Also handle tasks that were removed from the store entirely.
-    const removedIds = taskIds.filter((id) => !_tasksById.has(id));
+    for (const id of taskIds) {
+        if (isProjectedRecurringTaskId(id)) {
+            removedIds.push(id);
+            continue;
+        }
+        const task = _tasksById.get(id);
+        if (!task) {
+            removedIds.push(id, getProjectedRecurringTaskId(id));
+            continue;
+        }
+        const expandedTasks = expandCalendarRecurringTasks(task);
+        targets.push(...expandedTasks);
+        if (!expandedTasks.some((candidate) => candidate.id === getProjectedRecurringTaskId(task.id))) {
+            removedIds.push(getProjectedRecurringTaskId(task.id));
+        }
+    }
 
     await Promise.allSettled([
         ...targets.map((t) => syncTaskToCalendar(t, target)),
@@ -588,7 +862,12 @@ export const startCalendarPushSync = (): (() => void) => {
                     prev.deletedAt !== task.deletedAt ||
                     prev.status !== task.status ||
                     prev.title !== task.title ||
-                    prev.timeEstimate !== task.timeEstimate
+                    prev.description !== task.description ||
+                    prev.location !== task.location ||
+                    prev.timeEstimate !== task.timeEstimate ||
+                    prev.suppressMindwtrReminders !== task.suppressMindwtrReminders ||
+                    prev.recurrence !== task.recurrence ||
+                    prev.showFutureRecurrence !== task.showFutureRecurrence
                 ) {
                     changedIds.push(task.id);
                 }

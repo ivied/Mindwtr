@@ -48,6 +48,33 @@ const normalizeShortcutTags = (tags: string[]): string[] => {
     return normalized;
 };
 
+const trimSharedValue = (value: string | null | undefined): string => (
+    typeof value === 'string' ? value.trim() : ''
+);
+
+function buildShareIntentCaptureParams({
+    shareText,
+    shareWebUrl,
+}: {
+    shareText?: string | null;
+    shareWebUrl?: string | null;
+}): Record<string, string> | null {
+    const title = trimSharedValue(shareText) || trimSharedValue(shareWebUrl);
+    if (!title) return null;
+
+    const params: Record<string, string> = {
+        initialValue: encodeURIComponent(title),
+    };
+    const url = trimSharedValue(shareWebUrl);
+    if (url && url !== title) {
+        params.initialProps = encodeURIComponent(JSON.stringify({
+            description: url,
+        } satisfies Partial<Task>));
+    }
+
+    return params;
+}
+
 export function useRootLayoutExternalCapture({
     dataReady,
     hasShareIntent,
@@ -92,15 +119,11 @@ export function useRootLayoutExternalCapture({
 
     useEffect(() => {
         if (!hasShareIntent) return;
-        const sharedText = typeof shareText === 'string'
-            ? shareText
-            : typeof shareWebUrl === 'string'
-                ? shareWebUrl
-                : '';
-        if (sharedText.trim()) {
+        const params = buildShareIntentCaptureParams({ shareText, shareWebUrl });
+        if (params) {
             router.replace({
                 pathname: '/capture-modal',
-                params: { text: encodeURIComponent(sharedText.trim()) },
+                params,
             });
         } else {
             void logError(new Error('Share intent payload missing text'), { scope: 'share-intent' });

@@ -1,7 +1,14 @@
-import type { SystemCalendarPermissionStatus } from '../../../lib/system-calendar';
-import type { ExternalCalendarSubscription } from '@mindwtr/core';
+import type { SystemCalendarPermissionStatus, SystemCalendarPushTarget } from '../../../lib/system-calendar';
+import {
+    EXTERNAL_CALENDAR_COLORS,
+    getExternalCalendarColorForId,
+    type ExternalCalendarSubscription,
+} from '@mindwtr/core';
+import { ExternalLink } from 'lucide-react';
 
 import { cn } from '../../../lib/utils';
+
+const CALENDAR_INTEGRATION_GUIDE_URL = 'https://docs.mindwtr.app/use/calendar-integration';
 
 type Labels = {
     calendar: string;
@@ -21,6 +28,14 @@ type Labels = {
     calendarSystemPermissionUnsupported: string;
     calendarSystemRequestAccess: string;
     calendarSystemDeniedHint: string;
+    calendarPushTitle: string;
+    calendarPushDesc: string;
+    calendarPushEnable: string;
+    calendarPushTarget: string;
+    calendarPushManagedTarget: string;
+    calendarPushRefresh: string;
+    calendarPushLoading: string;
+    calendarPushTargetHint: string;
 };
 
 type SettingsCalendarPageProps = {
@@ -31,13 +46,21 @@ type SettingsCalendarPageProps = {
     externalCalendars: ExternalCalendarSubscription[];
     showSystemCalendarSection: boolean;
     systemCalendarPermission: SystemCalendarPermissionStatus;
+    calendarPushEnabled: boolean;
+    calendarPushTargetCalendarId: string | null;
+    calendarPushTargets: SystemCalendarPushTarget[];
+    calendarPushLoading: boolean;
     onCalendarNameChange: (value: string) => void;
     onCalendarUrlChange: (value: string) => void;
     onAddCalendar: () => void;
     onChooseLocalCalendarFile?: () => Promise<void> | void;
     onToggleCalendar: (id: string, enabled: boolean) => void;
+    onCalendarColorChange: (id: string, color: string) => void;
     onRemoveCalendar: (id: string) => void;
     onRequestSystemCalendarPermission: () => void;
+    onToggleCalendarPush: (enabled: boolean) => Promise<void> | void;
+    onCalendarPushTargetChange: (id: string | null) => Promise<void> | void;
+    onRefreshCalendarPushTargets: () => Promise<void> | void;
     maskCalendarUrl: (url: string) => string;
 };
 
@@ -49,13 +72,21 @@ export function SettingsCalendarPage({
     externalCalendars,
     showSystemCalendarSection,
     systemCalendarPermission,
+    calendarPushEnabled,
+    calendarPushTargetCalendarId,
+    calendarPushTargets,
+    calendarPushLoading,
     onCalendarNameChange,
     onCalendarUrlChange,
     onAddCalendar,
     onChooseLocalCalendarFile,
     onToggleCalendar,
+    onCalendarColorChange,
     onRemoveCalendar,
     onRequestSystemCalendarPermission,
+    onToggleCalendarPush,
+    onCalendarPushTargetChange,
+    onRefreshCalendarPushTargets,
     maskCalendarUrl,
 }: SettingsCalendarPageProps) {
     const permissionLabel = (() => {
@@ -91,6 +122,64 @@ export function SettingsCalendarPage({
                     {systemCalendarPermission === 'denied' && (
                         <p className="text-xs text-muted-foreground">{t.calendarSystemDeniedHint}</p>
                     )}
+                    <div className="border-t border-border pt-4 space-y-3">
+                        <div className="flex items-start justify-between gap-4">
+                            <div className="space-y-1">
+                                <div className="text-sm font-medium">{t.calendarPushTitle}</div>
+                                <p className="text-xs text-muted-foreground">{t.calendarPushDesc}</p>
+                            </div>
+                            <button
+                                type="button"
+                                role="switch"
+                                aria-checked={calendarPushEnabled}
+                                disabled={calendarPushLoading}
+                                onClick={() => onToggleCalendarPush(!calendarPushEnabled)}
+                                className={cn(
+                                    "relative h-6 w-11 shrink-0 rounded-full border transition-colors",
+                                    calendarPushEnabled ? "border-primary bg-primary" : "border-border bg-muted/50",
+                                    calendarPushLoading && "opacity-60 cursor-wait"
+                                )}
+                            >
+                                <span
+                                    className={cn(
+                                        "absolute top-1 h-4 w-4 rounded-full bg-background shadow-sm transition-transform",
+                                        calendarPushEnabled ? "translate-x-5" : "translate-x-1"
+                                    )}
+                                />
+                                <span className="sr-only">{t.calendarPushEnable}</span>
+                            </button>
+                        </div>
+
+                        {calendarPushEnabled && systemCalendarPermission === 'granted' && (
+                            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                                <label className="space-y-1">
+                                    <span className="text-sm font-medium">{t.calendarPushTarget}</span>
+                                    <select
+                                        value={calendarPushTargetCalendarId ?? ''}
+                                        onChange={(event) => onCalendarPushTargetChange(event.target.value || null)}
+                                        disabled={calendarPushLoading}
+                                        className="w-full text-sm px-3 py-2 rounded border border-border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
+                                    >
+                                        <option value="">{t.calendarPushManagedTarget}</option>
+                                        {calendarPushTargets.map((target) => (
+                                            <option key={target.id} value={target.id}>
+                                                {target.sourceName ? `${target.name} (${target.sourceName})` : target.name}
+                                            </option>
+                                        ))}
+                                    </select>
+                                    <span className="block text-xs text-muted-foreground">{t.calendarPushTargetHint}</span>
+                                </label>
+                                <button
+                                    type="button"
+                                    onClick={onRefreshCalendarPushTargets}
+                                    disabled={calendarPushLoading}
+                                    className="text-sm px-3 py-2 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors disabled:opacity-60"
+                                >
+                                    {calendarPushLoading ? t.calendarPushLoading : t.calendarPushRefresh}
+                                </button>
+                            </div>
+                        )}
+                    </div>
                 </div>
             )}
 
@@ -99,6 +188,15 @@ export function SettingsCalendarPage({
                     <div className="text-sm font-medium">{t.calendar}</div>
                     <p className="text-xs text-muted-foreground">{t.calendarDesc}</p>
                 </div>
+                <a
+                    href={CALENDAR_INTEGRATION_GUIDE_URL}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+                >
+                    Calendar integration guide
+                    <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                </a>
 
                 <div className="grid gap-3 md:grid-cols-2">
                     <div className="space-y-1">
@@ -159,7 +257,29 @@ export function SettingsCalendarPage({
                             <div key={calendar.id} className="p-4 flex items-start justify-between gap-4">
                                 <div className="min-w-0">
                                     <div className="text-sm font-medium truncate">{calendar.name}</div>
-                                    <div className="text-xs text-muted-foreground truncate mt-1">{maskCalendarUrl(calendar.url)}</div>
+                                            <div className="text-xs text-muted-foreground truncate mt-1">{maskCalendarUrl(calendar.url)}</div>
+                                            <div className="mt-2 flex flex-wrap gap-1.5" aria-label={`${calendar.name} color`}>
+                                                {EXTERNAL_CALENDAR_COLORS.map((color) => {
+                                                    const selectedColor = calendar.color ?? getExternalCalendarColorForId(calendar.id);
+                                                    const selected = selectedColor === color;
+                                                    return (
+                                                        <button
+                                                            key={color}
+                                                            type="button"
+                                                            aria-label={`${calendar.name} ${color}`}
+                                                            aria-pressed={selected}
+                                                            onClick={() => onCalendarColorChange(calendar.id, color)}
+                                                            className={cn(
+                                                                "h-5 w-5 rounded-full border transition focus:outline-none focus:ring-2 focus:ring-primary/40",
+                                                                selected
+                                                                    ? "border-background ring-2 ring-primary ring-offset-2 ring-offset-background"
+                                                                    : "border-border hover:scale-105"
+                                                            )}
+                                                            style={{ backgroundColor: color }}
+                                                        />
+                                                    );
+                                                })}
+                                            </div>
                                 </div>
                                 <div className="flex items-center gap-3">
                                     <input

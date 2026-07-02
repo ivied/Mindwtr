@@ -6,7 +6,7 @@ import {
     compareVersions,
     getFlatpakInstallChannel,
     HOMEBREW_CASK_URL,
-    MS_STORE_URL,
+    MS_STORE_UPDATES_URL,
     normalizeInstallSource,
     verifyDownloadChecksum,
     WINGET_PACKAGE_URL,
@@ -26,6 +26,7 @@ import {
     isTauriRuntime,
 } from '../../../lib/runtime';
 import { reportError } from '../../../lib/report-error';
+import { resolveDesktopAnalyticsVersion } from '../../../lib/analytics-heartbeat';
 import { getLogPath } from '../../../lib/app-log';
 import { measureSettingsOpenStep } from '../../../lib/settings-open-diagnostics';
 import type { SettingsLabels } from './labels';
@@ -42,7 +43,7 @@ type UseSettingsAboutPageOptions = {
 };
 
 type UseSettingsAboutPageResult = {
-    aboutPageProps: Omit<SettingsAboutPageProps, 't'>;
+    aboutPageProps: Omit<SettingsAboutPageProps, 't' | 'feedbackConfigured' | 'onSubmitFeedback'>;
     hasUpdateBadge: boolean;
     logPath: string;
     updateModalProps: Omit<SettingsUpdateModalProps, 't'>;
@@ -125,7 +126,7 @@ export function useSettingsAboutPage({
             if (cancelled) return;
             measureSettingsOpenStep('app-version', async () => {
                 const { getVersion } = await import('@tauri-apps/api/app');
-                return await getVersion();
+                return resolveDesktopAnalyticsVersion(await getVersion());
             })
                 .then((version) => {
                     if (!cancelled) setAppVersion(version);
@@ -324,7 +325,7 @@ export function useSettingsAboutPage({
     const handleDownloadUpdate = useCallback(async () => {
         const targetUrl = preferredDownloadUrl;
         if (installSource === 'microsoft-store') {
-            await openLink(MS_STORE_URL);
+            await openLink(MS_STORE_UPDATES_URL);
             setDownloadNotice(t.storeUpdateHint);
             return;
         }

@@ -48,6 +48,7 @@ const compute = (selectedArea: string) => computeGlobalSearchResults({
     selectedStatuses: [],
     selectedArea,
     selectedTokens: [],
+    locationQuery: '',
     duePreset: 'any',
     scope: 'all',
     weekStart: 'sunday',
@@ -88,6 +89,7 @@ describe('computeGlobalSearchResults', () => {
             selectedStatuses: [],
             selectedArea: 'all',
             selectedTokens: [],
+            locationQuery: '',
             duePreset: 'any',
             scope: 'all',
             weekStart: 'sunday',
@@ -101,5 +103,56 @@ describe('computeGlobalSearchResults', () => {
 
         expect(result.isTruncated).toBe(true);
         expect(result.totalResultsLabel).toBe('200+');
+    });
+
+    it('narrows task results by location text', () => {
+        const result = computeGlobalSearchResults({
+            query: 'needle',
+            tasks: [
+                { ...task('task-office', 'Needle office task'), location: 'Main Office' },
+                { ...task('task-home', 'Needle home task'), location: 'Home desk' },
+            ],
+            projects: [
+                project('project-work', 'Needle work project', 'area-work'),
+            ],
+            areas: [{ id: 'area-work' }],
+            includeCompleted: false,
+            includeReference: true,
+            hideFutureTasks: false,
+            selectedStatuses: [],
+            selectedArea: 'all',
+            selectedTokens: [],
+            locationQuery: 'office',
+            duePreset: 'any',
+            scope: 'all',
+            weekStart: 'sunday',
+        });
+
+        expect(result.results.map((item) => item.item.id)).toEqual(['task-office']);
+    });
+
+    it('keeps task id lookups visible when completed tasks are hidden by default', () => {
+        const matchingId = 'c5290e2c-1b77-4f77-8927-6d187e141891';
+        const result = computeGlobalSearchResults({
+            query: `id:${matchingId}`,
+            tasks: [
+                { ...task(matchingId, 'Archived sync warning task'), status: 'archived' },
+                { ...task('other-task', 'Other task'), status: 'next' },
+            ],
+            projects: [],
+            areas: [],
+            includeCompleted: false,
+            includeReference: false,
+            hideFutureTasks: false,
+            selectedStatuses: [],
+            selectedArea: 'all',
+            selectedTokens: [],
+            locationQuery: '',
+            duePreset: 'any',
+            scope: 'all',
+            weekStart: 'sunday',
+        });
+
+        expect(result.results.map((item) => item.item.id)).toEqual([matchingId]);
     });
 });

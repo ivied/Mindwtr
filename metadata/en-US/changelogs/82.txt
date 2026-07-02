@@ -1,0 +1,4 @@
+- Repeat reminders for tasks with an explicit due time.
+- Bulk Quick Add plus safer TickTick and Obsidian imports.
+- Board/project filters, local dictation model downloads, and relative-start scheduling.
+- Better WebDAV sync, completed-task visibility, keyboard handling, search, and long task titles.

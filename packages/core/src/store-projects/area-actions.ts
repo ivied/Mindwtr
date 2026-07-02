@@ -121,6 +121,13 @@ export const createAreaActions = ({
                 const existing = allAreas.find((a) => a.id !== id && !a.deletedAt && a?.name?.trim().toLowerCase() === normalized);
                 if (existing) {
                     const now = new Date().toISOString();
+                    const deletedArea: Area = {
+                        ...area,
+                        deletedAt: now,
+                        updatedAt: now,
+                        rev: nextRevision(area.rev),
+                        revBy: deviceState.deviceId,
+                    };
                     const mergedArea: Area = {
                         ...existing,
                         ...updates,
@@ -131,21 +138,35 @@ export const createAreaActions = ({
                     };
                     const newAllAreas = allAreas
                         .filter((a) => a.id !== id && a.id !== existing.id)
-                        .concat(mergedArea)
+                        .concat(deletedArea, mergedArea)
                         .sort((a, b) => a.order - b.order);
                     const newAllProjects = state._allProjects.map((project) => {
                         if (project.areaId !== id) return project;
                         return {
                             ...project,
                             areaId: existing.id,
+                            areaTitle: mergedArea.name,
                             color: mergedArea.color ?? project.color,
                             updatedAt: now,
                             rev: nextRevision(project.rev),
                             revBy: deviceState.deviceId,
                         };
                     });
+                    const newAllTasks = state._allTasks.map((task) => {
+                        if (task.areaId !== id) return task;
+                        return {
+                            ...task,
+                            areaId: task.projectId ? undefined : existing.id,
+                            updatedAt: now,
+                            rev: nextRevision(task.rev),
+                            revBy: deviceState.deviceId,
+                        };
+                    });
                     const newVisibleProjects = newAllProjects.filter(p => !p.deletedAt);
+                    const newVisibleTasks = selectVisibleTasks(newAllTasks);
+                    clearDerivedCache();
                     snapshot = buildSaveSnapshot(state, {
+                        tasks: newAllTasks,
                         areas: newAllAreas,
                         projects: newAllProjects,
                         ...(deviceState.updated ? { settings: deviceState.settings } : {}),
@@ -155,6 +176,8 @@ export const createAreaActions = ({
                         _allAreas: newAllAreas,
                         projects: newVisibleProjects,
                         _allProjects: newAllProjects,
+                        tasks: newVisibleTasks,
+                        _allTasks: newAllTasks,
                         lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt),
                         ...(deviceState.updated ? { settings: deviceState.settings } : {}),
                     };
@@ -259,52 +282,34 @@ export const createAreaActions = ({
                         : item
                 )
                 .sort((a, b) => a.order - b.order);
-            const cascadeProjectIds = new Set(
-                state._allProjects
-                    .filter((project) => project.areaId === id && !project.deletedAt)
-                    .map((project) => project.id)
-            );
             const newAllProjects = state._allProjects.map((project) => {
                 if (project.areaId !== id || project.deletedAt) return project;
                 return {
                     ...project,
-                    deletedAt: now,
+                    areaId: undefined,
+                    areaTitle: undefined,
                     updatedAt: now,
                     rev: nextRevision(project.rev),
                     revBy: deviceState.deviceId,
                 };
             });
-            const newAllSections = state._allSections.map((section) => {
-                if (!cascadeProjectIds.has(section.projectId) || section.deletedAt) return section;
-                return {
-                    ...section,
-                    deletedAt: now,
-                    updatedAt: now,
-                    rev: nextRevision(section.rev),
-                    revBy: deviceState.deviceId,
-                };
-            });
             const newAllTasks = state._allTasks.map((task) => {
-                if (task.deletedAt || (task.areaId !== id && !(task.projectId && cascadeProjectIds.has(task.projectId)))) {
-                    return task;
-                }
+                if (task.areaId !== id || task.deletedAt) return task;
                 return {
                     ...task,
-                    deletedAt: now,
+                    areaId: undefined,
                     updatedAt: now,
                     rev: nextRevision(task.rev),
                     revBy: deviceState.deviceId,
                 };
             });
             const newVisibleProjects = newAllProjects.filter(p => !p.deletedAt);
-            const newVisibleSections = newAllSections.filter((section) => !section.deletedAt);
             const newVisibleTasks = selectVisibleTasks(newAllTasks);
             const newVisibleAreas = newAllAreas.filter((item) => !item.deletedAt);
             clearDerivedCache();
             snapshot = buildSaveSnapshot(state, {
                 tasks: newAllTasks,
                 projects: newAllProjects,
-                sections: newAllSections,
                 areas: newAllAreas,
                 ...(deviceState.updated ? { settings: deviceState.settings } : {}),
             });
@@ -313,8 +318,6 @@ export const createAreaActions = ({
                 _allAreas: newAllAreas,
                 projects: newVisibleProjects,
                 _allProjects: newAllProjects,
-                sections: newVisibleSections,
-                _allSections: newAllSections,
                 tasks: newVisibleTasks,
                 _allTasks: newAllTasks,
                 lastDataChangeAt: getNextDataChangeAt(state.lastDataChangeAt, changeAt),

@@ -10,6 +10,7 @@ startupProfiler?.markStartupPhase?.('js.index.polyfills_loaded');
 startupProfiler?.markStartupPhase?.('js.index.metro_runtime_require:loaded');
 
 require('./lib/background-sync-task');
+require('./lib/context-automation-headless-task');
 const skipWidgetHandlerInit = process.env.EXPO_PUBLIC_SKIP_WIDGET_HANDLER_INIT === '1';
 
 const installKeepAwakeActivationGuard = () => {

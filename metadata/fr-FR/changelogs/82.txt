@@ -1,0 +1,4 @@
+- Rappels repetes pour les taches avec une heure precise.
+- Bulk Quick Add et imports TickTick/Obsidian plus surs.
+- Filtres tableau/projet, modeles locaux de dictee et debuts relatifs.
+- Meilleur WebDAV, visibilite des taches terminees, clavier, recherche et longs titres.

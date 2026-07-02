@@ -4,6 +4,8 @@ import {
     clearDeletedTaskProjectArchiveMetadata,
     computeProjectDerivedState,
     computeTaskDerivedState,
+    createProjectOrderReserver,
+    applyTaskUpdates,
     getNextProjectOrder,
     hasSameEntityIdentity,
     reconcileEntityCollection,
@@ -11,7 +13,6 @@ import {
     replaceEntitiesInMap,
     replaceEntityInArray,
     replaceEntityInMap,
-    reserveNextProjectOrder,
     restoreSectionFromProjectArchive,
     restoreTaskFromProjectArchive,
     reuseArrayIfShallowEqual,
@@ -67,6 +68,89 @@ const createSection = (
     rev: 1,
     revBy: 'device-a',
     ...overrides,
+});
+
+
+describe('relative start updates', () => {
+    it('recomputes startTime from the stored due-date offset when dueDate changes', () => {
+        const task = createTask('t1', undefined, undefined, {
+            dueDate: '2026-04-24',
+            startTime: '2026-04-21',
+            relativeStartOffset: { amount: -3, unit: 'day' },
+        } as Partial<Task>);
+
+        const { updatedTask } = applyTaskUpdates(task, {
+            dueDate: '2026-05-01',
+        }, '2026-04-20T10:00:00.000Z');
+
+        expect(updatedTask.dueDate).toBe('2026-05-01');
+        expect(updatedTask.startTime).toBe('2026-04-28');
+        expect((updatedTask as Task & { relativeStartOffset?: unknown }).relativeStartOffset).toEqual({
+            amount: -3,
+            unit: 'day',
+        });
+    });
+
+    it('sets startTime when a relative offset is added to a task with a dueDate', () => {
+        const task = createTask('t1', undefined, undefined, {
+            dueDate: '2026-04-24',
+            startTime: undefined,
+        });
+
+        const { updatedTask } = applyTaskUpdates(task, {
+            relativeStartOffset: { amount: -1, unit: 'week' },
+        }, '2026-04-20T10:00:00.000Z');
+
+        expect(updatedTask.startTime).toBe('2026-04-17');
+        expect(updatedTask.relativeStartOffset).toEqual({ amount: -1, unit: 'week' });
+    });
+
+    it('recomputes when full-form saves include an unchanged startTime', () => {
+        const task = createTask('t1', undefined, undefined, {
+            dueDate: '2026-04-24',
+            startTime: '2026-04-21',
+            relativeStartOffset: { amount: -3, unit: 'day' },
+        } as Partial<Task>);
+
+        const { updatedTask } = applyTaskUpdates(task, {
+            dueDate: '2026-05-01',
+            startTime: '2026-04-21',
+        }, '2026-04-20T10:00:00.000Z');
+
+        expect(updatedTask.startTime).toBe('2026-04-28');
+        expect(updatedTask.relativeStartOffset).toEqual({ amount: -3, unit: 'day' });
+    });
+
+    it('clears the relative start link when startTime is edited directly', () => {
+        const task = createTask('t1', undefined, undefined, {
+            dueDate: '2026-04-24',
+            startTime: '2026-04-21',
+            relativeStartOffset: { amount: -3, unit: 'day' },
+        } as Partial<Task>);
+
+        const { updatedTask } = applyTaskUpdates(task, {
+            startTime: '2026-04-22',
+        }, '2026-04-20T10:00:00.000Z');
+
+        expect(updatedTask.startTime).toBe('2026-04-22');
+        expect((updatedTask as Task & { relativeStartOffset?: unknown }).relativeStartOffset).toBeUndefined();
+    });
+
+    it('keeps the current startTime as absolute when dueDate is removed', () => {
+        const task = createTask('t1', undefined, undefined, {
+            dueDate: '2026-04-24',
+            startTime: '2026-04-21',
+            relativeStartOffset: { amount: -3, unit: 'day' },
+        } as Partial<Task>);
+
+        const { updatedTask } = applyTaskUpdates(task, {
+            dueDate: undefined,
+        }, '2026-04-20T10:00:00.000Z');
+
+        expect(updatedTask.dueDate).toBeUndefined();
+        expect(updatedTask.startTime).toBe('2026-04-21');
+        expect((updatedTask as Task & { relativeStartOffset?: unknown }).relativeStartOffset).toBeUndefined();
+    });
 });
 
 describe('entity collection helpers', () => {
@@ -363,28 +447,29 @@ describe('getNextProjectOrder', () => {
         expect(getNextProjectOrder('project-2', tasks)).toBe(0);
     });
 
-    it('reserves unique project orders against the same snapshot', () => {
+    it('reserves unique project orders with an explicit reserver', () => {
         const tasks = [
             createTask('t1', 'project-1', 0),
             createTask('t2', 'project-1', 1),
         ];
+        const reserveProjectOrder = createProjectOrderReserver(tasks);
 
-        expect(reserveNextProjectOrder('project-1', tasks)).toBe(2);
-        expect(reserveNextProjectOrder('project-1', tasks)).toBe(3);
-        expect(reserveNextProjectOrder('project-2', tasks)).toBe(0);
-        expect(reserveNextProjectOrder('project-2', tasks)).toBe(1);
+        expect(reserveProjectOrder('project-1')).toBe(2);
+        expect(reserveProjectOrder('project-1')).toBe(3);
+        expect(reserveProjectOrder('project-2')).toBe(0);
+        expect(reserveProjectOrder('project-2')).toBe(1);
     });
 
-    it('does not carry reserved orders across new task snapshots', () => {
+    it('does not carry reserved orders across reserver instances', () => {
         const tasks = [
             createTask('t1', 'project-1', 0),
             createTask('t2', 'project-1', 1),
         ];
 
-        expect(reserveNextProjectOrder('project-1', tasks)).toBe(2);
+        expect(createProjectOrderReserver(tasks)('project-1')).toBe(2);
 
         const refreshedTasks = tasks.map((task) => ({ ...task }));
-        expect(reserveNextProjectOrder('project-1', refreshedTasks)).toBe(2);
+        expect(createProjectOrderReserver(refreshedTasks)('project-1')).toBe(2);
     });
 });
 
@@ -404,6 +489,62 @@ describe('derived store state helpers', () => {
         expect(derived.focusedCount).toBe(1);
     });
 
+    it('derives transient date-coherence issues without mutating tasks', () => {
+        const incoherent = createTask('incoherent', 'project-1', 0, {
+            startTime: '2026-04-25',
+            dueDate: '2026-04-24',
+        });
+        const coherent = createTask('coherent', 'project-1', 1, {
+            startTime: '2026-04-24',
+            dueDate: '2026-04-24',
+        });
+
+        const derived = computeTaskDerivedState([incoherent, coherent]);
+
+        expect(derived.dateCoherenceIssuesByTaskId.get('incoherent')).toEqual([{
+            code: 'start_after_due',
+            field: 'startTime',
+            relatedField: 'dueDate',
+        }]);
+        expect(derived.dateCoherenceIssuesByTaskId.has('coherent')).toBe(false);
+        expect(incoherent.startTime).toBe('2026-04-25');
+        expect(incoherent.dueDate).toBe('2026-04-24');
+    });
+
+    it('derives query-scoped task indexes in one pass', () => {
+        const nextTask = createTask('next', 'project-1', 0, {
+            status: 'next',
+            contexts: ['@office'],
+            tags: ['#deep'],
+            isFocusedToday: true,
+        });
+        const doneTask = createTask('done', 'project-1', 1, {
+            status: 'done',
+            contexts: ['@office'],
+            tags: ['#done'],
+            isFocusedToday: true,
+        });
+        const waitingTask = createTask('waiting', 'project-2', 2, {
+            status: 'waiting',
+            contexts: ['@home'],
+            tags: ['#deep'],
+        });
+
+        const derived = computeTaskDerivedState([nextTask, doneTask, waitingTask]);
+
+        expect(derived.tasksByProjectId.get('project-1')?.map((task) => task.id)).toEqual(['next', 'done']);
+        expect(derived.tasksByContext.get('@office')?.map((task) => task.id)).toEqual(['next', 'done']);
+        expect(derived.tasksByTag.get('#deep')?.map((task) => task.id)).toEqual(['next', 'waiting']);
+        expect(derived.focusedTasks.map((task) => task.id)).toEqual(['next']);
+        expect(derived.projectTaskSummaryById.get('project-1')).toEqual({
+            activeTaskCount: 1,
+            nextAction: nextTask,
+        });
+        expect(derived.projectTaskSummaryById.get('project-2')).toEqual({
+            activeTaskCount: 1,
+        });
+    });
+
     it('derives focused project count while ignoring tombstones', () => {
         const derived = computeProjectDerivedState([
             createProject('focused-a', { isFocused: true }),
@@ -416,5 +557,16 @@ describe('derived store state helpers', () => {
         ]);
 
         expect(derived.focusedProjectCount).toBe(2);
+    });
+
+    it('derives section-scoped sequential project ids', () => {
+        const derived = computeProjectDerivedState([
+            createProject('project-wide', { isSequential: true }),
+            createProject('section-wide', { isSequential: true, sequentialScope: 'section' }),
+            createProject('parallel-section', { isSequential: false, sequentialScope: 'section' }),
+        ]);
+
+        expect([...derived.sequentialProjectIds]).toEqual(['project-wide', 'section-wide']);
+        expect([...derived.sequentialWithinSectionProjectIds]).toEqual(['section-wide']);
     });
 });

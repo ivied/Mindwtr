@@ -54,6 +54,38 @@ describe('parseObsidianTasksFromMarkdown', () => {
         expect(result.tasks[0]?.tags).toEqual(['journal', 'project/alpha', 'work']);
     });
 
+    it('keeps Dataview inline fields inert unless metadata import is enabled', () => {
+        const result = parseObsidianTasksFromMarkdown(
+            '- [ ] Ship proposal [project:: [[Project Alpha]]] [context:: @office] [due:: 2026-04-01] [scheduled:: 2026-03-28] [priority:: high] [estimate:: 45m] [tags:: #writing, review]',
+            createOptions('Projects/Dataview.md')
+        );
+
+        expect(result.tasks[0]?.dataviewData).toBeUndefined();
+        expect(result.tasks[0]?.text).toContain('[project:: [[Project Alpha]]]');
+    });
+
+    it('imports conservative Dataview metadata when enabled without changing task text', () => {
+        const result = parseObsidianTasksFromMarkdown(
+            '- [ ] Ship proposal [project:: [[Project Alpha]]] [context:: @office] [due:: 2026-04-01] [scheduled:: 2026-03-28] [priority:: high] [estimate:: 45m] [tags:: #writing, review]',
+            {
+                ...createOptions('Projects/Dataview.md'),
+                dataviewMetadataEnabled: true,
+            }
+        );
+
+        expect(result.tasks[0]?.text).toContain('[project:: [[Project Alpha]]]');
+        expect(result.tasks[0]?.dataviewData).toEqual({
+            priority: 'high',
+            dueDate: '2026-04-01',
+            scheduledDate: '2026-03-28',
+            contexts: ['office'],
+            projects: ['Project Alpha'],
+            tags: ['writing', 'review'],
+            timeEstimateMinutes: 45,
+        });
+        expect(result.tasks[0]?.tags).toEqual(['writing', 'review']);
+    });
+
     it('skips task-like lines inside fenced code blocks', () => {
         const result = parseObsidianTasksFromMarkdown(readFixture('EdgeCases.md'), createOptions('EdgeCases.md'));
         expect(result.tasks.some((task) => task.text.includes('inside code block'))).toBe(false);

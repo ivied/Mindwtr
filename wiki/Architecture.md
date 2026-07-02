@@ -52,7 +52,7 @@ flowchart LR
     Sync --> WebDAV["WebDAV"]
     Sync --> File["File Sync"]
     Sync --> Cloud["Self-hosted Cloud"]
-    MCP["MCP Server<br/>mindwtr-mcp-server"] --> Core
+    MCP["MCP Server<br/>mindwtr-mcp"] --> Core
 ```
 
 ---
@@ -98,11 +98,13 @@ The core package contains all shared business logic:
 | `contexts.ts`       | Preset contexts and tags                      |
 | `quick-add.ts`      | Natural language task parser                  |
 | `recurrence.ts`     | Recurring task logic (RFC 5545 partial)       |
-| `sync.ts` + `sync-*.ts` | Sync orchestration, normalization, signatures, settings merge, and tombstones |
+| `sync.ts` + `sync-*.ts` | Sync merge core plus shared sync helpers; see module list below |
 | `date.ts`           | Safe date parsing utilities                   |
 | `ai/`               | AI integration (Gemini/OpenAI/Anthropic)      |
 | `sqlite-adapter.ts` | Local storage adapter interface               |
 | `webdav.ts`         | WebDAV sync client                            |
+
+Current sync sub-modules split the protocol by responsibility: `sync-orchestrator.ts` runs cycles, `sync-normalization.ts` repairs payload shape, `sync-signatures.ts` computes comparable content signatures, `sync-merge-settings.ts` merges settings groups, `sync-tombstones.ts` handles retention cleanup, `sync-revision.ts` stamps revisions, and `sync-client-helpers.ts` / `sync-service-utils.ts` hold platform service helpers.
 
 ### Design Principles
 
@@ -197,12 +199,25 @@ apps/mobile/
 ├── app/                   # Expo Router pages
 │   ├── (drawer)/         # Drawer navigation
 │   │   ├── (tabs)/       # Tab navigation
+│   │   │   ├── calendar-tab.tsx
+│   │   │   ├── capture-quick.tsx
 │   │   │   ├── inbox.tsx
 │   │   │   ├── focus.tsx
 │   │   │   ├── capture.tsx
+│   │   │   ├── contexts-tab.tsx
 │   │   │   ├── projects.tsx
 │   │   │   ├── review-tab.tsx
 │   │   │   └── menu.tsx
+│   │   ├── calendar.tsx
+│   │   ├── contexts.tsx
+│   │   ├── saved-search/[id].tsx
+│   │   ├── board.tsx
+│   │   ├── waiting.tsx
+│   │   ├── someday.tsx
+│   │   ├── done.tsx
+│   │   ├── trash.tsx
+│   │   ├── archived.tsx
+│   │   ├── reference.tsx
 │   │   ├── projects-screen.tsx
 │   │   └── settings.tsx
 │   └── _layout.tsx       # Root layout
@@ -282,7 +297,7 @@ setStorageAdapter(mobileStorage);
 
 The canonical type surface lives in [[Core API]] and `packages/core/src/types.ts`.
 
-- Use [[Core API]] for current field-level docs for `Task`, `Project`, `Section`, `Area`, `Attachment`, and `AppData`.
+- Use [[Core API]] for current field-level docs for `Task`, `Project`, `Section`, `Area`, `Person`, `Attachment`, and `AppData`.
 - Sync-sensitive fields such as `rev`, `revBy`, `purgedAt`, `orderNum`, `mimeType`, `size`, `cloudKey`, and `localStatus` evolve more often than this architecture overview.
 - Keeping the detailed type dump in one page avoids architecture docs drifting from the code.
 
@@ -298,8 +313,10 @@ Data synchronization relies on revision-aware last-write-wins with deterministic
 
 1. **Resolution**:
     - If both sides have revisions, higher `rev` wins before timestamp tie-breaks.
+    - `rev` is a per-entity edit counter, not a vector clock, so a side with more offline edits can beat a newer single edit from another device.
     - If revisions tie, compare `updatedAt`.
     - If timestamps still tie, compare deterministic normalized content signatures so every device picks the same winner.
+    - Legacy entities without revision metadata treat `updatedAt` values inside the 5-minute clock-skew threshold as a deterministic tie; outside that window, newer `updatedAt` wins.
 2. **Tombstones**:
     - Deleted items retain their record with `deletedAt` set.
     - Prevents resurrection on sync.
@@ -309,6 +326,7 @@ Data synchronization relies on revision-aware last-write-wins with deterministic
 3. **Conflicts**:
     - Metadata-level conflicts are resolved automatically.
     - Settings merge by sync groups (`appearance`, `language`, `gtd`, `externalCalendars`, `ai`, `savedFilters`) rather than one giant object timestamp.
+    - Saved-filter live/live conflicts use the individual filter `updatedAt` strictly, with deterministic fallback only for equal or unusable timestamps.
     - Large clock skew warnings fire when merge drift exceeds the current 5-minute threshold.
 
 ### Sync Cycle

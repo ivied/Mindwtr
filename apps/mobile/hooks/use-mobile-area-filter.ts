@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import { type FilterSettings, useTaskStore } from '@mindwtr/core';
 
-import { AREA_FILTER_ALL, AREA_FILTER_NONE, resolveAreaFilter, type AreaFilterValue } from '../lib/area-filter';
+import { AREA_FILTER_ALL, AREA_FILTER_NONE, resolveAreaFilter, type AreaFilterValue } from '@mindwtr/core';
 
 let staleAreaFilterResetInFlight: string | null = null;
 
@@ -63,11 +63,11 @@ export function useMobileAreaFilter() {
     });
   }, [filterSettings, updateSettings]);
 
-  const selectedAreaIdForNewTasks = useMemo(() => (
-    resolvedAreaFilter !== AREA_FILTER_ALL && resolvedAreaFilter !== AREA_FILTER_NONE
-      ? resolvedAreaFilter
-      : undefined
-  ), [resolvedAreaFilter]);
+  const selectedAreaIdForNewTasks = useMemo(() => {
+    if (resolvedAreaFilter === AREA_FILTER_ALL) return undefined;
+    if (resolvedAreaFilter === AREA_FILTER_NONE) return null;
+    return resolvedAreaFilter;
+  }, [resolvedAreaFilter]);
 
   return {
     areaById,

@@ -74,6 +74,12 @@ export function SectionSelector({
         const active = document.activeElement as HTMLElement | null;
         let index = list.findIndex((option) => option === active);
         if (index < 0) {
+            if (normalizedQuery && filtered.length > 0) {
+                const sectionOptions = list.filter((option) => option.dataset.selectorOptionKind === 'item');
+                const nextOption = direction > 0 ? sectionOptions[0] : sectionOptions[sectionOptions.length - 1];
+                nextOption?.focus();
+                return;
+            }
             index = direction > 0 ? -1 : 0;
         }
         const nextIndex = (index + direction + list.length) % list.length;
@@ -108,6 +114,25 @@ export function SectionSelector({
         closeDropdown();
     };
 
+    const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+        if (event.key !== 'Enter') return;
+        const title = query.trim();
+        if (!title) return;
+
+        const firstMatch = filtered[0];
+        if (firstMatch) {
+            event.preventDefault();
+            onChange(firstMatch.id);
+            closeDropdown();
+            return;
+        }
+
+        if (!hasExactMatch && onCreateSection) {
+            event.preventDefault();
+            void handleCreate();
+        }
+    };
+
     return (
         <div ref={containerRef} className={cn('relative', className)}>
             <button
@@ -136,6 +161,7 @@ export function SectionSelector({
                         autoFocus
                         value={query}
                         onChange={(event) => setQuery(event.target.value)}
+                        onKeyDown={handleSearchKeyDown}
                         placeholder={searchPlaceholder}
                         aria-label={searchPlaceholder}
                         className="w-full mb-1 rounded border border-border bg-muted/40 px-2 py-1 text-xs"
@@ -144,6 +170,7 @@ export function SectionSelector({
                         <button
                             type="button"
                             data-selector-option="true"
+                            data-selector-option-kind="none"
                             role="option"
                             aria-selected={value === ''}
                             onClick={() => {
@@ -151,7 +178,7 @@ export function SectionSelector({
                                 closeDropdown();
                             }}
                             className={cn(
-                                'w-full text-left px-2 py-1 rounded hover:bg-muted/50',
+                                'w-full text-left px-2 py-1 rounded hover:bg-muted/50 focus:bg-muted/50 focus:outline-none',
                                 value === '' && 'bg-muted/70'
                             )}
                         >
@@ -161,10 +188,11 @@ export function SectionSelector({
                             <button
                                 type="button"
                                 data-selector-option="true"
+                                data-selector-option-kind="create"
                                 role="option"
                                 aria-selected={false}
                                 onClick={handleCreate}
-                                className="w-full text-left px-2 py-1 rounded hover:bg-muted/50 text-primary flex items-center gap-2"
+                                className="w-full text-left px-2 py-1 rounded hover:bg-muted/50 focus:bg-muted/50 focus:outline-none text-primary flex items-center gap-2"
                             >
                                 <Plus className="h-3.5 w-3.5" />
                                 {createSectionLabel} &quot;{query.trim()}&quot;
@@ -176,6 +204,7 @@ export function SectionSelector({
                                     key={section.id}
                                     type="button"
                                     data-selector-option="true"
+                                    data-selector-option-kind="item"
                                     role="option"
                                     aria-selected={section.id === value}
                                     onClick={() => {
@@ -183,7 +212,7 @@ export function SectionSelector({
                                         closeDropdown();
                                     }}
                                     className={cn(
-                                        'w-full text-left px-2 py-1 rounded hover:bg-muted/50',
+                                        'w-full text-left px-2 py-1 rounded hover:bg-muted/50 focus:bg-muted/50 focus:outline-none',
                                         section.id === value && 'bg-muted/70'
                                     )}
                                 >

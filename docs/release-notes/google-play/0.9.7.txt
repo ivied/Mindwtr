@@ -1,0 +1,12 @@
+<en-US>
+Mindwtr 0.9.7 adds first-run setup and fuller Getting Started guidance. Focus opens more consistently, task editing is faster, cleared project fields stay cleared, and Android context automation triggers are quieter. Sync cleanup, date warnings, recurrence, and large libraries are steadier.
+</en-US>
+<de-DE>
+Mindwtr 0.9.7 bringt Ersteinrichtung und vollere Erste-Schritte-Hilfe. Focus oeffnet konsistenter, Aufgabenbearbeitung ist schneller, geloeschte Projektfelder bleiben leer und Android-Kontextautomation ist leiser. Sync-Bereinigung, Datumswarnungen, Wiederholungen und grosse Datenbanken sind stabiler.
+</de-DE>
+<es-ES>
+Mindwtr 0.9.7 agrega configuracion inicial y una guia de primeros pasos mas completa. Focus se abre de forma mas consistente, editar tareas es mas rapido, los proyectos borrados permanecen vacios y la automatizacion de contextos en Android es mas silenciosa. Sync, avisos de fechas, recurrencias y bibliotecas grandes son mas estables.
+</es-ES>
+<zh-CN>
+Mindwtr 0.9.7 新增首次设置和更完整的入门指南。Focus 打开更一致，任务编辑更快，已清空的项目字段会保持为空，Android 上下文自动化触发更安静。同步清理、日期警告、重复任务和大型数据库也更稳定。
+</zh-CN>

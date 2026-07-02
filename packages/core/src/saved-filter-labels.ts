@@ -18,6 +18,7 @@ export type SavedFilterCriteriaChipOptions = {
 const AREA_CHIP_PREFIX = 'area:';
 const STATUS_CHIP_PREFIX = 'status:';
 const ASSIGNED_CHIP_PREFIX = 'assigned:';
+const LOCATION_CHIP_PREFIX = 'location:';
 
 const DATE_RANGE_PRESET_LABELS: Record<string, string> = {
     today: 'Today',
@@ -116,6 +117,14 @@ export function buildAdvancedFilterCriteriaChips(
         });
     });
 
+    const locationLabel = resolveText(options, 'taskEdit.locationLabel', 'Location');
+    criteria.locations?.forEach((location) => {
+        chips.push({
+            id: `location:${location}`,
+            label: `${locationLabel}: ${location}`,
+        });
+    });
+
     const dueDateLabel = resolveText(options, 'taskEdit.dueDateLabel', 'Due Date');
     const dueDateRange = formatDateRange(dueDateLabel, criteria.dueDateRange, options);
     if (dueDateRange) chips.push({ id: 'dueDateRange', label: dueDateRange });
@@ -176,6 +185,14 @@ export function removeAdvancedFilterCriteriaChip(criteria: FilterCriteria, chipI
         const assignedTo = removeListItem(criteria.assignedTo, chipId.slice(ASSIGNED_CHIP_PREFIX.length));
         if (assignedTo) next.assignedTo = assignedTo;
         else delete next.assignedTo;
+        return next;
+    }
+
+    if (chipId.startsWith(LOCATION_CHIP_PREFIX)) {
+        const next = { ...criteria };
+        const locations = removeListItem(criteria.locations, chipId.slice(LOCATION_CHIP_PREFIX.length));
+        if (locations) next.locations = locations;
+        else delete next.locations;
         return next;
     }
 

@@ -37,32 +37,49 @@ export const styles = StyleSheet.create({
   },
   headerAccessoryRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'flex-end',
+    justifyContent: 'space-between',
     gap: 8,
     paddingHorizontal: 16,
     paddingTop: 12,
     paddingBottom: 6,
-    alignItems: 'flex-end',
+    alignItems: 'center',
+  },
+  headerAccessoryLeft: {
+    flex: 1,
+    alignItems: 'flex-start',
+  },
+  headerAccessoryControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  headerAccessoryRight: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
   },
   sortButton: {
     borderWidth: 1,
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    borderRadius: 18,
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  sortButtonText: {
-    fontSize: 12,
+  filterBadge: {
+    position: 'absolute',
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    paddingHorizontal: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    right: -3,
+    top: -4,
   },
-  selectButton: {
-    borderWidth: 1,
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  selectButtonText: {
-    fontSize: 12,
-    fontWeight: '600',
+  filterBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
   },
   bulkBar: {
     borderBottomWidth: 1,
@@ -79,6 +96,18 @@ export const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: 8,
+  },
+  bulkStatusActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  bulkExitButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   bulkLoadingRow: {
     flexDirection: 'row',
@@ -104,9 +133,13 @@ export const styles = StyleSheet.create({
   },
   bulkActions: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
   },
   bulkActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 6,
@@ -114,6 +147,145 @@ export const styles = StyleSheet.create({
   bulkActionText: {
     fontSize: 12,
     fontWeight: '600',
+  },
+  bulkOrganizeCard: {
+    width: '100%',
+    maxWidth: 440,
+    maxHeight: '86%',
+    borderRadius: 12,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  bulkOrganizeHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 12,
+  },
+  bulkOrganizeTitleRow: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  bulkOrganizeTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+  },
+  bulkOrganizeTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  bulkOrganizeSubtitle: {
+    marginTop: 2,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  bulkOrganizeCloseButton: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bulkOrganizeScroll: {
+    flexGrow: 0,
+  },
+  bulkOrganizeContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 14,
+    gap: 14,
+  },
+  bulkOrganizeSection: {
+    gap: 8,
+  },
+  bulkOrganizeLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+  },
+  bulkOrganizeChipRow: {
+    gap: 8,
+    paddingRight: 6,
+  },
+  bulkOrganizeChip: {
+    minHeight: 34,
+    borderRadius: 999,
+    borderWidth: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  bulkOrganizeChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  bulkOrganizeDateGrid: {
+    gap: 10,
+  },
+  bulkOrganizeDateField: {
+    gap: 6,
+  },
+  bulkOrganizeInput: {
+    minHeight: 42,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 14,
+  },
+  bulkOrganizePickerRow: {
+    minHeight: 42,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  bulkOrganizePickerValue: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  bulkOrganizeValidation: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  bulkOrganizeFooter: {
+    borderTopWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+    padding: 12,
+  },
+  bulkOrganizeFooterButton: {
+    minHeight: 40,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  bulkOrganizeFooterText: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  bulkOrganizeApplyButton: {
+    minHeight: 40,
+    borderRadius: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+  },
+  bulkOrganizeApplyText: {
+    fontSize: 14,
+    fontWeight: '700',
   },
   modalOverlay: {
     flex: 1,
@@ -170,6 +342,7 @@ export const styles = StyleSheet.create({
   },
   inputContainer: {
     flexDirection: 'row',
+    alignItems: 'center',
     padding: 16,
     gap: 8,
     borderBottomWidth: 1,
@@ -183,8 +356,12 @@ export const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     fontSize: 16,
+    minHeight: 44,
   },
   copilotPill: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
     marginTop: 8,
     marginHorizontal: 16,
     borderWidth: 1,
@@ -195,9 +372,11 @@ export const styles = StyleSheet.create({
   copilotText: {
     fontSize: 12,
     fontWeight: '600',
+    lineHeight: 16,
   },
   copilotHint: {
     fontSize: 11,
+    lineHeight: 15,
     marginTop: 2,
   },
   copilotLoadingRow: {
@@ -205,11 +384,30 @@ export const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
+  copilotIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  copilotContent: {
+    flex: 1,
+    minWidth: 0,
+  },
   addButton: {
     width: 44,
     height: 44,
     backgroundColor: '#007AFF',
     borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  addAndEditButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    borderWidth: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -223,16 +421,15 @@ export const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   typeaheadRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
   typeaheadText: {
+    flexShrink: 1,
     fontSize: 13,
-  },
-  addButtonText: {
-    color: '#fff',
-    fontSize: 24,
-    fontWeight: 'bold',
   },
   quickAddHelp: {
     fontSize: 12,
@@ -259,10 +456,127 @@ export const styles = StyleSheet.create({
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
   filterChipText: {
     fontSize: 12,
     fontWeight: '600',
+  },
+  taskFilterSheetRoot: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  taskFilterSheetBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  taskFilterSheet: {
+    maxHeight: '82%',
+    borderTopWidth: 1,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 18,
+  },
+  taskFilterSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 12,
+  },
+  taskFilterSheetTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  taskFilterSheetHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  taskFilterTextButton: {
+    minHeight: 36,
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  taskFilterTextButtonText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  taskFilterIconButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  taskFilterSheetScroll: {
+    maxHeight: '100%',
+  },
+  taskFilterSheetContent: {
+    gap: 12,
+    paddingBottom: 20,
+  },
+  taskFilterSectionLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  taskFilterInput: {
+    borderWidth: 1,
+    borderRadius: 10,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    fontSize: 15,
+  },
+  taskFilterChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  taskFilterMatchModeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+  },
+  taskFilterMatchModeLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  taskFilterMatchModeControl: {
+    minHeight: 36,
+    flexDirection: 'row',
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: 2,
+  },
+  taskFilterMatchModeButton: {
+    minWidth: 52,
+    minHeight: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 15,
+    paddingHorizontal: 10,
+  },
+  taskFilterMatchModeButtonText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  taskFilterChip: {
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  taskFilterChipText: {
+    fontSize: 12,
+    fontWeight: '700',
   },
   list: {
     flex: 1,
@@ -316,6 +630,13 @@ export const styles = StyleSheet.create({
   projectDragList: {
     overflow: 'visible',
   },
+  projectDragSelfScrollList: {
+    flex: 1,
+  },
+  projectDragSelfScrollContent: {
+    paddingHorizontal: 12,
+    paddingBottom: 24,
+  },
   projectDragTaskRow: {
     flexDirection: 'row',
     alignItems: 'stretch',
@@ -324,9 +645,27 @@ export const styles = StyleSheet.create({
   projectDragTaskRowActive: {
     opacity: 0.92,
   },
-  projectDragTaskContent: {
+  projectReorderTaskCard: {
     flex: 1,
     minWidth: 0,
+    minHeight: 72,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    justifyContent: 'center',
+  },
+  projectReorderTaskTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    lineHeight: 19,
+  },
+  projectReorderTaskMeta: {
+    marginTop: 3,
+    fontSize: 12,
+    fontWeight: '600',
+    lineHeight: 15,
   },
   projectDragHandle: {
     width: 44,
@@ -344,11 +683,20 @@ export const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: 8,
     paddingHorizontal: 6,
     paddingTop: 10,
     paddingBottom: 6,
   },
+  sectionHeaderTitleBlock: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
   sectionTitle: {
+    flexShrink: 1,
     fontSize: 13,
     fontWeight: '700',
     textTransform: 'uppercase',
@@ -357,6 +705,22 @@ export const styles = StyleSheet.create({
   sectionCount: {
     fontSize: 11,
     fontWeight: '600',
+  },
+  sectionReorderControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  sectionReorderButton: {
+    width: 32,
+    height: 32,
+    borderWidth: 1,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sectionReorderButtonDisabled: {
+    opacity: 0.4,
   },
   taskItem: {
     flexDirection: 'row',

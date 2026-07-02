@@ -1,0 +1,208 @@
+name: Update AUR Beta
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: 'RC tag to publish to mindwtr-bin-beta (e.g., v1.0.5-rc.1)'
+        required: true
+        type: string
+    secrets:
+      AUR_SSH_PRIVATE_KEY:
+        required: true
+      AUR_USERNAME:
+        required: false
+      AUR_EMAIL:
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+concurrency:
+  group: update-aur-beta-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  update-aur-beta:
+    runs-on: ubuntu-latest
+    name: Update mindwtr-bin-beta
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Resolve release version
+        id: version
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          scripts/ci/resolve-release-version.sh "$INPUT_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Validate beta release tag
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc\.[0-9]+$ ]]; then
+            echo "mindwtr-bin-beta must be updated from an RC tag like v1.0.5-rc.1; got: $TAG" >&2
+            exit 1
+          fi
+
+      - name: Configure SSH for AUR
+        shell: bash
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${AUR_SSH_PRIVATE_KEY:-}" ]; then
+            echo "Missing AUR_SSH_PRIVATE_KEY secret." >&2
+            exit 1
+          fi
+
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${AUR_SSH_PRIVATE_KEY}" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          cat > ~/.ssh/config <<'EOF'
+          Host aur.archlinux.org
+            HostName aur.archlinux.org
+            User aur
+            IdentityFile ~/.ssh/aur
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+          EOF
+
+          rm -f ~/.ssh/known_hosts
+          touch ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          for attempt in 1 2 3; do
+            if ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null; then
+              exit 0
+            fi
+            echo "ssh-keyscan attempt ${attempt} failed; retrying..." >&2
+            sleep 2
+          done
+          echo "Failed to collect AUR host keys after 3 attempts." >&2
+          exit 1
+
+      - name: Clone or initialize AUR beta repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf aur-mindwtr-bin-beta
+          AUR_URL="ssh://aur@aur.archlinux.org/mindwtr-bin-beta.git"
+          for attempt in 1 2 3; do
+            if git clone "$AUR_URL" aur-mindwtr-bin-beta; then
+              exit 0
+            fi
+            echo "AUR beta clone attempt ${attempt} failed; retrying..." >&2
+            rm -rf aur-mindwtr-bin-beta
+            sleep 3
+          done
+
+          echo "Could not clone mindwtr-bin-beta; initializing a new AUR package checkout."
+          git init -b master aur-mindwtr-bin-beta
+          git -C aur-mindwtr-bin-beta remote add origin "$AUR_URL"
+
+      - name: Generate beta PKGBUILD
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-rc\.([0-9]+)$ ]]; then
+            PKGVER="${BASH_REMATCH[1]}rc${BASH_REMATCH[2]}"
+          else
+            PKGVER="${VERSION//-/_}"
+          fi
+          export TAG VERSION PKGVER
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          template = Path('aur/PKGBUILD-bin-beta.template').read_text(encoding='utf-8')
+          text = (template
+              .replace('__PKGVER__', os.environ['PKGVER'])
+              .replace('__RELEASE_TAG__', os.environ['TAG'])
+              .replace('__ASSET_VERSION__', os.environ['VERSION']))
+          Path('aur-mindwtr-bin-beta/PKGBUILD').write_text(text, encoding='utf-8')
+          PY
+
+      - name: Wait for release assets
+        shell: bash
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          URL_DEB="https://github.com/${{ github.repository }}/releases/download/${TAG}/mindwtr_${VERSION}_amd64.deb"
+          echo "Waiting for release assets to become available..."
+          for attempt in $(seq 1 10); do
+            if curl -fsI "$URL_DEB" >/dev/null; then
+              echo "Release assets are available."
+              exit 0
+            fi
+            if [ "$attempt" -eq 10 ]; then
+              echo "Release asset not available after waiting: $URL_DEB" >&2
+              exit 1
+            fi
+            echo "Release asset not available yet (attempt ${attempt}/10); retrying..." >&2
+            sleep 15
+          done
+
+      - name: Update .SRCINFO and smoke package
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOST_UID="$(id -u)"
+          HOST_GID="$(id -g)"
+          docker run --rm \
+            -e HOST_UID="$HOST_UID" \
+            -e HOST_GID="$HOST_GID" \
+            -v "$PWD/aur-mindwtr-bin-beta:/aur" \
+            -w /aur \
+            archlinux:latest \
+            bash -lc '
+              set -euo pipefail
+              pacman -Sy --noconfirm --needed base-devel git pacman-contrib
+              getent group "$HOST_GID" >/dev/null 2>&1 || groupadd -g "$HOST_GID" builder
+              id -u builder >/dev/null 2>&1 || useradd -m -u "$HOST_UID" -g "$HOST_GID" builder
+              chown -R builder:builder /aur
+              su builder -c "updpkgsums"
+              su builder -c "makepkg --verifysource --noconfirm"
+              su builder -c "makepkg --cleanbuild --clean --nodeps --noconfirm"
+              su builder -c "makepkg --printsrcinfo > /aur/.SRCINFO"
+            '
+
+      - name: Commit and push beta package
+        shell: bash
+        working-directory: aur-mindwtr-bin-beta
+        env:
+          AUR_USERNAME: ${{ secrets.AUR_USERNAME }}
+          AUR_EMAIL: ${{ secrets.AUR_EMAIL }}
+        run: |
+          set -euo pipefail
+          if [ -z "$(git status --porcelain -- PKGBUILD .SRCINFO)" ]; then
+            echo "No AUR beta package changes to publish."
+            exit 0
+          fi
+
+          git config --local user.name "${AUR_USERNAME:-mindwtr-bot}"
+          git config --local user.email "${AUR_EMAIL:-actions@github.com}"
+          git add PKGBUILD .SRCINFO
+          git commit -m "Update to ${{ steps.version.outputs.tag }}"
+
+          for attempt in 1 2 3; do
+            if git push origin master; then
+              exit 0
+            fi
+            echo "AUR beta push attempt ${attempt} failed; retrying..." >&2
+            sleep 3
+          done
+          echo "Failed to push mindwtr-bin-beta to AUR after 3 attempts." >&2
+          exit 1

@@ -11,9 +11,7 @@ ENV npm_config_disturl="https://nodejs.org/dist"
 COPY --chown=1000:1000 . .
 RUN chown bun:bun /app
 USER bun
-# --production: skip devDependencies (smaller image)
-# --ignore-scripts: cloud doesn't need native modules; saves slow native compile
-RUN bun install --production --ignore-scripts
+RUN bun install --production
 
 FROM base AS cloud
 RUN apk add --no-cache curl

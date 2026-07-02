@@ -133,9 +133,12 @@ vi.mock('./settings/useAiSettings', () => ({
         speechFieldStrategy: 'append',
         speechApiKey: '',
         speechOfflineReady: false,
+        speechOfflineModelPath: '',
+        speechOfflineEstimatedSize: null,
         speechOfflineSize: null,
         speechDownloadState: 'idle',
         speechDownloadError: null,
+        speechDownloadProgress: null,
         onUpdateAISettings: vi.fn(),
         onUpdateSpeechSettings: vi.fn(),
         onProviderChange: vi.fn(),
@@ -167,6 +170,8 @@ vi.mock('./settings/useSyncSettings', () => ({
         setCloudUrl: vi.fn(),
         cloudToken: '',
         setCloudToken: vi.fn(),
+        cloudRememberToken: false,
+        setCloudRememberToken: vi.fn(),
         cloudProvider: 'mindwtr-cloud',
         dropboxAppKey: '',
         dropboxConfigured: false,
@@ -216,6 +221,8 @@ vi.mock('./settings/useObsidianSettings', () => ({
         setObsidianInboxFile: vi.fn(),
         obsidianTaskNotesIncludeArchived: false,
         setObsidianTaskNotesIncludeArchived: vi.fn(),
+        obsidianDataviewMetadataEnabled: false,
+        setObsidianDataviewMetadataEnabled: vi.fn(),
         obsidianNewTaskFormat: 'auto',
         setObsidianNewTaskFormat: vi.fn(),
         obsidianLastScannedAt: null,
@@ -251,21 +258,31 @@ vi.mock('./settings/useCalendarSettings', () => ({
             newCalendarUrl: '',
             calendarError: null,
             systemCalendarPermission: 'unsupported',
+            calendarPushEnabled: false,
+            calendarPushTargetCalendarId: null,
+            calendarPushTargets: [],
+            calendarPushLoading: false,
             setNewCalendarName: vi.fn(),
             setNewCalendarUrl: vi.fn(),
             handleAddCalendar: vi.fn(),
             handleChooseLocalCalendarFile: vi.fn(),
             handleToggleCalendar: vi.fn(),
+            handleCalendarColorChange: vi.fn(),
             handleRemoveCalendar: vi.fn(),
             handleRequestSystemCalendarPermission: vi.fn(),
+            handleToggleCalendarPush: vi.fn(),
+            handleCalendarPushTargetChange: vi.fn(),
+            handleRefreshCalendarPushTargets: vi.fn(),
         };
     },
 }));
 
 import { SettingsView } from './SettingsView';
+import { isDesktopOnboardingHandoffHintDismissed } from '../../lib/desktop-onboarding-events';
 
 describe('SettingsView', () => {
     beforeEach(async () => {
+        window.localStorage.clear();
         calendarHookTracker.mounts = 0;
         calendarHookTracker.unmounts = 0;
         calendarHookUseEffect = (await import('react')).useEffect;
@@ -333,5 +350,47 @@ describe('SettingsView', () => {
 
         expect(calendarHookTracker.mounts).toBe(1);
         expect(calendarHookTracker.unmounts).toBe(0);
+    });
+
+    it('opens an initial settings page when requested', async () => {
+        const { getByText } = render(
+            <LanguageProvider>
+                <KeybindingProvider currentView="settings" onNavigate={() => undefined}>
+                    <SettingsView initialPage="sync" />
+                </KeybindingProvider>
+            </LanguageProvider>
+        );
+
+        await waitFor(() => {
+            expect(getByText('sync-page')).toBeInTheDocument();
+        });
+    });
+
+    it('shows and dismisses a local onboarding handoff hint for settings destinations', async () => {
+        const onResumeOnboarding = vi.fn();
+        const { getByLabelText, getByText, queryByText } = render(
+            <LanguageProvider>
+                <KeybindingProvider currentView="settings" onNavigate={() => undefined}>
+                    <SettingsView
+                        initialPage="sync"
+                        onboardingHintPage="sync"
+                        onResumeOnboarding={onResumeOnboarding}
+                    />
+                </KeybindingProvider>
+            </LanguageProvider>
+        );
+
+        await waitFor(() => {
+            expect(getByText('Recommended sync path')).toBeInTheDocument();
+        });
+
+        fireEvent.click(getByText('Continue setup'));
+        expect(onResumeOnboarding).toHaveBeenCalledTimes(1);
+
+        fireEvent.click(getByLabelText('Dismiss onboarding hint'));
+
+        expect(queryByText('Recommended sync path')).not.toBeInTheDocument();
+        expect(isDesktopOnboardingHandoffHintDismissed('sync')).toBe(true);
+        expect(isDesktopOnboardingHandoffHintDismissed('data')).toBe(false);
     });
 });

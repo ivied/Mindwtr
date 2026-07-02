@@ -1,4 +1,4 @@
-import { type Area, type Project, type StoreActionResult, type Task } from '@mindwtr/core';
+import { type Area, type Project, type ProjectSequenceTaskCue, type StoreActionResult, type Task } from '@mindwtr/core';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { GripVertical, Trash2 } from 'lucide-react';
@@ -117,9 +117,13 @@ export function SortableProjectRow({
 export function SortableProjectTaskRow({
     task,
     project,
+    sequenceCue,
+    availableSequenceLabel,
 }: {
     task: Task;
     project: Project;
+    sequenceCue?: ProjectSequenceTaskCue;
+    availableSequenceLabel: string;
 }) {
     const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
         id: task.id,
@@ -130,14 +134,23 @@ export function SortableProjectTaskRow({
         opacity: isDragging ? 0.6 : 1,
     };
 
+    const isAvailableNextAction = sequenceCue === 'available';
+    const taskContainerClassName = isAvailableNextAction
+        ? 'flex-1 min-w-0 -mx-2 -my-1 rounded-lg border border-primary/20 bg-primary/[0.04] px-2 py-1'
+        : 'flex-1 min-w-0';
+
     return (
         <div ref={setNodeRef} style={style} className="flex items-start gap-2">
-            <div className="flex-1 min-w-0">
+            <div
+                className={taskContainerClassName}
+                title={isAvailableNextAction ? availableSequenceLabel : undefined}
+            >
                 <TaskItem
                     task={task}
                     project={project}
                     enableDoubleClickEdit
                     showProjectBadgeInActions={false}
+                    showProjectBadgeInMetadata={false}
                     dragHandle={(
                         <button
                             type="button"

@@ -157,6 +157,7 @@ describe('performSyncCycle', () => {
         const result = await performSyncCycle({
             readLocal: async () => mockAppData([deletedTask]),
             readRemote: async () => mockAppData([liveTask]),
+            now: () => '2026-04-01T00:00:00.000Z',
             writeLocal: async (data) => {
                 wroteLocal = data;
             },
@@ -482,7 +483,6 @@ describe('performSyncCycle', () => {
         expect(keptTask).toBeTruthy();
         expect(keptTask!.attachments).toBeUndefined();
         expect(saved!.settings.attachments?.pendingRemoteDeletes?.map((entry) => entry.cloudKey)).toEqual([
-            'attachments/stale.bin',
             'attachments/recent.bin',
         ]);
     });
@@ -612,6 +612,38 @@ describe('performSyncCycle', () => {
         expect(result.data.settings.pendingRemoteWriteAt).toBeUndefined();
     });
 
+    it('clears the pending remote write marker when the final local write aborts after remote success', async () => {
+        const localWrites: AppData[] = [];
+        let remoteWriteData: AppData | null = null;
+        let clearedPendingAt: string | null = null;
+        const abort = new Error('Local changes detected during sync');
+        abort.name = 'LocalSyncAbort';
+
+        await expect(performSyncCycle({
+            readLocal: async () => mockAppData([createMockTask('1', '2024-01-01T00:00:00.000Z')]),
+            readRemote: async () => mockAppData(),
+            writeLocal: async (data) => {
+                localWrites.push(data);
+                if (!data.settings.pendingRemoteWriteAt) {
+                    throw abort;
+                }
+            },
+            clearPendingRemoteWriteAfterLocalAbort: async (pendingAt) => {
+                clearedPendingAt = pendingAt;
+            },
+            writeRemote: async (data) => {
+                remoteWriteData = data;
+            },
+            now: () => '2026-01-01T00:00:00.000Z',
+        })).rejects.toThrow('Local changes detected during sync');
+
+        expect(localWrites).toHaveLength(2);
+        expect(localWrites[0].settings.pendingRemoteWriteAt).toBe('2026-01-01T00:00:00.000Z');
+        expect(localWrites[1].settings.pendingRemoteWriteAt).toBeUndefined();
+        expect(remoteWriteData?.settings.pendingRemoteWriteAt).toBeUndefined();
+        expect(clearedPendingAt).toBe('2026-01-01T00:00:00.000Z');
+    });
+
     it('records retry backoff when remote write fails after the local pending flag is saved', async () => {
         const localWrites: AppData[] = [];
 
@@ -724,7 +756,7 @@ describe('performSyncCycle', () => {
         let readRemoteCalled = false;
         let writeRemoteCalled = false;
 
-        await expect(performSyncCycle({
+        const result = await performSyncCycle({
             readLocal: async () => localWithPending,
             readRemote: async () => {
                 readRemoteCalled = true;
@@ -735,8 +767,14 @@ describe('performSyncCycle', () => {
                 writeRemoteCalled = true;
             },
             now: () => '2026-01-01T00:00:05.000Z',
-        })).rejects.toThrow('Retry in about 5s');
+        });
 
+        expect(result).toMatchObject({
+            status: 'skipped',
+            skipped: 'pendingRemoteWriteBackoff',
+            retryInMs: 5000,
+            message: 'Sync paused briefly after remote write failure. Retry in about 5s.',
+        });
         expect(readRemoteCalled).toBe(false);
         expect(writeRemoteCalled).toBe(false);
     });

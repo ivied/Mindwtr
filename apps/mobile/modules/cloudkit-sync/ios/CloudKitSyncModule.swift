@@ -105,6 +105,23 @@ public class CloudKitSyncModule: Module {
             return true
         }
 
+        // MARK: - Attachment Assets
+
+        AsyncFunction("saveAttachmentAsset") { (recordName: String, filePath: String, metadata: [String: Any]) -> [String: Any] in
+            return try await self.manager.saveAttachmentAsset(
+                recordName: recordName,
+                filePath: filePath,
+                metadata: metadata
+            )
+        }
+
+        AsyncFunction("fetchAttachmentAsset") { (recordName: String, targetPath: String) -> [String: Any] in
+            return try await self.manager.fetchAttachmentAsset(
+                recordName: recordName,
+                targetPath: targetPath
+            )
+        }
+
         AsyncFunction("consumePendingRemoteChange") { () -> Bool in
             let defaults = UserDefaults.standard
             let hadPending = defaults.bool(forKey: Self.pendingRemoteChangeKey)

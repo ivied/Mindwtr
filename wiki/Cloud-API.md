@@ -113,8 +113,15 @@ Attachment paths are resolved inside the authenticated token namespace. Uploads 
 
 The orphan cleanup endpoint scans the namespace for files no longer referenced by `data.json`. It skips files modified in the last five minutes so an upload racing with a later snapshot write is not removed.
 
+## MCP Adapter
+
+The published `mindwtr-mcp` helper can use a self-hosted Cloud endpoint as a read-only backend. Configure it with `--cloud-url` and `--cloud-token` or the `MINDWTR_MCP_CLOUD_URL` / `MINDWTR_MCP_CLOUD_TOKEN` environment variables.
+
+Cloud-backed MCP mode reads `/v1/data` and exposes read tools for tasks, projects, sections, areas, and people. It does not enable MCP writes and does not turn Mindwtr Cloud itself into a hosted MCP service.
+
 ## Related Pages
 
+- [[MCP Server]]
 - [[Cloud Deployment]]
 - [[Cloud Deployment]]
 - [[Sync Algorithm]]

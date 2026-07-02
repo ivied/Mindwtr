@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+    Alert,
     View,
     Text,
     TextInput,
@@ -12,9 +13,11 @@ import {
     Dimensions,
     UIManager,
     findNodeHandle,
+    type ScrollViewProps,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
-import { getRecurrenceUntilValue, type Task, type TaskEditorFieldId, type TaskEditorSectionId, type TimeEstimate } from '@mindwtr/core';
+import { getRecurrenceUntilValue, tFallback, type Task, type TaskEditorFieldId, type TaskEditorSectionId, type TimeEstimate } from '@mindwtr/core';
 import type { ThemeColors } from '@/hooks/use-theme-colors';
 import { CollapsibleSection } from './CollapsibleSection';
 
@@ -53,12 +56,16 @@ type TaskEditFormTabProps = {
     textDirectionStyle: Record<string, any>;
     titleDraft: string;
     onTitleDraftChange: (text: string) => void;
+    onInputFocusTracked?: (targetInput?: number | string) => void;
+    onTitleInputFocusChange?: (focused: boolean) => void;
     registerScrollToEnd?: (handler: ((targetInput?: number | string) => void) | null) => void;
     formResetKey?: string;
     suspendKeyboardHandling?: boolean;
 };
 
-export function TaskEditFormTab({
+const TASK_FORM_BASE_BOTTOM_PADDING = 32;
+
+function TaskEditFormTabComponent({
     t,
     tc,
     styles,
@@ -91,6 +98,8 @@ export function TaskEditFormTab({
     textDirectionStyle,
     titleDraft,
     onTitleDraftChange,
+    onInputFocusTracked,
+    onTitleInputFocusChange,
     registerScrollToEnd,
     formResetKey,
     suspendKeyboardHandling = false,
@@ -99,42 +108,79 @@ export function TaskEditFormTab({
     const formScrollRef = React.useRef<ScrollView | null>(null);
     const formScrollOffsetRef = React.useRef(0);
     const keyboardTopRef = React.useRef(Dimensions.get('window').height);
+    const keyboardVisibleRef = React.useRef(false);
+    const [keyboardBottomInset, setKeyboardBottomInset] = React.useState(0);
+    const androidScrollViewFocusProps: Partial<ScrollViewProps> & { scrollsChildToFocus?: boolean } = (
+        Platform.OS === 'android' ? { scrollsChildToFocus: false } : {}
+    );
     const aiWorkingLabel = t('ai.working');
     const aiWorkingText = aiWorkingLabel === 'ai.working' ? 'Working...' : aiWorkingLabel;
+    const taskEditorLayoutHelpLabel = tFallback(t, 'taskEdit.editorLayoutHelpLabel', 'Editor layout help');
+    const taskEditorLayoutHelpText = tFallback(
+        t,
+        'taskEdit.editorLayoutHelpText',
+        'You can customize which fields appear here in Settings -> GTD -> Task Editor Layout.'
+    );
+    const showTaskEditorLayoutHelp = React.useCallback(() => {
+        Alert.alert(taskEditorLayoutHelpLabel, taskEditorLayoutHelpText);
+    }, [taskEditorLayoutHelpLabel, taskEditorLayoutHelpText]);
 
     React.useEffect(() => {
-        if (suspendKeyboardHandling) return;
+        formScrollOffsetRef.current = 0;
+        const resetScroll = () => {
+            formScrollRef.current?.scrollTo({ y: 0, animated: false });
+        };
+        if (typeof requestAnimationFrame === 'function') {
+            requestAnimationFrame(resetScroll);
+        } else {
+            setTimeout(resetScroll, 0);
+        }
+    }, [formResetKey]);
+
+    React.useEffect(() => {
+        if (suspendKeyboardHandling) {
+            keyboardTopRef.current = Dimensions.get('window').height;
+            keyboardVisibleRef.current = false;
+            setKeyboardBottomInset(0);
+            return;
+        }
         if (typeof Keyboard?.addListener !== 'function') return;
         const updateKeyboardTop = (event: { endCoordinates?: { screenY?: number; height?: number } }) => {
             const windowHeight = Dimensions.get('window').height;
             const endCoords = event.endCoordinates;
+            let nextKeyboardTop = windowHeight;
             if (typeof endCoords?.screenY === 'number') {
-                keyboardTopRef.current = endCoords.screenY;
-                return;
+                nextKeyboardTop = endCoords.screenY;
+            } else if (typeof endCoords?.height === 'number') {
+                nextKeyboardTop = Math.max(0, windowHeight - endCoords.height);
             }
-            if (typeof endCoords?.height === 'number') {
-                keyboardTopRef.current = Math.max(0, windowHeight - endCoords.height);
-                return;
-            }
-            keyboardTopRef.current = windowHeight;
+            keyboardTopRef.current = nextKeyboardTop;
+            keyboardVisibleRef.current = nextKeyboardTop < windowHeight;
+            setKeyboardBottomInset(Math.max(0, windowHeight - nextKeyboardTop));
         };
         const resetKeyboardTop = () => {
             keyboardTopRef.current = Dimensions.get('window').height;
+            keyboardVisibleRef.current = false;
+            setKeyboardBottomInset(0);
         };
-        const showListener = Keyboard.addListener('keyboardDidShow', updateKeyboardTop);
-        const changeListener = Keyboard.addListener('keyboardDidChangeFrame', updateKeyboardTop);
-        const hideListener = Keyboard.addListener('keyboardDidHide', resetKeyboardTop);
+        const showListener = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+            updateKeyboardTop
+        );
+        const changeListener = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillChangeFrame' : 'keyboardDidChangeFrame',
+            updateKeyboardTop
+        );
+        const hideListener = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+            resetKeyboardTop
+        );
         return () => {
             showListener.remove();
             changeListener.remove();
             hideListener.remove();
         };
     }, [suspendKeyboardHandling]);
-
-    const scrollDownForKeyboard = React.useCallback((amount = 180) => {
-        const nextOffset = Math.max(0, formScrollOffsetRef.current + amount);
-        formScrollRef.current?.scrollTo({ y: nextOffset, animated: true });
-    }, []);
 
     const scrollHandleIntoView = React.useCallback((targetHandle: number) => {
         const scrollView = formScrollRef.current;
@@ -147,22 +193,23 @@ export function TaskEditFormTab({
             if (!Number.isFinite(targetY) || !Number.isFinite(targetH)) return;
             UIManager.measureInWindow(scrollHandle, (_sx, scrollY, _sw, scrollH) => {
                 if (!Number.isFinite(scrollY) || !Number.isFinite(scrollH)) return;
-                const topPadding = 12;
-                const bottomPadding = Platform.OS === 'ios' ? 44 : 12;
-                const visibleTop = scrollY + topPadding;
+                const visibleTop = scrollY;
                 const keyboardTop = keyboardTopRef.current;
-                const visibleBottom = Math.min(scrollY + scrollH - bottomPadding, keyboardTop - bottomPadding);
+                const visibleBottom = Math.min(scrollY + scrollH, keyboardTop);
+                const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+                const bottomClearance = visibleHeight * 0.18;
+                const effectiveVisibleBottom = visibleBottom - bottomClearance;
                 const targetTop = targetY;
                 const targetBottom = targetY + targetH;
 
-                if (targetBottom > visibleBottom) {
-                    const delta = targetBottom - visibleBottom;
+                if (targetBottom > effectiveVisibleBottom) {
+                    const delta = targetBottom - effectiveVisibleBottom;
                     const nextOffset = Math.max(0, formScrollOffsetRef.current + delta);
                     formScrollRef.current?.scrollTo({ y: nextOffset, animated: true });
                     return;
                 }
 
-                if (targetTop < visibleTop) {
+                if (targetTop < visibleTop && Platform.OS !== 'android') {
                     const delta = visibleTop - targetTop;
                     const nextOffset = Math.max(0, formScrollOffsetRef.current - delta);
                     formScrollRef.current?.scrollTo({ y: nextOffset, animated: true });
@@ -170,6 +217,24 @@ export function TaskEditFormTab({
             });
         });
     }, []);
+
+    const scheduleScrollHandleIntoView = React.useCallback((targetHandle: number) => {
+        if (Platform.OS === 'android' && !keyboardVisibleRef.current) return;
+        const scrollIntoView = () => scrollHandleIntoView(targetHandle);
+        if (typeof requestAnimationFrame === 'function') {
+            requestAnimationFrame(() => {
+                scrollIntoView();
+                if (Platform.OS === 'android') {
+                    requestAnimationFrame(scrollIntoView);
+                }
+            });
+        } else {
+            setTimeout(scrollIntoView, 0);
+        }
+        if (Platform.OS === 'android') return;
+        setTimeout(scrollIntoView, 180);
+        setTimeout(scrollIntoView, 360);
+    }, [scrollHandleIntoView]);
 
     const ensureInputVisible = React.useCallback((targetInput?: number | string) => {
         const normalizedHandle = typeof targetInput === 'number'
@@ -179,13 +244,10 @@ export function TaskEditFormTab({
                 : NaN;
         const hasTargetHandle = Number.isFinite(normalizedHandle) && normalizedHandle > 0;
         if (!hasTargetHandle) {
-            scrollDownForKeyboard(Platform.OS === 'ios' ? 140 : 96);
             return;
         }
-        requestAnimationFrame(() => {
-            scrollHandleIntoView(normalizedHandle);
-        });
-    }, [scrollDownForKeyboard, scrollHandleIntoView]);
+        scheduleScrollHandleIntoView(normalizedHandle);
+    }, [scheduleScrollHandleIntoView]);
 
     React.useEffect(() => {
         if (!registerScrollToEnd) return;
@@ -221,6 +283,8 @@ export function TaskEditFormTab({
                     return Boolean(editedTask.timeEstimate);
                 case 'description':
                     return Boolean(String(editedTask.description ?? '').trim());
+                case 'location':
+                    return Boolean(String(editedTask.location ?? '').trim());
                 case 'checklist':
                     return (editedTask.checklist?.length ?? 0) > 0;
                 case 'attachments':
@@ -230,38 +294,69 @@ export function TaskEditFormTab({
             }
         }).length;
     };
+    const schedulingFilledCount = countFilledFields(schedulingFields);
+    const organizationFilledCount = countFilledFields(organizationFields);
+    const detailsFilledCount = countFilledFields(detailsFields);
 
     return (
         <View style={[styles.tabPage, { width: containerWidth || '100%' }]}>
             <KeyboardAvoidingView
-                behavior={suspendKeyboardHandling ? undefined : (Platform.OS === 'ios' ? 'padding' : 'height')}
+                behavior={suspendKeyboardHandling ? undefined : (Platform.OS === 'android' ? 'height' : undefined)}
                 style={{ flex: 1 }}
                 keyboardVerticalOffset={0}
             >
                 <ScrollView
                     ref={formScrollRef}
                     style={styles.content}
-                    contentContainerStyle={styles.contentContainer}
+                    contentContainerStyle={[
+                        styles.contentContainer,
+                        keyboardBottomInset > 0
+                            ? { paddingBottom: TASK_FORM_BASE_BOTTOM_PADDING + keyboardBottomInset }
+                            : null,
+                    ]}
+                    keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
                     keyboardShouldPersistTaps="handled"
                     scrollEnabled={!suspendKeyboardHandling}
+                    {...androidScrollViewFocusProps}
                     onScroll={(event) => {
                         formScrollOffsetRef.current = event.nativeEvent.contentOffset.y;
                     }}
                     scrollEventThrottle={16}
                     nestedScrollEnabled
                 >
-                    <View style={styles.formGroup}>
-                        <Text style={[styles.label, { color: tc.secondaryText }]}>{t('taskEdit.titleLabel')}</Text>
-                        <TextInput
-                            style={[styles.input, inputStyle, textDirectionStyle]}
+                        <View style={styles.formGroup}>
+                            <View style={styles.labelRow}>
+                                <Text style={[styles.label, { color: tc.secondaryText, marginBottom: 0 }]}>
+                                    {t('taskEdit.titleLabel')}
+                                </Text>
+                                <TouchableOpacity
+                                    accessibilityLabel={taskEditorLayoutHelpLabel}
+                                    accessibilityRole="button"
+                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                    onPress={showTaskEditorLayoutHelp}
+                                    style={[
+                                        styles.fieldHelpButton,
+                                        { backgroundColor: tc.filterBg, borderColor: tc.border },
+                                    ]}
+                                >
+                                    <Ionicons name="help-circle-outline" size={18} color={tc.secondaryText} />
+                                </TouchableOpacity>
+                            </View>
+                            <TextInput
+                            style={[styles.input, inputStyle, textDirectionStyle, styles.titleInput]}
                             value={titleDraft}
-                            onChangeText={(text) => onTitleDraftChange(text)}
+                            onChangeText={(text) => onTitleDraftChange(text.replace(/[\r\n]+/g, ' '))}
                             placeholderTextColor={tc.secondaryText}
-                            onFocus={(event) => {
+                            multiline
+                            onFocus={() => {
+                                onInputFocusTracked?.(undefined);
                                 setTitleFocused(true);
-                                ensureInputVisible(event.nativeEvent.target);
+                                onTitleInputFocusChange?.(true);
                             }}
-                            onBlur={() => setTitleFocused(false)}
+                            onBlur={() => {
+                                setTitleFocused(false);
+                                onTitleInputFocusChange?.(false);
+                            }}
                             selection={titleFocused ? undefined : { start: 0, end: 0 }}
                         />
                     </View>
@@ -321,67 +416,44 @@ export function TaskEditFormTab({
                         <React.Fragment key={fieldId}>{renderField(fieldId)}</React.Fragment>
                     ))}
 
-                    <CollapsibleSection
-                        resetKey={`${formResetKey ?? 'task'}:scheduling`}
-                        title={t('taskEdit.scheduling')}
-                        badge={countFilledFields(schedulingFields)}
-                        defaultExpanded={sectionOpenDefaults.scheduling || countFilledFields(schedulingFields) > 0}
-                    >
-                        {schedulingFields.length === 0 ? (
-                            <View style={[styles.emptySectionHint, { borderColor: tc.border, backgroundColor: tc.filterBg }]}>
-                                <Text style={[styles.emptySectionHintText, { color: tc.secondaryText }]}>
-                                    {t('taskEdit.schedulingEmpty')}
-                                </Text>
-                            </View>
-                        ) : (
-                            schedulingFields.map((fieldId) => (
+                    {schedulingFields.length > 0 && (
+                        <CollapsibleSection
+                            resetKey={`${formResetKey ?? 'task'}:scheduling`}
+                            title={t('taskEdit.scheduling')}
+                            badge={schedulingFilledCount}
+                            defaultExpanded={sectionOpenDefaults.scheduling || schedulingFilledCount > 0}
+                        >
+                            {schedulingFields.map((fieldId) => (
                                 <React.Fragment key={fieldId}>{renderField(fieldId)}</React.Fragment>
-                            ))
-                        )}
-                    </CollapsibleSection>
+                            ))}
+                        </CollapsibleSection>
+                    )}
 
-                    <CollapsibleSection
-                        resetKey={`${formResetKey ?? 'task'}:organization`}
-                        title={t('taskEdit.organization')}
-                        badge={countFilledFields(organizationFields)}
-                        defaultExpanded={sectionOpenDefaults.organization || countFilledFields(organizationFields) > 0}
-                    >
-                        {organizationFields.length === 0 ? (
-                            <View style={[styles.emptySectionHint, { borderColor: tc.border, backgroundColor: tc.filterBg }]}>
-                                <Text style={[styles.emptySectionHintText, { color: tc.secondaryText }]}>
-                                    {t('taskEdit.organizationEmpty')}
-                                </Text>
-                            </View>
-                        ) : (
-                            organizationFields.map((fieldId) => (
+                    {organizationFields.length > 0 && (
+                        <CollapsibleSection
+                            resetKey={`${formResetKey ?? 'task'}:organization`}
+                            title={t('taskEdit.organization')}
+                            badge={organizationFilledCount}
+                            defaultExpanded={sectionOpenDefaults.organization || organizationFilledCount > 0}
+                        >
+                            {organizationFields.map((fieldId) => (
                                 <React.Fragment key={fieldId}>{renderField(fieldId)}</React.Fragment>
-                            ))
-                        )}
-                    </CollapsibleSection>
+                            ))}
+                        </CollapsibleSection>
+                    )}
 
-                    <CollapsibleSection
-                        resetKey={`${formResetKey ?? 'task'}:details`}
-                        title={t('taskEdit.details')}
-                        badge={countFilledFields(detailsFields)}
-                        defaultExpanded={
-                            sectionOpenDefaults.details
-                            || countFilledFields(detailsFields) > 0
-                            || detailsFields.includes('description')
-                            || detailsFields.includes('checklist')
-                        }
-                    >
-                        {detailsFields.length === 0 ? (
-                            <View style={[styles.emptySectionHint, { borderColor: tc.border, backgroundColor: tc.filterBg }]}>
-                                <Text style={[styles.emptySectionHintText, { color: tc.secondaryText }]}>
-                                    {t('taskEdit.detailsEmpty')}
-                                </Text>
-                            </View>
-                        ) : (
-                            detailsFields.map((fieldId) => (
+                    {detailsFields.length > 0 && (
+                        <CollapsibleSection
+                            resetKey={`${formResetKey ?? 'task'}:details`}
+                            title={t('taskEdit.details')}
+                            badge={detailsFilledCount}
+                            defaultExpanded={sectionOpenDefaults.details || detailsFilledCount > 0}
+                        >
+                            {detailsFields.map((fieldId) => (
                                 <React.Fragment key={fieldId}>{renderField(fieldId)}</React.Fragment>
-                            ))
-                        )}
-                    </CollapsibleSection>
+                            ))}
+                        </CollapsibleSection>
+                    )}
 
                     <View style={{ height: 100 }} />
 
@@ -413,3 +485,5 @@ export function TaskEditFormTab({
         </View>
     );
 }
+
+export const TaskEditFormTab = React.memo(TaskEditFormTabComponent);

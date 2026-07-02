@@ -2,11 +2,19 @@ import React from 'react';
 import { StyleSheet, Text, type TextProps } from 'react-native';
 
 import { useThemeColor } from '@/hooks/use-theme-color';
+import { useThemeTokens } from '@/hooks/use-theme-tokens';
+import type { M3TypeRole } from '@/constants/material3/m3-typography';
 
 export type ThemedTextProps = TextProps & {
   lightColor?: string;
   darkColor?: string;
   type?: 'default' | 'title' | 'defaultSemiBold' | 'subtitle' | 'link';
+  /**
+   * Material 3 type-scale role. Only applied when the active theme is Material 3
+   * (`isMaterial`); under every other theme it is ignored and the legacy `type`
+   * styling is used unchanged.
+   */
+  m3?: M3TypeRole;
 };
 
 export function ThemedText({
@@ -14,9 +22,11 @@ export function ThemedText({
   lightColor,
   darkColor,
   type = 'default',
+  m3,
   ...rest
 }: ThemedTextProps) {
   const color = useThemeColor({ light: lightColor, dark: darkColor }, 'text');
+  const { isMaterial, type: typeScale } = useThemeTokens();
 
   return (
     <Text
@@ -27,6 +37,7 @@ export function ThemedText({
         type === 'defaultSemiBold' ? styles.defaultSemiBold : undefined,
         type === 'subtitle' ? styles.subtitle : undefined,
         type === 'link' ? styles.link : undefined,
+        isMaterial && m3 ? typeScale[m3] : undefined,
         style,
       ]}
       {...rest}

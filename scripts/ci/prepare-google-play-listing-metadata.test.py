@@ -40,14 +40,43 @@ class PrepareGooglePlayListingMetadataTest(unittest.TestCase):
                 short_description="Un sistema GTD completo.",
                 full_description="Mindwtr es un sistema GTD privado.",
             )
+            write_listing(
+                root,
+                "fr-FR",
+                short_description="Gestionnaire GTD privé.",
+                full_description="Mindwtr est un gestionnaire GTD privé.",
+            )
+            write_listing(
+                root,
+                "de-DE",
+                short_description="Privater GTD-Manager.",
+                full_description="Mindwtr ist ein privater GTD-Manager.",
+            )
+            write_listing(
+                root,
+                "zh-CN",
+                short_description="本地优先 GTD 任务管理器。",
+                full_description="Mindwtr 是本地优先的 GTD 任务管理器。",
+            )
             (root / "chocolatey").mkdir()
 
             listings = MODULE.collect_listings(root)
 
-        self.assertEqual([listing["language"] for listing in listings], ["en-US", "es-ES"])
+        self.assertEqual([listing["language"] for listing in listings], ["de-DE", "en-US", "es-ES", "fr-FR", "zh-CN"])
         self.assertEqual(listings[0]["title"], "Mindwtr")
         self.assertIn("shortDescription", listings[0])
         self.assertIn("fullDescription", listings[0])
+
+    def test_requires_french_listing_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            write_listing(root, "en-US")
+            write_listing(root, "de-DE")
+            write_listing(root, "es-ES")
+            write_listing(root, "zh-CN")
+
+            with self.assertRaisesRegex(ValueError, "fr-FR"):
+                MODULE.collect_listings(root)
 
     def test_en_us_metadata_must_include_mind_water(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -58,6 +87,10 @@ class PrepareGooglePlayListingMetadataTest(unittest.TestCase):
                 short_description="Local-first GTD capture.",
                 full_description="A private GTD task manager.",
             )
+            write_listing(root, "de-DE")
+            write_listing(root, "es-ES")
+            write_listing(root, "fr-FR")
+            write_listing(root, "zh-CN")
 
             with self.assertRaisesRegex(ValueError, "mind water"):
                 MODULE.collect_listings(root)
@@ -66,6 +99,10 @@ class PrepareGooglePlayListingMetadataTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             write_listing(root, "en-US", short_description="Mindwtr mind water " + ("x" * 80))
+            write_listing(root, "de-DE")
+            write_listing(root, "es-ES")
+            write_listing(root, "fr-FR")
+            write_listing(root, "zh-CN")
 
             with self.assertRaisesRegex(ValueError, "shortDescription"):
                 MODULE.collect_listings(root)

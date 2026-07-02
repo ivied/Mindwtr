@@ -1,4 +1,5 @@
 import type { AppData } from './types';
+import { nextRevision, SYNC_BACKUP_RESTORE_REV_BY } from './sync-revision';
 import {
     isObjectRecord,
     normalizeAppData,
@@ -38,6 +39,17 @@ type BackupEnvelope = {
         createdAt?: unknown;
     };
     data?: unknown;
+};
+
+type BackupRestoreSyncPreparationOptions = {
+    restoredAt?: string | number | Date | null;
+};
+
+type RestorableEntity = {
+    deletedAt?: string;
+    rev?: number;
+    revBy?: string;
+    updatedAt: string;
 };
 
 const BACKUP_TIMESTAMP_PATTERN = new RegExp(
@@ -105,6 +117,54 @@ export const createBackupFileName = (date: Date = new Date()): string => {
 };
 
 export const serializeBackupData = (data: AppData): string => JSON.stringify(data, null, 2);
+
+const prepareRestoredEntityForSync = <T extends RestorableEntity>(
+    item: T,
+    restoredAt: string
+): T => {
+    if (item.deletedAt) return item;
+    return {
+        ...item,
+        updatedAt: restoredAt,
+        rev: nextRevision(item.rev),
+        revBy: SYNC_BACKUP_RESTORE_REV_BY,
+    };
+};
+
+const stripDeviceLocalRestoreSettings = (settings: AppData['settings']): AppData['settings'] => {
+    if (settings.security?.mobileAppLockEnabled === undefined) return settings;
+    const nextSettings: AppData['settings'] = {
+        ...settings,
+        security: { ...settings.security },
+    };
+    delete nextSettings.security?.mobileAppLockEnabled;
+    if (nextSettings.security && Object.keys(nextSettings.security).length === 0) {
+        delete nextSettings.security;
+    }
+    return nextSettings;
+};
+
+export const prepareRestoredBackupDataForSync = (
+    data: AppData,
+    options: BackupRestoreSyncPreparationOptions = {}
+): AppData => {
+    const restoredAt = toIsoString(options.restoredAt) ?? new Date().toISOString();
+    const restoredSettings = stripDeviceLocalRestoreSettings(data.settings);
+    return {
+        ...data,
+        tasks: data.tasks.map((task) => prepareRestoredEntityForSync(task, restoredAt)),
+        projects: data.projects.map((project) => prepareRestoredEntityForSync(project, restoredAt)),
+        sections: data.sections.map((section) => prepareRestoredEntityForSync(section, restoredAt)),
+        areas: data.areas.map((area) => prepareRestoredEntityForSync(area, restoredAt)),
+        people: (data.people ?? []).map((person) => prepareRestoredEntityForSync(person, restoredAt)),
+        settings: {
+            ...restoredSettings,
+            pendingRemoteWriteAt: restoredAt,
+            pendingRemoteWriteRetryAt: undefined,
+            pendingRemoteWriteAttempts: undefined,
+        },
+    };
+};
 
 export const validateBackupJson = (
     rawJson: string,

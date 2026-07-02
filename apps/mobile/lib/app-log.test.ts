@@ -8,6 +8,40 @@ const storeState = {
   },
 };
 
+const legacyFileSystemMocks = vi.hoisted(() => {
+  const files = new Map<string, string>();
+  const directories = new Set<string>();
+  const documentDirectory = 'file://document/';
+  const logDir = 'file://document/logs';
+
+  return {
+    documentDirectory: documentDirectory as string | null,
+    files,
+    deleteAsync: vi.fn(async (uri: string) => {
+      files.delete(uri);
+      directories.delete(uri);
+    }),
+    getInfoAsync: vi.fn(async (uri: string) => ({
+      exists: files.has(uri) || directories.has(uri),
+      isDirectory: directories.has(uri),
+      size: files.get(uri)?.length ?? 0,
+    })),
+    makeDirectoryAsync: vi.fn(async (uri: string) => {
+      directories.add(uri);
+    }),
+    readAsStringAsync: vi.fn(async (uri: string) => files.get(uri) ?? ''),
+    reset: () => {
+      files.clear();
+      directories.clear();
+      directories.add(logDir);
+      legacyFileSystemMocks.documentDirectory = documentDirectory;
+    },
+    writeAsStringAsync: vi.fn(async (uri: string, contents: string) => {
+      files.set(uri, contents);
+    }),
+  };
+});
+
 vi.mock('@mindwtr/core', () => ({
   getBreadcrumbs: () => [],
   sanitizeForLog: (value: string) => value,
@@ -22,6 +56,32 @@ vi.mock('@mindwtr/core', () => ({
   },
 }));
 
+vi.mock('expo-file-system', () => ({
+  Directory: class Directory {
+    exists = false;
+    uri: string;
+    constructor(uri: string) {
+      this.uri = uri;
+    }
+    create() {}
+    delete() {}
+  },
+  File: class File {
+    exists = false;
+    uri: string;
+    constructor(uri: string) {
+      this.uri = uri;
+    }
+    create() {}
+    delete() {}
+    text = async () => '';
+    write() {}
+  },
+  Paths: {},
+}));
+
+vi.mock('expo-file-system/legacy', () => legacyFileSystemMocks);
+
 import { clearLog, ensureLogFilePath, getLogPath, logInfo, setLogBackend, type LogBackend } from './app-log';
 
 describe('app-log', () => {
@@ -33,7 +93,9 @@ describe('app-log', () => {
   };
 
   beforeEach(() => {
+    vi.stubGlobal('__DEV__', true);
     vi.clearAllMocks();
+    legacyFileSystemMocks.reset();
     storeState.settings = {
       diagnostics: {
         loggingEnabled: true,
@@ -44,6 +106,7 @@ describe('app-log', () => {
 
   afterEach(() => {
     setLogBackend(null);
+    vi.unstubAllGlobals();
   });
 
   it('routes log writes through an injected backend', async () => {
@@ -80,5 +143,38 @@ describe('app-log', () => {
     expect(backend.getLogPath).toHaveBeenCalledTimes(1);
     expect(backend.ensureLogFilePath).toHaveBeenCalledTimes(1);
     expect(backend.clearLog).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the legacy Expo file-system fallback without warning when the primary log file is unavailable', async () => {
+    setLogBackend(null);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      await expect(logInfo('Hello', { scope: 'sync' })).resolves.toBe('file://document/logs/mindwtr.log');
+      expect(legacyFileSystemMocks.writeAsStringAsync).toHaveBeenCalledWith(
+        'file://document/logs/mindwtr.log',
+        expect.stringContaining('Hello'),
+        { encoding: 'utf8' },
+      );
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('falls back to the dev console when Expo Go cannot provide a writable log file', async () => {
+    setLogBackend(null);
+    legacyFileSystemMocks.documentDirectory = null;
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      await expect(logInfo('Hello console', { scope: 'sync' })).resolves.toBeNull();
+      expect(infoSpy).toHaveBeenCalledWith(expect.stringContaining('[Mindwtr sync] Hello console'));
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('append log line failed'));
+    } finally {
+      infoSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
   });
 });

@@ -111,6 +111,7 @@ type SyncBackupSectionProps = {
   handleBackup: () => void;
   handleImportDgt: () => void;
   handleImportOmniFocus: () => void;
+  handleImportTickTick: () => void;
   handleImportTodoist: () => void;
   handleRestoreBackup: () => void;
   isBackupBusy: boolean;
@@ -125,6 +126,7 @@ export function SyncBackupSection({
   handleBackup,
   handleImportDgt,
   handleImportOmniFocus,
+  handleImportTickTick,
   handleImportTodoist,
   handleRestoreBackup,
   isBackupBusy,
@@ -166,6 +168,19 @@ export function SyncBackupSection({
             <Text style={[styles.settingLabel, { color: tc.tint }]}>{tr('settings.syncMobile.importFromTodoist')}</Text>
             <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
               {tr('settings.syncMobile.importTodoistCsvOrZipExportsIntoMindwtrProjects')}
+            </Text>
+          </View>
+          {backupAction === 'import' && <ActivityIndicator size="small" color={tc.tint} />}
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}
+          onPress={handleImportTickTick}
+          disabled={isSyncing || isBackupBusy}
+        >
+          <View style={styles.settingInfo}>
+            <Text style={[styles.settingLabel, { color: tc.tint }]}>{tr('settings.syncMobile.importFromTicktick')}</Text>
+            <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+              {tr('settings.syncMobile.importTicktickCsvOrZipBackupsIntoMindwtrAreas')}
             </Text>
           </View>
           {backupAction === 'import' && <ActivityIndicator size="small" color={tc.tint} />}
@@ -395,11 +410,11 @@ export function SyncPreferencesCard({
 
 type SyncDiagnosticsCardProps = {
   analyticsHeartbeatAvailable: boolean;
-  analyticsHeartbeatEnabled: boolean;
+  analyticsHeartbeatOptedOut: boolean;
   handleClearLog: () => void;
   handleShareLog: () => void;
   loggingEnabled: boolean;
-  toggleAnalyticsHeartbeat: (value: boolean) => void;
+  toggleAnalyticsHeartbeatOptOut: (value: boolean) => void;
   t: Translate;
   tc: ThemeColors;
   toggleDebugLogging: (value: boolean) => void;
@@ -407,11 +422,11 @@ type SyncDiagnosticsCardProps = {
 
 export function SyncDiagnosticsCard({
   analyticsHeartbeatAvailable,
-  analyticsHeartbeatEnabled,
+  analyticsHeartbeatOptedOut,
   handleClearLog,
   handleShareLog,
   loggingEnabled,
-  toggleAnalyticsHeartbeat,
+  toggleAnalyticsHeartbeatOptOut,
   t,
   tc,
   toggleDebugLogging,
@@ -427,9 +442,10 @@ export function SyncDiagnosticsCard({
               <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>{t('settings.analyticsHeartbeatDesc')}</Text>
             </View>
             <Switch
-              value={analyticsHeartbeatEnabled}
-              onValueChange={toggleAnalyticsHeartbeat}
-              trackColor={{ false: '#767577', true: '#3B82F6' }}
+              value={analyticsHeartbeatOptedOut}
+              onValueChange={toggleAnalyticsHeartbeatOptOut}
+              trackColor={{ false: '#767577', true: '#71717A' }}
+              thumbColor="#F4F4F5"
             />
           </View>
         )}

@@ -1,4 +1,11 @@
-import type { Area, Project, Task } from '@mindwtr/core';
+import {
+  isTaskInActiveProject,
+  taskMatchesAreaFilter,
+  type Area,
+  type AreaFilterValue,
+  type Project,
+  type Task,
+} from '@mindwtr/core';
 
 export type ReviewProjectTaskGroup = {
   hasNextAction: boolean;
@@ -33,8 +40,30 @@ type BuildReviewTaskGroupsParams = {
   unassignedAreaColor: string;
 };
 
+type GetReviewOverviewTasksParams = {
+  areaById: Map<string, Area>;
+  projectById: Map<string, Project>;
+  resolvedAreaFilter: AreaFilterValue;
+  tasks: Task[];
+};
+
 const UNASSIGNED_AREA_ORDER = -1;
 const SINGLE_ACTION_ORDER = Number.MAX_SAFE_INTEGER;
+
+export function getReviewOverviewTasks({
+  areaById,
+  projectById,
+  resolvedAreaFilter,
+  tasks,
+}: GetReviewOverviewTasksParams): Task[] {
+  return tasks.filter((task) => (
+    !task.deletedAt
+    && task.status !== 'reference'
+    && task.status !== 'done'
+    && isTaskInActiveProject(task, projectById)
+    && taskMatchesAreaFilter(task, resolvedAreaFilter, projectById, areaById)
+  ));
+}
 
 export function buildReviewTaskGroups({
   areaById,

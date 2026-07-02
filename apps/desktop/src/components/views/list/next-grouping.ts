@@ -1,8 +1,10 @@
 import { DEFAULT_AREA_COLOR } from '@mindwtr/core';
-import type { Area, Project, Task } from '@mindwtr/core';
+import type { Area, Project, Task, TaskEnergyLevel, TaskPriority } from '@mindwtr/core';
 import { getContextColor } from '../../../lib/context-color';
 
-export type NextGroupBy = 'none' | 'context' | 'area' | 'project';
+export type NextGroupBy = 'none' | 'context' | 'area' | 'project' | 'energy' | 'priority' | 'person' | 'tag';
+export type ReferenceGroupBy = 'none' | 'context' | 'area' | 'project' | 'tag';
+export type TaskListGroupBy = NextGroupBy | ReferenceGroupBy;
 
 /**
  * AI Agent lane grouping. Sections render in this exact order so the user's
@@ -85,6 +87,31 @@ interface GroupByProjectParams {
     noProjectLabel: string;
 }
 
+interface GroupByTagParams {
+    tasks: Task[];
+    noTagLabel: string;
+}
+
+interface GroupByPriorityParams {
+    tasks: Task[];
+    getPriorityLabel: (priority: TaskPriority) => string;
+    noPriorityLabel: string;
+}
+
+interface GroupByEnergyParams {
+    tasks: Task[];
+    getEnergyLabel: (energy: TaskEnergyLevel) => string;
+    noEnergyLabel: string;
+}
+
+interface GroupByPersonParams {
+    tasks: Task[];
+    unassignedLabel: string;
+}
+
+const PRIORITY_GROUP_ORDER: TaskPriority[] = ['urgent', 'high', 'medium', 'low'];
+const ENERGY_GROUP_ORDER: TaskEnergyLevel[] = ['high', 'medium', 'low'];
+
 export function groupTasksByArea({
     areas,
     tasks,
@@ -141,16 +168,18 @@ export function groupTasksByContext({
     const noContextTasks: Task[] = [];
 
     tasks.forEach((task) => {
-        const primaryContext = (task.contexts ?? [])
+        const contexts = (task.contexts ?? [])
             .map((value) => value.trim())
-            .find((value) => value.length > 0);
-        if (!primaryContext) {
+            .filter((value) => value.length > 0);
+        if (contexts.length === 0) {
             noContextTasks.push(task);
             return;
         }
-        const contextTasks = grouped.get(primaryContext) ?? [];
-        contextTasks.push(task);
-        grouped.set(primaryContext, contextTasks);
+        Array.from(new Set(contexts)).forEach((context) => {
+            const contextTasks = grouped.get(context) ?? [];
+            contextTasks.push(task);
+            grouped.set(context, contextTasks);
+        });
     });
 
     const groups: TaskGroup[] = [];
@@ -175,6 +204,88 @@ export function groupTasksByContext({
             dotColor: getContextColor(context),
         });
     });
+    return groups;
+}
+
+export function groupTasksByPriority({
+    tasks,
+    getPriorityLabel,
+    noPriorityLabel,
+}: GroupByPriorityParams): TaskGroup[] {
+    const grouped = new Map<TaskPriority, Task[]>();
+    const noPriorityTasks: Task[] = [];
+
+    tasks.forEach((task) => {
+        if (!task.priority) {
+            noPriorityTasks.push(task);
+            return;
+        }
+        const priorityTasks = grouped.get(task.priority) ?? [];
+        priorityTasks.push(task);
+        grouped.set(task.priority, priorityTasks);
+    });
+
+    const groups: TaskGroup[] = [];
+    PRIORITY_GROUP_ORDER.forEach((priority) => {
+        const priorityTasks = grouped.get(priority) ?? [];
+        if (priorityTasks.length === 0) return;
+        groups.push({
+            id: `priority:${priority}`,
+            title: getPriorityLabel(priority),
+            tasks: priorityTasks,
+        });
+    });
+
+    if (noPriorityTasks.length > 0) {
+        groups.push({
+            id: 'priority:none',
+            title: noPriorityLabel,
+            tasks: noPriorityTasks,
+            muted: true,
+        });
+    }
+
+    return groups;
+}
+
+export function groupTasksByEnergy({
+    tasks,
+    getEnergyLabel,
+    noEnergyLabel,
+}: GroupByEnergyParams): TaskGroup[] {
+    const grouped = new Map<TaskEnergyLevel, Task[]>();
+    const noEnergyTasks: Task[] = [];
+
+    tasks.forEach((task) => {
+        if (!task.energyLevel) {
+            noEnergyTasks.push(task);
+            return;
+        }
+        const energyTasks = grouped.get(task.energyLevel) ?? [];
+        energyTasks.push(task);
+        grouped.set(task.energyLevel, energyTasks);
+    });
+
+    const groups: TaskGroup[] = [];
+    ENERGY_GROUP_ORDER.forEach((energy) => {
+        const energyTasks = grouped.get(energy) ?? [];
+        if (energyTasks.length === 0) return;
+        groups.push({
+            id: `energy:${energy}`,
+            title: getEnergyLabel(energy),
+            tasks: energyTasks,
+        });
+    });
+
+    if (noEnergyTasks.length > 0) {
+        groups.push({
+            id: 'energy:none',
+            title: noEnergyLabel,
+            tasks: noEnergyTasks,
+            muted: true,
+        });
+    }
+
     return groups;
 }
 
@@ -231,5 +342,93 @@ export function groupTasksByProject({
         });
     });
 
+    return groups;
+}
+
+export function groupTasksByPerson({
+    tasks,
+    unassignedLabel,
+}: GroupByPersonParams): TaskGroup[] {
+    const grouped = new Map<string, { name: string; tasks: Task[] }>();
+    const unassignedTasks: Task[] = [];
+
+    tasks.forEach((task) => {
+        const name = task.assignedTo?.trim();
+        if (!name) {
+            unassignedTasks.push(task);
+            return;
+        }
+        const key = name.toLowerCase();
+        const entry = grouped.get(key) ?? { name, tasks: [] };
+        entry.tasks.push(task);
+        grouped.set(key, entry);
+    });
+
+    const groups: TaskGroup[] = [];
+    const sortedPeople = [...grouped.values()].sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    );
+    sortedPeople.forEach((entry) => {
+        groups.push({
+            id: `person:${entry.name.toLowerCase()}`,
+            title: entry.name,
+            tasks: entry.tasks,
+        });
+    });
+    if (unassignedTasks.length > 0) {
+        groups.push({
+            id: 'person:none',
+            title: unassignedLabel,
+            tasks: unassignedTasks,
+            muted: true,
+        });
+    }
+    return groups;
+}
+
+export function groupTasksByTag({
+    tasks,
+    noTagLabel,
+}: GroupByTagParams): TaskGroup[] {
+    const grouped = new Map<string, Task[]>();
+    const noTagTasks: Task[] = [];
+
+    tasks.forEach((task) => {
+        const tags = (task.tags ?? [])
+            .map((value) => value.trim())
+            .filter((value) => value.length > 0);
+        if (tags.length === 0) {
+            noTagTasks.push(task);
+            return;
+        }
+        Array.from(new Set(tags)).forEach((tag) => {
+            const tagTasks = grouped.get(tag) ?? [];
+            tagTasks.push(task);
+            grouped.set(tag, tagTasks);
+        });
+    });
+
+    const groups: TaskGroup[] = [];
+    if (noTagTasks.length > 0) {
+        groups.push({
+            id: 'tag:none',
+            title: noTagLabel,
+            tasks: noTagTasks,
+            muted: true,
+        });
+    }
+
+    const sortedTags = [...grouped.keys()].sort((a, b) =>
+        a.localeCompare(b, undefined, { sensitivity: 'base' })
+    );
+    sortedTags.forEach((tag) => {
+        const tagTasks = grouped.get(tag) ?? [];
+        groups.push({
+            id: `tag:${tag}`,
+            title: tag,
+            tasks: tagTasks,
+            dotColor: getContextColor(tag),
+        });
+    });
     return groups;
 }

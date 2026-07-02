@@ -2,9 +2,12 @@ import { useState, useCallback } from 'react';
 import { DndContext, type DragEndEvent, closestCenter, useSensor, useSensors, PointerSensor } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { GripVertical, Trash2, ChevronDown, ChevronRight, Pencil, Check, X } from 'lucide-react';
-import { DEFAULT_AREA_COLOR, translateWithFallback, useTaskStore, type Area } from '@mindwtr/core';
+import { GripVertical, Trash2, ChevronDown, ChevronRight, Pencil, Check, X, ExternalLink } from 'lucide-react';
+import { DEFAULT_AREA_COLOR, formatI18nTemplate, getPersonNameKey, translateWithFallback, useTaskStore, type Area, type Person } from '@mindwtr/core';
 import { AreaColorPicker } from '../projects/AreaColorPicker';
+import { reportError } from '../../../lib/report-error';
+import { isTauriRuntime } from '../../../lib/runtime';
+import type { ConfirmationRequestOptions } from '../../../hooks/useConfirmDialog';
 
 type Labels = {
     manage: string;
@@ -13,6 +16,20 @@ type Labels = {
 type SettingsManagePageProps = {
     t: Labels;
     translate: (key: string) => string;
+    requestConfirmation: (options: ConfirmationRequestOptions) => Promise<boolean>;
+};
+
+const SAFE_PERSON_REFERENCE_PROTOCOLS = new Set(['http:', 'https:', 'mailto:', 'tel:', 'obsidian:']);
+
+const isSafePersonReferenceLink = (value: string | undefined): value is string => {
+    const trimmed = value?.trim();
+    if (!trimmed) return false;
+    try {
+        const url = new URL(trimmed);
+        return SAFE_PERSON_REFERENCE_PROTOCOLS.has(url.protocol);
+    } catch {
+        return false;
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -185,6 +202,118 @@ function TokenRow({
     );
 }
 
+function PersonRow({
+    person,
+    taskCount,
+    onDelete,
+    onRename,
+    onUpdate,
+    resolveText,
+    translate,
+}: {
+    person: Person;
+    taskCount: number;
+    onDelete: (id: string) => void;
+    onRename: (id: string, name: string) => void;
+    onUpdate: (id: string, updates: Partial<Person>) => void;
+    resolveText: (key: string, fallback: string) => string;
+    translate: (key: string) => string;
+}) {
+    const commitName = (raw: string) => {
+        const name = raw.trim();
+        if (!name || name === person.name) return;
+        onRename(person.id, name);
+    };
+    const commitNote = (raw: string) => {
+        const note = raw.trim();
+        if ((person.note ?? '') === note) return;
+        onUpdate(person.id, { note: note || undefined });
+    };
+    const commitReferenceLink = (raw: string) => {
+        const referenceLink = raw.trim();
+        if ((person.referenceLink ?? '') === referenceLink) return;
+        onUpdate(person.id, { referenceLink: referenceLink || undefined });
+    };
+    const openReferenceLink = async () => {
+        const referenceLink = person.referenceLink?.trim();
+        if (!isSafePersonReferenceLink(referenceLink)) return;
+        let openError: unknown = null;
+        if (isTauriRuntime()) {
+            try {
+                const { open } = await import('@tauri-apps/plugin-shell');
+                await open(referenceLink);
+                return;
+            } catch (error) {
+                openError = error;
+            }
+        }
+        const opened = window.open(referenceLink, '_blank', 'noopener,noreferrer');
+        if (!opened) {
+            reportError('Failed to open person reference link', openError ?? new Error('Popup blocked'));
+        }
+    };
+    const canOpenReferenceLink = isSafePersonReferenceLink(person.referenceLink);
+
+    return (
+        <div className="rounded-md border border-border/70 bg-muted/20 p-3">
+            <div className="flex items-center gap-2">
+                <input
+                    key={`${person.id}-name-${person.updatedAt}`}
+                    defaultValue={person.name}
+                    onBlur={(e) => commitName(e.target.value)}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                            e.preventDefault();
+                            commitName(e.currentTarget.value);
+                            e.currentTarget.blur();
+                        }
+                    }}
+                    aria-label={resolveText('people.name', 'Name')}
+                    className="min-w-0 flex-1 bg-background border border-border rounded px-2 py-1 text-sm"
+                />
+                <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">
+                    {taskCount} {translate('common.tasks')}
+                </span>
+                <button
+                    type="button"
+                    onClick={() => void openReferenceLink()}
+                    disabled={!canOpenReferenceLink}
+                    className="text-muted-foreground hover:text-foreground hover:bg-muted h-8 w-8 rounded-md transition-colors flex items-center justify-center shrink-0 disabled:opacity-40 disabled:hover:bg-transparent"
+                    title={resolveText('people.openReference', 'Open reference link')}
+                >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                </button>
+                <button
+                    type="button"
+                    onClick={() => onDelete(person.id)}
+                    className="text-destructive hover:bg-destructive/10 h-8 w-8 rounded-md transition-colors flex items-center justify-center shrink-0"
+                    title={translate('common.delete')}
+                >
+                    <Trash2 className="w-4 h-4" />
+                </button>
+            </div>
+            <div className="mt-2 grid gap-2 md:grid-cols-2">
+                <input
+                    key={`${person.id}-note-${person.updatedAt}`}
+                    defaultValue={person.note ?? ''}
+                    onBlur={(e) => commitNote(e.target.value)}
+                    placeholder={resolveText('people.notePlaceholder', 'Note')}
+                    aria-label={resolveText('people.note', 'Note')}
+                    className="min-w-0 bg-background border border-border rounded px-2 py-1 text-xs"
+                />
+                <input
+                    key={`${person.id}-reference-${person.updatedAt}`}
+                    defaultValue={person.referenceLink ?? ''}
+                    onBlur={(e) => commitReferenceLink(e.target.value)}
+                    placeholder={resolveText('people.referencePlaceholder', 'Reference link, including obsidian://')}
+                    aria-label={resolveText('people.referenceLink', 'Reference link')}
+                    className="min-w-0 bg-background border border-border rounded px-2 py-1 text-xs"
+                />
+            </div>
+        </div>
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Collapsible section wrapper
 // ---------------------------------------------------------------------------
@@ -203,7 +332,7 @@ function ManageSection({
     const [open, setOpen] = useState(defaultOpen);
 
     return (
-        <div className="rounded-lg border border-border bg-card overflow-hidden">
+        <div className="rounded-lg border border-border bg-card overflow-visible">
             <button
                 type="button"
                 onClick={() => setOpen((prev) => !prev)}
@@ -222,8 +351,10 @@ function ManageSection({
 // Main page
 // ---------------------------------------------------------------------------
 
-export function SettingsManagePage({ t: _t, translate }: SettingsManagePageProps) {
+export function SettingsManagePage({ t: _t, translate, requestConfirmation }: SettingsManagePageProps) {
     const areas = useTaskStore((s) => s.areas);
+    const people = useTaskStore((s) => s.people);
+    const tasks = useTaskStore((s) => s.tasks);
     const addArea = useTaskStore((s) => s.addArea);
     const updateArea = useTaskStore((s) => s.updateArea);
     const deleteArea = useTaskStore((s) => s.deleteArea);
@@ -232,17 +363,31 @@ export function SettingsManagePage({ t: _t, translate }: SettingsManagePageProps
     const renameTag = useTaskStore((s) => s.renameTag);
     const deleteContext = useTaskStore((s) => s.deleteContext);
     const renameContext = useTaskStore((s) => s.renameContext);
+    const addPerson = useTaskStore((s) => s.addPerson);
+    const updatePerson = useTaskStore((s) => s.updatePerson);
+    const renamePerson = useTaskStore((s) => s.renamePerson);
+    const deletePerson = useTaskStore((s) => s.deletePerson);
     const getDerivedState = useTaskStore((s) => s.getDerivedState);
 
     const { allContexts, allTags } = getDerivedState();
 
     // Sort areas by order
     const sortedAreas = [...areas].sort((a, b) => a.order - b.order);
+    const sortedPeople = [...people].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    const assignedTaskCountByPerson = new Map<string, number>();
+    tasks.forEach((task) => {
+        if (task.deletedAt) return;
+        const key = getPersonNameKey(task.assignedTo);
+        if (!key) return;
+        assignedTaskCountByPerson.set(key, (assignedTaskCountByPerson.get(key) ?? 0) + 1);
+    });
 
     // New area form
     const [newAreaName, setNewAreaName] = useState('');
     const [newAreaColor, setNewAreaColor] = useState(DEFAULT_AREA_COLOR);
     const [isCreatingArea, setIsCreatingArea] = useState(false);
+    const [newPersonName, setNewPersonName] = useState('');
+    const [isCreatingPerson, setIsCreatingPerson] = useState(false);
 
     const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -276,9 +421,30 @@ export function SettingsManagePage({ t: _t, translate }: SettingsManagePageProps
         void reorderAreas(sorted.map((a) => a.id));
     }, [sortedAreas, reorderAreas]);
 
+    const handleCreatePerson = useCallback(async () => {
+        const name = newPersonName.trim();
+        if (!name) return;
+        setIsCreatingPerson(true);
+        try {
+            await addPerson(name);
+            setNewPersonName('');
+        } finally {
+            setIsCreatingPerson(false);
+        }
+    }, [addPerson, newPersonName]);
+
     const resolveText = (key: string, fallback: string) => {
         return translateWithFallback(translate, key, fallback);
     };
+    const confirmDelete = useCallback(async (messageKey: string, fallback: string, onConfirm: () => void) => {
+        const confirmed = await requestConfirmation({
+            title: resolveText('common.delete', 'Delete'),
+            description: formatI18nTemplate(resolveText(messageKey, fallback), {}),
+            confirmLabel: resolveText('common.delete', 'Delete'),
+            cancelLabel: resolveText('common.cancel', 'Cancel'),
+        });
+        if (confirmed) onConfirm();
+    }, [requestConfirmation, resolveText]);
 
     return (
         <div className="space-y-6">
@@ -309,7 +475,7 @@ export function SettingsManagePage({ t: _t, translate }: SettingsManagePageProps
                                     <SortableAreaRow
                                         key={area.id}
                                         area={area}
-                                        onDelete={(id) => void deleteArea(id)}
+                                        onDelete={(id) => void confirmDelete('areas.deleteConfirm', 'Delete this area? Projects and tasks in this area will be kept and moved to unassigned.', () => void deleteArea(id))}
                                         onUpdateName={(id, name) => void updateArea(id, { name })}
                                         onUpdateColor={(id, color) => void updateArea(id, { color })}
                                         translate={translate}
@@ -349,6 +515,58 @@ export function SettingsManagePage({ t: _t, translate }: SettingsManagePageProps
                             className="px-3 py-1.5 rounded-md text-sm bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                         >
                             {isCreatingArea ? resolveText('common.loading', 'Loading...') : resolveText('areas.create', 'Create')}
+                        </button>
+                    </div>
+                </div>
+            </ManageSection>
+
+            {/* People */}
+            <ManageSection
+                title={resolveText('people.title', 'People')}
+                count={sortedPeople.length}
+            >
+                {sortedPeople.length === 0 && (
+                    <div className="text-sm text-muted-foreground py-2">
+                        {resolveText('people.empty', 'No people yet')}
+                    </div>
+                )}
+                {sortedPeople.map((person) => (
+                    <PersonRow
+                        key={person.id}
+                        person={person}
+                        taskCount={assignedTaskCountByPerson.get(getPersonNameKey(person.name)) ?? 0}
+                        onRename={(id, name) => void renamePerson(id, name, { updateTasks: true })}
+                        onUpdate={(id, updates) => void updatePerson(id, updates)}
+                        onDelete={(id) => void confirmDelete('people.deleteConfirm', 'Delete this person? Tasks assigned to them will be kept and moved to unassigned.', () => void deletePerson(id))}
+                        resolveText={resolveText}
+                        translate={translate}
+                    />
+                ))}
+                <div className="border-t border-border/50 pt-3 space-y-2">
+                    <label className="text-xs text-muted-foreground font-medium uppercase tracking-wider">
+                        {resolveText('people.new', 'New Person')}
+                    </label>
+                    <div className="flex items-center gap-2">
+                        <input
+                            type="text"
+                            value={newPersonName}
+                            onChange={(e) => setNewPersonName(e.target.value)}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    void handleCreatePerson();
+                                }
+                            }}
+                            placeholder={resolveText('people.namePlaceholder', 'Person name')}
+                            className="flex-1 bg-muted/50 border border-border rounded px-2 py-1 text-sm"
+                        />
+                        <button
+                            type="button"
+                            onClick={() => void handleCreatePerson()}
+                            disabled={isCreatingPerson || !newPersonName.trim()}
+                            className="px-3 py-1.5 rounded-md text-sm bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                        >
+                            {isCreatingPerson ? resolveText('common.loading', 'Loading...') : resolveText('people.create', 'Create')}
                         </button>
                     </div>
                 </div>

@@ -1,10 +1,12 @@
-import type { TaskStatus } from '@mindwtr/core';
+import { ClipboardCheck } from 'lucide-react';
+import { tFallback, type TaskStatus } from '@mindwtr/core';
 
 type ReviewBulkActionsProps = {
     selectionCount: number;
     moveToStatus: TaskStatus | '';
     onMoveToStatus: (status: TaskStatus) => Promise<void> | void;
     onChangeMoveToStatus: (status: TaskStatus) => void;
+    onBulkOrganize?: () => void;
     onAddTag: () => void;
     onDelete: () => void;
     statusOptions: TaskStatus[];
@@ -16,6 +18,7 @@ export function ReviewBulkActions({
     moveToStatus,
     onMoveToStatus,
     onChangeMoveToStatus,
+    onBulkOrganize,
     onAddTag,
     onDelete,
     statusOptions,
@@ -55,6 +58,16 @@ export function ReviewBulkActions({
                 </div>
             </div>
             <div className="flex items-center gap-2">
+                {onBulkOrganize && (
+                    <button
+                        onClick={onBulkOrganize}
+                        className="inline-flex items-center gap-1.5 rounded bg-primary px-2 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                        aria-label={tFallback(t, 'bulk.organize', 'Bulk organize')}
+                    >
+                        <ClipboardCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                        {tFallback(t, 'bulk.organize', 'Bulk organize')}
+                    </button>
+                )}
                 <button
                     onClick={onAddTag}
                     className="text-xs px-2 py-1 rounded bg-muted/50 hover:bg-muted transition-colors"

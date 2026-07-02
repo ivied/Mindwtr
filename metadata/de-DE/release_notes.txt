@@ -1,0 +1,3 @@
+- Wiederhol-Erinnerungen koennen Aufgaben mit Uhrzeit erneut melden, bis du sie erledigst oder schlummerst.
+- Bulk Quick Add, TickTick- und Obsidian-Import, Apple Shortcuts, Widgets, Focus-Gruppen und Board-Filter sind runder.
+- Lokale Diktatfunktion, Sync-Reparatur, Tastatur-Popups, lange Aufgabentitel und Aufgabenbearbeitung sind zuverlaessiger.

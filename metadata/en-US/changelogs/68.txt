@@ -1,0 +1,3 @@
+Configurable quick access, optional Focus grouping, inbox project conversion, and compact task sorting make mobile navigation clearer.
+Android polish keeps the widget capture button visible, themes the navigation bar, and improves reminder reopen behavior.
+Sync is quieter when nothing changed and retains attachment delete retries more reliably.

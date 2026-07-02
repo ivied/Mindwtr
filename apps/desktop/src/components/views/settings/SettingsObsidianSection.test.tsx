@@ -4,8 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { SettingsObsidianSection } from './SettingsObsidianSection';
 
 const t = {
-    obsidianVault: 'Obsidian Vault',
-    obsidianVaultDesc: 'Connect a local Obsidian vault.',
+    obsidianVault: 'Obsidian vault import',
+    obsidianVaultDesc: 'Import tasks from a local Obsidian vault.',
     obsidianEnable: 'Enable Obsidian integration',
     obsidianVaultPath: 'Vault folder',
     obsidianVaultPathHint: 'Select the root folder of your vault.',
@@ -13,6 +13,10 @@ const t = {
     obsidianScanFoldersHint: 'One relative folder per line.',
     obsidianInboxFile: 'Mindwtr inbox note',
     obsidianInboxFileHint: 'Relative path for new notes.',
+    obsidianDataview: 'Dataview metadata',
+    obsidianDataviewDesc: 'Read Dataview fields.',
+    obsidianDataviewMetadata: 'Import Dataview fields',
+    obsidianDataviewMetadataHint: 'Reads project:: and due:: fields.',
     obsidianTaskNotes: 'TaskNotes',
     obsidianTaskNotesDesc: 'TaskNotes file options.',
     obsidianTaskNotesIncludeArchived: 'Include archived TaskNotes',
@@ -42,6 +46,7 @@ const baseProps: Parameters<typeof SettingsObsidianSection>[0] = {
     obsidianScanFoldersText: '/',
     obsidianInboxFile: 'Mindwtr/Inbox.md',
     obsidianTaskNotesIncludeArchived: false,
+    obsidianDataviewMetadataEnabled: false,
     obsidianNewTaskFormat: 'auto',
     obsidianLastScannedAt: null,
     obsidianHasVaultMarker: null,
@@ -55,6 +60,7 @@ const baseProps: Parameters<typeof SettingsObsidianSection>[0] = {
     onObsidianScanFoldersTextChange: vi.fn(),
     onObsidianInboxFileChange: vi.fn(),
     onObsidianTaskNotesIncludeArchivedChange: vi.fn(),
+    onObsidianDataviewMetadataEnabledChange: vi.fn(),
     onObsidianNewTaskFormatChange: vi.fn(),
     onBrowseObsidianVault: vi.fn(),
     onSaveObsidian: vi.fn(),
@@ -63,10 +69,19 @@ const baseProps: Parameters<typeof SettingsObsidianSection>[0] = {
 };
 
 describe('SettingsObsidianSection', () => {
+    it('links to the Obsidian integration guide in the docs site', () => {
+        const { getByRole } = render(<SettingsObsidianSection {...baseProps} />);
+
+        expect(getByRole('link', { name: /Obsidian integration guide/ })).toHaveAttribute(
+            'href',
+            'https://docs.mindwtr.app/power-users/obsidian',
+        );
+    });
+
     it('starts collapsed and expands on demand', () => {
         const { getByRole, queryByText, getByText } = render(<SettingsObsidianSection {...baseProps} />);
 
-        const toggle = getByRole('button', { name: /Obsidian Vault/i });
+        const toggle = getByRole('button', { name: /Obsidian vault import/i });
         expect(toggle).toHaveAttribute('aria-expanded', 'false');
         expect(queryByText('Vault folder')).not.toBeInTheDocument();
 
@@ -75,5 +90,20 @@ describe('SettingsObsidianSection', () => {
         expect(toggle).toHaveAttribute('aria-expanded', 'true');
         expect(getByText('Vault folder')).toBeInTheDocument();
         expect(getByText('Save Obsidian settings')).toBeInTheDocument();
+    });
+
+    it('toggles Dataview metadata import from the expanded settings', () => {
+        const onChange = vi.fn();
+        const { getAllByRole, getByRole } = render(
+            <SettingsObsidianSection
+                {...baseProps}
+                onObsidianDataviewMetadataEnabledChange={onChange}
+            />
+        );
+
+        fireEvent.click(getByRole('button', { name: /Obsidian vault import/i }));
+        fireEvent.click(getAllByRole('switch')[1]);
+
+        expect(onChange).toHaveBeenCalledWith(true);
     });
 });

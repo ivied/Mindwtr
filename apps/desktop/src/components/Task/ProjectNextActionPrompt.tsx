@@ -1,5 +1,6 @@
 import { useId } from 'react';
 import { translateWithFallback, type Task } from '@mindwtr/core';
+import { ModalPortal } from '../ModalPortal';
 import { Button } from '../ui/Button';
 
 type ProjectNextActionPromptProps = {
@@ -39,6 +40,7 @@ export function ProjectNextActionPrompt({
     if (!isOpen) return null;
 
     return (
+        <ModalPortal>
         <div
             className="fixed inset-0 bg-black/50 flex items-start justify-center pt-[16vh] z-50"
             role="dialog"
@@ -119,5 +121,6 @@ export function ProjectNextActionPrompt({
                 </div>
             </div>
         </div>
+        </ModalPortal>
     );
 }

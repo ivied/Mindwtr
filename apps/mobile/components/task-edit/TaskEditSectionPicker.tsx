@@ -4,6 +4,7 @@ import type { Section } from '@mindwtr/core';
 import type { ThemeColors } from '@/hooks/use-theme-colors';
 import { styles } from './task-edit-modal.styles';
 import { logError } from '../../lib/app-log';
+import { useAndroidKeyboardInset } from '../../lib/use-android-keyboard-inset';
 
 interface TaskEditSectionPickerProps {
     visible: boolean;
@@ -27,6 +28,7 @@ export function TaskEditSectionPicker({
     onCreateSection,
 }: TaskEditSectionPickerProps) {
     const [sectionQuery, setSectionQuery] = useState('');
+    const keyboardInset = useAndroidKeyboardInset(visible);
 
     useEffect(() => {
         if (visible) setSectionQuery('');
@@ -88,7 +90,7 @@ export function TaskEditSectionPicker({
             onRequestClose={onClose}
             accessibilityViewIsModal
         >
-            <View style={styles.overlay}>
+            <View style={keyboardInset > 0 ? [styles.overlay, { paddingBottom: keyboardInset }] : styles.overlay}>
                 <View style={[styles.modalCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>
                     <Text style={[styles.modalTitle, { color: tc.text }]} accessibilityRole="header">
                         {t('taskEdit.sectionLabel')}

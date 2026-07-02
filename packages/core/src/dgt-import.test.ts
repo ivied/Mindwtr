@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { applyDgtImport, parseDgtImportSource } from './dgt-import';
 import { mockAppData } from './sync-test-utils';
-import type { Area, Project } from './types';
+import type { Area, Person, Project } from './types';
 
 const buildSampleExport = () => ({
     version: 3,
@@ -227,11 +227,18 @@ describe('dgt import', () => {
             createdAt: '2026-04-01T00:00:00.000Z',
             updatedAt: '2026-04-01T00:00:00.000Z',
         };
+        const existingPerson: Person = {
+            id: 'person-existing',
+            name: 'Sam',
+            createdAt: '2026-04-01T00:00:00.000Z',
+            updatedAt: '2026-04-01T00:00:00.000Z',
+        };
 
         const result = applyDgtImport(
             {
                 ...mockAppData([], [existingProject], []),
                 areas: [existingArea],
+                people: [existingPerson],
             },
             parseResult.parsedData,
             { now: '2026-04-15T12:00:00.000Z' }
@@ -246,6 +253,7 @@ describe('dgt import', () => {
         expect(result.warnings).toContain('1 DGT recurring task could not be mapped and will be imported once.');
         expect(result.warnings).toContain('1 DGT task status could not be mapped and was imported to Inbox.');
         expect(result.data.settings.deviceId).toBeTruthy();
+        expect(result.data.people).toEqual([existingPerson]);
 
         const importedArea = result.data.areas.find((area) => area.id !== existingArea.id);
         expect(importedArea).toMatchObject({

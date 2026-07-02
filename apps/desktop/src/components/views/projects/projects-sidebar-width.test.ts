@@ -32,7 +32,7 @@ describe('projects-sidebar-width', () => {
     });
 
     it('expands the allowed max width on ultra-wide desktops', () => {
-        expect(getProjectsSidebarMaxWidth(2400)).toBe(1200);
+        expect(getProjectsSidebarMaxWidth(2400)).toBe(816);
         expect(getProjectsSidebarMaxWidth(4480)).toBe(PROJECTS_SIDEBAR_MAX_WIDTH);
         expect(clampProjectsSidebarWidth(9999, 4480)).toBe(PROJECTS_SIDEBAR_MAX_WIDTH);
     });

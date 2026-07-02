@@ -1,0 +1,5 @@
+- Aufgabenlisten-Filter und klarere aktive Filterbeschriftungen hinzugefuegt.
+- Android-Kontextautomation-Intents hinzugefuegt.
+- Markdown-Ausschnitte, Toolbar-Platzierung und adaptive Editor-Tasten verbessert.
+- Checklisten- und Aufgabenbearbeitung bleiben zuverlaessiger ueber der Tastatur sichtbar.
+- Projekt-Prompts und Kalender-Push-Wiederholungen behandeln Fehler klarer.

@@ -3,6 +3,7 @@ import type { Task } from '@mindwtr/core';
 
 type UseTaskEditPreviewParams = {
     editedProjectId?: string;
+    includeProjectContext?: boolean;
     onClose: () => void;
     onContextNavigate?: (context: string) => void;
     onProjectNavigate?: (projectId: string) => void;
@@ -15,6 +16,7 @@ type UseTaskEditPreviewParams = {
 
 export function useTaskEditPreview({
     editedProjectId,
+    includeProjectContext = true,
     onClose,
     onContextNavigate,
     onProjectNavigate,
@@ -25,6 +27,7 @@ export function useTaskEditPreview({
     tasks,
 }: UseTaskEditPreviewParams) {
     const projectContext = React.useMemo(() => {
+        if (!includeProjectContext) return null;
         const nextProjectId = editedProjectId ?? projectId;
         if (!nextProjectId) return null;
         const project = projects.find((item) => item.id === nextProjectId);
@@ -37,7 +40,7 @@ export function useTaskEditPreview({
             projectTitle: project?.title || '',
             projectTasks,
         };
-    }, [editedProjectId, projectId, projects, task?.id, tasks]);
+    }, [editedProjectId, includeProjectContext, projectId, projects, task?.id, tasks]);
 
     const handlePreviewProjectPress = React.useCallback((nextProjectId: string) => {
         onClose();
