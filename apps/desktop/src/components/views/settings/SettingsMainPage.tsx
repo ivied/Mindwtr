@@ -9,9 +9,10 @@ const FLATPAK_QUICK_ADD_COMMAND = 'flatpak run tech.dongdongbh.mindwtr --quick-a
 
 type ThemeMode = 'system' | 'light' | 'dark' | 'eink' | 'nord' | 'sepia';
 type DensityMode = 'comfortable' | 'compact';
-type TextSizeMode = 'default' | 'large' | 'extra-large';
-type WeekStart = 'sunday' | 'monday';
+type TextSizeMode = 'small' | 'default' | 'large' | 'extra-large';
+type WeekStart = 'sunday' | 'monday' | 'saturday';
 type DateFormatSetting = 'system' | 'dmy' | 'mdy' | 'ymd';
+type CalendarSystemSetting = 'gregorian' | 'jalali';
 type TimeFormatSetting = 'system' | '12h' | '24h';
 
 type Labels = {
@@ -26,6 +27,7 @@ type Labels = {
     densityCompact: string;
     textSize: string;
     textSizeDesc: string;
+    textSizeSmall: string;
     textSizeDefault: string;
     textSizeLarge: string;
     textSizeExtraLarge: string;
@@ -41,11 +43,15 @@ type Labels = {
     weekStart: string;
     weekStartSunday: string;
     weekStartMonday: string;
+    weekStartSaturday: string;
     dateFormat: string;
     dateFormatSystem: string;
     dateFormatDmy: string;
     dateFormatMdy: string;
     dateFormatYmd: string;
+    calendarSystem: string;
+    calendarSystemGregorian: string;
+    calendarSystemJalali: string;
     timeFormat: string;
     timeFormatSystem: string;
     timeFormat12h: string;
@@ -93,6 +99,9 @@ export type SettingsMainPageProps = {
     onWeekStartChange: (weekStart: WeekStart) => void;
     dateFormat: DateFormatSetting;
     onDateFormatChange: (format: DateFormatSetting) => void;
+    calendarSystem: CalendarSystemSetting;
+    showCalendarSystem: boolean;
+    onCalendarSystemChange: (calendarSystem: CalendarSystemSetting) => void;
     timeFormat: TimeFormatSetting;
     onTimeFormatChange: (format: TimeFormatSetting) => void;
     keybindingStyle: 'vim' | 'emacs';
@@ -197,6 +206,9 @@ export function SettingsMainPage({
     onWeekStartChange,
     dateFormat,
     onDateFormatChange,
+    calendarSystem,
+    showCalendarSystem,
+    onCalendarSystemChange,
     timeFormat,
     onTimeFormatChange,
     keybindingStyle,
@@ -231,6 +243,11 @@ export function SettingsMainPage({
         isWindows,
     });
     const quickAddShortcutValue = isFlatpak ? GLOBAL_QUICK_ADD_SHORTCUT_DISABLED : globalQuickAddShortcut;
+    const weekStartDescription = weekStart === 'monday'
+        ? t.weekStartMonday
+        : weekStart === 'saturday'
+            ? t.weekStartSaturday
+            : t.weekStartSunday;
 
     return (
         <div className="space-y-5">
@@ -266,10 +283,12 @@ export function SettingsMainPage({
                 </SettingsRow>
                 <SettingsRow title={t.textSize} description={t.textSizeDesc}>
                     <select
+                        aria-label={t.textSize}
                         value={textSizeMode}
                         onChange={(e) => onTextSizeChange(e.target.value as TextSizeMode)}
                         className={selectCls}
                     >
+                        <option value="small">{t.textSizeSmall}</option>
                         <option value="default">{t.textSizeDefault}</option>
                         <option value="large">{t.textSizeLarge}</option>
                         <option value="extra-large">{t.textSizeExtraLarge}</option>
@@ -305,15 +324,17 @@ export function SettingsMainPage({
                 </SettingsRow>
                 <SettingsRow
                     title={t.weekStart}
-                    description={weekStart === 'monday' ? t.weekStartMonday : t.weekStartSunday}
+                    description={weekStartDescription}
                 >
                     <select
+                        aria-label={t.weekStart}
                         value={weekStart}
                         onChange={(e) => onWeekStartChange(e.target.value as WeekStart)}
                         className={selectCls}
                     >
                         <option value="sunday">{t.weekStartSunday}</option>
                         <option value="monday">{t.weekStartMonday}</option>
+                        <option value="saturday">{t.weekStartSaturday}</option>
                     </select>
                 </SettingsRow>
                 <SettingsRow
@@ -339,6 +360,26 @@ export function SettingsMainPage({
                         <option value="ymd">{t.dateFormatYmd}</option>
                     </select>
                 </SettingsRow>
+                {showCalendarSystem && (
+                    <SettingsRow
+                        title={t.calendarSystem}
+                        description={
+                            calendarSystem === 'jalali'
+                                ? t.calendarSystemJalali
+                                : t.calendarSystemGregorian
+                        }
+                    >
+                        <select
+                            aria-label={t.calendarSystem}
+                            value={calendarSystem}
+                            onChange={(e) => onCalendarSystemChange(e.target.value as CalendarSystemSetting)}
+                            className={selectCls}
+                        >
+                            <option value="gregorian">{t.calendarSystemGregorian}</option>
+                            <option value="jalali">{t.calendarSystemJalali}</option>
+                        </select>
+                    </SettingsRow>
+                )}
                 <SettingsRow
                     title={t.timeFormat}
                     description={

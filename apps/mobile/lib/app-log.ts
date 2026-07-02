@@ -1,4 +1,5 @@
 import { getBreadcrumbs, sanitizeForLog, sanitizeLogContext, sanitizeUrl, useTaskStore } from '@mindwtr/core';
+import * as ExpoLegacyFileSystem from 'expo-file-system/legacy';
 
 type ExpoDirectory = {
   exists: boolean;
@@ -33,7 +34,17 @@ type ExpoFileSystemModule = {
   Paths: { document?: { uri: string } };
 };
 
+type ExpoLegacyFileSystemModule = {
+  documentDirectory: string | null;
+  deleteAsync: (fileUri: string, options?: { idempotent?: boolean }) => Promise<void>;
+  getInfoAsync: (fileUri: string) => Promise<{ exists: boolean; isDirectory?: boolean; size?: number }>;
+  makeDirectoryAsync: (fileUri: string, options?: { intermediates?: boolean }) => Promise<void>;
+  readAsStringAsync: (fileUri: string, options?: { encoding?: string }) => Promise<string>;
+  writeAsStringAsync: (fileUri: string, contents: string, options?: { encoding?: string }) => Promise<void>;
+};
+
 let expoFileSystemModule: ExpoFileSystemModule | null | undefined;
+let expoLegacyFileSystemModule: ExpoLegacyFileSystemModule | null | undefined = ExpoLegacyFileSystem as unknown as ExpoLegacyFileSystemModule;
 let logTargetsInitialized = false;
 let LOG_DIR: ExpoDirectory | null = null;
 let LOG_FILE: ExpoFile | null = null;
@@ -49,6 +60,46 @@ const getExpoFileSystem = async (): Promise<ExpoFileSystemModule | null> => {
     expoFileSystemModule = null;
   }
   return expoFileSystemModule;
+};
+
+const getLegacyFileSystem = async (): Promise<ExpoLegacyFileSystemModule | null> => {
+  if (expoLegacyFileSystemModule !== undefined) return expoLegacyFileSystemModule;
+  try {
+    expoLegacyFileSystemModule = (await import('expo-file-system/legacy')) as unknown as ExpoLegacyFileSystemModule;
+  } catch (error) {
+    logInternalFailure('load legacy file system', error);
+    expoLegacyFileSystemModule = null;
+  }
+  return expoLegacyFileSystemModule;
+};
+
+const logInternalFailure = (phase: string, error?: unknown): void => {
+  if (!__DEV__) return;
+  const message = error instanceof Error ? error.message : String(error ?? 'unknown');
+  // Console is the only reliable fallback when the diagnostics file itself is unavailable.
+  console.warn(`[Mindwtr diagnostics] ${phase} failed: ${message}`);
+};
+
+const logEntryToDevConsole = (entry: LogEntry): void => {
+  if (!__DEV__) return;
+  const context = entry.context && Object.keys(entry.context).length > 0
+    ? ` ${JSON.stringify(entry.context)}`
+    : '';
+  const line = `[Mindwtr ${entry.scope}] ${entry.message}${context}`;
+  if (entry.level === 'error') {
+    console.error(line);
+  } else if (entry.level === 'warn') {
+    console.warn(line);
+  } else {
+    console.info(line);
+  }
+};
+
+const buildLegacyTargets = (documentDirectory?: string | null): { dirUri: string; fileUri: string } | null => {
+  if (!documentDirectory) return null;
+  const baseUri = documentDirectory.endsWith('/') ? documentDirectory : `${documentDirectory}/`;
+  const dirUri = `${baseUri}logs`;
+  return { dirUri, fileUri: `${dirUri}/mindwtr.log` };
 };
 
 const ensureLogTargets = async (): Promise<void> => {
@@ -77,6 +128,7 @@ const ensureLogTargets = async (): Promise<void> => {
 const MAX_LOG_FILE_BYTES = 500_000;
 const ROTATED_LOG_RETAIN_CHARS = 250_000;
 const LOG_ROTATION_CHECK_INTERVAL = 50;
+const RECENT_LOG_MAX_CHARS = 20_000;
 const UTF8_ENCODING = 'utf8';
 
 type LogEntry = {
@@ -166,11 +218,37 @@ async function ensureLogFile(): Promise<boolean> {
         }
         LOG_FILE.create({ intermediates: true, overwrite: true });
       } else {
+        logInternalFailure('create log file', error);
         return false;
       }
     }
   }
   return fileExists(LOG_FILE);
+}
+
+async function ensureLegacyLogFilePath(): Promise<string | null> {
+  try {
+    const fs = await getLegacyFileSystem();
+    const targets = buildLegacyTargets(fs?.documentDirectory);
+    if (!fs || !targets) return null;
+    const dirInfo = await fs.getInfoAsync(targets.dirUri);
+    if (!dirInfo.exists) {
+      await fs.makeDirectoryAsync(targets.dirUri, { intermediates: true });
+    } else if (dirInfo.isDirectory === false) {
+      return null;
+    }
+    const fileInfo = await fs.getInfoAsync(targets.fileUri);
+    if (!fileInfo.exists) {
+      await fs.writeAsStringAsync(targets.fileUri, '', { encoding: UTF8_ENCODING });
+    } else if (fileInfo.isDirectory === true) {
+      return null;
+    }
+    const nextInfo = await fs.getInfoAsync(targets.fileUri);
+    return nextInfo.exists ? targets.fileUri : null;
+  } catch (error) {
+    logInternalFailure('legacy ensure log file', error);
+    return null;
+  }
 }
 
 function isLoggingEnabled(): boolean {
@@ -219,11 +297,11 @@ async function appendLogLine(entry: LogEntry, options?: { force?: boolean }): Pr
   if (customLogBackend?.appendLogLine) {
     return customLogBackend.appendLogLine(entry, options);
   }
+  const line = `${JSON.stringify(entry)}\n`;
   try {
     await ensureLogDir();
-    if (!await ensureLogFile()) return null;
+    if (!await ensureLogFile()) throw new Error('primary log file unavailable');
     if (!LOG_FILE) return null;
-    const line = `${JSON.stringify(entry)}\n`;
     await rotateLogIfNeeded();
     if (appendWithFileHandle(line)) {
       logWriteCount += 1;
@@ -239,7 +317,26 @@ async function appendLogLine(entry: LogEntry, options?: { force?: boolean }): Pr
     logWriteCount += 1;
     return LOG_FILE.uri;
   } catch (error) {
-    return null;
+    try {
+      const fs = await getLegacyFileSystem();
+      const path = await ensureLegacyLogFilePath();
+      if (!fs || !path) {
+        logEntryToDevConsole(entry);
+        return null;
+      }
+      const info = await fs.getInfoAsync(path);
+      const current = info.exists ? await fs.readAsStringAsync(path, { encoding: UTF8_ENCODING }).catch(() => '') : '';
+      let next = current + line;
+      if (next.length > MAX_LOG_FILE_BYTES) {
+        next = next.slice(-ROTATED_LOG_RETAIN_CHARS);
+      }
+      await fs.writeAsStringAsync(path, next, { encoding: UTF8_ENCODING });
+      logWriteCount += 1;
+      return path;
+    } catch {
+      logEntryToDevConsole(entry);
+      return null;
+    }
   }
 }
 
@@ -248,7 +345,9 @@ export async function getLogPath(): Promise<string | null> {
     return customLogBackend.getLogPath();
   }
   await ensureLogTargets();
-  return LOG_FILE?.uri ?? null;
+  if (LOG_FILE?.uri) return LOG_FILE.uri;
+  const fs = await getLegacyFileSystem();
+  return buildLegacyTargets(fs?.documentDirectory)?.fileUri ?? null;
 }
 
 export async function ensureLogFilePath(): Promise<string | null> {
@@ -258,12 +357,13 @@ export async function ensureLogFilePath(): Promise<string | null> {
   await ensureLogTargets();
   try {
     await ensureLogDir();
-    if (!await ensureLogFile()) return null;
+    if (!await ensureLogFile()) return await ensureLegacyLogFilePath();
     if (!LOG_FILE) return null;
     if (!fileExists(LOG_FILE)) return null;
     return LOG_FILE.uri;
-  } catch {
-    return null;
+  } catch (error) {
+    logInternalFailure('ensure log file path', error);
+    return await ensureLegacyLogFilePath();
   }
 }
 
@@ -273,9 +373,8 @@ export async function clearLog(): Promise<void> {
     return;
   }
   await ensureLogTargets();
-  if (!LOG_FILE) return;
   try {
-    if (fileExists(LOG_FILE)) {
+    if (LOG_FILE && fileExists(LOG_FILE)) {
       LOG_FILE.delete();
       logWriteCount = 0;
       return;
@@ -288,6 +387,43 @@ export async function clearLog(): Promise<void> {
       }
     }
   } catch (error) {
+    logInternalFailure('clear log', error);
+  }
+  try {
+    const fs = await getLegacyFileSystem();
+    const path = buildLegacyTargets(fs?.documentDirectory)?.fileUri;
+    if (!fs || !path) return;
+    await fs.deleteAsync(path, { idempotent: true });
+    logWriteCount = 0;
+  } catch (error) {
+    logInternalFailure('legacy clear log', error);
+  }
+}
+
+export async function readRecentLogText(maxChars = RECENT_LOG_MAX_CHARS): Promise<string | null> {
+  await ensureLogTargets();
+  try {
+    if (!LOG_FILE || !fileExists(LOG_FILE)) throw new Error('primary log file unavailable');
+    const raw = await LOG_FILE.text();
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    return trimmed.slice(-Math.max(1, maxChars));
+  } catch (error) {
+    logInternalFailure('read recent log', error);
+    try {
+      const fs = await getLegacyFileSystem();
+      const path = buildLegacyTargets(fs?.documentDirectory)?.fileUri;
+      if (!fs || !path) return null;
+      const info = await fs.getInfoAsync(path);
+      if (!info.exists || info.isDirectory) return null;
+      const raw = await fs.readAsStringAsync(path, { encoding: UTF8_ENCODING });
+      const trimmed = raw.trim();
+      if (!trimmed) return null;
+      return trimmed.slice(-Math.max(1, maxChars));
+    } catch (fallbackError) {
+      logInternalFailure('legacy read recent log', fallbackError);
+      return null;
+    }
   }
 }
 

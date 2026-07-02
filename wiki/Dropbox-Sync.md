@@ -15,19 +15,19 @@ This uses Dropbox OAuth with **App Folder** access, so Mindwtr only reads/writes
 - **Mobile (official builds):** Supported
 - **Expo Go:** Not supported for Dropbox OAuth
 - **FOSS builds:** Dropbox sync may be disabled
+- **Docker/PWA web build:** not supported; use a native desktop/mobile build, self-hosted sync, or WebDAV instead
 
-If Dropbox is disabled in your build, use [[Data and Sync]] (File Sync) or [[Cloud Deployment]] (self-hosted) instead.
+If Dropbox is disabled in your build, or you are using the Docker-served PWA, use [[Data and Sync]] (File Sync), [[Cloud Deployment]] (self-hosted), or WebDAV instead.
 
 ---
 
 ## User Setup (Official Builds)
 
 1. Open **Settings → Sync**.
-2. Set **Sync backend** to **Cloud**.
-3. Set **Cloud provider** to **Dropbox**.
-4. Click/Tap **Connect Dropbox** and complete OAuth in your browser.
-5. Back in Mindwtr, use **Test connection**.
-6. Run **Sync**.
+2. In the **Sync backend** selector, choose **Dropbox**. Mindwtr shows the selected path as **Cloud Sync**.
+3. Click/Tap **Connect Dropbox** and complete OAuth in your browser.
+4. Back in Mindwtr, use **Test connection**.
+5. Run **Sync**.
 
 After first sync, verify the app folder exists in Dropbox:
 
@@ -97,4 +97,4 @@ Use **Test connection** first. If successful, run **Sync** and check logs in [[D
 See:
 
 - [[Data and Sync]]
-- `docs/PRIVACY.md` in the repository
+- https://mindwtr.app/privacy

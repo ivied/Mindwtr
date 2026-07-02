@@ -1,0 +1,105 @@
+name: Android Debug APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      archs:
+        description: "Comma-separated Android ABIs to build"
+        required: true
+        default: "arm64-v8a,armeabi-v7a"
+        type: string
+      retention_days:
+        description: "Artifact retention in days"
+        required: true
+        default: "14"
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_OPTIONS: --max-old-space-size=6144
+
+concurrency:
+  group: android-debug-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-debug:
+    runs-on: ubuntu-latest
+    name: Android Debug APK
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 20
+
+      - name: Setup Java
+        uses: actions/setup-java@dded0888837ed1f317902acf8a20df0ad188d165 # v5.0.0
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK
+        run: bash scripts/ci/setup-android-sdk.sh
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile || (
+            echo "bun install failed, clearing cache and retrying..."
+            (bun pm cache rm || bun pm cache clean)
+            bun install --frozen-lockfile
+          )
+
+      - name: Build debug APK
+        run: bash apps/mobile/scripts/android_build_debug.sh
+        env:
+          ARCHS: ${{ inputs.archs }}
+          EXPO_NO_TELEMETRY: "1"
+          DONATION_PROMPT_ENABLED: "true"
+          FEEDBACK_ENDPOINT_URL: ${{ vars.FEEDBACK_ENDPOINT_URL || vars.VITE_FEEDBACK_ENDPOINT_URL || 'https://feedback.mindwtr.app' }}
+
+      - name: Prepare debug artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p android-debug-artifacts
+          cp apps/mobile/build/*-debug.apk android-debug-artifacts/
+          {
+            echo "Mindwtr Android debug APK"
+            echo "Commit: ${GITHUB_SHA}"
+            echo "ABIs: ${{ inputs.archs }}"
+            echo
+            echo "Install with:"
+            echo "adb install -r -d <apk>"
+            echo
+            echo "This is a debuggable APK for local diagnostics and profiling."
+          } > android-debug-artifacts/README.txt
+          ls -la android-debug-artifacts
+
+      - name: Upload Android debug APK
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: android-debug-apk
+          path: android-debug-artifacts/*
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention_days }}

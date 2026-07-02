@@ -1,0 +1,4 @@
+- Repeat reminders for tasks with an explicit due time.
+- Bulk Quick Add capture and safer typed quick-add text handling.
+- Better Focus/project refresh, keyboard-covered popups, large text wrapping, and Material 3 controls.
+- Stronger sync repair with clearer WebDAV/native failure details.

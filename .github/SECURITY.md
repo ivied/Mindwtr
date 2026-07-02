@@ -2,12 +2,12 @@
 
 ## Supported Versions
 
-Mindwtr currently provides security fixes for the latest stable release line.
+Mindwtr currently provides security fixes for supported 1.0+ releases.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.8.x   | :white_check_mark: |
-| < 0.8.0 | :x: |
+| 1.0.0 and later | :white_check_mark: |
+| < 1.0.0 | :x: |
 
 ## Security Model
 

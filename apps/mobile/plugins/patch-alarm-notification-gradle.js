@@ -30,6 +30,24 @@ const applyGradleCompatPatchToSource = (original) => {
     next = `${next.slice(0, markerIndex).trimEnd()}\n\n// Legacy publishing tasks removed for modern Gradle compatibility.\n`;
   }
 
+  if (
+    !next.includes("project(':notification-open-intents')")
+    && next.includes('dependencies {')
+  ) {
+    const reactNativeDependencyIndex = next.search(/implementation ['"]com\.facebook\.react:react-native:\+['"]/);
+    if (reactNativeDependencyIndex >= 0) {
+      const dependencyBlockStart = next.lastIndexOf('dependencies {', reactNativeDependencyIndex);
+      const dependencyBlockEnd = next.indexOf('\n}', reactNativeDependencyIndex);
+      if (dependencyBlockStart >= 0 && dependencyBlockEnd >= 0) {
+        next = `${next.slice(0, dependencyBlockEnd)}
+    if (rootProject.findProject(':notification-open-intents') != null) {
+        implementation project(':notification-open-intents')
+    }
+${next.slice(dependencyBlockEnd)}`;
+      }
+    }
+  }
+
   return next;
 };
 
@@ -89,6 +107,99 @@ const applyAlarmDuplicateToastPatchToSource = (original) => original.replace(
 );
 
 const applyAlarmDuplicateToastPatch = (filePath) => patchFile(filePath, applyAlarmDuplicateToastPatchToSource);
+
+const applyAlarmTimingPatchToSource = (original) => {
+  let next = original;
+  const alarmManagerHelperMarker = `    private AlarmManager getAlarmManager() {
+        return (AlarmManager) mContext.getSystemService(Context.ALARM_SERVICE);
+    }
+`;
+
+  if (!next.includes('setExactOrAllowWhileIdle(') && next.includes(alarmManagerHelperMarker)) {
+    next = next.replace(
+      alarmManagerHelperMarker,
+      `${alarmManagerHelperMarker}
+    private void setExactOrAllowWhileIdle(AlarmManager alarmManager, long triggerAtMillis, PendingIntent alarmIntent) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (alarmManager.canScheduleExactAlarms()) {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, alarmIntent);
+            } else {
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, alarmIntent);
+            }
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, alarmIntent);
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            alarmManager.setExact(AlarmManager.RTC_WAKEUP, triggerAtMillis, alarmIntent);
+        } else {
+            alarmManager.set(AlarmManager.RTC_WAKEUP, triggerAtMillis, alarmIntent);
+        }
+    }
+`
+    );
+  }
+
+  next = next.replace(
+    /^([ \t]*)if \(Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.M\) \{\n\1[ \t]{4}alarmManager\.setAndAllowWhileIdle\(AlarmManager\.RTC_WAKEUP, calendar\.getTimeInMillis\(\), alarmIntent\);\n\1\} else if \(Build\.VERSION\.SDK_INT >= Build\.VERSION_CODES\.KITKAT\) \{\n\1[ \t]{4}alarmManager\.setExact\(AlarmManager\.RTC_WAKEUP, calendar\.getTimeInMillis\(\), alarmIntent\);\n\1\} else \{\n\1[ \t]{4}alarmManager\.set\(AlarmManager\.RTC_WAKEUP, calendar\.getTimeInMillis\(\), alarmIntent\);\n\1\}\n/gm,
+    '$1setExactOrAllowWhileIdle(alarmManager, calendar.getTimeInMillis(), alarmIntent);\n'
+  );
+  next = next.replace(
+    `    void snoozeAlarm(AlarmModel alarm) {
+        Calendar calendar = getCalendarFromAlarm(alarm);
+`,
+    `    void snoozeAlarm(AlarmModel alarm) {
+        Calendar calendar = Calendar.getInstance();
+`
+  );
+  const firedNotificationIdMarker = 'int firedNotificationId = alarm.getAlarmId();';
+  if (!next.includes(firedNotificationIdMarker)) {
+    const withFiredNotificationId = next.replace(
+      `    void snoozeAlarm(AlarmModel alarm) {
+        Calendar calendar = Calendar.getInstance();
+
+        this.stopAlarmSound();
+`,
+      `    void snoozeAlarm(AlarmModel alarm) {
+        Calendar calendar = Calendar.getInstance();
+
+        this.stopAlarmSound();
+
+        int firedNotificationId = alarm.getAlarmId();
+`
+    );
+    if (withFiredNotificationId !== next) {
+      next = withFiredNotificationId;
+    }
+  }
+  if (
+    next.includes(firedNotificationIdMarker)
+    && !next.includes('int snoozedAlarmRowId = getAlarmDB().insert(alarm);')
+  ) {
+    // Snooze persists the rescheduled reminder as its own alarm row instead of
+    // mutating the original. The JS reschedule cycle only tracks alarms it
+    // scheduled (keyed by their original row id); the past-due task would
+    // otherwise be reaped on the next cycle, cancelling the snoozed alarm
+    // before it fires. An independent row is invisible to that reconciliation.
+    next = next.replace(
+      `        getAlarmDB().update(alarm);
+
+        Log.e(TAG, "snooze data - " + alarm.toString());
+`,
+      `        int snoozedAlarmRowId = getAlarmDB().insert(alarm);
+        alarm.setId(snoozedAlarmRowId);
+
+        getNotificationManager().cancel(firedNotificationId);
+
+        Log.e(TAG, "snooze data - " + alarm.toString());
+`
+    );
+  }
+
+  return next;
+};
+
+const applyAlarmTimingPatch = (filePath) => patchFile(filePath, applyAlarmTimingPatchToSource);
 
 const applyAlarmReminderBehaviorPatchToSource = (original) => {
   let next = original;
@@ -211,6 +322,40 @@ const applyAlarmCompleteConstantsPatchToSource = (original) => {
 
 const applyAlarmCompleteConstantsPatch = (filePath) => patchFile(filePath, applyAlarmCompleteConstantsPatchToSource);
 
+const applyAlarmTaskOpenIntentPatchToSource = (original) => {
+  let next = original;
+
+  if (!next.includes('import android.net.Uri;')) {
+    next = next.replace('import android.media.MediaPlayer;\n', 'import android.media.MediaPlayer;\nimport android.net.Uri;\n');
+  }
+
+  if (next.includes('mindwtr:///focus')) return next;
+
+  return next.replace(
+    `            PendingIntent pendingIntent = PendingIntent.getActivity(mContext, notificationID, intent, getUpdateCurrentImmutableFlags());
+`,
+    `            String taskId = bundle.getString("taskId");
+            if (taskId != null && !taskId.equals("")) {
+                String openToken = bundle.getString("alarmKey");
+                if (openToken == null || openToken.equals("")) {
+                    openToken = String.valueOf(alarm.getId());
+                }
+                intent.setAction(Intent.ACTION_VIEW);
+                intent.setData(Uri.parse("mindwtr:///focus")
+                        .buildUpon()
+                        .appendQueryParameter("taskId", taskId)
+                        .appendQueryParameter("openToken", openToken)
+                        .appendQueryParameter("taskTab", "view")
+                        .build());
+            }
+
+            PendingIntent pendingIntent = PendingIntent.getActivity(mContext, notificationID, intent, getUpdateCurrentImmutableFlags());
+`
+  );
+};
+
+const applyAlarmTaskOpenIntentPatch = (filePath) => patchFile(filePath, applyAlarmTaskOpenIntentPatchToSource);
+
 const applyAlarmCompleteUtilPatchToSource = (original) => {
   let next = original;
 
@@ -278,8 +423,38 @@ const applyAlarmCompleteReceiverPatchToSource = (original) => {
   if (!next.includes('import android.os.Bundle;')) {
     next = next.replace('import android.content.Intent;\n', 'import android.content.Intent;\nimport android.os.Bundle;\n');
   }
+  if (!next.includes('import java.util.LinkedHashMap;')) {
+    next = next.replace('import com.facebook.react.modules.core.DeviceEventManagerModule;\n', 'import com.facebook.react.modules.core.DeviceEventManagerModule;\n\nimport java.util.LinkedHashMap;\n');
+  }
+  if (!next.includes('import tech.dongdongbh.mindwtr.notificationopenintents.NotificationOpenPayloadStore;')) {
+    next = next.replace('import java.util.LinkedHashMap;\n', 'import java.util.LinkedHashMap;\n\nimport tech.dongdongbh.mindwtr.notificationopenintents.NotificationOpenPayloadStore;\n');
+  }
 
-  if (next.includes('case Constants.NOTIFICATION_ACTION_COMPLETE')) return next;
+  const pendingPayloadCacheBlock = `                            LinkedHashMap<String, String> pendingPayload = new LinkedHashMap<>();
+                            for (String key : payload.keySet()) {
+                                Object value = payload.get(key);
+                                if (value != null) {
+                                    pendingPayload.put(key, String.valueOf(value));
+                                }
+                            }
+                            NotificationOpenPayloadStore.cache(pendingPayload);
+`;
+
+  if (next.includes('case Constants.NOTIFICATION_ACTION_COMPLETE')) {
+    if (!next.includes('NotificationOpenPayloadStore.cache(pendingPayload)')) {
+      next = next.replace(
+        `                            payload.putString("actionIdentifier", "complete");
+
+                            alarmUtil.removeFiredNotification(alarm.getId());
+`,
+        `                            payload.putString("actionIdentifier", "complete");
+${pendingPayloadCacheBlock}
+                            alarmUtil.removeFiredNotification(alarm.getId());
+`
+      );
+    }
+    return next;
+  }
 
   return next.replace(
     `                    case Constants.NOTIFICATION_ACTION_DISMISS:
@@ -299,6 +474,7 @@ const applyAlarmCompleteReceiverPatchToSource = (original) => {
                                 payload.putString("alarmKey", "task:" + payload.getString("taskId"));
                             }
                             payload.putString("actionIdentifier", "complete");
+${pendingPayloadCacheBlock}
 
                             alarmUtil.removeFiredNotification(alarm.getId());
                             alarmUtil.cancelAlarm(alarm, false);
@@ -493,7 +669,6 @@ API_AVAILABLE(ios(10.0)) {
 const applyAlarmIosCompleteActionPatch = (filePath) => patchFile(filePath, applyAlarmIosCompleteActionPatchToSource);
 
 const logPatchedCandidate = (label, candidate) => {
-  // eslint-disable-next-line no-console
   console.log(`[${label}] patched ${candidate}`);
 };
 
@@ -568,6 +743,7 @@ function withAlarmNotificationGradlePatch(config) {
     }
 
     ensurePermission(manifest, 'android.permission.RECEIVE_BOOT_COMPLETED');
+    ensurePermission(manifest, 'android.permission.SCHEDULE_EXACT_ALARM');
 
     ensureReceiver(
       application,
@@ -576,7 +752,7 @@ function withAlarmNotificationGradlePatch(config) {
         'android:enabled': 'true',
         'android:exported': 'true',
       },
-      ['ACTION_DISMISS', 'ACTION_SNOOZE']
+      ['ACTION_DISMISS', 'ACTION_SNOOZE', 'ACTION_COMPLETE']
     );
 
     ensureReceiver(
@@ -632,8 +808,14 @@ function withAlarmNotificationGradlePatch(config) {
         if (applyAlarmPendingIntentPatch(candidate)) {
           logPatchedCandidate('alarm-pending-intent-patch', candidate);
         }
+        if (applyAlarmTaskOpenIntentPatch(candidate)) {
+          logPatchedCandidate('alarm-task-open-intent-patch', candidate);
+        }
         if (applyAlarmDuplicateToastPatch(candidate)) {
           logPatchedCandidate('alarm-duplicate-toast-patch', candidate);
+        }
+        if (applyAlarmTimingPatch(candidate)) {
+          logPatchedCandidate('alarm-timing-patch', candidate);
         }
         if (applyAlarmReminderBehaviorPatch(candidate)) {
           logPatchedCandidate('alarm-reminder-behavior-patch', candidate);
@@ -695,11 +877,13 @@ module.exports.__testables = {
   applyGradleCompatPatchToSource,
   applyAlarmPendingIntentPatchToSource,
   applyAlarmDuplicateToastPatchToSource,
+  applyAlarmTimingPatchToSource,
   applyAlarmReminderBehaviorPatchToSource,
   applyAlarmAudioInterfacePatchToSource,
   applyAlarmDismissReceiverPatchToSource,
   applyAlarmReceiverPatchToSource,
   applyAlarmCompleteConstantsPatchToSource,
+  applyAlarmTaskOpenIntentPatchToSource,
   applyAlarmCompleteUtilPatchToSource,
   applyAlarmCompleteReceiverPatchToSource,
   applyAlarmIosCompleteActionPatchToSource,

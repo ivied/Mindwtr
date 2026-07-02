@@ -1,5 +1,5 @@
 import React from 'react';
-import { Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { tFallback } from '@mindwtr/core';
 import type { Task } from '@mindwtr/core';
 import type { ThemeColors } from '../../hooks/use-theme-colors';
@@ -9,6 +9,7 @@ type ProjectNextActionPromptModalProps = {
     candidates: Task[];
     newTitle: string;
     projectTitle: string;
+    submitting?: boolean;
     tc: ThemeColors;
     t: (key: string) => string;
     visible: boolean;
@@ -22,6 +23,7 @@ export function ProjectNextActionPromptModal({
     candidates,
     newTitle,
     projectTitle,
+    submitting = false,
     tc,
     t,
     visible,
@@ -31,6 +33,7 @@ export function ProjectNextActionPromptModal({
     onNewTitleChange,
 }: ProjectNextActionPromptModalProps) {
     const canAddTask = newTitle.trim().length > 0;
+    const addDisabled = !canAddTask || submitting;
     const description = tFallback(
         t,
         'projects.nextActionPromptDesc',
@@ -67,10 +70,19 @@ export function ProjectNextActionPromptModal({
                                 {candidates.map((candidate) => (
                                     <Pressable
                                         key={candidate.id}
-                                        style={[styles.nextActionCandidate, { borderColor: tc.border, backgroundColor: tc.inputBg }]}
+                                        style={[
+                                            styles.nextActionCandidate,
+                                            {
+                                                borderColor: tc.border,
+                                                backgroundColor: tc.inputBg,
+                                                opacity: submitting ? 0.6 : 1,
+                                            },
+                                        ]}
                                         onPress={() => onChooseTask(candidate.id)}
+                                        disabled={submitting}
                                         accessibilityRole="button"
                                         accessibilityLabel={candidate.title}
+                                        accessibilityState={{ disabled: submitting }}
                                     >
                                         <Text style={[styles.nextActionCandidateTitle, { color: tc.text }]}>
                                             {candidate.title}
@@ -94,13 +106,14 @@ export function ProjectNextActionPromptModal({
                             placeholder={tFallback(t, 'projects.nextActionPromptPlaceholder', 'New next action...')}
                             placeholderTextColor={tc.secondaryText}
                             accessibilityLabel={tFallback(t, 'projects.nextActionPromptAddNew', 'Add a new next action')}
+                            editable={!submitting}
                             style={[
                                 styles.nextActionInput,
                                 { color: tc.text, backgroundColor: tc.inputBg, borderColor: tc.border },
                             ]}
                             returnKeyType="done"
                             onSubmitEditing={() => {
-                                if (canAddTask) onAddTask();
+                                if (!addDisabled) onAddTask();
                             }}
                         />
                     </View>
@@ -119,17 +132,21 @@ export function ProjectNextActionPromptModal({
                         <Pressable
                             style={[
                                 styles.nextActionPrimaryButton,
-                                { backgroundColor: canAddTask ? tc.tint : tc.filterBg },
+                                { backgroundColor: addDisabled ? tc.filterBg : tc.tint },
                             ]}
                             onPress={onAddTask}
-                            disabled={!canAddTask}
+                            disabled={addDisabled}
                             accessibilityRole="button"
                             accessibilityLabel={tFallback(t, 'projects.nextActionPromptAddButton', 'Add next action')}
-                            accessibilityState={{ disabled: !canAddTask }}
+                            accessibilityState={{ disabled: addDisabled }}
                         >
-                            <Text style={[styles.nextActionPrimaryText, { color: canAddTask ? tc.onTint : tc.secondaryText }]}>
-                                {tFallback(t, 'projects.nextActionPromptAddButton', 'Add next action')}
-                            </Text>
+                            {submitting ? (
+                                <ActivityIndicator color={tc.secondaryText} />
+                            ) : (
+                                <Text style={[styles.nextActionPrimaryText, { color: canAddTask ? tc.onTint : tc.secondaryText }]}>
+                                    {tFallback(t, 'projects.nextActionPromptAddButton', 'Add next action')}
+                                </Text>
+                            )}
                         </Pressable>
                     </View>
                 </Pressable>

@@ -14,10 +14,8 @@ https://play.google.com/store/apps/details?id=tech.dongdongbh.mindwtr
 ### Download APK (Alternative)
 
 1. Go to [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases)
-2. Download the latest arm64 APK (e.g., `mindwtr-0.4.3-arm64-v8a.apk` or `app-arm64-v8a-release.apk`)
+2. Download the latest APK (e.g., `mindwtr-<version>.apk`)
 3. Open the APK on your device
-
-> **Note:** Releases include ABI-split APKs. Most modern Android devices are **arm64-v8a**.
 
 ### Install from Unknown Sources
 

@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - 'v*'
+      - '!v*-rc.*'
   workflow_dispatch:
     inputs:
       tag:
@@ -40,6 +41,11 @@ on:
         required: false
         type: boolean
         default: false
+      force_ios_appstore_upload:
+        description: 'Fail instead of silently skipping iOS App Store upload when a corrected Apple build is required'
+        required: false
+        type: boolean
+        default: false
       run_macos_appstore:
         description: 'Run macOS App Store release job'
         required: false
@@ -52,11 +58,6 @@ on:
         default: false
       run_update_flathub:
         description: 'Run Flathub update job'
-        required: false
-        type: boolean
-        default: false
-      run_bump_official_cask:
-        description: 'Run official Homebrew cask bump job'
         required: false
         type: boolean
         default: false
@@ -87,58 +88,162 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  REQUIRE_STABLE_RELEASE_TAG: "1"
 
 jobs:
   linux:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_linux }}
+    if: ${{ !contains(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, '-') && (github.event_name != 'workflow_dispatch' || inputs.run_linux) }}
     uses: ./.github/workflows/release-linux.yml
+    with:
+      tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     secrets: inherit
 
   macos:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_macos }}
+    if: ${{ !contains(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, '-') && (github.event_name != 'workflow_dispatch' || inputs.run_macos) }}
     uses: ./.github/workflows/release-macos.yml
+    with:
+      tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     secrets: inherit
 
   windows:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_windows }}
+    if: ${{ !contains(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, '-') && (github.event_name != 'workflow_dispatch' || inputs.run_windows) }}
     uses: ./.github/workflows/release-windows.yml
+    with:
+      tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     secrets: inherit
 
+  android-version-code:
+    if: ${{ !contains(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, '-') && (github.event_name != 'workflow_dispatch' || inputs.run_android || inputs.run_android_foss) }}
+    runs-on: ubuntu-latest
+    name: Android VersionCode Preflight
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version_code: ${{ steps.version_code.outputs.resolved_code }}
+      local_version_code: ${{ steps.version_code.outputs.local_code }}
+      remote_max_version_code: ${{ steps.version_code.outputs.remote_max_code }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Authenticate Google Play API
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_android }}
+        id: play_auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          credentials_json: ${{ secrets.ANDROID_SERVICE_ACCOUNT_JSON }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/androidpublisher
+
+      - name: Resolve Android versionCode
+        id: version_code
+        env:
+          ACCESS_TOKEN: ${{ steps.play_auth.outputs.access_token }}
+          USE_PLAY_TRACKS: ${{ github.event_name != 'workflow_dispatch' || inputs.run_android }}
+        run: |
+          set -euo pipefail
+          PACKAGE="tech.dongdongbh.mindwtr"
+          LOCAL_CODE=$(jq -r '.expo.android.versionCode' apps/mobile/app.json)
+          if [ -z "$LOCAL_CODE" ] || [ "$LOCAL_CODE" = "null" ]; then
+            echo "Missing expo.android.versionCode in apps/mobile/app.json" >&2
+            exit 1
+          fi
+          MAX_CODE=0
+          if [ "$USE_PLAY_TRACKS" = "true" ]; then
+            if [ -z "${ACCESS_TOKEN:-}" ]; then
+              echo "Missing Google Play access token for Android versionCode preflight" >&2
+              exit 1
+            fi
+            EDIT_ID=$(curl -sS -X POST \
+              -H "Authorization: Bearer $ACCESS_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE/edits" \
+              -d '{}' | jq -r '.id')
+            if [ -z "$EDIT_ID" ] || [ "$EDIT_ID" = "null" ]; then
+              echo "Failed to create Google Play edit" >&2
+              exit 1
+            fi
+            TRACKS_FILE=$(mktemp)
+            TRACKS_CODE=$(curl -sS -o "$TRACKS_FILE" -w "%{http_code}" \
+              -H "Authorization: Bearer $ACCESS_TOKEN" \
+              "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE/edits/$EDIT_ID/tracks")
+            TRACKS_JSON=$(cat "$TRACKS_FILE")
+            if [ "$TRACKS_CODE" != "200" ]; then
+              echo "Failed to fetch Google Play tracks (HTTP $TRACKS_CODE): $TRACKS_JSON" >&2
+              exit 1
+            fi
+            if echo "$TRACKS_JSON" | jq -e '.error' >/dev/null; then
+              echo "Failed to fetch Google Play tracks: $TRACKS_JSON" >&2
+              exit 1
+            fi
+            MAX_CODE=$(echo "$TRACKS_JSON" | jq -r '[(.tracks // [])[]? | (.releases // [])[]? | (.versionCodes // [])[]? | tonumber] | max // 0')
+            if [ -z "$MAX_CODE" ] || [ "$MAX_CODE" = "null" ]; then
+              MAX_CODE=0
+            fi
+            curl -sS -X DELETE \
+              -H "Authorization: Bearer $ACCESS_TOKEN" \
+              "https://androidpublisher.googleapis.com/androidpublisher/v3/applications/$PACKAGE/edits/$EDIT_ID" >/dev/null
+          fi
+          REMOTE_MAX_VERSION_CODE="$MAX_CODE" \
+            ALLOW_UNTRACKED_VERSION_CODE=0 \
+            node scripts/ci/android-version-code-policy.js
+
   android:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_android }}
+    needs: android-version-code
+    if: ${{ always() && !contains(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, '-') && (github.event_name != 'workflow_dispatch' || inputs.run_android) && needs['android-version-code'].result == 'success' }}
+    permissions:
+      actions: read
+      contents: read
     uses: ./.github/workflows/release-android.yml
+    with:
+      tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      play_track: production
+      version_code: ${{ needs['android-version-code'].outputs.version_code }}
     secrets: inherit
 
   android-foss:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_android_foss }}
+    needs: android-version-code
+    if: ${{ always() && !contains(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, '-') && (github.event_name != 'workflow_dispatch' || inputs.run_android_foss) && needs['android-version-code'].result == 'success' }}
     uses: ./.github/workflows/release-android-foss.yml
+    with:
+      tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      version_code: ${{ needs['android-version-code'].outputs.version_code }}
     secrets: inherit
 
   ios-appstore:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_ios_appstore }}
+    if: ${{ !contains(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, '-') && (github.event_name != 'workflow_dispatch' || inputs.run_ios_appstore) }}
     uses: ./.github/workflows/release-ios-appstore.yml
     with:
+      tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
       upload: true
       submit_for_review: true
+      distribute_testflight: true
+      force_appstore_upload: ${{ github.event_name == 'workflow_dispatch' && inputs.force_ios_appstore_upload || false }}
       testflight_group: 'external_testing'
     secrets: inherit
 
   macos-appstore:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.run_macos_appstore }}
+    if: ${{ !contains(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, '-') && (github.event_name != 'workflow_dispatch' || inputs.run_macos_appstore) }}
     uses: ./.github/workflows/release-macos-appstore.yml
     with:
+      tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
       upload: true
       submit_for_review: true
+      distribute_testflight: true
       testflight_group: 'external_testing'
     secrets: inherit
 
   release:
-    if: ${{ github.event_name != 'workflow_dispatch' || (inputs.run_linux && inputs.run_macos && inputs.run_windows && inputs.run_android && inputs.run_android_foss) }}
+    if: ${{ !contains(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, '-') && (github.event_name != 'workflow_dispatch' || (inputs.run_linux && inputs.run_macos && inputs.run_windows && inputs.run_android && inputs.run_android_foss)) }}
     needs: [linux, macos, windows, android, android-foss]
     runs-on: ubuntu-latest
     name: Create Release
     timeout-minutes: 60
     permissions:
+      actions: read
       contents: write
 
     steps:
@@ -153,11 +258,25 @@ jobs:
           INPUT_TAG: ${{ github.event.inputs.tag }}
           GITHUB_EVENT_INPUTS_TAG: ${{ github.event.inputs.tag }}
         run: |
-          if [ -n "${INPUT_TAG:-}" ] && ! echo "${INPUT_TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
+          if [ -n "${INPUT_TAG:-}" ] && ! echo "${INPUT_TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "Invalid tag format" >&2
             exit 1
           fi
           scripts/ci/resolve-release-version.sh "$INPUT_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release tag points at this commit
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.release_version.outputs.tag }}"
+          TAG_SHA="$(git rev-list -n 1 "$TAG")"
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$TAG_SHA" != "$HEAD_SHA" ]; then
+            echo "Release workflow must run from the commit pointed to by $TAG." >&2
+            echo "$TAG -> $TAG_SHA" >&2
+            echo "workflow HEAD -> $HEAD_SHA" >&2
+            exit 1
+          fi
+          echo "Verified $TAG points at $HEAD_SHA."
 
       - name: Download build artifacts
         env:
@@ -278,10 +397,8 @@ jobs:
           NOTES_FILE="${{ steps.release_notes.outputs.body_path }}"
 
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release edit "$TAG" \
-              --draft=false \
-              --notes-file "$NOTES_FILE"
-            gh release upload "$TAG" ./release-assets/* --clobber
+            echo "Release $TAG already exists; stable release assets are immutable. Publish fixes under a new tag." >&2
+            exit 1
           else
             if [[ "$TAG" == *-* ]]; then
               gh release create "$TAG" ./release-assets/* \
@@ -302,7 +419,7 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
-    if: ${{ always() && ((startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.run_update_packages && (needs.release.result == 'success' || needs.release.result == 'skipped'))) }}
+    if: ${{ always() && !contains(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, '-') && ((startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.run_update_packages && (needs.release.result == 'success' || needs.release.result == 'skipped'))) }}
     steps:
       - name: Checkout release repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -322,7 +439,7 @@ jobs:
           INPUT_TAG: ${{ github.event.inputs.tag }}
           GITHUB_EVENT_INPUTS_TAG: ${{ github.event.inputs.tag }}
         run: |
-          if [ -n "${INPUT_TAG:-}" ] && ! echo "${INPUT_TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
+          if [ -n "${INPUT_TAG:-}" ] && ! echo "${INPUT_TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "Invalid tag format" >&2
             exit 1
           fi
@@ -551,109 +668,25 @@ jobs:
   update-flathub:
     needs: release
     name: Update Flathub
-    if: ${{ always() && ((startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success' && !contains(github.ref_name, '-')) || (github.event_name == 'workflow_dispatch' && inputs.run_update_flathub && (needs.release.result == 'success' || needs.release.result == 'skipped') && !contains(inputs.tag, '-'))) }}
+    if: ${{ always() && !contains(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, '-') && ((startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success' && !contains(github.ref_name, '-')) || (github.event_name == 'workflow_dispatch' && inputs.run_update_flathub && (needs.release.result == 'success' || needs.release.result == 'skipped') && !contains(inputs.tag, '-'))) }}
     uses: ./.github/workflows/update-flathub.yml
     with:
       tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
     secrets: inherit
 
-  bump-official-cask:
+  update-flathub-beta:
     needs: release
-    runs-on: macos-latest
-    name: Bump Official Homebrew Cask
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    if: ${{ always() && ((startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success' && !contains(github.ref, '-')) || (github.event_name == 'workflow_dispatch' && inputs.run_bump_official_cask && (needs.release.result == 'success' || needs.release.result == 'skipped'))) }}
-    steps:
-      - name: Checkout release repo
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-
-      - name: Resolve release tag/version
-        id: version
-        env:
-          INPUT_TAG: ${{ github.event.inputs.tag }}
-          GITHUB_EVENT_INPUTS_TAG: ${{ github.event.inputs.tag }}
-        run: |
-          if [ -n "${INPUT_TAG:-}" ] && ! echo "${INPUT_TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
-            echo "Invalid tag format" >&2
-            exit 1
-          fi
-          scripts/ci/resolve-release-version.sh "$INPUT_TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Wait for macOS release assets to be live
-        run: |
-          TAG="${{ steps.version.outputs.tag }}"
-          VERSION="${{ steps.version.outputs.version }}"
-          URL_DMG_ARM="https://github.com/${{ github.repository }}/releases/download/${TAG}/mindwtr_${VERSION}_aarch64.dmg"
-          URL_DMG_INTEL="https://github.com/${{ github.repository }}/releases/download/${TAG}/mindwtr_${VERSION}_x64.dmg"
-
-          echo "Waiting for release assets:"
-          echo "  - $URL_DMG_ARM"
-          echo "  - $URL_DMG_INTEL"
-
-          for attempt in $(seq 1 20); do
-            if curl -fsI "$URL_DMG_ARM" >/dev/null && curl -fsI "$URL_DMG_INTEL" >/dev/null; then
-              echo "macOS assets are available."
-              exit 0
-            fi
-            echo "Attempt $attempt/20: assets not live yet; sleeping 15s..."
-            sleep 15
-          done
-
-          echo "Release assets were not available in time."
-          exit 1
-
-      - name: Configure git identity
-        run: |
-          git config --local user.name "github-actions[bot]"
-          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - name: Submit Homebrew cask bump PR
-        env:
-          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.HOMEBREW_PR_TOKEN }}
-        run: |
-          if [ -z "${HOMEBREW_GITHUB_API_TOKEN}" ]; then
-            echo "Missing HOMEBREW_PR_TOKEN secret."
-            exit 1
-          fi
-
-          VERSION="${{ steps.version.outputs.version }}"
-          run_bump_cask_pr() {
-            HOMEBREW_NO_INSTALL_FROM_API=1 brew bump-cask-pr homebrew/cask/mindwtr --version "$VERSION" --verbose --no-browse 2>&1
-          }
-
-          set +e
-          OUTPUT="$(run_bump_cask_pr)"
-          STATUS=$?
-          set -e
-          echo "$OUTPUT"
-
-          if [ "$STATUS" -ne 0 ] && echo "$OUTPUT" | grep -Fqi "Tap homebrew/cask already tapped"; then
-            echo "Homebrew cask tap conflict detected; retrying once after untap."
-            brew untap homebrew/cask >/dev/null 2>&1 || true
-            set +e
-            OUTPUT="$(run_bump_cask_pr)"
-            STATUS=$?
-            set -e
-            echo "$OUTPUT"
-          fi
-
-          if [ "$STATUS" -ne 0 ]; then
-            if echo "$OUTPUT" | grep -Eiq "already (at version|up[ -]?to[ -]?date)|no changes"; then
-              echo "Official cask is already at version $VERSION; skipping."
-              exit 0
-            fi
-            if echo "$OUTPUT" | grep -Eiq "BrewTestBot|autobump|no_autobump"; then
-              echo "Official cask is BrewTestBot-managed; skipping manual bump."
-              exit 0
-            fi
-            exit "$STATUS"
-          fi
+    name: Update Flathub Beta
+    if: ${{ always() && !contains(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, '-') && ((startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success' && !contains(github.ref_name, '-')) || (github.event_name == 'workflow_dispatch' && inputs.run_update_flathub && (needs.release.result == 'success' || needs.release.result == 'skipped') && !contains(inputs.tag, '-'))) }}
+    uses: ./.github/workflows/update-flathub.yml
+    with:
+      tag: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      channel: beta
+    secrets: inherit
 
   update-linux-repos:
     needs: release
-    if: ${{ always() && ((startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.run_update_linux_repos && (needs.release.result == 'success' || needs.release.result == 'skipped'))) }}
+    if: ${{ always() && !contains(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, '-') && ((startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.run_update_linux_repos && (needs.release.result == 'success' || needs.release.result == 'skipped'))) }}
     permissions:
       contents: write
     uses: ./.github/workflows/publish-repo.yml
@@ -668,7 +701,7 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
-    if: ${{ always() && ((startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success' && !contains(github.ref, '-')) || (github.event_name == 'workflow_dispatch' && inputs.run_publish_chocolatey && (needs.release.result == 'success' || needs.release.result == 'skipped'))) && vars.CHOCOLATEY_PUBLISH_ENABLED == 'true' }}
+    if: ${{ always() && !contains(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, '-') && ((startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success' && !contains(github.ref, '-')) || (github.event_name == 'workflow_dispatch' && inputs.run_publish_chocolatey && (needs.release.result == 'success' || needs.release.result == 'skipped'))) && vars.CHOCOLATEY_PUBLISH_ENABLED == 'true' }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -792,7 +825,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-    if: ${{ always() && ((startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.run_update_aur && (needs.release.result == 'success' || needs.release.result == 'skipped'))) }}
+    if: ${{ always() && !contains(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, '-') && ((startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.run_update_aur && (needs.release.result == 'success' || needs.release.result == 'skipped'))) }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -803,7 +836,7 @@ jobs:
           INPUT_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           GITHUB_EVENT_INPUTS_TAG: ${{ github.event.inputs.tag }}
         run: |
-          if [ -n "${INPUT_TAG:-}" ] && ! echo "${INPUT_TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
+          if [ -n "${INPUT_TAG:-}" ] && ! echo "${INPUT_TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "Invalid tag format" >&2
             exit 1
           fi
@@ -873,7 +906,7 @@ jobs:
         shell: bash
         run: cp aur/PKGBUILD aur-mindwtr-bin/PKGBUILD
 
-      - name: Update .SRCINFO
+      - name: Update .SRCINFO and smoke package
         run: |
           HOST_UID="$(id -u)"
           HOST_GID="$(id -g)"
@@ -890,6 +923,8 @@ jobs:
               id -u builder >/dev/null 2>&1 || useradd -m -u "$HOST_UID" -g "$HOST_GID" builder
               chown -R builder:builder /aur
               su builder -c "updpkgsums"
+              su builder -c "makepkg --verifysource --noconfirm"
+              su builder -c "makepkg --cleanbuild --clean --nodeps --noconfirm"
               su builder -c "makepkg --printsrcinfo > /aur/.SRCINFO"
             '
         shell: bash
@@ -929,7 +964,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
-    if: ${{ always() && ((startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.run_update_aur_source && (needs.release.result == 'success' || needs.release.result == 'skipped'))) }}
+    if: ${{ always() && !contains(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, '-') && ((startsWith(github.ref, 'refs/tags/') && github.event_name == 'push' && needs.release.result == 'success') || (github.event_name == 'workflow_dispatch' && inputs.run_update_aur_source && (needs.release.result == 'success' || needs.release.result == 'skipped'))) }}
     steps:
       - name: Checkout release repo
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -992,7 +1027,7 @@ jobs:
           INPUT_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           GITHUB_EVENT_INPUTS_TAG: ${{ github.event.inputs.tag }}
         run: |
-          if [ -n "${INPUT_TAG:-}" ] && ! echo "${INPUT_TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
+          if [ -n "${INPUT_TAG:-}" ] && ! echo "${INPUT_TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "Invalid tag format" >&2
             exit 1
           fi
@@ -1015,6 +1050,43 @@ jobs:
             echo "pkgver_changed=false" >> "$GITHUB_OUTPUT"
             echo "pkgver unchanged (${VERSION}); keep current pkgrel for now"
           fi
+
+      - name: Use release archive for source package
+        shell: bash
+        working-directory: aur-mindwtr
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("PKGBUILD")
+          text = path.read_text(encoding="utf-8")
+
+          archive_source = (
+              'source=("$pkgname-$pkgver.tar.gz::https://github.com/dongdongbh/Mindwtr/archive/refs/tags/v$pkgver.tar.gz"\n'
+              '        "$pkgname.desktop"\n'
+              ')'
+          )
+          text, replaced = re.subn(
+              r'source=\("git\+https://github\.com/dongdongbh/Mindwtr\.git#tag=v\$pkgver"\s*\n\s*"\$pkgname\.desktop"\s*\)',
+              archive_source,
+              text,
+              count=1,
+          )
+          if replaced:
+              print("Switched source package from git tag clone to GitHub release archive.")
+          elif "Mindwtr/archive/refs/tags/v$pkgver.tar.gz" in text:
+              print("Source package already uses the GitHub release archive.")
+          else:
+              raise SystemExit("Could not find the expected Mindwtr source entry in PKGBUILD")
+
+          text = text.replace('cd Mindwtr/apps/desktop/src-tauri', 'cd "$srcdir/Mindwtr-$pkgver/apps/desktop/src-tauri"')
+          text = text.replace('cd Mindwtr/apps/desktop', 'cd "$srcdir/Mindwtr-$pkgver/apps/desktop"')
+          text = text.replace('cd Mindwtr', 'cd "$srcdir/Mindwtr-$pkgver"')
+
+          path.write_text(text, encoding="utf-8")
+          PY
 
       - name: Sync Tauri compatibility patch
         shell: bash

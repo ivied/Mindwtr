@@ -1,0 +1,4 @@
+- Guided Mind Sweep captura asuntos personales y de trabajo directamente en Bandeja.
+- Personas, orden del tablero, procesamiento de bandeja y seguimientos para hoy mejoran la organizacion.
+- Sync y adjuntos son mas seguros con solicitudes acotadas, borrados remotos, tombstones y mejores fallbacks.
+- Acciones moviles, texto compartido y organizacion de revision son mas estables.

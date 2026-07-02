@@ -35,6 +35,11 @@ if [ -z "${version}" ] || ! echo "${version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]
   exit 1
 fi
 
+if [ "${REQUIRE_STABLE_RELEASE_TAG:-0}" = "1" ] && ! echo "${version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+  echo "Invalid stable release tag '${tag}'. Expected format like v1.2.3 without prerelease suffix." >&2
+  exit 1
+fi
+
 printf 'tag=%s\n' "${tag}"
 printf 'version=%s\n' "${version}"
 

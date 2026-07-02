@@ -2,6 +2,9 @@ type ReviewLabelKey =
     | 'weeklyReview'
     | 'inbox'
     | 'ai'
+    | 'stale'
+    | 'staleDesc'
+    | 'staleDaysInactive'
     | 'calendar'
     | 'waiting'
     | 'contexts'
@@ -68,6 +71,9 @@ const defaultReviewLabels: ReviewLabels = {
     weeklyReview: 'Weekly Review',
     inbox: 'Inbox',
     ai: 'AI Insight',
+    stale: 'Stale items',
+    staleDesc: 'No recent activity. Update each one, complete it, or let it go.',
+    staleDaysInactive: '{{days}} days inactive',
     calendar: 'Calendar',
     waiting: 'Waiting For',
     contexts: 'Contexts',
@@ -131,6 +137,9 @@ const reviewLabelTranslationKeys: Record<ReviewLabelKey, string> = {
     weeklyReview: 'settings.weeklyReview',
     inbox: 'nav.inbox',
     ai: 'review.aiStep',
+    stale: 'review.staleStep',
+    staleDesc: 'review.staleStepDesc',
+    staleDaysInactive: 'review.staleDaysInactive',
     calendar: 'nav.calendar',
     waiting: 'review.waitingStep',
     contexts: 'review.contexts',

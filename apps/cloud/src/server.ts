@@ -3,6 +3,8 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSy
 import { join, relative } from 'path';
 import {
     applyTaskUpdates,
+    areSyncPayloadsEqual,
+    buildHttpRemoteFileFingerprint,
     filterNotDeleted,
     generateUUID,
     mergeAppDataWithStats,
@@ -13,6 +15,7 @@ import {
     type Area,
     type Attachment,
     type AppData,
+    type PendingRemoteAttachmentDelete,
     type Project,
     type Section,
     type Task,
@@ -24,12 +27,14 @@ import {
     getClientIp,
     getToken,
     isAuthorizedToken,
+    normalizeAllowedAuthTokens,
     parseAllowedAuthTokens,
     parseBoolEnv,
     parseTrustedProxyIps,
     resolveAllowedAuthTokensFromEnv,
     toRateLimitRoute,
     tokenToKey,
+    type AllowedAuthTokenInput,
 } from './server-auth';
 import {
     AUTH_FAILURE_RATE_MAX,
@@ -84,6 +89,7 @@ import {
 import {
     __serverDataCacheTestUtils,
     dataMetadataResponse,
+    getDataFileMetadata,
     isTrustedValidatedDataFile,
     jsonFileResponse,
     loadAppData,
@@ -142,6 +148,7 @@ const normalizeStoredAppData = (data: AppData): AppData => ({
     projects: Array.isArray(data.projects) ? data.projects : [],
     sections: Array.isArray(data.sections) ? data.sections : [],
     areas: Array.isArray(data.areas) ? data.areas : [],
+    people: Array.isArray(data.people) ? data.people : [],
     settings: isRecord(data.settings) ? data.settings : {},
 });
 
@@ -163,7 +170,7 @@ const validateStoredAppData = (
 };
 
 const loadExistingDataForMerge = (filePath: string, key: string): AppData | { error: Response } => {
-    if (!existsSync(filePath)) return { tasks: [], projects: [], sections: [], areas: [], settings: {} };
+    if (!existsSync(filePath)) return { tasks: [], projects: [], sections: [], areas: [], people: [], settings: {} };
     const rawData = readData(filePath);
     if (!rawData) {
         logWarn('Stored cloud data failed validation', { key, error: 'Invalid JSON' });
@@ -181,6 +188,7 @@ type BunRuntime = {
     serve: (options: {
         hostname: string;
         port: number;
+        idleTimeout?: number;
         fetch: (req: Request) => Response | Promise<Response>;
     }) => BunServer;
 };
@@ -251,7 +259,25 @@ function parseSearchPaginationValue(searchParams: URLSearchParams, name: string,
     return name.toLowerCase().includes('limit') ? Math.min(LIST_MAX_LIMIT, value) : value;
 }
 
-function finalizeCloudDataForWrite(data: AppData, nowIso: string): AppData | { error: Response } {
+type FinalizeCloudDataForWriteOptions = {
+    rejectInvalidBeforeRepair?: boolean;
+};
+
+const FINALIZE_REJECT_INVALID_REST_WRITE: FinalizeCloudDataForWriteOptions = {
+    rejectInvalidBeforeRepair: true,
+};
+
+function finalizeCloudDataForWrite(
+    data: AppData,
+    nowIso: string,
+    options: FinalizeCloudDataForWriteOptions = {},
+): AppData | { error: Response } {
+    if (options.rejectInvalidBeforeRepair) {
+        const initialValidation = validateAppData(data);
+        if (!initialValidation.ok) {
+            return { error: errorResponse(initialValidation.error, 400) };
+        }
+    }
     const repaired = repairMergedSyncReferences(data, nowIso);
     const validated = validateAppData(repaired);
     if (!validated.ok) {
@@ -259,6 +285,393 @@ function finalizeCloudDataForWrite(data: AppData, nowIso: string): AppData | { e
     }
     return repaired;
 }
+
+type CloudEntity = {
+    id: string;
+    deletedAt?: string;
+    updatedAt: string;
+    rev?: number;
+    revBy?: string;
+};
+type EntityCollectionKey = 'projects' | 'sections' | 'areas';
+type EntityItemKey = 'project' | 'section' | 'area';
+
+type EntityRouteDefinition<T extends CloudEntity> = {
+    path: string;
+    collectionKey: EntityCollectionKey;
+    itemKey: EntityItemKey;
+    listKey: EntityCollectionKey;
+    label: string;
+    invalidIdMessage: string;
+    listItems: (data: AppData, url: URL) => T[];
+    createEntity: (body: Record<string, unknown>, data: AppData, nowIso: string) => T | Response;
+    canPatchDeletedEntity?: (body: Record<string, unknown>) => boolean;
+    patchEntity: (body: Record<string, unknown>, existing: T, data: AppData, nowIso: string) => T | Response;
+};
+
+type EntityRouteContext = {
+    key: string;
+    filePath: string;
+    maxBodyBytes: number;
+    signal: AbortSignal;
+    withWriteLock: ReturnType<typeof createWriteLockRunner>;
+};
+
+type EntityBodyResult =
+    | { ok: true; body: Record<string, unknown> }
+    | { ok: false; response: Response };
+
+const isResponse = (value: unknown): value is Response => value instanceof Response;
+
+const readEntityObjectBody = async (
+    req: Request,
+    maxBodyBytes: number,
+    signal: AbortSignal
+): Promise<EntityBodyResult> => {
+    const body = await readJsonBody(req, maxBodyBytes, signal);
+    if (isBodyReadError(body)) {
+        const err = body.__mindwtrError;
+        return {
+            ok: false,
+            response: errorResponse(String(err?.message || 'Payload too large'), Number(err?.status) || 413),
+        };
+    }
+    const bodyRecord = readObjectBody(body);
+    if (!bodyRecord) return { ok: false, response: errorResponse('Invalid JSON body') };
+    return { ok: true, body: bodyRecord };
+};
+
+const getEntityCollection = <T extends CloudEntity>(data: AppData, route: EntityRouteDefinition<T>): T[] =>
+    data[route.collectionKey] as unknown as T[];
+
+const handleEntityRoute = async <T extends CloudEntity>(
+    route: EntityRouteDefinition<T>,
+    req: Request,
+    pathname: string,
+    url: URL,
+    context: EntityRouteContext
+): Promise<Response | null> => {
+    if (req.method === 'GET' && pathname === route.path) {
+        throwIfRequestAborted(context.signal);
+        const pagination = parsePagination(url.searchParams);
+        if ('error' in pagination) return errorResponse(pagination.error, 400);
+        const data = loadAppData(context.filePath);
+        const items = route.listItems(data, url);
+        const total = items.length;
+        return jsonResponse({
+            [route.listKey]: items.slice(pagination.offset, pagination.offset + pagination.limit),
+            total,
+            limit: pagination.limit,
+            offset: pagination.offset,
+        });
+    }
+
+    if (req.method === 'POST' && pathname === route.path) {
+        const bodyResult = await readEntityObjectBody(req, context.maxBodyBytes, context.signal);
+        if (!bodyResult.ok) return bodyResult.response;
+
+        return await context.withWriteLock(context.key, async () => {
+            throwIfRequestAborted(context.signal);
+            const data = loadAppData(context.filePath);
+            const nowIso = new Date().toISOString();
+            const entity = route.createEntity(bodyResult.body, data, nowIso);
+            if (isResponse(entity)) return entity;
+            getEntityCollection(data, route).push(entity);
+            const finalized = finalizeCloudDataForWrite(data, nowIso);
+            if ('error' in finalized) return finalized.error;
+            throwIfRequestAborted(context.signal);
+            writeCloudData(context.filePath, finalized);
+            return jsonResponse({ [route.itemKey]: entity }, { status: 201 });
+        });
+    }
+
+    const entityMatch = pathname.match(new RegExp(`^${route.path}/([^/]+)$`));
+    if (!entityMatch) return null;
+    const entityId = parseEntityRouteId(entityMatch[1]);
+    if (!entityId) return errorResponse(route.invalidIdMessage, 400);
+
+    if (req.method === 'GET') {
+        const data = loadAppData(context.filePath);
+        const entity = getEntityCollection(data, route).find((item) => item.id === entityId && !item.deletedAt);
+        if (!entity) return errorResponse(`${route.label} not found`, 404);
+        return jsonResponse({ [route.itemKey]: entity });
+    }
+
+    if (req.method === 'PATCH') {
+        const bodyResult = await readEntityObjectBody(req, context.maxBodyBytes, context.signal);
+        if (!bodyResult.ok) return bodyResult.response;
+
+        return await context.withWriteLock(context.key, async () => {
+            throwIfRequestAborted(context.signal);
+            const data = loadAppData(context.filePath);
+            const collection = getEntityCollection(data, route);
+            const idx = collection.findIndex((item) => (
+                item.id === entityId
+                && (!item.deletedAt || route.canPatchDeletedEntity?.(bodyResult.body))
+            ));
+            if (idx < 0) return errorResponse(`${route.label} not found`, 404);
+            const nowIso = new Date().toISOString();
+            const updated = route.patchEntity(bodyResult.body, collection[idx], data, nowIso);
+            if (isResponse(updated)) return updated;
+            collection[idx] = updated;
+            const finalized = finalizeCloudDataForWrite(data, nowIso);
+            if ('error' in finalized) return finalized.error;
+            throwIfRequestAborted(context.signal);
+            writeCloudData(context.filePath, finalized);
+            const entity = getEntityCollection(finalized, route).find((item) => item.id === entityId);
+            return jsonResponse({ [route.itemKey]: entity });
+        });
+    }
+
+    if (req.method === 'DELETE') {
+        return await context.withWriteLock(context.key, async () => {
+            throwIfRequestAborted(context.signal);
+            const data = loadAppData(context.filePath);
+            const collection = getEntityCollection(data, route);
+            const idx = collection.findIndex((item) => item.id === entityId && !item.deletedAt);
+            if (idx < 0) return errorResponse(`${route.label} not found`, 404);
+            const nowIso = new Date().toISOString();
+            const existing = collection[idx];
+            collection[idx] = {
+                ...existing,
+                deletedAt: nowIso,
+                updatedAt: nowIso,
+                rev: normalizeRevision(existing.rev) + 1,
+                revBy: CLOUD_API_REV_BY,
+            };
+            const finalized = finalizeCloudDataForWrite(data, nowIso);
+            if ('error' in finalized) return finalized.error;
+            throwIfRequestAborted(context.signal);
+            writeCloudData(context.filePath, finalized);
+            return jsonResponse({ ok: true });
+        });
+    }
+
+    return null;
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- The route table is heterogeneous; each route owns its entity type.
+const ENTITY_ROUTES: Array<EntityRouteDefinition<any>> = [
+    {
+        path: '/v1/projects',
+        collectionKey: 'projects',
+        itemKey: 'project',
+        listKey: 'projects',
+        label: 'Project',
+        invalidIdMessage: 'Invalid project id',
+        listItems: (data, url) => (
+            url.searchParams.get('deleted') === '1' ? data.projects : filterNotDeleted(data.projects)
+        ),
+        createEntity: (bodyRecord, data, nowIso): Project | Response => {
+            const rawProps = isRecord(bodyRecord.props) ? bodyRecord.props : {};
+            const validatedProps = validateProjectCreationProps(rawProps);
+            if (!validatedProps.ok) return errorResponse(validatedProps.error, 400);
+            const title = typeof bodyRecord.title === 'string' ? bodyRecord.title.trim() : '';
+            if (!title) return errorResponse('Missing project title');
+            if (title.length > MAX_TASK_TITLE_LENGTH) {
+                return errorResponse(`Project title too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
+            }
+            const props = validatedProps.props as Record<string, unknown>;
+            if (props.areaId !== undefined && typeof props.areaId !== 'string') return errorResponse('Invalid area id', 400);
+            const areaId = typeof props.areaId === 'string' ? props.areaId.trim() : '';
+            if (areaId && !data.areas.some((area) => area.id === areaId && !area.deletedAt)) {
+                return errorResponse('Area not found', 404);
+            }
+            const rawStatus = props.status;
+            const status = rawStatus === undefined ? 'active' : asProjectStatus(rawStatus);
+            if (!status) return errorResponse('Invalid project status', 400);
+            const rawOrder = props.order;
+            const rawTagIds = props.tagIds;
+            const {
+                status: _status,
+                color: rawColor,
+                order: _order,
+                tagIds: _tagIds,
+                areaId: _areaId,
+                ...restProps
+            } = props;
+            return {
+                id: generateUUID(),
+                title,
+                ...restProps,
+                areaId: areaId || undefined,
+                status,
+                color: typeof rawColor === 'string' && rawColor.trim() ? rawColor : '#6B7280',
+                order: typeof rawOrder === 'number' && Number.isFinite(rawOrder) ? rawOrder : nextOrder(data.projects),
+                tagIds: Array.isArray(rawTagIds) ? rawTagIds.filter((item): item is string => typeof item === 'string') : [],
+                createdAt: nowIso,
+                updatedAt: nowIso,
+                rev: 1,
+                revBy: CLOUD_API_REV_BY,
+            };
+        },
+        canPatchDeletedEntity: isProjectPurgePatch,
+        patchEntity: (bodyRecord, existing: Project, data, nowIso): Project | Response => {
+            const validatedPatch = validateProjectPatchProps(bodyRecord);
+            if (!validatedPatch.ok) return errorResponse(validatedPatch.error, 400);
+            const updates = validatedPatch.props;
+            const purgingProject = isProjectPurgePatch(bodyRecord);
+            if (typeof updates.title === 'string' && !updates.title.trim()) return errorResponse('Missing project title');
+            if (typeof updates.title === 'string' && updates.title.length > MAX_TASK_TITLE_LENGTH) {
+                return errorResponse(`Project title too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
+            }
+            if (updates.status !== undefined && !asProjectStatus(updates.status)) return errorResponse('Invalid project status', 400);
+            if (updates.areaId !== undefined && updates.areaId !== null && typeof updates.areaId !== 'string') {
+                return errorResponse('Invalid area id', 400);
+            }
+            if (typeof updates.areaId === 'string' && updates.areaId.trim() === '') return errorResponse('Invalid area id', 400);
+            const areaId = updates.areaId === null
+                ? null
+                : typeof updates.areaId === 'string'
+                    ? updates.areaId.trim()
+                    : undefined;
+            if (areaId && !data.areas.some((area) => area.id === areaId && !area.deletedAt)) {
+                return errorResponse('Area not found', 404);
+            }
+            const updatedProject = {
+                ...existing,
+                ...updates,
+                title: typeof updates.title === 'string' ? updates.title.trim() : existing.title,
+                areaId: areaId !== undefined ? areaId ?? undefined : existing.areaId,
+                updatedAt: nowIso,
+                rev: normalizeRevision(existing.rev) + 1,
+                revBy: CLOUD_API_REV_BY,
+            };
+            if (!purgingProject) return updatedProject;
+
+            const pendingDeletes = collectPendingRemoteDeletesForProjectPurge(updatedProject, data);
+            data.settings = appendPendingRemoteAttachmentDeletes(data.settings, pendingDeletes);
+            return {
+                ...updatedProject,
+                deletedAt: typeof updatedProject.deletedAt === 'string' ? updatedProject.deletedAt : nowIso,
+                purgedAt: typeof updates.purgedAt === 'string' ? updates.purgedAt : updatedProject.purgedAt,
+                attachments: stripProjectAttachmentRemoteMetadata(updatedProject.attachments),
+            };
+        },
+    },
+    {
+        path: '/v1/sections',
+        collectionKey: 'sections',
+        itemKey: 'section',
+        listKey: 'sections',
+        label: 'Section',
+        invalidIdMessage: 'Invalid section id',
+        listItems: (data, url) => {
+            let sections = url.searchParams.get('deleted') === '1' ? data.sections : filterNotDeleted(data.sections);
+            const projectId = url.searchParams.get('projectId');
+            if (projectId) sections = sections.filter((section) => section.projectId === projectId);
+            return sections;
+        },
+        createEntity: (bodyRecord, data, nowIso): Section | Response => {
+            const rawProps = isRecord(bodyRecord.props) ? bodyRecord.props : {};
+            const validatedProps = validateSectionCreationProps(rawProps);
+            if (!validatedProps.ok) return errorResponse(validatedProps.error, 400);
+            const title = typeof bodyRecord.title === 'string' ? bodyRecord.title.trim() : '';
+            const projectId = typeof bodyRecord.projectId === 'string' ? bodyRecord.projectId.trim() : '';
+            if (!title) return errorResponse('Missing section title');
+            if (title.length > MAX_TASK_TITLE_LENGTH) {
+                return errorResponse(`Section title too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
+            }
+            if (!projectId) return errorResponse('Missing project id');
+            if (!data.projects.some((project) => project.id === projectId && !project.deletedAt)) {
+                return errorResponse('Project not found', 404);
+            }
+            const props = validatedProps.props as Record<string, unknown>;
+            const rawOrder = props.order;
+            const { order: _order, ...restProps } = props;
+            return {
+                id: generateUUID(),
+                projectId,
+                title,
+                ...restProps,
+                order: typeof rawOrder === 'number' && Number.isFinite(rawOrder)
+                    ? rawOrder
+                    : nextOrder(data.sections.filter((item) => item.projectId === projectId)),
+                createdAt: nowIso,
+                updatedAt: nowIso,
+                rev: 1,
+                revBy: CLOUD_API_REV_BY,
+            };
+        },
+        patchEntity: (bodyRecord, existing: Section, data, nowIso): Section | Response => {
+            const validatedPatch = validateSectionPatchProps(bodyRecord);
+            if (!validatedPatch.ok) return errorResponse(validatedPatch.error, 400);
+            const updates = validatedPatch.props;
+            if (typeof updates.title === 'string' && !updates.title.trim()) return errorResponse('Missing section title');
+            if (typeof updates.title === 'string' && updates.title.length > MAX_TASK_TITLE_LENGTH) {
+                return errorResponse(`Section title too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
+            }
+            if (updates.projectId !== undefined && typeof updates.projectId !== 'string') {
+                return errorResponse('Invalid project id', 400);
+            }
+            const projectId = typeof updates.projectId === 'string' ? updates.projectId.trim() : existing.projectId;
+            if (!projectId) return errorResponse('Missing project id');
+            if (!data.projects.some((project) => project.id === projectId && !project.deletedAt)) {
+                return errorResponse('Project not found', 404);
+            }
+            return {
+                ...existing,
+                ...updates,
+                projectId,
+                title: typeof updates.title === 'string' ? updates.title.trim() : existing.title,
+                updatedAt: nowIso,
+                rev: normalizeRevision(existing.rev) + 1,
+                revBy: CLOUD_API_REV_BY,
+            };
+        },
+    },
+    {
+        path: '/v1/areas',
+        collectionKey: 'areas',
+        itemKey: 'area',
+        listKey: 'areas',
+        label: 'Area',
+        invalidIdMessage: 'Invalid area id',
+        listItems: (data, url) => (
+            url.searchParams.get('deleted') === '1' ? data.areas : filterNotDeleted(data.areas)
+        ),
+        createEntity: (bodyRecord, data, nowIso): Area | Response => {
+            const rawProps = isRecord(bodyRecord.props) ? bodyRecord.props : {};
+            const validatedProps = validateAreaCreationProps(rawProps);
+            if (!validatedProps.ok) return errorResponse(validatedProps.error, 400);
+            const name = typeof bodyRecord.name === 'string' ? bodyRecord.name.trim() : '';
+            if (!name) return errorResponse('Missing area name');
+            if (name.length > MAX_TASK_TITLE_LENGTH) {
+                return errorResponse(`Area name too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
+            }
+            const props = validatedProps.props as Record<string, unknown>;
+            const rawOrder = props.order;
+            const { order: _order, ...restProps } = props;
+            return {
+                id: generateUUID(),
+                name,
+                ...restProps,
+                order: typeof rawOrder === 'number' && Number.isFinite(rawOrder) ? rawOrder : nextOrder(data.areas),
+                createdAt: nowIso,
+                updatedAt: nowIso,
+                rev: 1,
+                revBy: CLOUD_API_REV_BY,
+            };
+        },
+        patchEntity: (bodyRecord, existing: Area, _data, nowIso): Area | Response => {
+            const validatedPatch = validateAreaPatchProps(bodyRecord);
+            if (!validatedPatch.ok) return errorResponse(validatedPatch.error, 400);
+            const updates = validatedPatch.props;
+            if (typeof updates.name === 'string' && !updates.name.trim()) return errorResponse('Missing area name');
+            if (typeof updates.name === 'string' && updates.name.length > MAX_TASK_TITLE_LENGTH) {
+                return errorResponse(`Area name too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
+            }
+            return {
+                ...existing,
+                ...updates,
+                name: typeof updates.name === 'string' ? updates.name.trim() : existing.name,
+                updatedAt: nowIso,
+                rev: normalizeRevision(existing.rev) + 1,
+                revBy: CLOUD_API_REV_BY,
+            };
+        },
+    },
+];
 
 function namespaceExists(dataDir: string, key: string): boolean {
     return existsSync(join(dataDir, `${key}.json`)) || existsSync(join(dataDir, key));
@@ -280,6 +693,85 @@ function countTokenNamespaces(dataDir: string): number {
 function resolveServerMergeTimestamp(..._dataSets: AppData[]): string {
     return new Date().toISOString();
 }
+
+function isProjectPurgePatch(bodyRecord: Record<string, unknown>): boolean {
+    return typeof bodyRecord.purgedAt === 'string' && bodyRecord.purgedAt.trim().length > 0;
+}
+
+const stripProjectAttachmentRemoteMetadata = (attachments: Project['attachments']): Project['attachments'] => (
+    attachments?.map((attachment) => (
+        attachment.kind === 'file'
+            ? {
+                ...attachment,
+                cloudKey: undefined,
+                localStatus: undefined,
+            }
+            : attachment
+    ))
+);
+
+const getAttachmentCloudKey = (attachment: Attachment): string | null => {
+    if (attachment.kind !== 'file' || !attachment.cloudKey) return null;
+    return normalizeAttachmentRelativePath(attachment.cloudKey);
+};
+
+const collectRetainedAttachmentCloudKeysForProjectPurge = (data: AppData, purgedProjectId: string): Set<string> => {
+    const cloudKeys = new Set<string>();
+    for (const project of data.projects) {
+        if (project.id === purgedProjectId || project.purgedAt) continue;
+        for (const attachment of project.attachments || []) {
+            const cloudKey = getAttachmentCloudKey(attachment);
+            if (cloudKey) cloudKeys.add(cloudKey);
+        }
+    }
+    for (const task of data.tasks) {
+        if (task.purgedAt) continue;
+        for (const attachment of task.attachments || []) {
+            const cloudKey = getAttachmentCloudKey(attachment);
+            if (cloudKey) cloudKeys.add(cloudKey);
+        }
+    }
+    return cloudKeys;
+};
+
+const collectPendingRemoteDeletesForProjectPurge = (
+    project: Project,
+    data: AppData,
+): PendingRemoteAttachmentDelete[] => {
+    const retainedCloudKeys = collectRetainedAttachmentCloudKeysForProjectPurge(data, project.id);
+    const byCloudKey = new Map<string, PendingRemoteAttachmentDelete>();
+    for (const attachment of project.attachments || []) {
+        const cloudKey = getAttachmentCloudKey(attachment);
+        if (!cloudKey || retainedCloudKeys.has(cloudKey) || byCloudKey.has(cloudKey)) continue;
+        byCloudKey.set(cloudKey, {
+            cloudKey,
+            title: attachment.title || cloudKey,
+        });
+    }
+    return Array.from(byCloudKey.values());
+};
+
+const appendPendingRemoteAttachmentDeletes = (
+    settings: AppData['settings'],
+    pendingDeletes: readonly PendingRemoteAttachmentDelete[],
+): AppData['settings'] => {
+    if (pendingDeletes.length === 0) return settings;
+    const byCloudKey = new Map<string, PendingRemoteAttachmentDelete>();
+    for (const existing of settings.attachments?.pendingRemoteDeletes || []) {
+        byCloudKey.set(existing.cloudKey, existing);
+    }
+    for (const pending of pendingDeletes) {
+        if (byCloudKey.has(pending.cloudKey)) continue;
+        byCloudKey.set(pending.cloudKey, pending);
+    }
+    return {
+        ...settings,
+        attachments: {
+            ...settings.attachments,
+            pendingRemoteDeletes: Array.from(byCloudKey.values()),
+        },
+    };
+};
 
 function collectReferencedAttachmentCloudKeys(data: AppData): Set<string> {
     const referenced = new Set<string>();
@@ -383,6 +875,7 @@ export const __cloudTestUtils = {
     validateTaskPatchProps,
     pickTaskList,
     readJsonBody,
+    isBodyReadError,
     resolveServerMergeTimestamp,
     writeData,
     resolveAttachmentPath,
@@ -405,7 +898,7 @@ type CloudServerOptions = {
     maxBodyBytes?: number;
     maxAttachmentBytes?: number;
     requestTimeoutMs?: number;
-    allowedAuthTokens?: Set<string> | null;
+    allowedAuthTokens?: AllowedAuthTokenInput;
     trustProxyHeaders?: boolean;
     trustedProxyIps?: Set<string> | null;
     maxAnyTokenNamespaces?: number;
@@ -421,8 +914,6 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
     const port = Number(options.port ?? flags.port ?? process.env.PORT ?? 8787);
     const host = String(options.host ?? flags.host ?? process.env.HOST ?? '0.0.0.0');
     const dataDir = String(options.dataDir ?? process.env.MINDWTR_CLOUD_DATA_DIR ?? join(process.cwd(), 'data'));
-
-    const rateLimits = new Map<string, RateLimitState>();
 
     // ── Task-changes webhook (our fork addition) ───────────────────────
     // Fire-and-forget POST to ai-service on user-originated task
@@ -444,6 +935,8 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
             console.warn('[task-webhook] fire failed:', (err as Error).message);
         });
     };
+
+    const rateLimits = new Map<string, RateLimitState>();
     const windowMs = Number(options.windowMs ?? process.env.MINDWTR_CLOUD_RATE_WINDOW_MS ?? 60_000);
     const maxPerWindow = Number(options.maxPerWindow ?? process.env.MINDWTR_CLOUD_RATE_MAX ?? 120);
     const maxAttachmentPerWindow = Number(
@@ -453,9 +946,11 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
     const maxAttachmentBytes = Number(
         options.maxAttachmentBytes ?? process.env.MINDWTR_CLOUD_MAX_ATTACHMENT_BYTES ?? 50_000_000
     );
-    const allowedAuthTokens = options.allowedAuthTokens === undefined
-        ? resolveAllowedAuthTokensFromEnv(process.env)
-        : options.allowedAuthTokens;
+    const allowedAuthTokens = normalizeAllowedAuthTokens(
+        options.allowedAuthTokens === undefined
+            ? resolveAllowedAuthTokensFromEnv(process.env)
+            : options.allowedAuthTokens
+    );
     const trustProxyHeaders = options.trustProxyHeaders ?? parseBoolEnv(process.env.MINDWTR_CLOUD_TRUST_PROXY_HEADERS);
     const trustedProxyIps = options.trustedProxyIps ?? parseTrustedProxyIps(process.env.MINDWTR_CLOUD_TRUSTED_PROXY_IPS);
     const rawMaxAnyTokenNamespaces = Number(
@@ -696,16 +1191,17 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                             const err = body.__mindwtrError;
                             return errorResponse(String(err?.message || 'Payload too large'), Number(err?.status) || 413);
                         }
-                        if (!body || typeof body !== 'object') return errorResponse('Invalid JSON body');
+                        const bodyRecord = readObjectBody(body);
+                        if (!bodyRecord) return errorResponse('Invalid JSON body');
 
                         return await withWriteLock(key, async () => {
                             throwIfRequestAborted(requestAbortController.signal);
                             const data = loadAppData(filePath);
                             const nowIso = new Date().toISOString();
 
-                            const input = typeof (body as any).input === 'string' ? String((body as any).input) : '';
-                            const rawTitle = typeof (body as any).title === 'string' ? String((body as any).title) : '';
-                            const rawInitialProps = typeof (body as any).props === 'object' && (body as any).props ? (body as any).props : {};
+                            const input = typeof bodyRecord.input === 'string' ? bodyRecord.input : '';
+                            const rawTitle = typeof bodyRecord.title === 'string' ? bodyRecord.title : '';
+                            const rawInitialProps = readObjectBody(bodyRecord.props) ?? {};
                             const validatedInitialProps = validateTaskCreationProps(rawInitialProps);
                             if (!validatedInitialProps.ok) {
                                 return errorResponse(validatedInitialProps.error, 400);
@@ -729,14 +1225,14 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                                 ...initialProps,
                             };
 
-                            const rawStatus = (props as any).status;
+                            const rawStatus = props.status;
                             const parsedStatus = asStatus(rawStatus);
                             if (rawStatus !== undefined && parsedStatus === null) {
                                 return errorResponse('Invalid task status', 400);
                             }
                             const status = parsedStatus || 'inbox';
-                            const tags = Array.isArray((props as any).tags) ? (props as any).tags : [];
-                            const contexts = Array.isArray((props as any).contexts) ? (props as any).contexts : [];
+                            const tags = Array.isArray(props.tags) ? props.tags : [];
+                            const contexts = Array.isArray(props.contexts) ? props.contexts : [];
                             const {
                                 id: _id,
                                 title: _title,
@@ -746,7 +1242,7 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                                 tags: _tags,
                                 contexts: _contexts,
                                 ...restProps
-                            } = props as any;
+                            } = props;
                             const task: Task = {
                                 id: generateUUID(),
                                 title,
@@ -754,6 +1250,8 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                                 status,
                                 tags,
                                 contexts,
+                                rev: 1,
+                                revBy: CLOUD_API_REV_BY,
                                 createdAt: nowIso,
                                 updatedAt: nowIso,
                             } as Task;
@@ -762,23 +1260,25 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                             }
 
                             data.tasks.push(task);
+                            const finalized = finalizeCloudDataForWrite(data, nowIso, FINALIZE_REJECT_INVALID_REST_WRITE);
+                            if ('error' in finalized) return finalized.error;
+                            const finalizedTask = finalized.tasks.find((item) => item.id === task.id) || task;
                             throwIfRequestAborted(requestAbortController.signal);
-                            writeCloudData(filePath, data);
+                            writeCloudData(filePath, finalized);
 
                             // Notify ai-service so manually-added cards (Mindwtr UI quick-add,
                             // sync from another device) flow through the Enricher pipeline.
                             // ai-service-originated creates skip this branch via the source guard.
-                            const requestSource = req.headers.get('x-mindwtr-source') || '';
-                            if (requestSource !== 'ai-service') {
-                                fireTaskWebhook('create', task.id, {
-                                    title: task.title,
-                                    description: task.description,
-                                    status: task.status,
-                                    tags: task.tags,
-                                    projectId: task.projectId ?? null,
+                            if ((req.headers.get('x-mindwtr-source') || '') !== 'ai-service') {
+                                fireTaskWebhook('create', finalizedTask.id, {
+                                    title: finalizedTask.title,
+                                    description: finalizedTask.description,
+                                    status: finalizedTask.status,
+                                    tags: finalizedTask.tags,
+                                    projectId: finalizedTask.projectId ?? null,
                                 });
                             }
-                            return jsonResponse({ task }, { status: 201 });
+                            return jsonResponse({ task: finalizedTask }, { status: 201 });
                         });
                     }
 
@@ -808,9 +1308,12 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                             );
                             data.tasks[idx] = updatedTask;
                             if (nextRecurringTask) data.tasks.push(nextRecurringTask);
+                            const finalized = finalizeCloudDataForWrite(data, nowIso, FINALIZE_REJECT_INVALID_REST_WRITE);
+                            if ('error' in finalized) return finalized.error;
+                            const finalizedTask = finalized.tasks.find((item) => item.id === updatedTask.id) || updatedTask;
                             throwIfRequestAborted(requestAbortController.signal);
-                            writeCloudData(filePath, data);
-                            return jsonResponse({ task: updatedTask });
+                            writeCloudData(filePath, finalized);
+                            return jsonResponse({ task: finalizedTask });
                         });
                     }
 
@@ -832,16 +1335,17 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                                 const err = body.__mindwtrError;
                                 return errorResponse(String(err?.message || 'Payload too large'), Number(err?.status) || 413);
                             }
-                            if (!body || typeof body !== 'object') return errorResponse('Invalid JSON body');
-                            const validatedPatch = validateTaskPatchProps(body);
+                            const bodyRecord = readObjectBody(body);
+                            if (!bodyRecord) return errorResponse('Invalid JSON body');
+                            const validatedPatch = validateTaskPatchProps(bodyRecord);
                             if (!validatedPatch.ok) {
                                 return errorResponse(validatedPatch.error, 400);
                             }
                             const updates = validatedPatch.props;
-                            if (typeof (updates as any).title === 'string' && (updates as any).title.length > MAX_TASK_TITLE_LENGTH) {
+                            if (typeof updates.title === 'string' && updates.title.length > MAX_TASK_TITLE_LENGTH) {
                                 return errorResponse(`Task title too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
                             }
-                            const rawStatus = (updates as any).status;
+                            const rawStatus = updates.status;
                             if (rawStatus !== undefined && asStatus(rawStatus) === null) {
                                 return errorResponse('Invalid task status', 400);
                             }
@@ -866,15 +1370,18 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
 
                                 data.tasks[idx] = updatedTask;
                                 if (nextRecurringTask) data.tasks.push(nextRecurringTask);
+                                const finalized = finalizeCloudDataForWrite(data, nowIso, FINALIZE_REJECT_INVALID_REST_WRITE);
+                                if ('error' in finalized) return finalized.error;
+                                const finalizedTask = finalized.tasks.find((item) => item.id === updatedTask.id) || updatedTask;
                                 throwIfRequestAborted(requestAbortController.signal);
-                                writeCloudData(filePath, data);
+                                writeCloudData(filePath, finalized);
 
                                 // DIAGNOSTIC: trace direct PATCH writes that promote a task
                                 // into 'next'. Pinpoints HTTP integrations (e.g. ai-service)
                                 // that keep moving someday tasks back to Next. Remove later.
-                                if (updatedTask.status === 'next' && existing.status !== 'next') {
-                                    const sequential = updatedTask.projectId
-                                        ? (data.projects ?? []).some((p) => p && p.id === updatedTask.projectId && p.isSequential === true)
+                                if (finalizedTask.status === 'next' && existing.status !== 'next') {
+                                    const sequential = finalizedTask.projectId
+                                        ? (finalized.projects ?? []).some((p) => p && p.id === finalizedTask.projectId && p.isSequential === true)
                                         : false;
                                     logWarn('[status-trace] PATCH promoted task to next', {
                                         key,
@@ -882,25 +1389,24 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                                         source: req.headers.get('x-mindwtr-source') || '(none)',
                                         userAgent: req.headers.get('user-agent') || '(none)',
                                         clientIp: getClientIp(req) || '(none)',
-                                        taskId: updatedTask.id,
-                                        title: typeof updatedTask.title === 'string' ? updatedTask.title.slice(0, 60) : '',
+                                        taskId: finalizedTask.id,
+                                        title: typeof finalizedTask.title === 'string' ? finalizedTask.title.slice(0, 60) : '',
                                         from: existing.status,
-                                        projectId: updatedTask.projectId ?? null,
+                                        projectId: finalizedTask.projectId ?? null,
                                         inSequentialProject: sequential,
                                     });
                                 }
 
-                                const requestSource = req.headers.get('x-mindwtr-source') || '';
-                                if (requestSource !== 'ai-service') {
+                                if ((req.headers.get('x-mindwtr-source') || '') !== 'ai-service') {
                                     fireTaskWebhook('edit', taskId, {
-                                        title: updatedTask.title,
-                                        description: updatedTask.description,
-                                        status: updatedTask.status,
-                                        tags: updatedTask.tags,
-                                        projectId: updatedTask.projectId ?? null,
+                                        title: finalizedTask.title,
+                                        description: finalizedTask.description,
+                                        status: finalizedTask.status,
+                                        tags: finalizedTask.tags,
+                                        projectId: finalizedTask.projectId ?? null,
                                     });
                                 }
-                                return jsonResponse({ task: updatedTask });
+                                return jsonResponse({ task: finalizedTask });
                             });
                         }
 
@@ -920,11 +1426,12 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                                     rev: normalizeRevision(existing.rev) + 1,
                                     revBy: CLOUD_API_REV_BY,
                                 };
+                                const finalized = finalizeCloudDataForWrite(data, nowIso, FINALIZE_REJECT_INVALID_REST_WRITE);
+                                if ('error' in finalized) return finalized.error;
                                 throwIfRequestAborted(requestAbortController.signal);
-                                writeCloudData(filePath, data);
+                                writeCloudData(filePath, finalized);
 
-                                const requestSource = req.headers.get('x-mindwtr-source') || '';
-                                if (requestSource !== 'ai-service') {
+                                if ((req.headers.get('x-mindwtr-source') || '') !== 'ai-service') {
                                     fireTaskWebhook('delete', taskId);
                                 }
                                 return jsonResponse({ ok: true });
@@ -932,439 +1439,15 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                         }
                     }
 
-                    if (req.method === 'GET' && pathname === '/v1/projects') {
-                        throwIfRequestAborted(requestAbortController.signal);
-                        const pagination = parsePagination(url.searchParams);
-                        if ('error' in pagination) return errorResponse(pagination.error, 400);
-                        const data = loadAppData(filePath);
-                        const projects = url.searchParams.get('deleted') === '1' ? data.projects : filterNotDeleted(data.projects);
-                        const total = projects.length;
-                        const pageProjects = projects.slice(pagination.offset, pagination.offset + pagination.limit);
-                        return jsonResponse({
-                            projects: pageProjects,
-                            total,
-                            limit: pagination.limit,
-                            offset: pagination.offset,
+                    for (const entityRoute of ENTITY_ROUTES) {
+                        const entityRouteResponse = await handleEntityRoute(entityRoute, req, pathname, url, {
+                            key,
+                            filePath,
+                            maxBodyBytes,
+                            signal: requestAbortController.signal,
+                            withWriteLock,
                         });
-                    }
-
-                    if (req.method === 'POST' && pathname === '/v1/projects') {
-                        const body = await readJsonBody(req, maxBodyBytes, requestAbortController.signal);
-                        if (isBodyReadError(body)) {
-                            const err = body.__mindwtrError;
-                            return errorResponse(String(err?.message || 'Payload too large'), Number(err?.status) || 413);
-                        }
-                        const bodyRecord = readObjectBody(body);
-                        if (!bodyRecord) return errorResponse('Invalid JSON body');
-                        const rawProps = isRecord(bodyRecord.props) ? bodyRecord.props : {};
-                        const validatedProps = validateProjectCreationProps(rawProps);
-                        if (!validatedProps.ok) return errorResponse(validatedProps.error, 400);
-                        const title = typeof bodyRecord.title === 'string' ? bodyRecord.title.trim() : '';
-                        if (!title) return errorResponse('Missing project title');
-                        if (title.length > MAX_TASK_TITLE_LENGTH) return errorResponse(`Project title too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
-                        const props = validatedProps.props as Record<string, unknown>;
-                        if (props.areaId !== undefined && typeof props.areaId !== 'string') return errorResponse('Invalid area id', 400);
-
-                        return await withWriteLock(key, async () => {
-                            throwIfRequestAborted(requestAbortController.signal);
-                            const data = loadAppData(filePath);
-                            const nowIso = new Date().toISOString();
-                            const areaId = typeof props.areaId === 'string' ? props.areaId.trim() : '';
-                            if (areaId && !data.areas.some((area) => area.id === areaId && !area.deletedAt)) {
-                                return errorResponse('Area not found', 404);
-                            }
-                            const rawStatus = props.status;
-                            const status = rawStatus === undefined ? 'active' : asProjectStatus(rawStatus);
-                            if (!status) return errorResponse('Invalid project status', 400);
-                            const rawOrder = props.order;
-                            const rawTagIds = props.tagIds;
-                            const {
-                                status: _status,
-                                color: rawColor,
-                                order: _order,
-                                tagIds: _tagIds,
-                                areaId: _areaId,
-                                ...restProps
-                            } = props;
-                            const project: Project = {
-                                id: generateUUID(),
-                                title,
-                                ...restProps,
-                                areaId: areaId || undefined,
-                                status,
-                                color: typeof rawColor === 'string' && rawColor.trim() ? rawColor : '#6B7280',
-                                order: typeof rawOrder === 'number' && Number.isFinite(rawOrder) ? rawOrder : nextOrder(data.projects),
-                                tagIds: Array.isArray(rawTagIds) ? rawTagIds.filter((item): item is string => typeof item === 'string') : [],
-                                createdAt: nowIso,
-                                updatedAt: nowIso,
-                                rev: 1,
-                                revBy: CLOUD_API_REV_BY,
-                            };
-                            data.projects.push(project);
-                            const finalized = finalizeCloudDataForWrite(data, nowIso);
-                            if ('error' in finalized) return finalized.error;
-                            throwIfRequestAborted(requestAbortController.signal);
-                            writeCloudData(filePath, finalized);
-                            return jsonResponse({ project }, { status: 201 });
-                        });
-                    }
-
-                    const projectMatch = pathname.match(/^\/v1\/projects\/([^/]+)$/);
-                    if (projectMatch) {
-                        const projectId = parseEntityRouteId(projectMatch[1]);
-                        if (!projectId) return errorResponse('Invalid project id', 400);
-
-                        if (req.method === 'GET') {
-                            const data = loadAppData(filePath);
-                            const project = data.projects.find((item) => item.id === projectId && !item.deletedAt);
-                            if (!project) return errorResponse('Project not found', 404);
-                            return jsonResponse({ project });
-                        }
-
-                        if (req.method === 'PATCH') {
-                            const body = await readJsonBody(req, maxBodyBytes, requestAbortController.signal);
-                            if (isBodyReadError(body)) {
-                                const err = body.__mindwtrError;
-                                return errorResponse(String(err?.message || 'Payload too large'), Number(err?.status) || 413);
-                            }
-                            if (!readObjectBody(body)) return errorResponse('Invalid JSON body');
-                            const validatedPatch = validateProjectPatchProps(body);
-                            if (!validatedPatch.ok) return errorResponse(validatedPatch.error, 400);
-                            const updates = validatedPatch.props;
-                            if (typeof updates.title === 'string' && !updates.title.trim()) return errorResponse('Missing project title');
-                            if (typeof updates.title === 'string' && updates.title.length > MAX_TASK_TITLE_LENGTH) {
-                                return errorResponse(`Project title too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
-                            }
-                            if (updates.status !== undefined && !asProjectStatus(updates.status)) return errorResponse('Invalid project status', 400);
-                            if (updates.areaId !== undefined && updates.areaId !== null && typeof updates.areaId !== 'string') return errorResponse('Invalid area id', 400);
-                            if (typeof updates.areaId === 'string' && updates.areaId.trim() === '') return errorResponse('Invalid area id', 400);
-
-                            return await withWriteLock(key, async () => {
-                                throwIfRequestAborted(requestAbortController.signal);
-                                const data = loadAppData(filePath);
-                                const idx = data.projects.findIndex((item) => item.id === projectId && !item.deletedAt);
-                                if (idx < 0) return errorResponse('Project not found', 404);
-                                const areaId = updates.areaId === null
-                                    ? null
-                                    : typeof updates.areaId === 'string'
-                                        ? updates.areaId.trim()
-                                        : undefined;
-                                if (areaId && !data.areas.some((area) => area.id === areaId && !area.deletedAt)) {
-                                    return errorResponse('Area not found', 404);
-                                }
-                                const nowIso = new Date().toISOString();
-                                const existing = data.projects[idx];
-                                data.projects[idx] = {
-                                    ...existing,
-                                    ...updates,
-                                    title: typeof updates.title === 'string' ? updates.title.trim() : existing.title,
-                                    areaId: areaId !== undefined ? areaId ?? undefined : existing.areaId,
-                                    updatedAt: nowIso,
-                                    rev: normalizeRevision(existing.rev) + 1,
-                                    revBy: CLOUD_API_REV_BY,
-                                };
-                                const finalized = finalizeCloudDataForWrite(data, nowIso);
-                                if ('error' in finalized) return finalized.error;
-                                writeCloudData(filePath, finalized);
-                                const project = finalized.projects.find((item) => item.id === projectId);
-                                return jsonResponse({ project });
-                            });
-                        }
-
-                        if (req.method === 'DELETE') {
-                            return await withWriteLock(key, async () => {
-                                throwIfRequestAborted(requestAbortController.signal);
-                                const data = loadAppData(filePath);
-                                const idx = data.projects.findIndex((item) => item.id === projectId && !item.deletedAt);
-                                if (idx < 0) return errorResponse('Project not found', 404);
-                                const nowIso = new Date().toISOString();
-                                const existing = data.projects[idx];
-                                data.projects[idx] = {
-                                    ...existing,
-                                    deletedAt: nowIso,
-                                    updatedAt: nowIso,
-                                    rev: normalizeRevision(existing.rev) + 1,
-                                    revBy: CLOUD_API_REV_BY,
-                                };
-                                const finalized = finalizeCloudDataForWrite(data, nowIso);
-                                if ('error' in finalized) return finalized.error;
-                                writeCloudData(filePath, finalized);
-                                return jsonResponse({ ok: true });
-                            });
-                        }
-                    }
-
-                    if (req.method === 'GET' && pathname === '/v1/sections') {
-                        throwIfRequestAborted(requestAbortController.signal);
-                        const pagination = parsePagination(url.searchParams);
-                        if ('error' in pagination) return errorResponse(pagination.error, 400);
-                        const data = loadAppData(filePath);
-                        let sections = url.searchParams.get('deleted') === '1' ? data.sections : filterNotDeleted(data.sections);
-                        const projectId = url.searchParams.get('projectId');
-                        if (projectId) sections = sections.filter((section) => section.projectId === projectId);
-                        const total = sections.length;
-                        return jsonResponse({
-                            sections: sections.slice(pagination.offset, pagination.offset + pagination.limit),
-                            total,
-                            limit: pagination.limit,
-                            offset: pagination.offset,
-                        });
-                    }
-
-                    if (req.method === 'POST' && pathname === '/v1/sections') {
-                        const body = await readJsonBody(req, maxBodyBytes, requestAbortController.signal);
-                        if (isBodyReadError(body)) {
-                            const err = body.__mindwtrError;
-                            return errorResponse(String(err?.message || 'Payload too large'), Number(err?.status) || 413);
-                        }
-                        const bodyRecord = readObjectBody(body);
-                        if (!bodyRecord) return errorResponse('Invalid JSON body');
-                        const rawProps = isRecord(bodyRecord.props) ? bodyRecord.props : {};
-                        const validatedProps = validateSectionCreationProps(rawProps);
-                        if (!validatedProps.ok) return errorResponse(validatedProps.error, 400);
-                        const title = typeof bodyRecord.title === 'string' ? bodyRecord.title.trim() : '';
-                        const projectId = typeof bodyRecord.projectId === 'string' ? bodyRecord.projectId.trim() : '';
-                        if (!title) return errorResponse('Missing section title');
-                        if (title.length > MAX_TASK_TITLE_LENGTH) return errorResponse(`Section title too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
-                        if (!projectId) return errorResponse('Missing project id');
-
-                        return await withWriteLock(key, async () => {
-                            throwIfRequestAborted(requestAbortController.signal);
-                            const data = loadAppData(filePath);
-                            if (!data.projects.some((project) => project.id === projectId && !project.deletedAt)) {
-                                return errorResponse('Project not found', 404);
-                            }
-                            const nowIso = new Date().toISOString();
-                            const props = validatedProps.props as Record<string, unknown>;
-                            const rawOrder = props.order;
-                            const { order: _order, ...restProps } = props;
-                            const section: Section = {
-                                id: generateUUID(),
-                                projectId,
-                                title,
-                                ...restProps,
-                                order: typeof rawOrder === 'number' && Number.isFinite(rawOrder)
-                                    ? rawOrder
-                                    : nextOrder(data.sections.filter((item) => item.projectId === projectId)),
-                                createdAt: nowIso,
-                                updatedAt: nowIso,
-                                rev: 1,
-                                revBy: CLOUD_API_REV_BY,
-                            };
-                            data.sections.push(section);
-                            const finalized = finalizeCloudDataForWrite(data, nowIso);
-                            if ('error' in finalized) return finalized.error;
-                            writeCloudData(filePath, finalized);
-                            return jsonResponse({ section }, { status: 201 });
-                        });
-                    }
-
-                    const sectionMatch = pathname.match(/^\/v1\/sections\/([^/]+)$/);
-                    if (sectionMatch) {
-                        const sectionId = parseEntityRouteId(sectionMatch[1]);
-                        if (!sectionId) return errorResponse('Invalid section id', 400);
-
-                        if (req.method === 'GET') {
-                            const data = loadAppData(filePath);
-                            const section = data.sections.find((item) => item.id === sectionId && !item.deletedAt);
-                            if (!section) return errorResponse('Section not found', 404);
-                            return jsonResponse({ section });
-                        }
-
-                        if (req.method === 'PATCH') {
-                            const body = await readJsonBody(req, maxBodyBytes, requestAbortController.signal);
-                            if (isBodyReadError(body)) {
-                                const err = body.__mindwtrError;
-                                return errorResponse(String(err?.message || 'Payload too large'), Number(err?.status) || 413);
-                            }
-                            if (!readObjectBody(body)) return errorResponse('Invalid JSON body');
-                            const validatedPatch = validateSectionPatchProps(body);
-                            if (!validatedPatch.ok) return errorResponse(validatedPatch.error, 400);
-                            const updates = validatedPatch.props;
-                            if (typeof updates.title === 'string' && !updates.title.trim()) return errorResponse('Missing section title');
-                            if (typeof updates.title === 'string' && updates.title.length > MAX_TASK_TITLE_LENGTH) {
-                                return errorResponse(`Section title too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
-                            }
-                            if (updates.projectId !== undefined && typeof updates.projectId !== 'string') return errorResponse('Invalid project id', 400);
-
-                            return await withWriteLock(key, async () => {
-                                throwIfRequestAborted(requestAbortController.signal);
-                                const data = loadAppData(filePath);
-                                const idx = data.sections.findIndex((item) => item.id === sectionId && !item.deletedAt);
-                                if (idx < 0) return errorResponse('Section not found', 404);
-                                const projectId = typeof updates.projectId === 'string' ? updates.projectId.trim() : data.sections[idx].projectId;
-                                if (!projectId) return errorResponse('Missing project id');
-                                if (!data.projects.some((project) => project.id === projectId && !project.deletedAt)) {
-                                    return errorResponse('Project not found', 404);
-                                }
-                                const nowIso = new Date().toISOString();
-                                const existing = data.sections[idx];
-                                data.sections[idx] = {
-                                    ...existing,
-                                    ...updates,
-                                    projectId,
-                                    title: typeof updates.title === 'string' ? updates.title.trim() : existing.title,
-                                    updatedAt: nowIso,
-                                    rev: normalizeRevision(existing.rev) + 1,
-                                    revBy: CLOUD_API_REV_BY,
-                                };
-                                const finalized = finalizeCloudDataForWrite(data, nowIso);
-                                if ('error' in finalized) return finalized.error;
-                                writeCloudData(filePath, finalized);
-                                const section = finalized.sections.find((item) => item.id === sectionId);
-                                return jsonResponse({ section });
-                            });
-                        }
-
-                        if (req.method === 'DELETE') {
-                            return await withWriteLock(key, async () => {
-                                throwIfRequestAborted(requestAbortController.signal);
-                                const data = loadAppData(filePath);
-                                const idx = data.sections.findIndex((item) => item.id === sectionId && !item.deletedAt);
-                                if (idx < 0) return errorResponse('Section not found', 404);
-                                const nowIso = new Date().toISOString();
-                                const existing = data.sections[idx];
-                                data.sections[idx] = {
-                                    ...existing,
-                                    deletedAt: nowIso,
-                                    updatedAt: nowIso,
-                                    rev: normalizeRevision(existing.rev) + 1,
-                                    revBy: CLOUD_API_REV_BY,
-                                };
-                                const finalized = finalizeCloudDataForWrite(data, nowIso);
-                                if ('error' in finalized) return finalized.error;
-                                writeCloudData(filePath, finalized);
-                                return jsonResponse({ ok: true });
-                            });
-                        }
-                    }
-
-                    if (req.method === 'GET' && pathname === '/v1/areas') {
-                        throwIfRequestAborted(requestAbortController.signal);
-                        const pagination = parsePagination(url.searchParams);
-                        if ('error' in pagination) return errorResponse(pagination.error, 400);
-                        const data = loadAppData(filePath);
-                        const areas = url.searchParams.get('deleted') === '1' ? data.areas : filterNotDeleted(data.areas);
-                        const total = areas.length;
-                        return jsonResponse({
-                            areas: areas.slice(pagination.offset, pagination.offset + pagination.limit),
-                            total,
-                            limit: pagination.limit,
-                            offset: pagination.offset,
-                        });
-                    }
-
-                    if (req.method === 'POST' && pathname === '/v1/areas') {
-                        const body = await readJsonBody(req, maxBodyBytes, requestAbortController.signal);
-                        if (isBodyReadError(body)) {
-                            const err = body.__mindwtrError;
-                            return errorResponse(String(err?.message || 'Payload too large'), Number(err?.status) || 413);
-                        }
-                        const bodyRecord = readObjectBody(body);
-                        if (!bodyRecord) return errorResponse('Invalid JSON body');
-                        const rawProps = isRecord(bodyRecord.props) ? bodyRecord.props : {};
-                        const validatedProps = validateAreaCreationProps(rawProps);
-                        if (!validatedProps.ok) return errorResponse(validatedProps.error, 400);
-                        const name = typeof bodyRecord.name === 'string' ? bodyRecord.name.trim() : '';
-                        if (!name) return errorResponse('Missing area name');
-                        if (name.length > MAX_TASK_TITLE_LENGTH) return errorResponse(`Area name too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
-
-                        return await withWriteLock(key, async () => {
-                            throwIfRequestAborted(requestAbortController.signal);
-                            const data = loadAppData(filePath);
-                            const nowIso = new Date().toISOString();
-                            const props = validatedProps.props as Record<string, unknown>;
-                            const rawOrder = props.order;
-                            const { order: _order, ...restProps } = props;
-                            const area: Area = {
-                                id: generateUUID(),
-                                name,
-                                ...restProps,
-                                order: typeof rawOrder === 'number' && Number.isFinite(rawOrder) ? rawOrder : nextOrder(data.areas),
-                                createdAt: nowIso,
-                                updatedAt: nowIso,
-                                rev: 1,
-                                revBy: CLOUD_API_REV_BY,
-                            };
-                            data.areas.push(area);
-                            const finalized = finalizeCloudDataForWrite(data, nowIso);
-                            if ('error' in finalized) return finalized.error;
-                            writeCloudData(filePath, finalized);
-                            return jsonResponse({ area }, { status: 201 });
-                        });
-                    }
-
-                    const areaMatch = pathname.match(/^\/v1\/areas\/([^/]+)$/);
-                    if (areaMatch) {
-                        const areaId = parseEntityRouteId(areaMatch[1]);
-                        if (!areaId) return errorResponse('Invalid area id', 400);
-
-                        if (req.method === 'GET') {
-                            const data = loadAppData(filePath);
-                            const area = data.areas.find((item) => item.id === areaId && !item.deletedAt);
-                            if (!area) return errorResponse('Area not found', 404);
-                            return jsonResponse({ area });
-                        }
-
-                        if (req.method === 'PATCH') {
-                            const body = await readJsonBody(req, maxBodyBytes, requestAbortController.signal);
-                            if (isBodyReadError(body)) {
-                                const err = body.__mindwtrError;
-                                return errorResponse(String(err?.message || 'Payload too large'), Number(err?.status) || 413);
-                            }
-                            if (!readObjectBody(body)) return errorResponse('Invalid JSON body');
-                            const validatedPatch = validateAreaPatchProps(body);
-                            if (!validatedPatch.ok) return errorResponse(validatedPatch.error, 400);
-                            const updates = validatedPatch.props;
-                            if (typeof updates.name === 'string' && !updates.name.trim()) return errorResponse('Missing area name');
-                            if (typeof updates.name === 'string' && updates.name.length > MAX_TASK_TITLE_LENGTH) {
-                                return errorResponse(`Area name too long (max ${MAX_TASK_TITLE_LENGTH} characters)`, 400);
-                            }
-
-                            return await withWriteLock(key, async () => {
-                                throwIfRequestAborted(requestAbortController.signal);
-                                const data = loadAppData(filePath);
-                                const idx = data.areas.findIndex((item) => item.id === areaId && !item.deletedAt);
-                                if (idx < 0) return errorResponse('Area not found', 404);
-                                const nowIso = new Date().toISOString();
-                                const existing = data.areas[idx];
-                                data.areas[idx] = {
-                                    ...existing,
-                                    ...updates,
-                                    name: typeof updates.name === 'string' ? updates.name.trim() : existing.name,
-                                    updatedAt: nowIso,
-                                    rev: normalizeRevision(existing.rev) + 1,
-                                    revBy: CLOUD_API_REV_BY,
-                                };
-                                const finalized = finalizeCloudDataForWrite(data, nowIso);
-                                if ('error' in finalized) return finalized.error;
-                                writeCloudData(filePath, finalized);
-                                const area = finalized.areas.find((item) => item.id === areaId);
-                                return jsonResponse({ area });
-                            });
-                        }
-
-                        if (req.method === 'DELETE') {
-                            return await withWriteLock(key, async () => {
-                                throwIfRequestAborted(requestAbortController.signal);
-                                const data = loadAppData(filePath);
-                                const idx = data.areas.findIndex((item) => item.id === areaId && !item.deletedAt);
-                                if (idx < 0) return errorResponse('Area not found', 404);
-                                const nowIso = new Date().toISOString();
-                                const existing = data.areas[idx];
-                                data.areas[idx] = {
-                                    ...existing,
-                                    deletedAt: nowIso,
-                                    updatedAt: nowIso,
-                                    rev: normalizeRevision(existing.rev) + 1,
-                                    revBy: CLOUD_API_REV_BY,
-                                };
-                                const finalized = finalizeCloudDataForWrite(data, nowIso);
-                                if ('error' in finalized) return finalized.error;
-                                writeCloudData(filePath, finalized);
-                                return jsonResponse({ ok: true });
-                            });
-                        }
+                        if (entityRouteResponse) return entityRouteResponse;
                     }
 
                     if (req.method === 'GET' && pathname === '/v1/search') {
@@ -1435,7 +1518,7 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                             if (!existsSync(filePath)) {
                                 const namespaceResponse = ensureNamespaceWriteAllowed(key);
                                 if (namespaceResponse) return namespaceResponse;
-                                const emptyData: AppData = { tasks: [], projects: [], sections: [], areas: [], settings: {} };
+                                const emptyData: AppData = { tasks: [], projects: [], sections: [], areas: [], people: [], settings: {} };
                                 throwIfRequestAborted(requestAbortController.signal);
                                 if (!existsSync(filePath)) writeCloudData(filePath, emptyData);
                                 return jsonResponse(emptyData);
@@ -1480,124 +1563,18 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                             if ('error' in existingDataResult) return existingDataResult.error;
                             const existingData = existingDataResult;
                             const incomingData = validated.data;
-
-                            // DIAGNOSTIC: trace what a client PUSHES for the watched tasks,
-                            // BEFORE merge, plus how the merge resolves. Catches the case
-                            // where a device keeps a local 'next' copy that diverges from the
-                            // cloud 'someday'. Remove once the offending writer is identified.
-                            const WATCHED_TASK_IDS = new Set<string>([
-                                '1c4029ed-b5bb-4ada-a025-e124963cf181',
-                                'a1409091-4af2-4dde-887c-9bfeb087c26e',
-                            ]);
-                            try {
-                                const existingById = new Map<string, { status?: string; rev?: number; revBy?: string }>();
-                                for (const t of existingData.tasks ?? []) {
-                                    if (t && typeof t.id === 'string') existingById.set(t.id, { status: t.status, rev: t.rev, revBy: t.revBy });
-                                }
-                                for (const t of incomingData.tasks ?? []) {
-                                    if (!t || typeof t.id !== 'string') continue;
-                                    const watched = WATCHED_TASK_IDS.has(t.id);
-                                    const prior = existingById.get(t.id);
-                                    const statusChanged = prior && prior.status !== t.status;
-                                    if (!watched && !(t.status === 'next' && statusChanged)) continue;
-                                    logWarn('[status-trace] incoming PUT task payload', {
-                                        key,
-                                        requestId,
-                                        source: req.headers.get('x-mindwtr-source') || '(none)',
-                                        userAgent: req.headers.get('user-agent') || '(none)',
-                                        clientIp: getClientIp(req) || '(none)',
-                                        taskId: t.id,
-                                        title: typeof t.title === 'string' ? t.title.slice(0, 60) : '',
-                                        incomingStatus: t.status,
-                                        incomingRev: t.rev,
-                                        incomingRevBy: t.revBy,
-                                        existingStatus: prior?.status ?? '(absent)',
-                                        existingRev: prior?.rev,
-                                        existingRevBy: prior?.revBy,
-                                    });
-                                }
-                            } catch (incomingTraceError) {
-                                logWarn('[status-trace] incoming PUT trace failed', {
-                                    requestId,
-                                    error: (incomingTraceError as Error).message,
-                                });
-                            }
-
+                            const mergeTimestamp = resolveServerMergeTimestamp(existingData, incomingData);
                             const mergeResult = mergeAppDataWithStats(existingData, incomingData, {
-                                nowIso: resolveServerMergeTimestamp(existingData, incomingData),
+                                nowIso: mergeTimestamp,
                             });
                             throwIfRequestAborted(requestAbortController.signal);
                             writeCloudData(filePath, mergeResult.data);
-
-                            // DIAGNOSTIC: log the post-merge status of the watched tasks so we
-                            // can see whether the merge accepted the client's value or kept
-                            // the cloud value (rev-based conflict resolution outcome).
-                            try {
-                                for (const t of mergeResult.data.tasks ?? []) {
-                                    if (!t || typeof t.id !== 'string' || !WATCHED_TASK_IDS.has(t.id)) continue;
-                                    logWarn('[status-trace] post-merge watched task', {
-                                        requestId,
-                                        taskId: t.id,
-                                        mergedStatus: t.status,
-                                        mergedRev: t.rev,
-                                        mergedRevBy: t.revBy,
-                                    });
-                                }
-                            } catch {
-                                // ignore trace failures
-                            }
-
-                            // DIAGNOSTIC: trace any task whose status flipped to 'next'
-                            // during this sync merge. Helps pinpoint who keeps promoting
-                            // someday/inbox tasks back into Next/Focus. Remove once the
-                            // offending writer is identified.
-                            try {
-                                const priorStatusById = new Map<string, string>();
-                                for (const t of existingData.tasks ?? []) {
-                                    if (t && typeof t.id === 'string') priorStatusById.set(t.id, t.status);
-                                }
-                                const sequentialProjectIds = new Set<string>(
-                                    (mergeResult.data.projects ?? [])
-                                        .filter((p) => p && p.isSequential === true)
-                                        .map((p) => p.id)
-                                );
-                                const flipped = (mergeResult.data.tasks ?? []).filter((task) => {
-                                    if (!task || typeof task.id !== 'string') return false;
-                                    if (task.status !== 'next') return false;
-                                    const prior = priorStatusById.get(task.id);
-                                    return prior !== undefined && prior !== 'next';
-                                });
-                                if (flipped.length > 0) {
-                                    logWarn('[status-trace] sync merge promoted task(s) to next', {
-                                        key,
-                                        requestId,
-                                        source: req.headers.get('x-mindwtr-source') || '(none)',
-                                        userAgent: req.headers.get('user-agent') || '(none)',
-                                        clientIp: getClientIp(req) || '(none)',
-                                        tasks: flipped.map((task) => ({
-                                            id: task.id,
-                                            title: typeof task.title === 'string' ? task.title.slice(0, 60) : '',
-                                            from: priorStatusById.get(task.id),
-                                            rev: task.rev,
-                                            revBy: task.revBy,
-                                            projectId: task.projectId ?? null,
-                                            inSequentialProject: task.projectId ? sequentialProjectIds.has(task.projectId) : false,
-                                        })),
-                                    });
-                                }
-                            } catch (traceError) {
-                                logWarn('[status-trace] sync merge trace failed', {
-                                    requestId,
-                                    error: (traceError as Error).message,
-                                });
-                            }
 
                             // Fire 'create' webhook for tasks that appear in the merged
                             // snapshot but weren't there before. That's how desktop UI's
                             // manual-add (Mindwtr quick-add) reaches the Enricher (FR80).
                             // Source guard prevents ai-service from re-triggering itself.
-                            const requestSource = req.headers.get('x-mindwtr-source') || '';
-                            if (requestSource !== 'ai-service' && taskWebhookUrl) {
+                            if ((req.headers.get('x-mindwtr-source') || '') !== 'ai-service' && taskWebhookUrl) {
                                 const priorTaskIds = new Set<string>();
                                 for (const t of existingData.tasks ?? []) {
                                     if (t && typeof t.id === 'string') priorTaskIds.add(t.id);
@@ -1615,11 +1592,36 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                                     });
                                 }
                             }
-
+                            const metadata = getDataFileMetadata(filePath);
+                            const contentLength = String(metadata.size);
+                            const remoteFingerprint = buildHttpRemoteFileFingerprint('cloud', {
+                                etag: metadata.etag,
+                                lastModified: metadata.lastModified,
+                                contentLength,
+                            });
+                            const incomingOnlyMerge = mergeAppDataWithStats({
+                                tasks: [],
+                                projects: [],
+                                sections: [],
+                                areas: [],
+                                people: [],
+                                settings: {},
+                            }, incomingData, { nowIso: mergeTimestamp });
+                            const serverMergedRemoteData = !areSyncPayloadsEqual(mergeResult.data, incomingOnlyMerge.data);
                             return jsonResponse({
                                 ok: true,
                                 stats: mergeResult.stats,
                                 clockSkewWarning: mergeResult.clockSkewWarning ?? null,
+                                remoteFingerprint,
+                                etag: metadata.etag,
+                                lastModified: metadata.lastModified,
+                                contentLength,
+                                serverMergedRemoteData,
+                            }, {
+                                headers: {
+                                    ETag: metadata.etag,
+                                    'Last-Modified': metadata.lastModified,
+                                },
                             });
                         });
                     }
@@ -1676,7 +1678,6 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                             const file = readFileSync(realFilePath);
                             const headers = new Headers();
                             headers.set('Access-Control-Allow-Origin', resolveAllowedOrigin());
-                            headers.set('Vary', 'Origin');
                             headers.set('Content-Type', 'application/octet-stream');
                             return new Response(file, { status: 200, headers });
                         } catch {
@@ -1741,7 +1742,7 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                     return errorResponse(error.message, error.status);
                 }
                 if (error && typeof error === 'object' && 'code' in error) {
-                    const code = (error as any).code;
+                    const code = (error as { code?: unknown }).code;
                     if (code === 'EACCES') {
                         logError(`permission denied writing cloud data (requestId=${requestId})`, error);
                         return createInternalServerErrorResponse(

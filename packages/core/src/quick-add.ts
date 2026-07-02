@@ -1,7 +1,10 @@
 import * as chrono from 'chrono-node';
 import { format, isValid, set } from 'date-fns';
-import type { Area, Project, Task, TaskStatus } from './types';
+import type { Area, Attachment, Project, Task, TaskEnergyLevel, TaskStatus } from './types';
+import { generateUUID } from './uuid';
 import { normalizeTaskStatus } from './task-status';
+import { normalizeLinkAttachmentInput } from './attachment-link-utils';
+import { normalizeClockTimeInput } from './date';
 
 export interface QuickAddDetectedDate {
     date: string;
@@ -17,10 +20,38 @@ export interface QuickAddResult {
     detectedDate?: QuickAddDetectedDate;
 }
 
+export interface QuickAddParseOptions {
+    knownContexts?: readonly string[];
+    knownTags?: readonly string[];
+    defaultScheduleTime?: string | null;
+    // When true, keep the user's text exactly as entered: recognized metadata
+    // (dates, tags, contexts, ...) is still detected and applied, but never
+    // stripped out of the title. Default strips recognized tokens. See #742.
+    preserveText?: boolean;
+}
+
+export function getQuickAddProjectInitialProps(
+    props: Partial<Task>,
+    fallbackAreaId?: string | null
+): Pick<Project, 'areaId'> | undefined {
+    const parsedAreaId = typeof props.areaId === 'string' ? props.areaId.trim() : '';
+    const fallback = typeof fallbackAreaId === 'string' ? fallbackAreaId.trim() : '';
+    const areaId = parsedAreaId || fallback;
+    return areaId ? { areaId } : undefined;
+}
+
 export interface QuickAddDateCommandsResult {
     title: string;
     props: Pick<Partial<Task>, 'startTime' | 'dueDate' | 'reviewAt'>;
     invalidDateCommands?: string[];
+}
+
+export function splitQuickAddBulkLines(input: string): string[] {
+    return String(input || '')
+        .replace(/\r\n?/g, '\n')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
 }
 
 const STATUS_TOKENS: Record<string, TaskStatus> = {
@@ -32,9 +63,22 @@ const STATUS_TOKENS: Record<string, TaskStatus> = {
     done: 'done',
 };
 
+const ENERGY_TOKENS: Record<string, TaskEnergyLevel> = {
+    low: 'low',
+    medium: 'medium',
+    high: 'high',
+};
+
 const ESCAPE_SENTINEL = '__MW_ESC__';
 const QUICK_ADD_ESCAPE_CHARS = new Set(['@', '#', '+', '/', '!']);
-const QUICK_ADD_COMMAND_BOUNDARY = String.raw`(?=\s\/(?:note:|start:|due:|review:|project:|area:|inbox\b|next\b|in-progress\b|waiting\b|someday\b|done\b|archived\b)|$)`;
+const QUICK_ADD_FOCUS_COMMAND_PATTERN = String.raw`\*(?:\s+focus\b)?`;
+const QUICK_ADD_COMMAND_BOUNDARY = String.raw`(?=\s\/(?:${QUICK_ADD_FOCUS_COMMAND_PATTERN}|link:|note:|start:|due:|review:|project:|area:|energy:|inbox\b|next\b|in-progress\b|waiting\b|someday\b|done\b|archived\b)|$)`;
+const QUICK_ADD_INLINE_CONTROL_BOUNDARY = String.raw`(?=\s(?:[@#+!]|\/(?:${QUICK_ADD_FOCUS_COMMAND_PATTERN}|link:|note:|start:|due:|review:|project:|area:|energy:|inbox\b|next\b|in-progress\b|waiting\b|someday\b|done\b|archived\b))|$)`;
+const SIMPLE_TASK_TOKEN_RE = /[@#][\p{L}\p{N}_-]+/gu;
+const RICH_TASK_TOKEN_RE = new RegExp(
+    String.raw`(?:^|\s)([@#](?![\s\p{L}\p{N}_-])[^@#+/!]+?)${QUICK_ADD_INLINE_CONTROL_BOUNDARY}`,
+    'gu',
+);
 const NATURAL_TIME_HINT_RE = /\b(?:\d{1,2}:\d{2}(?:\s*[ap]m)?|\d{1,2}\s*[ap]m|noon|midnight|morning|afternoon|evening|night|tonight)\b/i;
 const PURE_TIME_ONLY_RE = /^(?:at\s+)?(?:\d{1,2}(?::\d{2})?\s*(?:am|pm)?|noon|midnight)$/i;
 const BARE_MONTH_RE = /^(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)$/i;
@@ -66,6 +110,10 @@ function restoreEscapes(input: string): string {
 
 type DateDefaultTimeMode = 'now' | 'startOfDay';
 
+type DateCommandParseOptions = {
+    defaultScheduleTime?: string | null;
+};
+
 type ParsedNaturalDate = {
     date: Date;
     hasExplicitTime: boolean;
@@ -75,6 +123,27 @@ function buildDefaultDate(now: Date, defaultTimeMode: DateDefaultTimeMode): Date
     const fallbackHour = defaultTimeMode === 'startOfDay' ? 0 : now.getHours();
     const fallbackMinute = defaultTimeMode === 'startOfDay' ? 0 : now.getMinutes();
     return set(new Date(now), { hours: fallbackHour, minutes: fallbackMinute, seconds: 0, milliseconds: 0 });
+}
+
+function parseDefaultScheduleTime(value?: string | null): { hours: number; minutes: number } | null {
+    const normalized = normalizeClockTimeInput(value);
+    if (!normalized) return null;
+    const [hours, minutes] = normalized.split(':').map(Number);
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+    return { hours, minutes };
+}
+
+function applyDefaultScheduleTime(
+    parsed: ParsedNaturalDate,
+    defaultScheduleTime?: string | null,
+): ParsedNaturalDate {
+    if (parsed.hasExplicitTime) return parsed;
+    const clock = parseDefaultScheduleTime(defaultScheduleTime);
+    if (!clock) return parsed;
+    return {
+        ...parsed,
+        date: set(parsed.date, { hours: clock.hours, minutes: clock.minutes, seconds: 0, milliseconds: 0 }),
+    };
 }
 
 function hasNaturalTimeHint(text: string): boolean {
@@ -151,17 +220,143 @@ function stripToken(source: string, token: string): string {
     return source.replace(token, '').replace(/\s{2,}/g, ' ').trim();
 }
 
+type QuickAddTokenMatch = {
+    token: string;
+    raw: string;
+    index: number;
+    end: number;
+};
+
+function normalizeKnownQuickAddToken(token: string, prefix: '@' | '#'): string | null {
+    const trimmed = restoreEscapes(String(token || '')).replace(/\s+/g, ' ').trim();
+    if (!trimmed || trimmed === prefix) return null;
+    return trimmed.startsWith(prefix) ? trimmed : `${prefix}${trimmed}`;
+}
+
+function isQuickAddTokenStartBoundary(working: string, index: number): boolean {
+    return index === 0 || /\s/u.test(working[index - 1] ?? '');
+}
+
+function isQuickAddTokenEndBoundary(working: string, index: number): boolean {
+    if (index >= working.length) return true;
+    const ch = working[index] ?? '';
+    return /\s/u.test(ch) || !/[\p{L}\p{N}_-]/u.test(ch);
+}
+
+function pushQuickAddQuotedTokenMatches(working: string, prefix: '@' | '#', matches: QuickAddTokenMatch[]) {
+    const quotedRe = /(?:^|\s)([@#])"((?:\\.|[^"\\])*)"/gu;
+    for (const match of working.matchAll(quotedRe)) {
+        if (match[1] !== prefix) continue;
+        const rawOffset = match[0].indexOf(`${prefix}"`);
+        if (rawOffset < 0) continue;
+        const index = (match.index ?? 0) + rawOffset;
+        const raw = match[0].slice(rawOffset);
+        const value = (match[2] ?? '').replace(/\\(["\\])/g, '$1').replace(/\s+/g, ' ').trim();
+        if (!value) continue;
+        matches.push({
+            token: `${prefix}${restoreEscapes(value)}`,
+            raw,
+            index,
+            end: index + raw.length,
+        });
+    }
+}
+
+function pushQuickAddKnownTokenMatches(
+    working: string,
+    prefix: '@' | '#',
+    knownTokens: readonly string[] | undefined,
+    matches: QuickAddTokenMatch[],
+) {
+    if (!knownTokens?.length) return;
+    const candidates = Array.from(
+        new Set(
+            knownTokens
+                .map((token) => normalizeKnownQuickAddToken(token, prefix))
+                .filter((token): token is string => Boolean(token))
+        )
+    ).sort((a, b) => b.length - a.length);
+    if (candidates.length === 0) return;
+
+    const lowerWorking = working.toLowerCase();
+    for (let index = 0; index < working.length; index += 1) {
+        if (working[index] !== prefix || !isQuickAddTokenStartBoundary(working, index)) continue;
+        const candidate = candidates.find((token) => {
+            if (lowerWorking.slice(index, index + token.length) !== token.toLowerCase()) return false;
+            return isQuickAddTokenEndBoundary(working, index + token.length);
+        });
+        if (!candidate) continue;
+        matches.push({
+            token: candidate,
+            raw: working.slice(index, index + candidate.length),
+            index,
+            end: index + candidate.length,
+        });
+    }
+}
+
+function getQuickAddTokenMatches(
+    working: string,
+    prefix: '@' | '#',
+    knownTokens?: readonly string[],
+): QuickAddTokenMatch[] {
+    const matches: QuickAddTokenMatch[] = [];
+
+    pushQuickAddQuotedTokenMatches(working, prefix, matches);
+    pushQuickAddKnownTokenMatches(working, prefix, knownTokens, matches);
+
+    for (const match of working.matchAll(SIMPLE_TASK_TOKEN_RE)) {
+        const token = match[0];
+        if (token.startsWith(prefix)) {
+            const index = match.index ?? 0;
+            matches.push({
+                token: restoreEscapes(token),
+                raw: token,
+                index,
+                end: index + token.length,
+            });
+        }
+    }
+
+    for (const match of working.matchAll(RICH_TASK_TOKEN_RE)) {
+        const token = match[1]?.replace(/\s+/g, ' ').trim();
+        if (token?.startsWith(prefix)) {
+            const rawIndex = match.index ?? 0;
+            const index = rawIndex + match[0].indexOf(match[1]);
+            matches.push({
+                token: restoreEscapes(token),
+                raw: match[1] ?? token,
+                index,
+                end: index + (match[1]?.length ?? token.length),
+            });
+        }
+    }
+
+    let lastEnd = -1;
+    return matches
+        .sort((a, b) => (a.index - b.index) || (b.end - b.index) - (a.end - a.index))
+        .filter((match) => {
+            if (match.index < lastEnd) return false;
+            lastEnd = match.end;
+            return true;
+        });
+}
+
 function parseDateCommand(
     command: 'start' | 'due' | 'review',
     working: string,
     now: Date,
+    options: DateCommandParseOptions = {},
 ): { value?: string; working: string; invalidCommand?: string } {
     const match = working.match(new RegExp(`\\/${command}:([\\s\\S]+?)${QUICK_ADD_COMMAND_BOUNDARY}`, 'i'));
     if (!match) return { working };
 
     const dateText = match[1].trim();
     const defaultTimeMode: DateDefaultTimeMode = command === 'due' ? 'now' : 'startOfDay';
-    const parsed = parseNaturalDate(dateText, now, defaultTimeMode);
+    const parsedNaturalDate = parseNaturalDate(dateText, now, defaultTimeMode);
+    const parsed = parsedNaturalDate && command !== 'due'
+        ? applyDefaultScheduleTime(parsedNaturalDate, options.defaultScheduleTime)
+        : parsedNaturalDate;
     if (!parsed) {
         return {
             working,
@@ -178,6 +373,7 @@ function parseDateCommand(
 function parseDateCommandsFromWorking(
     working: string,
     now: Date,
+    options: DateCommandParseOptions = {},
 ): {
     working: string;
     startTime?: string;
@@ -187,7 +383,7 @@ function parseDateCommandsFromWorking(
 } {
     const invalidDateCommands: string[] = [];
 
-    const startResult = parseDateCommand('start', working, now);
+    const startResult = parseDateCommand('start', working, now, options);
     const startTime = startResult.value;
     if (startResult.invalidCommand) invalidDateCommands.push(startResult.invalidCommand);
     working = startResult.working;
@@ -197,7 +393,7 @@ function parseDateCommandsFromWorking(
     if (dueResult.invalidCommand) invalidDateCommands.push(dueResult.invalidCommand);
     working = dueResult.working;
 
-    const reviewResult = parseDateCommand('review', working, now);
+    const reviewResult = parseDateCommand('review', working, now, options);
     const reviewAt = reviewResult.value;
     if (reviewResult.invalidCommand) invalidDateCommands.push(reviewResult.invalidCommand);
     working = reviewResult.working;
@@ -211,7 +407,52 @@ function parseDateCommandsFromWorking(
     };
 }
 
-export function parseQuickAddDateCommands(input: string, now: Date = new Date()): QuickAddDateCommandsResult {
+function buildQuickAddLinkAttachment(input: string, now: Date): Attachment | null {
+    const normalized = normalizeLinkAttachmentInput(input);
+    if (!normalized.uri.trim()) return null;
+    const createdAt = now.toISOString();
+    return {
+        id: generateUUID(),
+        kind: 'link',
+        title: normalized.title,
+        uri: normalized.uri,
+        createdAt,
+        updatedAt: createdAt,
+    };
+}
+
+function parseLinkCommandsFromWorking(
+    working: string,
+    now: Date,
+): { attachments?: Attachment[]; working: string } {
+    const attachments: Attachment[] = [];
+    const linkCommandRe = new RegExp(`\\/link:([\\s\\S]*?)${QUICK_ADD_COMMAND_BOUNDARY}`, 'i');
+
+    let nextWorking = working;
+    while (true) {
+        const match = nextWorking.match(linkCommandRe);
+        if (!match) break;
+
+        const rawLink = restoreEscapes(match[1].trim());
+        const attachment = rawLink ? buildQuickAddLinkAttachment(rawLink, now) : null;
+        if (attachment) attachments.push(attachment);
+
+        const stripped = stripToken(nextWorking, match[0]);
+        if (stripped === nextWorking) break;
+        nextWorking = stripped;
+    }
+
+    return {
+        attachments: attachments.length > 0 ? attachments : undefined,
+        working: nextWorking,
+    };
+}
+
+export function parseQuickAddDateCommands(
+    input: string,
+    now: Date = new Date(),
+    options: Pick<QuickAddParseOptions, 'preserveText' | 'defaultScheduleTime'> = {},
+): QuickAddDateCommandsResult {
     const protectedInput = protectEscapes(input.trim());
     const {
         working,
@@ -219,10 +460,12 @@ export function parseQuickAddDateCommands(input: string, now: Date = new Date())
         dueDate,
         reviewAt,
         invalidDateCommands,
-    } = parseDateCommandsFromWorking(protectedInput, now);
+    } = parseDateCommandsFromWorking(protectedInput, now, options);
 
     return {
-        title: restoreEscapes(working.replace(/\s{2,}/g, ' ').trim()),
+        title: options.preserveText === true
+            ? input.trim()
+            : restoreEscapes(working.replace(/\s{2,}/g, ' ').trim()),
         props: {
             ...(startTime ? { startTime } : {}),
             ...(dueDate ? { dueDate } : {}),
@@ -232,20 +475,41 @@ export function parseQuickAddDateCommands(input: string, now: Date = new Date())
     };
 }
 
-export function parseQuickAdd(input: string, projects?: Project[], now: Date = new Date(), areas?: Area[]): QuickAddResult {
+export function parseQuickAdd(
+    input: string,
+    projects?: Project[],
+    now: Date = new Date(),
+    areas?: Area[],
+    options: QuickAddParseOptions = {},
+): QuickAddResult {
     let working = protectEscapes(input.trim());
+    const preserveText = options.preserveText === true;
     const hadExplicitDueCommand = /(?:^|\s)\/due:/i.test(working);
 
     const contexts = new Set<string>();
     const tags = new Set<string>();
 
-    const contextMatches = working.match(/@[\p{L}\p{N}_-]+/gu) || [];
-    contextMatches.forEach((ctx) => contexts.add(ctx));
-    contextMatches.forEach((ctx) => (working = stripToken(working, ctx)));
+    const linkResult = parseLinkCommandsFromWorking(working, now);
+    const attachments = linkResult.attachments;
+    working = linkResult.working;
 
-    const tagMatches = working.match(/#[\p{L}\p{N}_-]+/gu) || [];
-    tagMatches.forEach((tag) => tags.add(tag));
-    tagMatches.forEach((tag) => (working = stripToken(working, tag)));
+    const contextMatches = getQuickAddTokenMatches(working, '@', options.knownContexts);
+    contextMatches.forEach((ctx) => contexts.add(ctx.token));
+    contextMatches.forEach((ctx) => (working = stripToken(working, ctx.raw)));
+
+    const tagMatches = getQuickAddTokenMatches(working, '#', options.knownTags);
+    tagMatches.forEach((tag) => tags.add(tag.token));
+    tagMatches.forEach((tag) => (working = stripToken(working, tag.raw)));
+
+    let energyLevel: TaskEnergyLevel | undefined;
+    const energyMatch = working.match(/\/energy:([^\s/]+)/i);
+    if (energyMatch) {
+        const token = restoreEscapes(energyMatch[1] ?? '').trim().toLowerCase();
+        energyLevel = ENERGY_TOKENS[token];
+        if (energyLevel) {
+            working = stripToken(working, energyMatch[0]);
+        }
+    }
 
     // Area: /area:<id|name> or !Area Name
     let areaId: string | undefined;
@@ -298,7 +562,7 @@ export function parseQuickAdd(input: string, projects?: Project[], now: Date = n
         dueDate,
         reviewAt,
         invalidDateCommands,
-    } = parseDateCommandsFromWorking(working, now);
+    } = parseDateCommandsFromWorking(working, now, options);
     working = workingWithoutDates;
 
     // Status tokens like /next, /waiting, etc.
@@ -308,6 +572,14 @@ export function parseQuickAdd(input: string, projects?: Project[], now: Date = n
         const token = statusMatch[1].toLowerCase();
         status = STATUS_TOKENS[token] ?? normalizeTaskStatus(token);
         working = stripToken(working, statusMatch[0]);
+    }
+
+    // Focus token: /* or /* focus. Bare focus implies Next; explicit status tokens still win.
+    const focusMatch = working.match(/(?:^|\s)\/\*(?:\s+focus\b)?(?=\s|$)/i);
+    const focusToday = Boolean(focusMatch);
+    if (focusMatch) {
+        working = stripToken(working, focusMatch[0]);
+        if (!status) status = 'next';
     }
 
     // Project: +ProjectName or /project:<id>
@@ -326,11 +598,13 @@ export function parseQuickAdd(input: string, projects?: Project[], now: Date = n
             const rawProject = restoreEscapes((plusMatch[1] || '').replace(/\s+/g, ' ').trim());
             if (!rawProject) {
                 working = stripToken(working, plusMatch[0]);
-                const title = restoreEscapes(working.replace(/\s{2,}/g, ' ').trim());
-                return { title, props: {} };
+                const strippedTitle = restoreEscapes(working.replace(/\s{2,}/g, ' ').trim());
+                return { title: preserveText ? input.trim() : strippedTitle, props: {} };
             }
             if (projects && projects.length > 0) {
-                const found = projects.find((p) => p.title.toLowerCase() === rawProject.toLowerCase());
+                const found = projects.find(
+                    (p) => p.status !== 'archived' && p.title.toLowerCase() === rawProject.toLowerCase()
+                );
                 if (found) projectId = found.id;
             } else if (/^[0-9a-f-]{8,}$/i.test(rawProject)) {
                 projectId = rawProject;
@@ -342,8 +616,13 @@ export function parseQuickAdd(input: string, projects?: Project[], now: Date = n
         }
     }
 
-    const title = restoreEscapes(working.replace(/\s{2,}/g, ' ').trim());
-    const detectedDate = !dueDate && !hadExplicitDueCommand ? detectTrailingDate(title, now) : undefined;
+    const cleanedTitle = restoreEscapes(working.replace(/\s{2,}/g, ' ').trim());
+    // Preserve mode keeps the original text and never strips a recognized
+    // trailing date; explicit metadata in props is still applied (copy-out).
+    const title = preserveText ? input.trim() : cleanedTitle;
+    const detectedDate = preserveText || dueDate || hadExplicitDueCommand
+        ? undefined
+        : detectTrailingDate(cleanedTitle, now);
 
     const props: Partial<Task> = {};
     if (status) props.status = status;
@@ -353,8 +632,11 @@ export function parseQuickAdd(input: string, projects?: Project[], now: Date = n
     if (description) props.description = description;
     if (contexts.size > 0) props.contexts = Array.from(contexts);
     if (tags.size > 0) props.tags = Array.from(tags);
+    if (attachments && attachments.length > 0) props.attachments = attachments;
     if (projectId) props.projectId = projectId;
     if (areaId) props.areaId = areaId;
+    if (energyLevel) props.energyLevel = energyLevel;
+    if (focusToday) props.isFocusedToday = true;
 
     return {
         title,

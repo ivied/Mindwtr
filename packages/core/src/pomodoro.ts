@@ -18,6 +18,11 @@ export interface PomodoroState {
     completedFocusSessions: number;
 }
 
+export interface PomodoroSessionHistory {
+    totalCompletedFocusSessions: number;
+    completedFocusSessionsByTaskId: Record<string, number>;
+}
+
 export interface PomodoroTickResult {
     state: PomodoroState;
     switchedPhase: boolean;
@@ -91,6 +96,65 @@ export function getPomodoroPhaseSeconds(phase: PomodoroPhase, durations: Pomodor
     const normalized = sanitizePomodoroDurations(durations);
     const minutes = phase === 'focus' ? normalized.focusMinutes : normalized.breakMinutes;
     return minutes * 60;
+}
+
+function sanitizeCompletedSessionCount(value: unknown, fallback = 0): number {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return Math.max(0, Math.floor(fallback));
+    return Math.max(0, Math.floor(value));
+}
+
+export function sanitizePomodoroSessionHistory(
+    value?: Partial<PomodoroSessionHistory> | null,
+    fallbackTotalCompletedFocusSessions = 0
+): PomodoroSessionHistory {
+    const completedFocusSessionsByTaskId: Record<string, number> = {};
+    const rawByTaskId = value?.completedFocusSessionsByTaskId;
+
+    if (rawByTaskId && typeof rawByTaskId === 'object' && !Array.isArray(rawByTaskId)) {
+        for (const [rawTaskId, rawCount] of Object.entries(rawByTaskId)) {
+            const taskId = rawTaskId.trim();
+            if (!taskId) continue;
+            const count = sanitizeCompletedSessionCount(rawCount);
+            if (count <= 0) continue;
+            completedFocusSessionsByTaskId[taskId] = count;
+        }
+    }
+
+    const taskTotal = Object.values(completedFocusSessionsByTaskId)
+        .reduce((sum, count) => sum + count, 0);
+    const totalCompletedFocusSessions = Math.max(
+        sanitizeCompletedSessionCount(value?.totalCompletedFocusSessions),
+        sanitizeCompletedSessionCount(fallbackTotalCompletedFocusSessions),
+        taskTotal
+    );
+
+    return {
+        totalCompletedFocusSessions,
+        completedFocusSessionsByTaskId,
+    };
+}
+
+export function recordPomodoroFocusSessions(
+    history: Partial<PomodoroSessionHistory> | undefined,
+    taskId?: string,
+    completedSessions = 1
+): PomodoroSessionHistory {
+    const sanitized = sanitizePomodoroSessionHistory(history);
+    const increment = sanitizeCompletedSessionCount(completedSessions);
+    if (increment <= 0) return sanitized;
+
+    const next: PomodoroSessionHistory = {
+        totalCompletedFocusSessions: sanitized.totalCompletedFocusSessions + increment,
+        completedFocusSessionsByTaskId: { ...sanitized.completedFocusSessionsByTaskId },
+    };
+    const normalizedTaskId = taskId?.trim();
+    if (normalizedTaskId) {
+        next.completedFocusSessionsByTaskId[normalizedTaskId] = (
+            next.completedFocusSessionsByTaskId[normalizedTaskId] ?? 0
+        ) + increment;
+    }
+
+    return next;
 }
 
 export function createPomodoroState(

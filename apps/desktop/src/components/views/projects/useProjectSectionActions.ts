@@ -11,9 +11,6 @@ type UseProjectSectionActionsParams = {
     deleteSection: (id: string) => void;
     updateSection: (id: string, updates: Partial<Section>) => void;
     setSectionNotesOpen: (updater: (prev: Record<string, boolean>) => Record<string, boolean>) => void;
-    setSectionTaskTargetId: (value: string | null) => void;
-    setSectionTaskDraft: (value: string) => void;
-    setShowSectionTaskPrompt: (value: boolean) => void;
     requestConfirmation: (options: ConfirmationRequestOptions) => Promise<boolean>;
 };
 
@@ -26,9 +23,6 @@ export function useProjectSectionActions({
     deleteSection,
     updateSection,
     setSectionNotesOpen,
-    setSectionTaskTargetId,
-    setSectionTaskDraft,
-    setShowSectionTaskPrompt,
     requestConfirmation,
 }: UseProjectSectionActionsParams) {
     const handleAddSection = useCallback(() => {
@@ -64,18 +58,11 @@ export function useProjectSectionActions({
         setSectionNotesOpen((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }));
     }, [setSectionNotesOpen]);
 
-    const handleOpenSectionTaskPrompt = useCallback((sectionId: string) => {
-        setSectionTaskTargetId(sectionId);
-        setSectionTaskDraft('');
-        setShowSectionTaskPrompt(true);
-    }, [setSectionTaskDraft, setSectionTaskTargetId, setShowSectionTaskPrompt]);
-
     return {
         handleAddSection,
         handleRenameSection,
         handleDeleteSection,
         handleToggleSection,
         handleToggleSectionNotes,
-        handleOpenSectionTaskPrompt,
     };
 }

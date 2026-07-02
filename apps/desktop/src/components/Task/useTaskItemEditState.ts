@@ -19,6 +19,8 @@ type TaskItemEditState = {
     setEditDueDate: (value: string) => void;
     editStartTime: string;
     setEditStartTime: (value: string) => void;
+    editRelativeStartOffset: Task['relativeStartOffset'];
+    setEditRelativeStartOffset: (value: Task['relativeStartOffset']) => void;
     editProjectId: string;
     setEditProjectId: (value: string) => void;
     editSectionId: string;
@@ -41,6 +43,8 @@ type TaskItemEditState = {
     setEditRecurrenceStrategy: (value: RecurrenceStrategy) => void;
     editRecurrenceRRule: string;
     setEditRecurrenceRRule: (value: string) => void;
+    editShowFutureRecurrence: boolean;
+    setEditShowFutureRecurrence: (value: boolean) => void;
     editTimeEstimate: TimeEstimate | '';
     setEditTimeEstimate: (value: TimeEstimate | '') => void;
     editPriority: TaskPriority | '';
@@ -51,10 +55,14 @@ type TaskItemEditState = {
     setEditAssignedTo: (value: string) => void;
     editReviewAt: string;
     setEditReviewAt: (value: string) => void;
+    editRepeatReminderMinutes: number | undefined;
+    setEditRepeatReminderMinutes: (value: number | undefined) => void;
     showDescriptionPreview: boolean;
     setShowDescriptionPreview: Dispatch<SetStateAction<boolean>>;
     resetEditState: () => void;
 };
+
+const hasPreviewableDescription = (task: Task) => Boolean(task.description?.trim());
 
 export function useTaskItemEditState({
     task,
@@ -63,6 +71,7 @@ export function useTaskItemEditState({
     const [editTitle, setEditTitle] = useState(task.title);
     const [editDueDate, setEditDueDate] = useState(toDateTimeLocalValue(task.dueDate));
     const [editStartTime, setEditStartTime] = useState(toDateTimeLocalValue(task.startTime));
+    const [editRelativeStartOffset, setEditRelativeStartOffset] = useState<Task['relativeStartOffset']>(task.relativeStartOffset);
     const [editProjectId, setEditProjectId] = useState(task.projectId || '');
     const [editSectionId, setEditSectionId] = useState(task.sectionId || '');
     const [editAreaId, setEditAreaId] = useState(task.areaId || '');
@@ -70,7 +79,7 @@ export function useTaskItemEditState({
     const [editContexts, setEditContexts] = useState(task.contexts?.join(', ') || '');
     const [editTags, setEditTags] = useState(task.tags?.join(', ') || '');
     const [editDescription, setEditDescription] = useState(task.description || '');
-    const [showDescriptionPreview, setShowDescriptionPreview] = useState(false);
+    const [showDescriptionPreview, setShowDescriptionPreview] = useState(() => hasPreviewableDescription(task));
     const [editLocation, setEditLocation] = useState(task.location || '');
     const [editRecurrence, setEditRecurrence] = useState<RecurrenceRule | ''>(
         getRecurrenceRuleValue(task.recurrence),
@@ -81,16 +90,19 @@ export function useTaskItemEditState({
     const [editRecurrenceRRule, setEditRecurrenceRRule] = useState<string>(
         getRecurrenceRRuleValue(task.recurrence),
     );
+    const [editShowFutureRecurrence, setEditShowFutureRecurrence] = useState(Boolean(task.showFutureRecurrence));
     const [editTimeEstimate, setEditTimeEstimate] = useState<TimeEstimate | ''>(task.timeEstimate || '');
     const [editPriority, setEditPriority] = useState<TaskPriority | ''>(task.priority || '');
     const [editEnergyLevel, setEditEnergyLevel] = useState<NonNullable<Task['energyLevel']> | ''>(task.energyLevel || '');
     const [editAssignedTo, setEditAssignedTo] = useState(task.assignedTo || '');
     const [editReviewAt, setEditReviewAt] = useState(toDateTimeLocalValue(task.reviewAt));
+    const [editRepeatReminderMinutes, setEditRepeatReminderMinutes] = useState<number | undefined>(task.repeatReminderMinutes);
 
     const resetEditState = useCallback(() => {
         setEditTitle(task.title);
         setEditDueDate(toDateTimeLocalValue(task.dueDate));
         setEditStartTime(toDateTimeLocalValue(task.startTime));
+        setEditRelativeStartOffset(task.relativeStartOffset);
         setEditProjectId(task.projectId || '');
         setEditSectionId(task.sectionId || '');
         setEditAreaId(task.areaId || '');
@@ -102,13 +114,15 @@ export function useTaskItemEditState({
         setEditRecurrence(getRecurrenceRuleValue(task.recurrence));
         setEditRecurrenceStrategy(getRecurrenceStrategyValue(task.recurrence));
         setEditRecurrenceRRule(getRecurrenceRRuleValue(task.recurrence));
+        setEditShowFutureRecurrence(Boolean(task.showFutureRecurrence));
         setEditTimeEstimate(task.timeEstimate || '');
         setEditPriority(task.priority || '');
         setEditEnergyLevel(task.energyLevel || '');
         setEditAssignedTo(task.assignedTo || '');
         setEditReviewAt(toDateTimeLocalValue(task.reviewAt));
+        setEditRepeatReminderMinutes(task.repeatReminderMinutes);
         resetAttachmentState(task.attachments);
-        setShowDescriptionPreview(false);
+        setShowDescriptionPreview(hasPreviewableDescription(task));
     }, [resetAttachmentState, task]);
 
     return {
@@ -118,6 +132,8 @@ export function useTaskItemEditState({
         setEditDueDate,
         editStartTime,
         setEditStartTime,
+        editRelativeStartOffset,
+        setEditRelativeStartOffset,
         editProjectId,
         setEditProjectId,
         editSectionId,
@@ -140,6 +156,8 @@ export function useTaskItemEditState({
         setEditRecurrenceStrategy,
         editRecurrenceRRule,
         setEditRecurrenceRRule,
+        editShowFutureRecurrence,
+        setEditShowFutureRecurrence,
         editTimeEstimate,
         setEditTimeEstimate,
         editPriority,
@@ -150,6 +168,8 @@ export function useTaskItemEditState({
         setEditAssignedTo,
         editReviewAt,
         setEditReviewAt,
+        editRepeatReminderMinutes,
+        setEditRepeatReminderMinutes,
         showDescriptionPreview,
         setShowDescriptionPreview,
         resetEditState,

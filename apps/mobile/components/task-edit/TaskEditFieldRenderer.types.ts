@@ -17,8 +17,8 @@ import type {
     TaskStatus,
     TimeEstimate,
     MarkdownSelection,
-    MarkdownToolbarActionId,
     MarkdownToolbarResult,
+    Person,
 } from '@mindwtr/core';
 import type { ThemeColors } from '@/hooks/use-theme-colors';
 
@@ -51,21 +51,24 @@ export type TaskEditFieldRendererProps = {
     commitTagDraft: () => void;
     contextInputDraft: string;
     contextTokenSuggestions: string[];
+    createAssignedToPerson: (name: string) => Promise<Person | null>;
     customWeekdays: RecurrenceWeekday[];
     dailyInterval: number;
     descriptionDraft: string;
     descriptionInputRef: React.RefObject<TextInput | null>;
     descriptionSelection: MarkdownSelection;
+    descriptionSelectionRestorePending: boolean;
     setDescriptionSelection: (selection: MarkdownSelection) => void;
-    descriptionUndoDepth: number;
+    descriptionToolbarInteractionUntilRef: React.MutableRefObject<number>;
     isDescriptionInputFocused: boolean;
     setIsDescriptionInputFocused: React.Dispatch<React.SetStateAction<boolean>>;
     handleDescriptionChange: (text: string) => void;
-    handleDescriptionUndo: () => MarkdownSelection | undefined;
-    handleDescriptionApplyAction: (actionId: MarkdownToolbarActionId, selection: MarkdownSelection) => MarkdownToolbarResult;
+    handleDescriptionKeyPress: (event: any) => void;
     applyDescriptionResult: (result: MarkdownToolbarResult) => void;
+    applyChecklistUpdate: (checklist: NonNullable<Task['checklist']>) => void;
     openDescriptionExpandedEditor: () => void;
     downloadAttachment: (attachment: Attachment) => void | Promise<void>;
+    editLinkAttachment: (attachment: Attachment) => void | Promise<void>;
     editedTask: Partial<Task>;
     formatDate: (dateStr?: string) => string;
     formatDueDate: (dateStr?: string) => string;
@@ -78,6 +81,7 @@ export type TaskEditFieldRendererProps = {
     monthlyPattern: 'date' | 'custom';
     onDateChange: (event: DateTimePickerEvent, selectedDate?: Date) => void;
     openAttachment: (attachment: Attachment) => void | Promise<void>;
+    openAddLinkAttachment: () => void;
     openCustomRecurrence: () => void;
     pendingDueDate: Date | null;
     pendingStartDate: Date | null;
@@ -91,6 +95,7 @@ export type TaskEditFieldRendererProps = {
     recurrenceRuleValue: RecurrenceRule | '';
     recurrenceStrategyValue: RecurrenceStrategy;
     recurrenceWeekdayButtons: WeekdayButton[];
+    requestStatusChange: (status: TaskStatus) => void;
     removeAttachment: (attachmentId: string) => void | Promise<void>;
     selectedContextTokens: Set<string>;
     selectedTagTokens: Set<string>;

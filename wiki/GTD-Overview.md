@@ -82,6 +82,14 @@ A next action is the **next visible, physical activity** to move something forwa
 
 A project is any outcome requiring more than one action. It's a commitment to a result, not a to-do list.
 
+### Project Sections
+
+Project Sections are labeled groups inside one project. They keep a longer project task list readable without turning it into nested projects or subtasks.
+
+Example: a project named **Launch website** might have sections for **Design**, **Development**, and **Content**. The project still has one outcome; sections are just headings for tasks inside that project.
+
+The **Project Section** field on a task assigns that task to one of the sections in its current project. It only matters when the task already belongs to a project that has sections. If the task has no project, or the project has no sections, leave Project Section blank.
+
 ### Areas, Projects, and Tasks
 
 Mindwtr uses a flexible "container" model so you can organize without friction:

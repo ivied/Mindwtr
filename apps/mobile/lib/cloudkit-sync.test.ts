@@ -1,4 +1,28 @@
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+    ensureCloudKitReady,
+    readRemoteCloudKit,
+    writeRemoteCloudKit,
+} from './cloudkit-sync';
+
+const currentDir = dirname(fileURLToPath(import.meta.url));
+const swiftMapperSource = readFileSync(
+    resolve(currentDir, '../modules/cloudkit-sync/ios/CloudKitRecordMapper.swift'),
+    'utf8',
+);
+const macosBridgeSource = readFileSync(
+    resolve(currentDir, '../../desktop/src-tauri/src/macos_cloudkit_bridge.m'),
+    'utf8',
+);
+
+const extractSourceBlock = (source: string, pattern: RegExp, label: string): string => {
+    const match = source.match(pattern);
+    if (!match?.[1]) throw new Error('Missing ' + label + ' field block');
+    return match[1];
+};
 
 const {
     asyncStorageGetItem,
@@ -42,6 +66,62 @@ vi.mock('./app-log', () => ({
 
 const createPendingPromise = <T,>() => new Promise<T>(() => undefined);
 
+describe('CloudKit native field specs', () => {
+    it('maps project purgedAt in Swift and macOS CloudKit mappers', () => {
+        const swiftProjectFields = extractSourceBlock(
+            swiftMapperSource,
+            /private static let projectFieldSpecs: \[FieldSpec\] = \[([\s\S]*?)\n    \]/,
+            'Swift project',
+        );
+        const macosProjectFields = extractSourceBlock(
+            macosBridgeSource,
+            /static const MWFieldSpec kProjectFields\[\] = \{([\s\S]*?)\n\};/,
+            'macOS project',
+        );
+
+        expect(swiftProjectFields).toContain('purgedAt');
+        expect(macosProjectFields).toContain('purgedAt');
+    });
+
+    it('maps project archive restore metadata in Swift and macOS CloudKit mappers', () => {
+        const swiftTaskFields = extractSourceBlock(
+            swiftMapperSource,
+            /private static let taskFieldSpecs: \[FieldSpec\] = \[([\s\S]*?)\n    \]/,
+            'Swift task',
+        );
+        const swiftSectionFields = extractSourceBlock(
+            swiftMapperSource,
+            /private static let sectionFieldSpecs: \[FieldSpec\] = \[([\s\S]*?)\n    \]/,
+            'Swift section',
+        );
+        const macosTaskFields = extractSourceBlock(
+            macosBridgeSource,
+            /static const MWFieldSpec kTaskFields\[\] = \{([\s\S]*?)\n\};/,
+            'macOS task',
+        );
+        const macosSectionFields = extractSourceBlock(
+            macosBridgeSource,
+            /static const MWFieldSpec kSectionFields\[\] = \{([\s\S]*?)\n\};/,
+            'macOS section',
+        );
+
+        for (const field of [
+            'statusBeforeProjectArchive',
+            'completedAtBeforeProjectArchive',
+            'isFocusedTodayBeforeProjectArchive',
+            'projectArchivedAt',
+        ]) {
+            expect(swiftTaskFields).toContain(field);
+            expect(macosTaskFields).toContain(field);
+        }
+
+        for (const field of ['deletedAtBeforeProjectArchive', 'projectArchivedAt']) {
+            expect(swiftSectionFields).toContain(field);
+            expect(macosSectionFields).toContain(field);
+        }
+    });
+});
+
 describe('cloudkit-sync abort handling', () => {
     beforeEach(() => {
         asyncStorageGetItem.mockReset();
@@ -66,7 +146,6 @@ describe('cloudkit-sync abort handling', () => {
     });
 
     it('rejects CloudKit reads when the sync lifecycle aborts mid-fetch', async () => {
-        const { readRemoteCloudKit } = await import('./cloudkit-sync');
         const controller = new AbortController();
         const abortReason = new Error('Sync lifecycle aborted');
         cloudKitSync.fetchAllRecords.mockImplementation(() => createPendingPromise());
@@ -80,7 +159,6 @@ describe('cloudkit-sync abort handling', () => {
     });
 
     it('rejects CloudKit writes when the sync lifecycle aborts mid-save', async () => {
-        const { writeRemoteCloudKit } = await import('./cloudkit-sync');
         const controller = new AbortController();
         const abortReason = new Error('Sync lifecycle aborted');
         cloudKitSync.saveRecords.mockImplementation(() => createPendingPromise());
@@ -108,7 +186,6 @@ describe('cloudkit-sync abort handling', () => {
     });
 
     it('does not start CloudKit setup when the signal is already aborted', async () => {
-        const { ensureCloudKitReady } = await import('./cloudkit-sync');
         const controller = new AbortController();
         controller.abort(new Error('Already cancelled'));
 

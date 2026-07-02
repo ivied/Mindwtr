@@ -1,4 +1,143 @@
 use crate::*;
+use std::error::Error as StdError;
+
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RemoteJsonWriteResult {
+    fingerprint: Option<String>,
+    etag: Option<String>,
+    last_modified: Option<String>,
+    content_length: Option<String>,
+    server_merged_remote_data: Option<bool>,
+}
+
+const NATIVE_HTTP_TIMEOUT_SECS: u64 = 30;
+
+fn blocking_http_client() -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(NATIVE_HTTP_TIMEOUT_SECS))
+        .use_native_tls()
+        .build()
+        .map_err(|error| format!("Failed to create HTTP client: {error}"))
+}
+
+fn format_error_with_source_chain(
+    label: &str,
+    error: &(dyn StdError + 'static),
+    categories: &[&str],
+) -> String {
+    let root_message = error.to_string();
+    let category_suffix = if categories.is_empty() {
+        String::new()
+    } else {
+        format!(" [{}]", categories.join(","))
+    };
+    let mut message = format!("{label}{category_suffix}: {root_message}");
+    let mut causes: Vec<String> = Vec::new();
+    let mut source = error.source();
+
+    while let Some(cause) = source {
+        let detail = cause.to_string();
+        if !detail.is_empty()
+            && detail != root_message
+            && !causes.iter().any(|existing| existing == &detail)
+        {
+            causes.push(detail);
+        }
+        source = cause.source();
+    }
+
+    if !causes.is_empty() {
+        message.push_str(" (caused by: ");
+        message.push_str(&causes.join(" -> "));
+        message.push(')');
+    }
+
+    message
+}
+
+fn reqwest_error_categories(error: &reqwest::Error) -> Vec<&'static str> {
+    let mut categories = Vec::new();
+    if error.is_timeout() {
+        categories.push("timeout");
+    }
+    if error.is_connect() {
+        categories.push("connect");
+    }
+    if error.is_request() {
+        categories.push("request");
+    }
+    if error.is_builder() {
+        categories.push("builder");
+    }
+    if error.is_redirect() {
+        categories.push("redirect");
+    }
+    if error.is_status() {
+        categories.push("status");
+    }
+    if error.is_body() {
+        categories.push("body");
+    }
+    if error.is_decode() {
+        categories.push("decode");
+    }
+    categories
+}
+
+fn format_reqwest_send_error(label: &str, error: &reqwest::Error) -> String {
+    let categories = reqwest_error_categories(error);
+    format_error_with_source_chain(label, error, &categories)
+}
+
+fn header_value_to_string(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_string())
+}
+
+fn remote_json_write_result_from_headers(
+    headers: &reqwest::header::HeaderMap,
+) -> RemoteJsonWriteResult {
+    RemoteJsonWriteResult {
+        fingerprint: None,
+        etag: header_value_to_string(headers, "etag"),
+        last_modified: header_value_to_string(headers, "last-modified"),
+        content_length: header_value_to_string(headers, "content-length"),
+        server_merged_remote_data: None,
+    }
+}
+
+fn apply_cloud_write_response_body(result: &mut RemoteJsonWriteResult, body: &str) {
+    let normalized_body = body.trim_start_matches('\u{feff}').trim();
+    if normalized_body.is_empty() {
+        return;
+    }
+    let Ok(parsed) = serde_json::from_str::<Value>(normalized_body) else {
+        return;
+    };
+    if let Some(value) = parsed.get("remoteFingerprint").and_then(Value::as_str) {
+        if !value.trim().is_empty() {
+            result.fingerprint = Some(value.to_string());
+        }
+    }
+    if let Some(value) = parsed.get("etag").and_then(Value::as_str) {
+        result.etag = Some(value.to_string());
+    }
+    if let Some(value) = parsed.get("lastModified").and_then(Value::as_str) {
+        result.last_modified = Some(value.to_string());
+    }
+    if let Some(value) = parsed.get("contentLength").and_then(Value::as_str) {
+        result.content_length = Some(value.to_string());
+    }
+    if let Some(value) = parsed
+        .get("serverMergedRemoteData")
+        .and_then(Value::as_bool)
+    {
+        result.server_merged_remote_data = Some(value);
+    }
+}
 
 fn now_unix_ms() -> i64 {
     SystemTime::now()
@@ -210,7 +349,7 @@ fn exchange_dropbox_auth_code(
     verifier: &str,
     redirect_uri: &str,
 ) -> Result<DropboxTokenBundle, String> {
-    let client = reqwest::blocking::Client::new();
+    let client = blocking_http_client()?;
     let response = client
         .post(DROPBOX_TOKEN_ENDPOINT)
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -254,7 +393,7 @@ fn exchange_dropbox_auth_code(
 }
 
 fn refresh_dropbox_token(client_id: &str, refresh_token: &str) -> Result<(String, i64), String> {
-    let client = reqwest::blocking::Client::new();
+    let client = blocking_http_client()?;
     let response = client
         .post(DROPBOX_TOKEN_ENDPOINT)
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -467,12 +606,39 @@ fn validate_sync_dir(path: &PathBuf) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
+fn strip_windows_verbatim_prefix(raw: &str) -> String {
+    const VERBATIM_UNC_PREFIX: &str = "\\\\?\\UNC\\";
+    const VERBATIM_PREFIX: &str = "\\\\?\\";
+
+    if let Some(rest) = raw.strip_prefix(VERBATIM_UNC_PREFIX) {
+        return format!("\\\\{rest}");
+    }
+    raw.strip_prefix(VERBATIM_PREFIX).unwrap_or(raw).to_string()
+}
+
+fn sync_dir_to_display_string(path: &Path) -> String {
+    strip_windows_verbatim_prefix(&path.to_string_lossy())
+}
+
 fn resolve_sync_dir(app: &tauri::AppHandle, path: Option<String>) -> Result<PathBuf, String> {
     let candidate = match path {
         Some(raw) => normalize_sync_dir(raw.trim()),
         None => default_sync_dir(app)?,
     };
     validate_sync_dir(&candidate)
+}
+
+fn configured_sync_dir(app: &tauri::AppHandle) -> Result<Option<PathBuf>, String> {
+    let config = read_config(app);
+    let Some(sync_path) = config
+        .sync_path
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(None);
+    };
+    resolve_sync_dir(app, Some(sync_path.to_string())).map(Some)
 }
 
 #[cfg(target_os = "macos")]
@@ -513,17 +679,9 @@ pub(crate) fn expand_tauri_fs_scope(app: &tauri::AppHandle, dir: &Path) {
 
 #[tauri::command]
 pub(crate) fn get_sync_path(app: tauri::AppHandle) -> Result<String, String> {
-    let config = read_config(&app);
-    let Some(sync_path) = config
-        .sync_path
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-    else {
-        return Ok(String::new());
-    };
-    let path = resolve_sync_dir(&app, Some(sync_path.to_string()))?;
-    Ok(path.to_string_lossy().to_string())
+    Ok(configured_sync_dir(&app)?
+        .map(|path| sync_dir_to_display_string(&path))
+        .unwrap_or_default())
 }
 
 #[tauri::command]
@@ -548,7 +706,7 @@ pub(crate) fn set_sync_path(
     let bookmark = create_sync_path_bookmark(&sanitized_path);
 
     let mut config = read_config(&app);
-    config.sync_path = Some(sanitized_path.to_string_lossy().to_string());
+    config.sync_path = Some(sync_dir_to_display_string(&sanitized_path));
     #[cfg(target_os = "macos")]
     {
         config.sync_path_bookmark = bookmark;
@@ -565,14 +723,130 @@ pub(crate) fn set_sync_path(
 }
 
 fn normalize_webdav_url(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let path_end = [trimmed.find('?'), trimmed.find('#')]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(trimmed.len());
+    let path = trimmed[..path_end].trim_end_matches('/');
+    let suffix = &trimmed[path_end..];
+    let normalized_path = if path.to_lowercase().ends_with(".json") {
+        path.to_string()
+    } else {
+        format!("{}/{}", path, DATA_FILE_NAME)
+    };
+
+    if suffix.is_empty() {
+        return normalized_path;
+    }
+
+    let hash_index = suffix.find('#');
+    let query_part = if suffix.starts_with('?') {
+        &suffix[..hash_index.unwrap_or(suffix.len())]
+    } else {
+        ""
+    };
+    let hash_part = if let Some(index) = hash_index {
+        &suffix[index..]
+    } else if suffix.starts_with('#') {
+        suffix
+    } else {
+        ""
+    };
+    if query_part.is_empty() {
+        return format!("{normalized_path}{hash_part}");
+    }
+
+    let query = query_part
+        .trim_start_matches('?')
+        .split('&')
+        .filter(|part| {
+            let key = part.split_once('=').map(|(key, _)| key).unwrap_or(part);
+            key != "_"
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    if query.is_empty() {
+        format!("{normalized_path}{hash_part}")
+    } else {
+        format!("{normalized_path}?{query}{hash_part}")
+    }
+}
+
+fn normalize_cloud_url(raw: &str) -> String {
     let trimmed = raw.trim().trim_end_matches('/');
     if trimmed.is_empty() {
         return String::new();
     }
-    if trimmed.to_lowercase().ends_with(".json") {
-        trimmed.to_string()
-    } else {
-        format!("{}/{}", trimmed, DATA_FILE_NAME)
+    let lower = trimmed.to_lowercase();
+    if lower.ends_with("/v1/data") || lower.ends_with("/data") {
+        return trimmed.to_string();
+    }
+    if let Some(last_segment) = trimmed.rsplit('/').next() {
+        if last_segment.len() > 1
+            && last_segment.starts_with('v')
+            && last_segment[1..]
+                .chars()
+                .all(|value| value.is_ascii_digit())
+        {
+            return format!("{trimmed}/data");
+        }
+    }
+    format!("{trimmed}/v1/data")
+}
+
+fn is_likely_local_hostname(host: &str) -> bool {
+    if host.is_empty() {
+        return false;
+    }
+    if host.contains('.') {
+        return host.ends_with(".local")
+            || host.ends_with(".localdomain")
+            || host.ends_with(".home.arpa");
+    }
+    host.chars()
+        .all(|value| value.is_ascii_alphanumeric() || value == '-')
+}
+
+fn is_private_http_host(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return match ip {
+            std::net::IpAddr::V4(ipv4) => {
+                ipv4.is_loopback() || ipv4.is_private() || {
+                    let octets = ipv4.octets();
+                    octets[0] == 100 && (64..=127).contains(&octets[1])
+                }
+            }
+            std::net::IpAddr::V6(ipv6) => {
+                ipv6.is_loopback()
+                    || ipv6.is_unique_local()
+                    || ipv6.segments()[0] & 0xffc0 == 0xfe80
+            }
+        };
+    }
+    is_likely_local_hostname(&host.to_lowercase())
+}
+
+fn assert_cloud_url_allowed(url: &str, allow_insecure_http: bool) -> Result<(), String> {
+    let parsed = reqwest::Url::parse(url).map_err(|_| "Cloud URL is invalid".to_string())?;
+    match parsed.scheme() {
+        "https" => Ok(()),
+        "http" => {
+            let host = parsed.host_str().unwrap_or_default();
+            if allow_insecure_http || is_private_http_host(host) {
+                Ok(())
+            } else {
+                Err("Cloud sync requires HTTPS for public URLs (HTTP allowed for localhost, private IPs, and local hostnames).".to_string())
+            }
+        }
+        _ => Err("Cloud URL must use HTTP or HTTPS.".to_string()),
     }
 }
 
@@ -640,7 +914,7 @@ fn ensure_webdav_parent_collections_blocking(
             .request(mkcol_method.clone(), target)
             .basic_auth(username, Some(password))
             .send()
-            .map_err(|e| format!("WebDAV request failed: {e}"))?;
+            .map_err(|e| format_reqwest_send_error("WebDAV request failed", &e))?;
         Ok(response.status())
     })
 }
@@ -666,12 +940,12 @@ fn webdav_get_json_blocking(app: &tauri::AppHandle) -> Result<Value, String> {
     .or(config.webdav_password.clone())
     .ok_or_else(|| "WebDAV password not configured".to_string())?;
 
-    let client = reqwest::blocking::Client::new();
+    let client = blocking_http_client()?;
     let response = client
         .get(url)
         .basic_auth(username, Some(password))
         .send()
-        .map_err(|e| format!("WebDAV request failed: {e}"))?;
+        .map_err(|e| format_reqwest_send_error("WebDAV request failed", &e))?;
 
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(Value::Null);
@@ -699,7 +973,10 @@ pub(crate) async fn webdav_get_json(app: tauri::AppHandle) -> Result<Value, Stri
         .map_err(|e| e.to_string())?
 }
 
-fn webdav_put_json_blocking(app: &tauri::AppHandle, data: &Value) -> Result<bool, String> {
+fn webdav_put_json_blocking(
+    app: &tauri::AppHandle,
+    data: &Value,
+) -> Result<RemoteJsonWriteResult, String> {
     let config = read_config(app);
     let url = normalize_webdav_url(&config.webdav_url.unwrap_or_default());
     if url.trim().is_empty() {
@@ -718,7 +995,7 @@ fn webdav_put_json_blocking(app: &tauri::AppHandle, data: &Value) -> Result<bool
 
     let payload = serde_json::to_string_pretty(&data)
         .map_err(|e| format!("Failed to encode WebDAV payload: {e}"))?;
-    let client = reqwest::blocking::Client::new();
+    let client = blocking_http_client()?;
     let send_put = || {
         client
             .put(url.clone())
@@ -726,7 +1003,7 @@ fn webdav_put_json_blocking(app: &tauri::AppHandle, data: &Value) -> Result<bool
             .header("Content-Type", "application/json")
             .body(payload.clone())
             .send()
-            .map_err(|e| format!("WebDAV request failed: {e}"))
+            .map_err(|e| format_reqwest_send_error("WebDAV request failed", &e))
     };
     let mut response = send_put()?;
 
@@ -746,12 +1023,128 @@ fn webdav_put_json_blocking(app: &tauri::AppHandle, data: &Value) -> Result<bool
     if !response.status().is_success() {
         return Err(format!("WebDAV error: {}", response.status()));
     }
-    Ok(true)
+    Ok(remote_json_write_result_from_headers(response.headers()))
 }
 
 #[tauri::command]
-pub(crate) async fn webdav_put_json(app: tauri::AppHandle, data: Value) -> Result<bool, String> {
+pub(crate) async fn webdav_put_json(
+    app: tauri::AppHandle,
+    data: Value,
+) -> Result<RemoteJsonWriteResult, String> {
     tauri::async_runtime::spawn_blocking(move || webdav_put_json_blocking(&app, &data))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn read_cloud_token(app: &tauri::AppHandle, config: &AppConfigToml) -> String {
+    match get_keyring_secret(app, KEYRING_CLOUD_TOKEN) {
+        Ok(value) => value,
+        Err(error) => {
+            log::warn!("Failed to read cloud token from keyring (sync): {error}");
+            None
+        }
+    }
+    .or(config.cloud_token.clone())
+    .unwrap_or_default()
+}
+
+fn cloud_request_builder(
+    client: &reqwest::blocking::Client,
+    method: reqwest::Method,
+    url: &str,
+    token: &str,
+) -> reqwest::blocking::RequestBuilder {
+    let request = client.request(method, url);
+    if token.trim().is_empty() {
+        request
+    } else {
+        request.bearer_auth(token.trim())
+    }
+}
+
+fn cloud_get_json_blocking(app: &tauri::AppHandle) -> Result<Value, String> {
+    let config = read_config(app);
+    let url = normalize_cloud_url(&config.cloud_url.clone().unwrap_or_default());
+    if url.trim().is_empty() {
+        return Err("Self-hosted URL not configured".to_string());
+    }
+    let allow_insecure_http = config.cloud_allow_insecure_http.as_deref() == Some("true");
+    assert_cloud_url_allowed(&url, allow_insecure_http)?;
+
+    let token = read_cloud_token(app, &config);
+    let client = blocking_http_client()?;
+    let response = cloud_request_builder(&client, reqwest::Method::GET, &url, &token)
+        .send()
+        .map_err(|e| format_reqwest_send_error("Cloud request failed", &e))?;
+
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(Value::Null);
+    }
+    if !response.status().is_success() {
+        return Err(format!(
+            "Cloud GET failed ({}): {}",
+            response.status().as_u16(),
+            response.status().canonical_reason().unwrap_or_default()
+        ));
+    }
+
+    let body = response
+        .text()
+        .map_err(|e| format!("Cloud GET failed: error reading response body: {e}"))?;
+    let normalized_body = body.trim_start_matches('\u{feff}').trim();
+    serde_json::from_str::<Value>(normalized_body)
+        .map_err(|e| format!("Cloud GET failed: invalid JSON ({e})"))
+}
+
+#[tauri::command]
+pub(crate) async fn cloud_get_json(app: tauri::AppHandle) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || cloud_get_json_blocking(&app))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn cloud_put_json_blocking(
+    app: &tauri::AppHandle,
+    data: &Value,
+) -> Result<RemoteJsonWriteResult, String> {
+    let config = read_config(app);
+    let url = normalize_cloud_url(&config.cloud_url.clone().unwrap_or_default());
+    if url.trim().is_empty() {
+        return Err("Self-hosted URL not configured".to_string());
+    }
+    let allow_insecure_http = config.cloud_allow_insecure_http.as_deref() == Some("true");
+    assert_cloud_url_allowed(&url, allow_insecure_http)?;
+
+    let token = read_cloud_token(app, &config);
+    let payload = serde_json::to_string_pretty(data)
+        .map_err(|e| format!("Failed to encode Cloud payload: {e}"))?;
+    let client = blocking_http_client()?;
+    let response = cloud_request_builder(&client, reqwest::Method::PUT, &url, &token)
+        .header("Content-Type", "application/json")
+        .body(payload)
+        .send()
+        .map_err(|e| format_reqwest_send_error("Cloud request failed", &e))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "Cloud PUT failed ({}): {}",
+            response.status().as_u16(),
+            response.status().canonical_reason().unwrap_or_default()
+        ));
+    }
+    let mut result = remote_json_write_result_from_headers(response.headers());
+    if let Ok(body) = response.text() {
+        apply_cloud_write_response_body(&mut result, &body);
+    }
+    Ok(result)
+}
+
+#[tauri::command]
+pub(crate) async fn cloud_put_json(
+    app: tauri::AppHandle,
+    data: Value,
+) -> Result<RemoteJsonWriteResult, String> {
+    tauri::async_runtime::spawn_blocking(move || cloud_put_json_blocking(&app, &data))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -759,6 +1152,72 @@ pub(crate) async fn webdav_put_json(app: tauri::AppHandle, data: Value) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strips_windows_verbatim_prefix_from_sync_path_display() {
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\C:\Users\mmbtu\Dropbox\Apps\Mindwtr"),
+            r"C:\Users\mmbtu\Dropbox\Apps\Mindwtr"
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"\\?\UNC\server\share\Mindwtr"),
+            r"\\server\share\Mindwtr"
+        );
+        assert_eq!(
+            strip_windows_verbatim_prefix(r"C:\Users\mmbtu\Dropbox\Apps\Mindwtr"),
+            r"C:\Users\mmbtu\Dropbox\Apps\Mindwtr"
+        );
+    }
+
+    #[test]
+    fn normalize_cloud_url_matches_shared_client_shape() {
+        assert_eq!(
+            normalize_cloud_url("https://example.com"),
+            "https://example.com/v1/data"
+        );
+        assert_eq!(
+            normalize_cloud_url("https://example.com/mindwtr/"),
+            "https://example.com/mindwtr/v1/data"
+        );
+        assert_eq!(
+            normalize_cloud_url("https://example.com/v2"),
+            "https://example.com/v2/data"
+        );
+        assert_eq!(
+            normalize_cloud_url("https://example.com/v1/data"),
+            "https://example.com/v1/data"
+        );
+        assert_eq!(
+            normalize_cloud_url("https://example.com/data/"),
+            "https://example.com/data"
+        );
+    }
+
+    #[test]
+    fn normalize_webdav_url_strips_cache_busting_query() {
+        assert_eq!(
+            normalize_webdav_url("https://dav.example.com/mindwtr?_=1782668355219"),
+            "https://dav.example.com/mindwtr/data.json"
+        );
+        assert_eq!(
+            normalize_webdav_url("https://dav.example.com/mindwtr/data.json?_=1782668355219"),
+            "https://dav.example.com/mindwtr/data.json"
+        );
+        assert_eq!(
+            normalize_webdav_url("https://dav.example.com/mindwtr/#sync"),
+            "https://dav.example.com/mindwtr/data.json#sync"
+        );
+    }
+
+    #[test]
+    fn cloud_url_security_allows_https_and_local_http_only_by_default() {
+        assert!(assert_cloud_url_allowed("https://example.com/v1/data", false).is_ok());
+        assert!(assert_cloud_url_allowed("http://localhost:8787/v1/data", false).is_ok());
+        assert!(assert_cloud_url_allowed("http://192.168.1.50:8787/v1/data", false).is_ok());
+        assert!(assert_cloud_url_allowed("http://nas.local:8787/v1/data", false).is_ok());
+        assert!(assert_cloud_url_allowed("http://example.com/v1/data", false).is_err());
+        assert!(assert_cloud_url_allowed("http://example.com/v1/data", true).is_ok());
+    }
 
     #[test]
     fn parent_webdav_collection_url_strips_query_and_hash() {
@@ -808,6 +1267,62 @@ mod tests {
         assert!(!is_webdav_mkcol_conflict_error(
             "WebDAV MKCOL failed (500 Internal Server Error)"
         ));
+    }
+
+    #[derive(Debug)]
+    struct TestError {
+        message: &'static str,
+        source: Option<Box<TestError>>,
+    }
+
+    impl std::fmt::Display for TestError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.message)
+        }
+    }
+
+    impl std::error::Error for TestError {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.source
+                .as_deref()
+                .map(|source| source as &(dyn std::error::Error + 'static))
+        }
+    }
+
+    #[test]
+    fn format_error_with_source_chain_includes_nested_causes() {
+        let error = TestError {
+            message: "error sending request for url (https://mindwtr.private.tld/v1/data)",
+            source: Some(Box::new(TestError {
+                message: "client error (Connect)",
+                source: Some(Box::new(TestError {
+                    message: "invalid peer certificate: UnknownIssuer",
+                    source: None,
+                })),
+            })),
+        };
+
+        let formatted =
+            format_error_with_source_chain("Cloud request failed", &error, &["connect"]);
+
+        assert_eq!(
+            formatted,
+            "Cloud request failed [connect]: error sending request for url (https://mindwtr.private.tld/v1/data) (caused by: client error (Connect) -> invalid peer certificate: UnknownIssuer)"
+        );
+    }
+
+    #[test]
+    fn acquire_sync_lock_rejects_fresh_existing_lock() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let first = acquire_sync_lock(dir.path()).expect("first lock");
+
+        let second = acquire_sync_lock(dir.path());
+
+        assert_eq!(
+            second.expect_err("fresh lock should block another writer"),
+            "Sync lock held by another process"
+        );
+        release_sync_lock(&first);
     }
 }
 
@@ -870,7 +1385,11 @@ pub(crate) async fn disconnect_dropbox(
         let normalized_client_id = normalize_dropbox_client_id(&client_id)?;
         if let Ok(Some(tokens)) = read_dropbox_tokens(&app) {
             if tokens.client_id == normalized_client_id && !tokens.access_token.trim().is_empty() {
-                let _ = reqwest::blocking::Client::new()
+                let Ok(client) = blocking_http_client() else {
+                    clear_dropbox_tokens(&app)?;
+                    return Ok::<(), String>(());
+                };
+                let _ = client
                     .post(DROPBOX_REVOKE_ENDPOINT)
                     .bearer_auth(tokens.access_token)
                     .send();
@@ -949,14 +1468,11 @@ fn release_sync_lock(lock_path: &Path) {
 
 #[tauri::command]
 pub(crate) fn read_sync_file(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    let sync_path_str = get_sync_path(app)?;
-    if sync_path_str.trim().is_empty() {
-        return Err("Sync path is not configured".to_string());
-    }
-    let sync_dir = PathBuf::from(&sync_path_str);
+    let sync_dir =
+        configured_sync_dir(&app)?.ok_or_else(|| "Sync path is not configured".to_string())?;
     let sync_file = sync_dir.join(DATA_FILE_NAME);
     let backup_file = sync_dir.join(format!("{}.bak", DATA_FILE_NAME));
-    let legacy_sync_file = PathBuf::from(&sync_path_str).join(format!("{}-sync.json", APP_NAME));
+    let legacy_sync_file = sync_dir.join(format!("{}-sync.json", APP_NAME));
 
     let find_seed_backup_file = |dir: &Path| -> Option<PathBuf> {
         let mut latest: Option<(SystemTime, PathBuf)> = None;
@@ -1042,11 +1558,8 @@ pub(crate) fn read_sync_file(app: tauri::AppHandle) -> Result<serde_json::Value,
 
 #[tauri::command]
 pub(crate) fn write_sync_file(app: tauri::AppHandle, data: Value) -> Result<bool, String> {
-    let sync_path_str = get_sync_path(app)?;
-    if sync_path_str.trim().is_empty() {
-        return Err("Sync path is not configured".to_string());
-    }
-    let sync_dir = PathBuf::from(&sync_path_str);
+    let sync_dir =
+        configured_sync_dir(&app)?.ok_or_else(|| "Sync path is not configured".to_string())?;
     let sync_file = sync_dir.join(DATA_FILE_NAME);
     let backup_file = sync_dir.join(format!("{}.bak", DATA_FILE_NAME));
     let tmp_file = sync_dir.join(format!("{}.tmp", DATA_FILE_NAME));
@@ -1061,14 +1574,7 @@ pub(crate) fn write_sync_file(app: tauri::AppHandle, data: Value) -> Result<bool
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    let lock = acquire_sync_lock(&sync_dir);
-    let lock_path = match &lock {
-        Ok(path) => Some(path.clone()),
-        Err(msg) => {
-            log::warn!("Sync lock unavailable, proceeding without lock: {msg}");
-            None
-        }
-    };
+    let lock_path = acquire_sync_lock(&sync_dir)?;
 
     let result = (|| -> Result<bool, String> {
         if sync_file.exists() {
@@ -1108,9 +1614,7 @@ pub(crate) fn write_sync_file(app: tauri::AppHandle, data: Value) -> Result<bool
         }
     })();
 
-    if let Some(ref lp) = lock_path {
-        release_sync_lock(lp);
-    }
+    release_sync_lock(&lock_path);
 
     result
 }

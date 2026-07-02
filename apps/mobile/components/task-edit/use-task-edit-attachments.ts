@@ -4,6 +4,7 @@ import type { Attachment, Task } from '@mindwtr/core';
 import {
     DEFAULT_PROJECT_COLOR,
     buildTaskUpdatesFromSpeechResult,
+    findSelectableProjectByTitleAndArea,
     generateUUID,
     isSelectableProjectForTaskAssignment,
     normalizeLinkAttachmentInput,
@@ -19,7 +20,7 @@ import { Paths } from 'expo-file-system';
 
 import { ensureAttachmentAvailable, persistAttachmentLocally } from '../../lib/attachment-sync';
 import { loadAIKey } from '../../lib/ai-config';
-import { ensureWhisperModelPathForConfig, processAudioCapture } from '../../lib/speech-to-text';
+import { ensureWhisperModelPathForConfigAsync, processAudioCapture, resolveSpeechToTextRuntimeSettings } from '../../lib/speech-to-text';
 import { normalizeAudioUri } from '../../lib/speech-to-text.helpers';
 import {
     isReleasedAudioPlayerError,
@@ -51,6 +52,7 @@ export function useTaskEditAttachments({
     const [audioTranscriptionError, setAudioTranscriptionError] = React.useState<string | null>(null);
     const [linkInput, setLinkInput] = React.useState('');
     const [linkInputTouched, setLinkInputTouched] = React.useState(false);
+    const [editingLinkAttachmentId, setEditingLinkAttachmentId] = React.useState<string | null>(null);
 
     const audioPlayer = useAudioPlayer(null, { updateInterval: 500 });
     const audioStatus = useAudioPlayerStatus(audioPlayer);
@@ -176,6 +178,25 @@ export function useTaskEditAttachments({
         setEditedTask((prev) => ({ ...prev, attachments: [...(prev.attachments || []), cached] }));
     }, [resolveValidationMessage, setEditedTask, t]);
 
+    const openAddLinkAttachment = React.useCallback(() => {
+        setEditingLinkAttachmentId(null);
+        setLinkInput('');
+        setLinkInputTouched(false);
+        setLinkModalVisible(true);
+    }, []);
+
+    const editLinkAttachment = React.useCallback((attachment: Attachment) => {
+        if (attachment.kind !== 'link') return;
+        setEditingLinkAttachmentId(attachment.id);
+        setLinkInput(
+            attachment.title && attachment.title !== attachment.uri
+                ? `${attachment.title} | ${attachment.uri}`
+                : attachment.uri
+        );
+        setLinkInputTouched(false);
+        setLinkModalVisible(true);
+    }, []);
+
     const confirmAddLink = React.useCallback(() => {
         if (!linkInput.trim()) {
             setLinkInputTouched(true);
@@ -187,6 +208,27 @@ export function useTaskEditAttachments({
             return;
         }
         const now = new Date().toISOString();
+        if (editingLinkAttachmentId) {
+            setEditedTask((prev) => ({
+                ...prev,
+                attachments: (prev.attachments || []).map((attachment) => (
+                    attachment.id === editingLinkAttachmentId
+                        ? {
+                            ...attachment,
+                            kind: 'link',
+                            title: normalized.title,
+                            uri: normalized.uri,
+                            updatedAt: now,
+                        }
+                        : attachment
+                )),
+            }));
+            setLinkInput('');
+            setLinkInputTouched(false);
+            setEditingLinkAttachmentId(null);
+            setLinkModalVisible(false);
+            return;
+        }
         const attachment: Attachment = {
             id: generateUUID(),
             kind: normalized.kind,
@@ -198,13 +240,15 @@ export function useTaskEditAttachments({
         setEditedTask((prev) => ({ ...prev, attachments: [...(prev.attachments || []), attachment] }));
         setLinkInput('');
         setLinkInputTouched(false);
+        setEditingLinkAttachmentId(null);
         setLinkModalVisible(false);
-    }, [linkInput, setEditedTask, t]);
+    }, [editingLinkAttachmentId, linkInput, setEditedTask, t]);
 
     const closeLinkModal = React.useCallback(() => {
         setLinkModalVisible(false);
         setLinkInput('');
         setLinkInputTouched(false);
+        setEditingLinkAttachmentId(null);
     }, []);
 
     const isAudioAttachment = React.useCallback((attachment: Attachment) => {
@@ -345,22 +389,21 @@ export function useTaskEditAttachments({
             }
 
             const speech = currentSettings.ai?.speechToText;
-            if (!speech?.enabled) {
+            const speechRuntime = resolveSpeechToTextRuntimeSettings(speech);
+            if (!speechRuntime.enabled) {
                 throw new Error(resolveText('attachments.transcriptionUnavailable', 'Speech-to-text is not ready. Check your AI settings and try again.'));
             }
 
-            const provider = speech.provider ?? 'gemini';
-            const model = speech.model ?? (provider === 'openai' ? 'gpt-4o-transcribe' : provider === 'gemini' ? 'gemini-2.5-flash' : 'whisper-tiny');
+            const { provider, model, modelPath } = speechRuntime;
             const apiKey = provider === 'whisper' ? '' : await loadAIKey(provider).catch(() => '');
-            const modelPath = provider === 'whisper' ? speech.offlineModelPath : undefined;
             const whisperResolved = provider === 'whisper'
-                ? ensureWhisperModelPathForConfig(model, modelPath)
+                ? await ensureWhisperModelPathForConfigAsync(model, modelPath)
                 : null;
             const whisperModelReady = provider === 'whisper' ? Boolean(whisperResolved?.exists) : false;
             const resolvedModelPath = provider === 'whisper'
                 ? (whisperResolved?.exists ? whisperResolved.path : modelPath)
                 : undefined;
-            const speechReady = provider === 'whisper' ? whisperModelReady : Boolean(apiKey);
+            const speechReady = provider === 'whisper' ? whisperModelReady || Boolean(modelPath?.trim()) : Boolean(apiKey);
             if (!speechReady) {
                 throw new Error(resolveText('attachments.transcriptionUnavailable', 'Speech-to-text is not ready. Check your AI settings and try again.'));
             }
@@ -373,9 +416,10 @@ export function useTaskEditAttachments({
                 apiKey,
                 model,
                 modelPath: resolvedModelPath,
-                language: speech.language,
-                mode: speech.mode ?? 'smart_parse',
-                fieldStrategy: speech.fieldStrategy ?? 'smart',
+                isFossBuild: speechRuntime.isFossBuild,
+                language: speechRuntime.language,
+                mode: speechRuntime.mode,
+                fieldStrategy: speechRuntime.fieldStrategy,
                 parseModel: provider === 'openai' && currentSettings.ai?.provider === 'openai' ? currentSettings.ai?.model : undefined,
                 now: new Date(),
                 timeZone,
@@ -383,13 +427,18 @@ export function useTaskEditAttachments({
 
             const { updates, suggestedProjectTitle } = buildTaskUpdatesFromSpeechResult(existing, result, currentSettings);
             if (suggestedProjectTitle && !existing.projectId) {
-                const match = currentProjects.find((project) => project.title.toLowerCase() === suggestedProjectTitle.toLowerCase());
+                const targetAreaId = updates.areaId ?? existing.areaId;
+                const match = findSelectableProjectByTitleAndArea(currentProjects, suggestedProjectTitle, targetAreaId);
                 if (match) {
                     if (isSelectableProjectForTaskAssignment(match)) {
                         updates.projectId = match.id;
                     }
                 } else {
-                    const created = await addProjectNow(suggestedProjectTitle, DEFAULT_PROJECT_COLOR);
+                    const created = await addProjectNow(
+                        suggestedProjectTitle,
+                        DEFAULT_PROJECT_COLOR,
+                        targetAreaId ? { areaId: targetAreaId } : undefined
+                    );
                     if (!created) {
                         throw new Error(resolveText('attachments.transcriptionFailed', 'Transcription failed. Please try again.'));
                     }
@@ -524,11 +573,14 @@ export function useTaskEditAttachments({
         closeLinkModal,
         confirmAddLink,
         downloadAttachment,
+        editLinkAttachment,
+        editingLinkAttachmentId,
         imagePreviewAttachment,
         isImageAttachment,
         linkInput,
         linkInputTouched,
         linkModalVisible,
+        openAddLinkAttachment,
         openAttachment,
         removeAttachment,
         retryAudioTranscription,

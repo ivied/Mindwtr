@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef } from 'react';
-import { createPortal } from 'react-dom';
+import { ModalPortal } from './ModalPortal';
 import { Button } from './ui/Button';
 
 interface ConfirmModalProps {
@@ -48,9 +48,8 @@ export function ConfirmModal({
     }, [isOpen]);
 
     if (!isOpen) return null;
-    if (typeof document === 'undefined') return null;
-
-    return createPortal(
+    return (
+        <ModalPortal>
         <div
             className="fixed inset-0 bg-black/50 flex items-start justify-center pt-[20vh] z-50"
             role="dialog"
@@ -113,7 +112,6 @@ export function ConfirmModal({
                 </div>
             </div>
         </div>
-        ,
-        document.body,
+        </ModalPortal>
     );
 }

@@ -12,6 +12,7 @@ import {
   base64ToBytes,
   CLOUD_PROVIDER_DROPBOX,
   copyFileSafely,
+  ensureAttachmentStoredLocally,
   extractExtension,
   fileExists,
   findSafEntry,
@@ -31,7 +32,7 @@ import {
   validateAttachmentHash,
   writeBytesSafely,
 } from './attachment-sync-utils';
-import { getMobileWebDavRequestOptions } from './webdav-request-options';
+import { getMobileCloudRequestOptions, getMobileWebDavRequestOptions } from './webdav-request-options';
 
 const downloadLocks = new Map<string, Promise<Attachment | null>>();
 
@@ -72,15 +73,20 @@ const ensureFileAttachmentAvailable = async (
 
 const ensureAttachmentAvailableInternal = async (attachment: Attachment): Promise<Attachment | null> => {
   if (attachment.kind !== 'file') return attachment;
-  const uri = attachment.uri || '';
+  const localAttachment = { ...attachment };
+  if (await ensureAttachmentStoredLocally(localAttachment)) {
+    return localAttachment;
+  }
+
+  const uri = localAttachment.uri || '';
   if (uri && (isHttpAttachmentUri(uri) || isContentAttachmentUri(uri))) {
-    return { ...attachment, localStatus: 'available' };
+    return { ...localAttachment, localStatus: 'available' };
   }
 
   if (uri) {
     const exists = await fileExists(uri);
     if (exists) {
-      return { ...attachment, localStatus: 'available' };
+      return { ...localAttachment, localStatus: 'available' };
     }
   }
 
@@ -88,20 +94,20 @@ const ensureAttachmentAvailableInternal = async (attachment: Attachment): Promis
   if (backend === 'file') {
     const syncPath = await AsyncStorage.getItem(SYNC_PATH_KEY);
     if (syncPath) {
-      const resolved = await ensureFileAttachmentAvailable(attachment, syncPath);
+      const resolved = await ensureFileAttachmentAvailable(localAttachment, syncPath);
       if (resolved) return resolved;
     }
     return null;
   }
 
-  if (backend === 'cloud' && attachment.cloudKey) {
+  if (backend === 'cloud' && localAttachment.cloudKey) {
     const attachmentsDir = await getAttachmentsDir();
     if (!attachmentsDir) return null;
-    const filename = attachment.cloudKey.split('/').pop() || `${attachment.id}${extractExtension(attachment.title)}`;
+    const filename = localAttachment.cloudKey.split('/').pop() || `${localAttachment.id}${extractExtension(localAttachment.title)}`;
     const targetUri = `${attachmentsDir}${filename}`;
     const existing = await fileExists(targetUri);
     if (existing) {
-      return { ...attachment, uri: targetUri, localStatus: 'available' };
+      return { ...localAttachment, uri: targetUri, localStatus: 'available' };
     }
     const cloudProvider = ((await AsyncStorage.getItem(CLOUD_PROVIDER_KEY)) || '').trim();
     if (cloudProvider === CLOUD_PROVIDER_DROPBOX) {
@@ -110,23 +116,23 @@ const ensureAttachmentAvailableInternal = async (attachment: Attachment): Promis
       try {
         const data = await runDropboxAuthorized(
           dropboxClientId,
-          (accessToken) => downloadDropboxFile(accessToken, attachment.cloudKey as string),
+          (accessToken) => downloadDropboxFile(accessToken, localAttachment.cloudKey as string),
         );
         const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data as ArrayBuffer);
-        await validateAttachmentHash(attachment, bytes);
+        await validateAttachmentHash(localAttachment, bytes);
         await writeBytesSafely(targetUri, bytes);
-        reportProgress(attachment.id, 'download', bytes.length, bytes.length, 'completed');
-        return { ...attachment, uri: targetUri, localStatus: 'available' };
+        reportProgress(localAttachment.id, 'download', bytes.length, bytes.length, 'completed');
+        return { ...localAttachment, uri: targetUri, localStatus: 'available' };
       } catch (error) {
         reportProgress(
-          attachment.id,
+          localAttachment.id,
           'download',
           0,
-          attachment.size ?? 0,
+          localAttachment.size ?? 0,
           'failed',
           error instanceof Error ? error.message : String(error)
         );
-        logAttachmentWarn(`Failed to download attachment ${attachment.title}`, error);
+        logAttachmentWarn(`Failed to download attachment ${localAttachment.title}`, error);
         return null;
       }
     }
@@ -135,66 +141,67 @@ const ensureAttachmentAvailableInternal = async (attachment: Attachment): Promis
     const baseSyncUrl = getCloudBaseUrl(config.url);
     try {
       const data = await withRetry(() =>
-        cloudGetFile(`${baseSyncUrl}/${attachment.cloudKey}`, {
+        cloudGetFile(`${baseSyncUrl}/${localAttachment.cloudKey}`, {
+          ...getMobileCloudRequestOptions(config.allowInsecureHttp),
           token: config.token,
-          onProgress: (loaded, total) => reportProgress(attachment.id, 'download', loaded, total, 'active'),
+          onProgress: (loaded, total) => reportProgress(localAttachment.id, 'download', loaded, total, 'active'),
         })
       );
       const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data as ArrayBuffer);
-      await validateAttachmentHash(attachment, bytes);
+      await validateAttachmentHash(localAttachment, bytes);
       await writeBytesSafely(targetUri, bytes);
-      reportProgress(attachment.id, 'download', bytes.length, bytes.length, 'completed');
-      return { ...attachment, uri: targetUri, localStatus: 'available' };
+      reportProgress(localAttachment.id, 'download', bytes.length, bytes.length, 'completed');
+      return { ...localAttachment, uri: targetUri, localStatus: 'available' };
     } catch (error) {
       reportProgress(
-        attachment.id,
+        localAttachment.id,
         'download',
         0,
-        attachment.size ?? 0,
+        localAttachment.size ?? 0,
         'failed',
         error instanceof Error ? error.message : String(error)
       );
-      logAttachmentWarn(`Failed to download attachment ${attachment.title}`, error);
+      logAttachmentWarn(`Failed to download attachment ${localAttachment.title}`, error);
       return null;
     }
   }
 
-  if (attachment.cloudKey) {
+  if (localAttachment.cloudKey) {
     const config = await loadWebDavConfig();
     if (!config?.url) return null;
     const baseSyncUrl = getBaseSyncUrl(config.url);
     const attachmentsDir = await getAttachmentsDir();
     if (!attachmentsDir) return null;
-    const filename = attachment.cloudKey.split('/').pop() || `${attachment.id}${extractExtension(attachment.title)}`;
+    const filename = localAttachment.cloudKey.split('/').pop() || `${localAttachment.id}${extractExtension(localAttachment.title)}`;
     const targetUri = `${attachmentsDir}${filename}`;
     const existing = await fileExists(targetUri);
     if (existing) {
-      return { ...attachment, uri: targetUri, localStatus: 'available' };
+      return { ...localAttachment, uri: targetUri, localStatus: 'available' };
     }
     try {
       const data = await withRetry(() =>
-        webdavGetFile(`${baseSyncUrl}/${attachment.cloudKey}`, {
+        webdavGetFile(`${baseSyncUrl}/${localAttachment.cloudKey}`, {
           ...getMobileWebDavRequestOptions(config.allowInsecureHttp),
           username: config.username,
           password: config.password,
-          onProgress: (loaded, total) => reportProgress(attachment.id, 'download', loaded, total, 'active'),
+          onProgress: (loaded, total) => reportProgress(localAttachment.id, 'download', loaded, total, 'active'),
         })
       );
       const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data as ArrayBuffer);
-      await validateAttachmentHash(attachment, bytes);
+      await validateAttachmentHash(localAttachment, bytes);
       await writeBytesSafely(targetUri, bytes);
-      reportProgress(attachment.id, 'download', bytes.length, bytes.length, 'completed');
-      return { ...attachment, uri: targetUri, localStatus: 'available' };
+      reportProgress(localAttachment.id, 'download', bytes.length, bytes.length, 'completed');
+      return { ...localAttachment, uri: targetUri, localStatus: 'available' };
     } catch (error) {
       reportProgress(
-        attachment.id,
+        localAttachment.id,
         'download',
         0,
-        attachment.size ?? 0,
+        localAttachment.size ?? 0,
         'failed',
         error instanceof Error ? error.message : String(error)
       );
-      logAttachmentWarn(`Failed to download attachment ${attachment.title}`, error);
+      logAttachmentWarn(`Failed to download attachment ${localAttachment.title}`, error);
       return null;
     }
   }

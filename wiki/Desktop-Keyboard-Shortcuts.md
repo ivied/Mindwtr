@@ -8,6 +8,7 @@ Mindwtr supports **Vim** and **Emacs** presets on desktop. Press `?` in the app 
 - Use `?` to open the in-app shortcut sheet.
 - Use `/` to search, `gi` for Inbox, `gn` for Next, and `gf` for Focus when Vim mode is active.
 - Use `j/k` to move selection, `e` to edit the selected task, `x` to toggle done, and `dd` to delete in Vim mode.
+- Use `Ctrl+Alt+S` to run sync manually from the desktop app. The shortcut is ignored while typing in editable fields.
 - Change or disable the global Quick Add shortcut in **Settings → General → Input**.
 
 ## Canonical Reference

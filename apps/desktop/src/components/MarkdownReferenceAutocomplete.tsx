@@ -4,6 +4,7 @@ import { CheckSquare2, Folder } from 'lucide-react';
 import {
     getActiveMarkdownReferenceQuery,
     insertMarkdownReferenceAtQuery,
+    isMarkdownEditorAssistEnabled,
     searchMarkdownReferences,
     shallow,
     tFallback,
@@ -46,9 +47,10 @@ export function useMarkdownReferenceAutocomplete({
         tasks: state._allTasks,
         projects: state.projects,
     }), shallow);
+    const markdownEditorAssist = useTaskStore((state) => isMarkdownEditorAssistEnabled(state.settings));
     const activeQuery = React.useMemo(
-        () => getActiveMarkdownReferenceQuery(value, selection),
-        [selection.end, selection.start, value],
+        () => getActiveMarkdownReferenceQuery(value, selection, { assist: markdownEditorAssist }),
+        [markdownEditorAssist, selection.end, selection.start, value],
     );
     const activeKey = activeQuery ? `${activeQuery.start}:${activeQuery.query}` : null;
     const [selectedIndex, setSelectedIndex] = React.useState(0);

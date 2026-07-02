@@ -13,9 +13,9 @@ export type DbOptions = {
 
 export type DbClient = {
   prepare: (sql: string) => {
-    all: (...args: any[]) => any[];
-    get: (...args: any[]) => any;
-    run: (...args: any[]) => { changes?: number };
+    all: <T = Record<string, unknown>>(...args: unknown[]) => T[];
+    get: <T = Record<string, unknown>>(...args: unknown[]) => T | undefined;
+    run: (...args: unknown[]) => { changes?: number };
   };
   pragma?: (sql: string) => void;
   close: () => void;
@@ -29,7 +29,7 @@ type CoreModule = {
   normalizeAppData: (data: AppData) => AppData;
 };
 
-const isBun = () => typeof (globalThis as any).Bun !== 'undefined';
+const isBun = () => typeof (globalThis as { Bun?: unknown }).Bun !== 'undefined';
 const getErrorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -41,6 +41,7 @@ const normalizeBootstrapData = (core: CoreModule, raw: unknown): AppData => {
     projects: Array.isArray(record.projects) ? (record.projects as AppData['projects']) : [],
     sections: Array.isArray(record.sections) ? (record.sections as AppData['sections']) : [],
     areas: Array.isArray(record.areas) ? (record.areas as AppData['areas']) : [],
+    people: Array.isArray(record.people) ? (record.people as AppData['people']) : [],
     settings: isRecord(record.settings) ? (record.settings as AppData['settings']) : {},
   });
 };

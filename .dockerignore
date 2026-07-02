@@ -6,6 +6,19 @@
 .DS_Store
 .claude
 
+# Agent/local assistant files
+AGENT.md
+AGENTS.md
+.codex
+.codegraph
+.agents
+.serena
+.claude
+.cursor
+.gemini
+.kiro
+skills-lock.json
+
 node_modules
 **/node_modules
 

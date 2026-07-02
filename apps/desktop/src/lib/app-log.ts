@@ -1,4 +1,4 @@
-import { BaseDirectory, mkdir, remove, writeTextFile } from '@tauri-apps/plugin-fs';
+import { BaseDirectory, mkdir, readTextFile, remove, writeTextFile } from '@tauri-apps/plugin-fs';
 import { dataDir, join } from '@tauri-apps/api/path';
 import {
     getBreadcrumbs,
@@ -12,6 +12,7 @@ import { isTauriRuntime } from './runtime';
 
 const LOG_DIR = 'mindwtr/logs';
 const LOG_FILE = `${LOG_DIR}/mindwtr.log`;
+const RECENT_LOG_MAX_CHARS = 20_000;
 
 type LogEntry = {
     ts: string;
@@ -92,6 +93,18 @@ export async function clearLog(): Promise<void> {
         } catch (_removeError) {
             return;
         }
+    }
+}
+
+export async function readRecentLogText(maxChars = RECENT_LOG_MAX_CHARS): Promise<string | null> {
+    if (!isTauriRuntime()) return null;
+    try {
+        const raw = await readTextFile(LOG_FILE, { baseDir: BaseDirectory.Data });
+        const trimmed = raw.trim();
+        if (!trimmed) return null;
+        return trimmed.slice(-Math.max(1, maxChars));
+    } catch {
+        return null;
     }
 }
 

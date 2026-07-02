@@ -1,6 +1,6 @@
 import React from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, test, vi } from 'vitest';
 
 vi.mock('react-native-safe-area-context', () => ({
     useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
@@ -64,6 +64,7 @@ vi.mock('react-native', async () => {
 import { ToastProvider, useToast } from './toast-context';
 
 const QUEUE_GAP_MS = 120;
+const TOAST_SWIPE_TARGET_TEST_ID = 'toast-swipe-dismiss-target';
 type ToastControls = {
     showToast: (options: { message: string; durationMs?: number }) => void;
 };
@@ -126,5 +127,44 @@ describe('ToastProvider', () => {
         });
 
         expect(getRenderedText(renderedTree)).not.toContain('Second toast');
+    });
+
+    test.each([
+        ['right', 96],
+        ['left', -96],
+    ])('dismisses the visible toast after a horizontal swipe %s', (_direction, dx) => {
+        let controls: ToastControls | null = null;
+        let tree: ReactTestRenderer | null = null;
+
+        act(() => {
+            tree = create(
+                <ToastProvider>
+                    <ToastHarness onReady={(value) => {
+                        controls = value;
+                    }}
+                    />
+                </ToastProvider>
+            );
+        });
+
+        expect(controls).not.toBeNull();
+        expect(tree).not.toBeNull();
+        if (!controls || !tree) return;
+        const toastControls = controls as ToastControls;
+        const renderedTree = tree as ReactTestRenderer;
+
+        act(() => {
+            toastControls.showToast({ message: `Swipe ${_direction}`, durationMs: 10_000 });
+        });
+
+        const swipeTarget = renderedTree.root.findByProps({ testID: TOAST_SWIPE_TARGET_TEST_ID });
+
+        expect(getRenderedText(renderedTree)).toContain(`Swipe ${_direction}`);
+
+        act(() => {
+            swipeTarget.props.onResponderRelease?.({}, { dx, dy: 4, vx: 0.2 });
+        });
+
+        expect(getRenderedText(renderedTree)).not.toContain(`Swipe ${_direction}`);
     });
 });

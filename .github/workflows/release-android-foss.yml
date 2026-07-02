@@ -7,6 +7,10 @@ on:
         description: 'Release tag (e.g., v0.2.3)'
         required: false
         type: string
+      version_code:
+        description: 'Android versionCode to apply before building, usually from the standard Android release preflight'
+        required: false
+        type: string
   workflow_dispatch:
     inputs:
       tag:
@@ -33,10 +37,14 @@ jobs:
       # Keep Metro/JS bundling stable on CI during release builds.
       NODE_OPTIONS: --max-old-space-size=6144
       DROPBOX_APP_KEY: ${{ vars.DROPBOX_APP_KEY || secrets.DROPBOX_APP_KEY }}
+      FEEDBACK_ENDPOINT_URL: ${{ vars.FEEDBACK_ENDPOINT_URL || vars.VITE_FEEDBACK_ENDPOINT_URL || 'https://feedback.mindwtr.app' }}
+      DONATION_PROMPT_ENABLED: "true"
 
     steps:
       - name: Checkout code
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ inputs.tag || github.event.inputs.tag || github.ref }}
 
       - name: Install pinned Node.js (match reproducible recipe)
         run: |
@@ -57,35 +65,13 @@ jobs:
         run: bash scripts/ci/setup-android-sdk.sh
 
       - name: Install core dependencies
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3; do
-            if npm ci --workspaces=false --legacy-peer-deps --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=30000 --prefix packages/core; then
-              exit 0
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              exit 1
-            fi
-            echo "Retrying core dependency install after transient npm failure (attempt ${attempt}/3)." >&2
-            sleep $((attempt * 5))
-          done
+        run: bash scripts/ci/install_core_dependencies.sh
 
       - name: Prepare FOSS dependency manifest
         run: bash apps/mobile/scripts/fdroid_prep.sh
 
       - name: Install mobile dependencies
-        run: |
-          set -euo pipefail
-          for attempt in 1 2 3; do
-            if npm ci --workspaces=false --legacy-peer-deps --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=30000 --prefix apps/mobile; then
-              exit 0
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              exit 1
-            fi
-            echo "Retrying mobile dependency install after transient npm failure (attempt ${attempt}/3)." >&2
-            sleep $((attempt * 5))
-          done
+        run: bash scripts/ci/install_mobile_dependencies.sh
 
       - name: Resolve version
         id: version
@@ -93,6 +79,14 @@ jobs:
           INPUT_TAG="${{ inputs.tag || github.event.inputs.tag }}"
           GITHUB_EVENT_INPUTS_TAG="${{ github.event.inputs.tag }}"
           scripts/ci/resolve-release-version.sh "$INPUT_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Apply resolved Android versionCode
+        if: ${{ inputs.version_code != '' }}
+        env:
+          REQUESTED_VERSION_CODE: ${{ inputs.version_code }}
+          ALLOW_UNTRACKED_VERSION_CODE: ${{ contains(inputs.tag || github.event.inputs.tag || github.ref_name, '-') && 'true' || 'false' }}
+          WRITE_APP_JSON: "1"
+        run: node scripts/ci/android-version-code-policy.js
 
       - name: Build FOSS Android APK (Gradle, arm64-v8a only)
         timeout-minutes: 30
@@ -211,6 +205,16 @@ jobs:
             exit 1
           fi
           echo "Verified APK permissions: CAMERA/storage/alert removed; RECORD_AUDIO present."
+
+      - name: Verify FOSS Google service cleanup
+        run: |
+          mapfile -t apk_matches < <(find apps/mobile/build -maxdepth 1 -type f -name 'mindwtr-*-arm64-v8a-foss.apk' | sort)
+          if [[ "${#apk_matches[@]}" -ne 1 ]]; then
+            echo "Expected exactly one arm64 FOSS APK for Google service verification, found ${#apk_matches[@]}" >&2
+            printf '%s\n' "${apk_matches[@]}" >&2
+            exit 1
+          fi
+          python3 apps/mobile/scripts/verify_foss_no_google_services.py "${apk_matches[0]}"
 
       - name: Collect Android FOSS artifacts
         run: |

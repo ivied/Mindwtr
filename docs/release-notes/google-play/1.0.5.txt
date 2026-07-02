@@ -1,0 +1,15 @@
+<en-US>
+Mindwtr 1.0.5 adds repeat reminders, bulk Quick Add, TickTick and Obsidian import fixes, board/project filters, local dictation model downloads, safer recurrence and relative-start scheduling, better WebDAV sync, clearer completed-task visibility, and mobile keyboard/search/title polish.
+</en-US>
+<de-DE>
+Mindwtr 1.0.5 bringt Wiederhol-Erinnerungen, Bulk Quick Add, TickTick- und Obsidian-Importfixes, Board-/Projektfilter, lokale Diktatmodell-Downloads, sicherere Wiederholungen und relative Startzeiten, besseren WebDAV-Sync, klarere Erledigt-Sichtbarkeit und mobile Tastatur-/Such-/Titel-Politur.
+</de-DE>
+<es-ES>
+Mindwtr 1.0.5 agrega recordatorios repetidos, Bulk Quick Add, arreglos de importacion TickTick/Obsidian, filtros de tablero/proyecto, modelos locales de dictado, recurrencia e inicios relativos mas seguros, mejor WebDAV, visibilidad de completadas mas clara y mejoras moviles de teclado/busqueda/titulos.
+</es-ES>
+<fr-FR>
+Mindwtr 1.0.5 ajoute rappels repetes, Bulk Quick Add, corrections d'import TickTick/Obsidian, filtres tableau/projet, modeles locaux de dictee, recurrence et debuts relatifs plus surs, meilleur WebDAV, visibilite des taches terminees plus claire et polish clavier/recherche/titres mobile.
+</fr-FR>
+<zh-CN>
+Mindwtr 1.0.5 新增重复提醒、批量 Quick Add、TickTick/Obsidian 导入修复、看板/项目筛选、本地听写模型下载，并改进循环任务、相对开始时间、WebDAV 同步、已完成可见性以及移动端键盘、搜索和标题显示。
+</zh-CN>

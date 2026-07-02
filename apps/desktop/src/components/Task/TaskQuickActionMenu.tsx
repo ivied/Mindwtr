@@ -1,45 +1,57 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { Bot, Calendar, CalendarClock, ChevronRight, Copy, MapPin, Mic, Tag, Trash2, X } from 'lucide-react';
-import { parseRoutingTarget, queueForAgentTags } from '../../lib/routing-target';
-import { RoutingTargetOptions } from '../RoutingTargetOptions';
-import { isRecordingAvailable, startRecording } from '../../lib/recording-client';
+import { BookOpen, Calendar, CalendarClock, ChevronRight, Copy, FolderPlus, MapPin, Tag, Trash2 } from 'lucide-react';
 import {
+    getAdvancedReviewDate,
     hasTimeComponent,
+    isDueForReview,
     safeFormatDate,
     safeParseDate,
     tFallback,
     type Area,
     type StoreActionResult,
     type Task,
+    type TaskStatus,
 } from '@mindwtr/core';
 
 import { reportError } from '../../lib/report-error';
 import { cn } from '../../lib/utils';
+import { FocusStarIcon } from '../FocusStarIcon';
 import { Button } from '../ui/Button';
 import { AreaSelector } from '../ui/AreaSelector';
 import { normalizeDateInputValue } from './task-item-helpers';
 import { ContextsField } from './fields/TaskMetadataFields';
-import { QuickDateChips } from '../QuickDateChips';
+import { DateField } from './TaskItemFieldRenderer';
 
 const VIEWPORT_MARGIN_PX = 8;
 const PANEL_GAP_PX = 8;
 const MENU_WIDTH_PX = 224;
 
-type QuickPanelId = 'startTime' | 'dueDate' | 'reviewAt' | 'area' | 'contexts' | 'agentTarget' | null;
+type QuickPanelId = 'startTime' | 'dueDate' | 'reviewAt' | 'area' | 'contexts' | null;
 
 interface TaskQuickActionMenuProps {
     task: Task;
     x: number;
     y: number;
     t: (key: string) => string;
+    dateFormatSetting?: string | null;
     nativeDateInputLocale: string;
     contextOptions: string[];
+    contextSuggestions?: string[];
     areas: Area[];
     readOnly: boolean;
+    focusAction?: {
+        isFocused: boolean;
+        canToggle: boolean;
+        label: string;
+        title: string;
+        onToggle: () => void;
+    };
     onClose: () => void;
     onDuplicate: () => void;
+    onPromoteToProject?: () => void;
     onDelete: () => void;
+    onStatusChange: (status: TaskStatus) => void;
     onCreateArea: (name: string) => Promise<string | null>;
     onUpdateTask: (updates: Partial<Task>) => Promise<StoreActionResult>;
 }
@@ -71,24 +83,29 @@ export function TaskQuickActionMenu({
     x,
     y,
     t,
+    dateFormatSetting,
     nativeDateInputLocale,
     contextOptions,
+    contextSuggestions = contextOptions,
     areas,
     readOnly,
+    focusAction,
     onClose,
     onDuplicate,
+    onPromoteToProject,
     onDelete,
+    onStatusChange,
     onCreateArea,
     onUpdateTask,
 }: TaskQuickActionMenuProps) {
     const menuRef = useRef<HTMLDivElement | null>(null);
     const panelRef = useRef<HTMLDivElement | null>(null);
+    const initialLayoutScrollSettledRef = useRef(false);
     const startButtonRef = useRef<HTMLButtonElement | null>(null);
     const dueButtonRef = useRef<HTMLButtonElement | null>(null);
     const reviewButtonRef = useRef<HTMLButtonElement | null>(null);
     const areaButtonRef = useRef<HTMLButtonElement | null>(null);
     const contextsButtonRef = useRef<HTMLButtonElement | null>(null);
-    const agentButtonRef = useRef<HTMLButtonElement | null>(null);
     const [activePanel, setActivePanel] = useState<QuickPanelId>(null);
     const [panelPosition, setPanelPosition] = useState<{ left: number; top: number } | null>(null);
     const [menuSize, setMenuSize] = useState({ width: MENU_WIDTH_PX, height: 1 });
@@ -113,15 +130,19 @@ export function TaskQuickActionMenu({
     const contextsLabel = tFallback(t, 'taskEdit.contextsLabel', 'Contexts');
     const noAreaLabel = tFallback(t, 'taskEdit.noAreaOption', 'No Area');
     const duplicateLabel = tFallback(t, 'projects.duplicate', 'Duplicate');
+    const promoteToProjectLabel = t('task.createProjectFromTask');
     const deleteLabel = tFallback(t, 'common.delete', 'Delete');
+    const convertToReferenceLabel = tFallback(t, 'task.convertToReference', 'Convert to Reference');
+    const markReviewedLabel = tFallback(t, 'review.markReviewed', 'Mark reviewed');
+    const advanceReviewLabel = tFallback(t, 'review.advanceWeek', 'Review in 1 week');
     const saveLabel = tFallback(t, 'common.save', 'Save');
     const cancelLabel = tFallback(t, 'common.cancel', 'Cancel');
-    const clearLabel = tFallback(t, 'common.clear', 'Clear');
     const moreOptionsLabel = tFallback(t, 'taskEdit.moreOptions', 'More options');
     const searchAreasLabel = tFallback(t, 'areas.search', 'Search areas');
     const noMatchesLabel = tFallback(t, 'common.noMatches', 'No matches');
     const createAreaLabel = tFallback(t, 'areas.create', 'Create area');
     const canEditArea = !task.projectId;
+    const canMarkReviewed = isDueForReview(task.reviewAt);
     const normalizedInitialContexts = parseTokenInput(initialContextsDraft);
     const normalizedDraftContexts = parseTokenInput(contextsDraft);
     const startDraftChanged = startDateDraft !== initialStartDraft.date || startTimeDraft !== initialStartDraft.time;
@@ -155,12 +176,28 @@ export function TaskQuickActionMenu({
     }, []);
 
     useEffect(() => {
+        const timer = window.setTimeout(() => {
+            initialLayoutScrollSettledRef.current = true;
+        }, 120);
+        return () => window.clearTimeout(timer);
+    }, []);
+
+    useEffect(() => {
+        const isInsideMenuSurface = (target: Node | null) => {
+            if (!target) return false;
+            if (menuRef.current?.contains(target) || panelRef.current?.contains(target)) return true;
+            const targetElement = target instanceof Element ? target : target.parentElement;
+            return Boolean(targetElement?.closest('[data-selector-dropdown="true"]'));
+        };
         const handlePointer = (event: Event) => {
             const target = event.target as Node | null;
-            if (target && (menuRef.current?.contains(target) || panelRef.current?.contains(target))) return;
+            if (isInsideMenuSurface(target)) return;
             onClose();
         };
-        const handleScrollOrResize = () => onClose();
+        const handleScrollOrResize = (event: Event) => {
+            if (event.type === 'scroll' && !initialLayoutScrollSettledRef.current) return;
+            onClose();
+        };
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key !== 'Escape') return;
             event.preventDefault();
@@ -225,9 +262,7 @@ export function TaskQuickActionMenu({
                     ? reviewButtonRef.current
                     : activePanel === 'area'
                         ? areaButtonRef.current
-                        : activePanel === 'contexts'
-                            ? contextsButtonRef.current
-                            : agentButtonRef.current;
+                        : contextsButtonRef.current;
         const panel = panelRef.current;
         if (!anchor || !panel) return;
         const anchorRect = anchor.getBoundingClientRect();
@@ -274,18 +309,21 @@ export function TaskQuickActionMenu({
             setReviewTimeDraft(nextReviewDraft.time);
         } else if (panelId === 'area') {
             setAreaDraft(task.areaId || '');
-        } else if (panelId === 'contexts') {
+        } else {
             setContextsDraft(task.contexts?.join(', ') || '');
         }
         setActivePanel(panelId);
     };
 
-    const handleStartDateSave = async () => {
+    const handleStartDateSave = async (
+        dateDraft = startDateDraft,
+        timeDraft = startTimeDraft,
+    ) => {
         setSavingPanel('startTime');
         try {
-            const normalizedDate = normalizeDateInputValue(startDateDraft);
+            const normalizedDate = normalizeDateInputValue(dateDraft);
             const nextStartTime = normalizedDate
-                ? (startTimeDraft ? `${normalizedDate}T${startTimeDraft}` : normalizedDate)
+                ? (timeDraft ? `${normalizedDate}T${timeDraft}` : normalizedDate)
                 : undefined;
             const result = await onUpdateTask({ startTime: nextStartTime });
             if (!result.success) {
@@ -299,12 +337,15 @@ export function TaskQuickActionMenu({
         }
     };
 
-    const handleDueDateSave = async () => {
+    const handleDueDateSave = async (
+        dateDraft = dueDateDraft,
+        timeDraft = dueTimeDraft,
+    ) => {
         setSavingPanel('dueDate');
         try {
-            const normalizedDate = normalizeDateInputValue(dueDateDraft);
+            const normalizedDate = normalizeDateInputValue(dateDraft);
             const nextDueDate = normalizedDate
-                ? (dueTimeDraft ? `${normalizedDate}T${dueTimeDraft}` : normalizedDate)
+                ? (timeDraft ? `${normalizedDate}T${timeDraft}` : normalizedDate)
                 : undefined;
             const result = await onUpdateTask({ dueDate: nextDueDate });
             if (!result.success) {
@@ -318,12 +359,15 @@ export function TaskQuickActionMenu({
         }
     };
 
-    const handleReviewDateSave = async () => {
+    const handleReviewDateSave = async (
+        dateDraft = reviewDateDraft,
+        timeDraft = reviewTimeDraft,
+    ) => {
         setSavingPanel('reviewAt');
         try {
-            const normalizedDate = normalizeDateInputValue(reviewDateDraft);
+            const normalizedDate = normalizeDateInputValue(dateDraft);
             const nextReviewAt = normalizedDate
-                ? (reviewTimeDraft ? `${normalizedDate}T${reviewTimeDraft}` : normalizedDate)
+                ? (timeDraft ? `${normalizedDate}T${timeDraft}` : normalizedDate)
                 : undefined;
             const result = await onUpdateTask({ reviewAt: nextReviewAt });
             if (!result.success) {
@@ -332,6 +376,36 @@ export function TaskQuickActionMenu({
             onClose();
         } catch (error) {
             reportError('Failed to update task review date from quick actions', error);
+        } finally {
+            setSavingPanel(null);
+        }
+    };
+
+    const handleMarkReviewed = async () => {
+        setSavingPanel('reviewAt');
+        try {
+            const result = await onUpdateTask({ reviewAt: undefined });
+            if (!result.success) {
+                throw new Error(result.error || 'Failed to mark task reviewed');
+            }
+            onClose();
+        } catch (error) {
+            reportError('Failed to mark task reviewed from quick actions', error);
+        } finally {
+            setSavingPanel(null);
+        }
+    };
+
+    const handleAdvanceReview = async () => {
+        setSavingPanel('reviewAt');
+        try {
+            const result = await onUpdateTask({ reviewAt: getAdvancedReviewDate(task.reviewAt) });
+            if (!result.success) {
+                throw new Error(result.error || 'Failed to advance task review date');
+            }
+            onClose();
+        } catch (error) {
+            reportError('Failed to advance task review date from quick actions', error);
         } finally {
             setSavingPanel(null);
         }
@@ -374,6 +448,8 @@ export function TaskQuickActionMenu({
         active = false,
         onClick,
         showChevron = false,
+        disabled = false,
+        title,
     }: {
         ref?: RefObject<HTMLButtonElement | null>;
         icon: ReactNode;
@@ -381,6 +457,8 @@ export function TaskQuickActionMenu({
         active?: boolean;
         onClick: () => void;
         showChevron?: boolean;
+        disabled?: boolean;
+        title?: string;
     }) => (
         <button
             ref={ref}
@@ -388,13 +466,19 @@ export function TaskQuickActionMenu({
             role="menuitem"
             aria-haspopup={showChevron ? 'dialog' : undefined}
             aria-expanded={showChevron ? active : undefined}
+            disabled={disabled}
+            title={title}
             onClick={onClick}
             className={cn(
                 'flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
-                active ? 'bg-muted text-foreground' : 'text-foreground hover:bg-muted',
+                disabled
+                    ? 'cursor-not-allowed text-muted-foreground/50'
+                    : active
+                        ? 'bg-muted text-foreground'
+                        : 'text-foreground hover:bg-muted',
             )}
         >
-            <span className="text-muted-foreground">{icon}</span>
+            <span className={disabled ? 'text-muted-foreground/50' : 'text-muted-foreground'}>{icon}</span>
             <span className="flex-1 truncate">{label}</span>
             {showChevron ? <ChevronRight className="h-4 w-4 text-muted-foreground" /> : null}
         </button>
@@ -410,6 +494,26 @@ export function TaskQuickActionMenu({
                     style={{ top: menuPosition.top, left: menuPosition.left }}
                     onContextMenu={(event) => event.preventDefault()}
                 >
+                {!readOnly && focusAction && renderMenuAction({
+                    icon: (
+                        <FocusStarIcon
+                            className={cn(
+                                'h-4 w-4',
+                                focusAction.isFocused && 'text-yellow-500',
+                            )}
+                            filled={focusAction.isFocused}
+                        />
+                    ),
+                    label: focusAction.label,
+                    title: focusAction.title,
+                    disabled: !focusAction.canToggle,
+                    onClick: () => {
+                        if (!focusAction.canToggle) return;
+                        focusAction.onToggle();
+                        onClose();
+                    },
+                })}
+                {!readOnly && focusAction ? <div className="my-1 h-px bg-border/70" role="separator" /> : null}
                 {!readOnly && renderMenuAction({
                     ref: startButtonRef,
                     icon: <Calendar className="h-4 w-4" />,
@@ -434,6 +538,16 @@ export function TaskQuickActionMenu({
                     onClick: () => openPanel('reviewAt'),
                     showChevron: true,
                 })}
+                {!readOnly && canMarkReviewed && renderMenuAction({
+                    icon: <CalendarClock className="h-4 w-4" />,
+                    label: markReviewedLabel,
+                    onClick: () => { void handleMarkReviewed(); },
+                })}
+                {!readOnly && canMarkReviewed && renderMenuAction({
+                    icon: <CalendarClock className="h-4 w-4" />,
+                    label: advanceReviewLabel,
+                    onClick: () => { void handleAdvanceReview(); },
+                })}
                 {!readOnly && canEditArea && renderMenuAction({
                     ref: areaButtonRef,
                     icon: <MapPin className="h-4 w-4" />,
@@ -450,38 +564,28 @@ export function TaskQuickActionMenu({
                     onClick: () => openPanel('contexts'),
                     showChevron: true,
                 })}
-                {!readOnly && task.assignedTo !== '@ai-agent' && renderMenuAction({
-                    ref: agentButtonRef,
-                    icon: <Bot className="h-4 w-4" />,
-                    label: tFallback(t, 'task.sendToAgent', 'Отправить агенту'),
-                    active: activePanel === 'agentTarget',
-                    onClick: () => openPanel('agentTarget'),
-                    showChevron: true,
-                })}
-                {!readOnly ? <div className="my-1 h-px bg-border/70" role="separator" /> : null}
-                {isRecordingAvailable() && renderMenuAction({
-                    icon: <Mic className="h-4 w-4" />,
-                    label: tFallback(t, 'task.startRecording', 'Start recording'),
+                {!readOnly && task.status !== 'reference' && renderMenuAction({
+                    icon: <BookOpen className="h-4 w-4" />,
+                    label: convertToReferenceLabel,
                     onClick: () => {
-                        void startRecording({ taskId: task.id, taskTitle: task.title }).catch(
-                            (err: Error & { status?: number }) => {
-                                if (err.status === 409) {
-                                    window.alert(
-                                        'Another recording session is already active. Stop it first (top banner).'
-                                    );
-                                } else {
-                                    window.alert(`Could not start recording: ${err.message}`);
-                                }
-                            }
-                        );
+                        onStatusChange('reference');
                         onClose();
                     },
                 })}
+                {!readOnly ? <div className="my-1 h-px bg-border/70" role="separator" /> : null}
                 {renderMenuAction({
                     icon: <Copy className="h-4 w-4" />,
                     label: duplicateLabel,
                     onClick: () => {
                         onDuplicate();
+                        onClose();
+                    },
+                })}
+                {!readOnly && onPromoteToProject && renderMenuAction({
+                    icon: <FolderPlus className="h-4 w-4" />,
+                    label: promoteToProjectLabel,
+                    onClick: () => {
+                        onPromoteToProject();
                         onClose();
                     },
                 })}
@@ -508,9 +612,7 @@ export function TaskQuickActionMenu({
                                 ? reviewLabel
                                 : activePanel === 'area'
                                     ? areaLabel
-                                    : activePanel === 'contexts'
-                                        ? contextsLabel
-                                        : tFallback(t, 'task.sendToAgent', 'Отправить агенту')
+                                    : contextsLabel
                     }
                     className="fixed z-50 w-[min(30rem,calc(100vw-1rem))] rounded-lg border border-border bg-popover p-3 text-popover-foreground shadow-xl"
                     style={{
@@ -520,49 +622,18 @@ export function TaskQuickActionMenu({
                     }}
                     onContextMenu={(event) => event.preventDefault()}
                 >
-                    {activePanel === 'agentTarget' ? (
-                        <RoutingTargetOptions
-                            current={parseRoutingTarget(task.tags)}
-                            onPick={(target) => {
-                                void onUpdateTask({
-                                    assignedTo: '@ai-agent',
-                                    tags: queueForAgentTags(task.tags, target),
-                                }).catch(() => {});
-                                onClose();
-                            }}
-                        />
-                    ) : activePanel === 'startTime' ? (
+                    {activePanel === 'startTime' ? (
                         <div className="space-y-3">
-                            <div className="space-y-1">
-                                <label className="text-xs font-medium text-muted-foreground">{startLabel}</label>
-                                <QuickDateChips
-                                    t={t}
-                                    selectedDate={safeParseDate(startDateDraft)}
-                                    wrap
-                                    onSelect={(date) => {
-                                        if (!date) {
-                                            setStartDateDraft('');
-                                            setStartTimeDraft('');
-                                            return;
-                                        }
-                                        setStartDateDraft(safeFormatDate(date, 'yyyy-MM-dd'));
-                                    }}
-                                />
-                                <div className="flex items-center gap-2">
-                                    <input
-                                        type="date"
-                                        lang={nativeDateInputLocale}
-                                        aria-label={startLabel}
-                                        value={startDateDraft}
-                                        onChange={(event) => {
-                                            const nextValue = normalizeDateInputValue(event.target.value);
-                                            setStartDateDraft(nextValue);
-                                            if (!nextValue) {
-                                                setStartTimeDraft('');
-                                            }
-                                        }}
-                                        className="flex-1 rounded border border-border bg-muted/50 px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
-                                    />
+                            <DateField
+                                t={t}
+                                label={startLabel}
+                                dateAriaLabel={startLabel}
+                                dateValue={startDateDraft}
+                                selectedDate={safeParseDate(startDateDraft)}
+                                dateFormatSetting={dateFormatSetting}
+                                nativeDateInputLocale={nativeDateInputLocale}
+                                dateInputClassName="rounded border border-border bg-muted/50 px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+                                timeInput={
                                     <input
                                         type="time"
                                         lang={nativeDateInputLocale}
@@ -572,19 +643,21 @@ export function TaskQuickActionMenu({
                                         onChange={(event) => setStartTimeDraft(event.target.value)}
                                         className="w-24 shrink-0 rounded border border-border bg-muted/50 px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-50"
                                     />
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setStartDateDraft('');
-                                            setStartTimeDraft('');
-                                        }}
-                                        className="shrink-0 rounded p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                                        aria-label={`${clearLabel} ${startLabel}`}
-                                    >
-                                        <X className="h-4 w-4" />
-                                    </button>
-                                </div>
-                            </div>
+                                }
+                                onDateChange={(value) => {
+                                    setStartDateDraft(value);
+                                    if (!value) setStartTimeDraft('');
+                                }}
+                                onCalendarSelect={(value) => {
+                                    setStartDateDraft(value);
+                                    void handleStartDateSave(value, startTimeDraft);
+                                }}
+                                onClear={() => {
+                                    setStartDateDraft('');
+                                    setStartTimeDraft('');
+                                }}
+                                hasValue={Boolean(startDateDraft || startTimeDraft)}
+                            />
                             <div className="flex items-center justify-end gap-2">
                                 <Button
                                     variant="secondary"
@@ -599,7 +672,7 @@ export function TaskQuickActionMenu({
                                 </Button>
                                 <Button
                                     size="sm"
-                                    onClick={handleStartDateSave}
+                                    onClick={() => void handleStartDateSave()}
                                     loading={savingPanel === 'startTime'}
                                     disabled={!startDraftChanged}
                                 >
@@ -609,36 +682,16 @@ export function TaskQuickActionMenu({
                         </div>
                     ) : activePanel === 'dueDate' ? (
                         <div className="space-y-3">
-                            <div className="space-y-1">
-                                <label className="text-xs font-medium text-muted-foreground">{dueLabel}</label>
-                                <QuickDateChips
-                                    t={t}
-                                    selectedDate={safeParseDate(dueDateDraft)}
-                                    wrap
-                                    onSelect={(date) => {
-                                        if (!date) {
-                                            setDueDateDraft('');
-                                            setDueTimeDraft('');
-                                            return;
-                                        }
-                                        setDueDateDraft(safeFormatDate(date, 'yyyy-MM-dd'));
-                                    }}
-                                />
-                                <div className="flex items-center gap-2">
-                                    <input
-                                        type="date"
-                                        lang={nativeDateInputLocale}
-                                        aria-label={dueLabel}
-                                        value={dueDateDraft}
-                                        onChange={(event) => {
-                                            const nextValue = normalizeDateInputValue(event.target.value);
-                                            setDueDateDraft(nextValue);
-                                            if (!nextValue) {
-                                                setDueTimeDraft('');
-                                            }
-                                        }}
-                                        className="flex-1 rounded border border-border bg-muted/50 px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
-                                    />
+                            <DateField
+                                t={t}
+                                label={dueLabel}
+                                dateAriaLabel={dueLabel}
+                                dateValue={dueDateDraft}
+                                selectedDate={safeParseDate(dueDateDraft)}
+                                dateFormatSetting={dateFormatSetting}
+                                nativeDateInputLocale={nativeDateInputLocale}
+                                dateInputClassName="rounded border border-border bg-muted/50 px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+                                timeInput={
                                     <input
                                         type="time"
                                         lang={nativeDateInputLocale}
@@ -648,19 +701,21 @@ export function TaskQuickActionMenu({
                                         onChange={(event) => setDueTimeDraft(event.target.value)}
                                         className="w-24 shrink-0 rounded border border-border bg-muted/50 px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-50"
                                     />
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setDueDateDraft('');
-                                            setDueTimeDraft('');
-                                        }}
-                                        className="shrink-0 rounded p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                                        aria-label={`${clearLabel} ${dueLabel}`}
-                                    >
-                                        <X className="h-4 w-4" />
-                                    </button>
-                                </div>
-                            </div>
+                                }
+                                onDateChange={(value) => {
+                                    setDueDateDraft(value);
+                                    if (!value) setDueTimeDraft('');
+                                }}
+                                onCalendarSelect={(value) => {
+                                    setDueDateDraft(value);
+                                    void handleDueDateSave(value, dueTimeDraft);
+                                }}
+                                onClear={() => {
+                                    setDueDateDraft('');
+                                    setDueTimeDraft('');
+                                }}
+                                hasValue={Boolean(dueDateDraft || dueTimeDraft)}
+                            />
                             <div className="flex items-center justify-end gap-2">
                                 <Button
                                     variant="secondary"
@@ -675,7 +730,7 @@ export function TaskQuickActionMenu({
                                 </Button>
                                 <Button
                                     size="sm"
-                                    onClick={handleDueDateSave}
+                                    onClick={() => void handleDueDateSave()}
                                     loading={savingPanel === 'dueDate'}
                                     disabled={!dueDraftChanged}
                                 >
@@ -685,36 +740,16 @@ export function TaskQuickActionMenu({
                         </div>
                     ) : activePanel === 'reviewAt' ? (
                         <div className="space-y-3">
-                            <div className="space-y-1">
-                                <label className="text-xs font-medium text-muted-foreground">{reviewLabel}</label>
-                                <QuickDateChips
-                                    t={t}
-                                    selectedDate={safeParseDate(reviewDateDraft)}
-                                    wrap
-                                    onSelect={(date) => {
-                                        if (!date) {
-                                            setReviewDateDraft('');
-                                            setReviewTimeDraft('');
-                                            return;
-                                        }
-                                        setReviewDateDraft(safeFormatDate(date, 'yyyy-MM-dd'));
-                                    }}
-                                />
-                                <div className="flex items-center gap-2">
-                                    <input
-                                        type="date"
-                                        lang={nativeDateInputLocale}
-                                        aria-label={reviewLabel}
-                                        value={reviewDateDraft}
-                                        onChange={(event) => {
-                                            const nextValue = normalizeDateInputValue(event.target.value);
-                                            setReviewDateDraft(nextValue);
-                                            if (!nextValue) {
-                                                setReviewTimeDraft('');
-                                            }
-                                        }}
-                                        className="flex-1 rounded border border-border bg-muted/50 px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
-                                    />
+                            <DateField
+                                t={t}
+                                label={reviewLabel}
+                                dateAriaLabel={reviewLabel}
+                                dateValue={reviewDateDraft}
+                                selectedDate={safeParseDate(reviewDateDraft)}
+                                dateFormatSetting={dateFormatSetting}
+                                nativeDateInputLocale={nativeDateInputLocale}
+                                dateInputClassName="rounded border border-border bg-muted/50 px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+                                timeInput={
                                     <input
                                         type="time"
                                         lang={nativeDateInputLocale}
@@ -724,19 +759,21 @@ export function TaskQuickActionMenu({
                                         onChange={(event) => setReviewTimeDraft(event.target.value)}
                                         className="w-24 shrink-0 rounded border border-border bg-muted/50 px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-50"
                                     />
-                                    <button
-                                        type="button"
-                                        onClick={() => {
-                                            setReviewDateDraft('');
-                                            setReviewTimeDraft('');
-                                        }}
-                                        className="shrink-0 rounded p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-                                        aria-label={`${clearLabel} ${reviewLabel}`}
-                                    >
-                                        <X className="h-4 w-4" />
-                                    </button>
-                                </div>
-                            </div>
+                                }
+                                onDateChange={(value) => {
+                                    setReviewDateDraft(value);
+                                    if (!value) setReviewTimeDraft('');
+                                }}
+                                onCalendarSelect={(value) => {
+                                    setReviewDateDraft(value);
+                                    void handleReviewDateSave(value, reviewTimeDraft);
+                                }}
+                                onClear={() => {
+                                    setReviewDateDraft('');
+                                    setReviewTimeDraft('');
+                                }}
+                                hasValue={Boolean(reviewDateDraft || reviewTimeDraft)}
+                            />
                             <div className="flex items-center justify-end gap-2">
                                 <Button
                                     variant="secondary"
@@ -751,7 +788,7 @@ export function TaskQuickActionMenu({
                                 </Button>
                                 <Button
                                     size="sm"
-                                    onClick={handleReviewDateSave}
+                                    onClick={() => void handleReviewDateSave()}
                                     loading={savingPanel === 'reviewAt'}
                                     disabled={!reviewDraftChanged}
                                 >
@@ -803,6 +840,7 @@ export function TaskQuickActionMenu({
                                 t={t}
                                 value={contextsDraft}
                                 options={contextOptions}
+                                suggestions={contextSuggestions}
                                 onChange={setContextsDraft}
                             />
                             <div className="flex items-center justify-end gap-2">

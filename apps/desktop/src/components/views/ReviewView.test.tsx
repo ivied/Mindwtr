@@ -1,9 +1,10 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest';
-import { render, fireEvent } from '@testing-library/react';
-import { useTaskStore, type Task } from '@mindwtr/core';
+import { act, render, fireEvent, waitFor } from '@testing-library/react';
+import { useTaskStore, type Project, type Task } from '@mindwtr/core';
 import { ReviewView } from './ReviewView';
 import { LanguageProvider } from '../../contexts/language-context';
 import { useUiStore } from '../../store/ui-store';
+import { fetchExternalCalendarEvents } from '../../lib/external-calendar-events';
 
 const renderWithProviders = (ui: React.ReactElement) => {
     return render(
@@ -13,13 +14,35 @@ const renderWithProviders = (ui: React.ReactElement) => {
     );
 };
 
-// Avoid async state updates from calendar fetch effects in review modals.
+// Keep review calendar stages genuinely empty unless a test seeds calendar work.
 vi.mock('../../lib/external-calendar-events', () => ({
-    fetchExternalCalendarEvents: vi.fn(() => new Promise(() => {})),
+    fetchExternalCalendarEvents: vi.fn(async () => ({ events: [], warnings: [] })),
+    summarizeExternalCalendarWarnings: vi.fn((warnings: string[]) => warnings[0] ?? null),
 }));
+
+const waitForExternalCalendarIdle = async () => {
+    const mock = vi.mocked(fetchExternalCalendarEvents);
+    await waitFor(() => expect(mock).toHaveBeenCalled());
+    const latest = mock.mock.results[mock.mock.results.length - 1];
+    if (latest?.type !== 'return') return;
+    await act(async () => {
+        await latest.value;
+    });
+};
+
+const initialTaskState = useTaskStore.getState();
+const initialUiState = useUiStore.getState();
 
 describe('ReviewView', () => {
     const nowIso = '2026-04-19T12:00:00.000Z';
+    const dateStringFromToday = (offsetDays: number) => {
+        const date = new Date();
+        date.setDate(date.getDate() + offsetDays);
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    };
     const makeTask = (id: string, overrides: Partial<Task> = {}): Task => ({
         id,
         title: `Task ${id}`,
@@ -30,8 +53,22 @@ describe('ReviewView', () => {
         updatedAt: nowIso,
         ...overrides,
     });
+    const makeProject = (id: string, overrides: Partial<Project> = {}): Project => ({
+        id,
+        title: `Project ${id}`,
+        status: 'active',
+        color: '#2563eb',
+        order: 0,
+        tagIds: [],
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        ...overrides,
+    });
 
     beforeEach(() => {
+        useTaskStore.setState(initialTaskState, true);
+        useUiStore.setState(initialUiState, true);
+        vi.mocked(fetchExternalCalendarEvents).mockClear();
         useTaskStore.setState({
             tasks: [],
             _allTasks: [],
@@ -48,6 +85,7 @@ describe('ReviewView', () => {
             listOptions: {
                 showDetails: false,
                 nextGroupBy: 'none',
+                referenceGroupBy: 'area',
                 focusTop3Only: false,
             },
             expandedTaskIds: {},
@@ -89,61 +127,253 @@ describe('ReviewView', () => {
         expect(useUiStore.getState().listOptions.showDetails).toBe(false);
     });
 
-    it('navigates through the wizard steps', () => {
-        const { getByText, getAllByText, queryByText } = renderWithProviders(<ReviewView />);
+    it('selects and clears all visible review tasks', () => {
+        const tasks = [
+            makeTask('review-1', { title: 'First review task' }),
+            makeTask('review-2', { title: 'Second review task' }),
+        ];
+        useTaskStore.setState({
+            tasks,
+            _allTasks: tasks,
+            lastDataChangeAt: 1,
+        });
 
-        // Open guide
+        const { getAllByRole, getByRole } = renderWithProviders(<ReviewView />);
+
+        fireEvent.click(getByRole('button', { name: 'Select' }));
+        fireEvent.click(getByRole('button', { name: 'Select All' }));
+
+        expect(getAllByRole('checkbox', { name: 'Select task' }).map((checkbox) => (
+            (checkbox as HTMLInputElement).checked
+        ))).toEqual([true, true]);
+
+        fireEvent.click(getByRole('button', { name: 'Clear' }));
+
+        expect(getAllByRole('checkbox', { name: 'Select task' }).map((checkbox) => (
+            (checkbox as HTMLInputElement).checked
+        ))).toEqual([false, false]);
+    });
+
+    it('shows bulk organize for selected review tasks', () => {
+        const tasks = [
+            makeTask('review-1', { title: 'First review task' }),
+            makeTask('review-2', { title: 'Second review task' }),
+        ];
+        useTaskStore.setState({
+            tasks,
+            _allTasks: tasks,
+            lastDataChangeAt: 1,
+        });
+
+        const { getByRole } = renderWithProviders(<ReviewView />);
+
+        fireEvent.click(getByRole('button', { name: 'Select' }));
+        fireEvent.click(getByRole('button', { name: 'Select All' }));
+
+        expect(getByRole('button', { name: 'Bulk organize' })).toBeInTheDocument();
+    });
+
+    it('auto-skips an empty weekly review to the all-clear state while showing checked stages', async () => {
+        const { getByText } = renderWithProviders(<ReviewView />);
+
         fireEvent.click(getByText('Weekly Review'));
+        await waitForExternalCalendarIdle();
+
+        await waitFor(() => expect(getByText('Review Complete!')).toBeInTheDocument());
         expect(getByText('Process Inbox')).toBeInTheDocument();
+        expect(getByText('Review Calendar')).toBeInTheDocument();
+    });
+
+    it('navigates through the wizard steps that have review work', async () => {
+        const project = makeProject('project-1', { title: 'Launch Project' });
+        const tasks = [
+            makeTask('inbox-1', { title: 'Inbox item', status: 'inbox' }),
+            makeTask('calendar-1', { title: 'Calendar item', dueDate: dateStringFromToday(1), status: 'next' }),
+            makeTask('waiting-1', { title: 'Waiting item', status: 'waiting' }),
+            makeTask('context-1', { title: 'Context item', contexts: ['@home'], status: 'next' }),
+            makeTask('project-1-task', { title: 'Project item', projectId: project.id, status: 'next' }),
+            makeTask('someday-1', { title: 'Someday item', status: 'someday' }),
+        ];
+        useTaskStore.setState({
+            tasks,
+            _allTasks: tasks,
+            projects: [project],
+            _allProjects: [project],
+            settings: {
+                gtd: {
+                    weeklyReview: {
+                        includeContextStep: true,
+                    },
+                },
+            },
+        });
+        const { getByRole, getByText, queryByRole } = renderWithProviders(<ReviewView />);
+
+        fireEvent.click(getByText('Weekly Review'));
+        await waitForExternalCalendarIdle();
+        expect(getByRole('heading', { level: 1, name: 'Process Inbox' })).toBeInTheDocument();
         expect(getByText('Inbox Zero Goal')).toBeInTheDocument();
+        expect(getByRole('button', { name: 'Process Inbox (1)' })).toBeInTheDocument();
 
-        // Inbox -> AI or Calendar (AI step is hidden when AI is disabled)
         fireEvent.click(getByText('Next Step'));
-        const aiVisible = queryByText('AI insight');
-        if (aiVisible) {
-            expect(aiVisible).toBeInTheDocument();
-            fireEvent.click(getByText('Next Step'));
-        }
+        expect(getByRole('heading', { level: 1, name: 'Stale items' })).toBeInTheDocument();
+        fireEvent.click(getByText('Next Step'));
 
-        // -> Calendar
-        expect(getAllByText('Review Calendar').length).toBeGreaterThan(0);
+        expect(getByRole('heading', { level: 1, name: 'Review Calendar' })).toBeInTheDocument();
         expect(getByText('Events')).toBeInTheDocument();
         expect(getByText('Look at the next week. What do you need to prepare for? Capture any new next actions.')).toBeInTheDocument();
 
-        // Calendar -> Waiting For
         fireEvent.click(getByText('Next Step'));
-        expect(getByText('Waiting For')).toBeInTheDocument();
+        expect(getByRole('heading', { level: 1, name: 'Waiting For' })).toBeInTheDocument();
 
-        // Waiting For -> Contexts (optional) -> Projects
         fireEvent.click(getByText('Next Step'));
-        const contextsVisible = queryByText('Contexts');
+        const contextsVisible = queryByRole('heading', { level: 1, name: 'Contexts' });
         if (contextsVisible) {
             expect(contextsVisible).toBeInTheDocument();
             fireEvent.click(getByText('Next Step'));
         }
-        expect(getByText('Review Projects')).toBeInTheDocument();
+        expect(getByRole('heading', { level: 1, name: 'Review Projects' })).toBeInTheDocument();
 
-        // Projects -> Someday/Maybe
         fireEvent.click(getByText('Next Step'));
-        expect(getByText('Someday/Maybe')).toBeInTheDocument();
+        expect(getByRole('heading', { level: 1, name: 'Someday/Maybe' })).toBeInTheDocument();
 
-        // Someday/Maybe -> Completed
         fireEvent.click(getByText('Next Step'));
-        expect(getByText('Review Complete!')).toBeInTheDocument();
+        expect(getByRole('heading', { name: 'Review Complete!' })).toBeInTheDocument();
         expect(getByText('Finish')).toBeInTheDocument();
     });
 
-    it('can navigate back', () => {
-        const { getByText, queryByText } = renderWithProviders(<ReviewView />);
+    it('can navigate back', async () => {
+        const freshIso = new Date().toISOString();
+        const tasks = [
+            makeTask('inbox-1', { title: 'Inbox item', status: 'inbox' }),
+            makeTask('waiting-1', { title: 'Waiting item', status: 'waiting', updatedAt: freshIso }),
+        ];
+        useTaskStore.setState({
+            tasks,
+            _allTasks: tasks,
+            settings: {
+                gtd: {
+                    weeklyReview: {
+                        includeContextStep: false,
+                    },
+                },
+            },
+        });
+        const { getByRole, getByText, queryByText } = renderWithProviders(<ReviewView />);
 
-        // Open guide
         fireEvent.click(getByText('Weekly Review'));
-        expect(getByText('Process Inbox')).toBeInTheDocument();
+        await waitForExternalCalendarIdle();
+        expect(getByRole('heading', { level: 1, name: 'Process Inbox' })).toBeInTheDocument();
 
-        // Go forward then back to Inbox
         fireEvent.click(getByText('Next Step'));
-        expect(queryByText('Process Inbox')).not.toBeInTheDocument();
+        expect(getByRole('heading', { level: 1, name: 'Waiting For' })).toBeInTheDocument();
+        expect(queryByText('Inbox Zero Goal')).not.toBeInTheDocument();
         fireEvent.click(getByText('Back'));
-        expect(getByText('Process Inbox')).toBeInTheDocument();
+        expect(getByText('Inbox Zero Goal')).toBeInTheDocument();
+    });
+
+    it('can apply AI Someday suggestions for stale projects', async () => {
+        const project = makeProject('project-1', {
+            title: 'Stale Project',
+            createdAt: '2026-01-01T00:00:00.000Z',
+            updatedAt: '2026-01-01T00:00:00.000Z',
+        });
+        const updateProject = vi.fn(async () => ({ success: true }));
+        const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+            ok: true,
+            status: 200,
+            json: async () => ({
+                choices: [{
+                    message: {
+                        content: JSON.stringify({
+                            suggestions: [{
+                                id: 'project:project-1',
+                                action: 'someday',
+                                reason: 'No movement for a long time.',
+                            }],
+                        }),
+                    },
+                }],
+            }),
+        } as Response);
+        useTaskStore.setState({
+            projects: [project],
+            _allProjects: [project],
+            settings: {
+                ai: {
+                    enabled: true,
+                    provider: 'openai',
+                    baseUrl: 'https://ai.example.com/v1',
+                    model: 'gpt-4o-mini',
+                },
+                gtd: {
+                    weeklyReview: {
+                        includeContextStep: false,
+                    },
+                },
+            },
+            updateProject,
+        });
+
+        const { getByRole, getByText } = renderWithProviders(<ReviewView />);
+
+        fireEvent.click(getByText('Weekly Review'));
+        await waitFor(() => expect(getByRole('heading', { level: 1, name: 'Stale items' })).toBeInTheDocument());
+
+        fireEvent.click(getByRole('button', { name: 'Run analysis' }));
+
+        await waitFor(() => expect(fetchSpy).toHaveBeenCalled());
+        const projectSuggestion = await waitFor(() => (
+            getByRole('button', { name: 'Stale Project: Move to Someday' })
+        ));
+        expect(projectSuggestion).toHaveAttribute('aria-pressed', 'true');
+
+        fireEvent.click(getByRole('button', { name: 'Apply selected (1)' }));
+
+        await waitFor(() => {
+            expect(updateProject).toHaveBeenCalledWith('project-1', { status: 'someday' });
+        });
+        fetchSpy.mockRestore();
+    });
+
+    it('parses quick-add date commands when adding a task during project review', async () => {
+        const addTask = vi.fn(async () => ({ success: true }));
+        const project = makeProject('project-1', { title: 'Launch Project', updatedAt: new Date().toISOString() });
+        useTaskStore.setState({
+            projects: [project],
+            _allProjects: [project],
+            settings: {
+                quickAddAutoClean: true,
+                gtd: {
+                    weeklyReview: {
+                        includeContextStep: false,
+                    },
+                },
+            },
+            addTask,
+        });
+
+        const { getByText, getByRole, getByPlaceholderText } = renderWithProviders(<ReviewView />);
+
+        fireEvent.click(getByText('Weekly Review'));
+        await waitForExternalCalendarIdle();
+
+        expect(getByRole('heading', { level: 1, name: 'Review Projects' })).toBeInTheDocument();
+        fireEvent.click(getByRole('button', { name: 'Add Task' }));
+        fireEvent.change(getByPlaceholderText('Add Task'), {
+            target: { value: 'Draft launch plan /due:2026-05-30' },
+        });
+        fireEvent.click(getByRole('button', { name: 'Add' }));
+
+        await waitFor(() => {
+            expect(addTask).toHaveBeenCalledWith(
+                'Draft launch plan',
+                expect.objectContaining({
+                    projectId: 'project-1',
+                    status: 'next',
+                    dueDate: expect.stringContaining('2026-05-30'),
+                }),
+            );
+        });
     });
 });

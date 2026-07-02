@@ -3,6 +3,12 @@ import { readFileSync } from 'node:fs';
 
 const axeSource = readFileSync('node_modules/axe-core/axe.min.js', 'utf8');
 
+test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => {
+        window.localStorage.setItem('mindwtr:desktop:first-run-onboarding:v1', 'dismissed');
+    });
+});
+
 test('desktop app has no browser color contrast violations', async ({ page }) => {
     await page.goto('/');
     await page.addScriptTag({ content: axeSource });

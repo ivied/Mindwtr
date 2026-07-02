@@ -141,13 +141,13 @@ function main() {
 
   if (missingEntries.length > 0 || mismatches.length > 0) {
     if (missingEntries.length > 0) {
-      console.error('Package-lock is missing entries for desktop dependencies:');
+      console.error('Package-lock is missing entries for package dependencies:');
       for (const item of missingEntries) {
         console.error(`  - ${item}`);
       }
     }
     if (mismatches.length > 0) {
-      console.error('Desktop package.json and package-lock.json are out of sync:');
+      console.error('Package.json and package-lock.json are out of sync:');
       for (const mismatch of mismatches) {
         console.error(
           `  - ${mismatch.sectionName}:${mismatch.dependencyName} requests ${mismatch.requestedSpec}, lock has ${mismatch.lockedVersion}`
@@ -157,7 +157,7 @@ function main() {
     process.exit(1);
   }
 
-  console.log(`Package.json specs match locked desktop dependencies: ${packageJsonPath}`);
+  console.log(`Package.json specs match locked dependencies: ${packageJsonPath}`);
 }
 
 main();

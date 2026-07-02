@@ -1,0 +1,3 @@
+- Les builds configures peuvent envoyer des retours depuis les reglages.
+- Estimations de temps, indices de sequence, couleurs d'urgence et grandes listes plus rapides ameliorent la planification.
+- Synchro des pieces jointes, anciens fichiers joints, recherche de filtres, notifications, automatisation des contextes et repetitions sont plus fiables.

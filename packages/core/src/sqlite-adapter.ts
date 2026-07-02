@@ -1,4 +1,4 @@
-import type { AppData, Area, Attachment, Project, SavedFilter, Task, Section } from './types';
+import type { AppData, Area, Attachment, Person, Project, SavedFilter, Task, Section } from './types';
 
 export type CalendarSyncEntry = {
     taskId: string;
@@ -11,8 +11,11 @@ import { SEARCH_RESULT_LIMIT, type SearchProjectResult, type SearchResults, type
 import { SQLITE_BASE_SCHEMA, SQLITE_FTS_SCHEMA, SQLITE_INDEX_SCHEMA } from './sqlite-schema';
 import { normalizeTaskStatus } from './task-status';
 import { normalizeRecurrenceForLoad } from './recurrence';
+import { normalizeRelativeStartOffset } from './task-relative-start';
 import { logWarn } from './logger';
 import { normalizeSavedFilter, normalizeSavedFilters } from './saved-filters';
+import { normalizeProjectSequentialScope } from './project-utils';
+import { sleep } from './async-utils';
 
 export interface SqliteClient {
     run(sql: string, params?: unknown[]): Promise<void>;
@@ -54,11 +57,210 @@ const fromNullableBool = (value: unknown): boolean | null | undefined => {
     if (value === undefined) return undefined;
     return Boolean(value);
 };
+
+type SqliteReferenceIssue = {
+    kind: string;
+    id: string;
+    missingId: string;
+};
+
+const optionalId = (value: unknown): string | undefined => (
+    typeof value === 'string' && value.trim().length > 0 ? value : undefined
+);
+
+const collectSqliteReferenceIssues = (data: AppData): SqliteReferenceIssue[] => {
+    const areaIds = new Set(data.areas.map((area) => area.id));
+    const projectIds = new Set(data.projects.map((project) => project.id));
+    const sectionIds = new Set(data.sections.map((section) => section.id));
+    const issues: SqliteReferenceIssue[] = [];
+    const addIssue = (kind: string, id: string, missingId: string) => {
+        issues.push({ kind, id, missingId });
+    };
+
+    data.projects.forEach((project) => {
+        const areaId = optionalId(project.areaId);
+        if (areaId && !areaIds.has(areaId)) {
+            addIssue('project.areaId', project.id, areaId);
+        }
+    });
+    data.sections.forEach((section) => {
+        const projectId = optionalId(section.projectId);
+        if (projectId && !projectIds.has(projectId)) {
+            addIssue('section.projectId', section.id, projectId);
+        }
+    });
+    data.tasks.forEach((task) => {
+        const projectId = optionalId(task.projectId);
+        if (projectId && !projectIds.has(projectId)) {
+            addIssue('task.projectId', task.id, projectId);
+        }
+        const sectionId = optionalId(task.sectionId);
+        if (sectionId && !sectionIds.has(sectionId)) {
+            addIssue('task.sectionId', task.id, sectionId);
+        }
+        const areaId = optionalId(task.areaId);
+        if (areaId && !areaIds.has(areaId)) {
+            addIssue('task.areaId', task.id, areaId);
+        }
+    });
+
+    return issues;
+};
+
+const buildSqliteSaveFailureContext = (data: AppData, step: string): Record<string, unknown> => {
+    const referenceIssues = collectSqliteReferenceIssues(data);
+    return {
+        step,
+        tasks: data.tasks.length,
+        projects: data.projects.length,
+        sections: data.sections.length,
+        areas: data.areas.length,
+        people: Array.isArray(data.people) ? data.people.length : 0,
+        taskAttachments: data.tasks.reduce((count, task) => count + (task.attachments?.length ?? 0), 0),
+        projectAttachments: data.projects.reduce((count, project) => count + (project.attachments?.length ?? 0), 0),
+        referenceIssues: referenceIssues.length,
+        referenceIssueSamples: referenceIssues.slice(0, 8),
+    };
+};
+
+export const TASK_SQLITE_COLUMNS = [
+    'id',
+    'title',
+    'status',
+    'priority',
+    'energyLevel',
+    'assignedTo',
+    'taskMode',
+    'startTime',
+    'relativeStartOffset',
+    'dueDate',
+    'recurrence',
+    'showFutureRecurrence',
+    'pushCount',
+    'repeatReminderMinutes',
+    'tags',
+    'contexts',
+    'checklist',
+    'description',
+    'textDirection',
+    'attachments',
+    'location',
+    'projectId',
+    'sectionId',
+    'areaId',
+    'orderNum',
+    'boardOrder',
+    'isFocusedToday',
+    'timeEstimate',
+    'suppressMindwtrReminders',
+    'reviewAt',
+    'completedAt',
+    'statusBeforeProjectArchive',
+    'completedAtBeforeProjectArchive',
+    'isFocusedTodayBeforeProjectArchive',
+    'projectArchivedAt',
+    'rev',
+    'revBy',
+    'createdAt',
+    'updatedAt',
+    'deletedAt',
+    'purgedAt',
+] as const;
+
+const TASK_UPSERT_COLUMNS = TASK_SQLITE_COLUMNS;
+
+const TASK_UPSERT_UPDATE_CLAUSE = `title=excluded.title,
+status=excluded.status,
+priority=excluded.priority,
+energyLevel=excluded.energyLevel,
+assignedTo=excluded.assignedTo,
+taskMode=excluded.taskMode,
+startTime=excluded.startTime,
+relativeStartOffset=excluded.relativeStartOffset,
+dueDate=excluded.dueDate,
+recurrence=excluded.recurrence,
+showFutureRecurrence=excluded.showFutureRecurrence,
+pushCount=excluded.pushCount,
+repeatReminderMinutes=excluded.repeatReminderMinutes,
+tags=excluded.tags,
+contexts=excluded.contexts,
+checklist=excluded.checklist,
+description=excluded.description,
+textDirection=excluded.textDirection,
+attachments=excluded.attachments,
+location=excluded.location,
+projectId=excluded.projectId,
+sectionId=excluded.sectionId,
+areaId=excluded.areaId,
+orderNum=excluded.orderNum,
+boardOrder=excluded.boardOrder,
+isFocusedToday=excluded.isFocusedToday,
+timeEstimate=excluded.timeEstimate,
+suppressMindwtrReminders=excluded.suppressMindwtrReminders,
+reviewAt=excluded.reviewAt,
+completedAt=excluded.completedAt,
+statusBeforeProjectArchive=excluded.statusBeforeProjectArchive,
+completedAtBeforeProjectArchive=excluded.completedAtBeforeProjectArchive,
+isFocusedTodayBeforeProjectArchive=excluded.isFocusedTodayBeforeProjectArchive,
+projectArchivedAt=excluded.projectArchivedAt,
+rev=excluded.rev,
+revBy=excluded.revBy,
+createdAt=excluded.createdAt,
+updatedAt=excluded.updatedAt,
+deletedAt=excluded.deletedAt,
+purgedAt=excluded.purgedAt
+WHERE tasks.rev IS NULL OR tasks.rev <= excluded.rev`;
+
+export const taskToSqliteRow = (task: Task): unknown[] => {
+    const taskOrder = Number.isFinite(task.order) ? task.order : task.orderNum;
+    return [
+        task.id,
+        task.title,
+        task.status,
+        task.priority ?? null,
+        task.energyLevel ?? null,
+        task.assignedTo ?? null,
+        task.taskMode ?? null,
+        task.startTime ?? null,
+        toJson(task.relativeStartOffset),
+        task.dueDate ?? null,
+        toJson(task.recurrence),
+        toBool(task.showFutureRecurrence),
+        task.pushCount ?? null,
+        task.repeatReminderMinutes ?? null,
+        toJson(task.tags ?? []),
+        toJson(task.contexts ?? []),
+        toJson(task.checklist),
+        task.description ?? null,
+        task.textDirection ?? null,
+        toJson(task.attachments),
+        task.location ?? null,
+        task.projectId ?? null,
+        task.sectionId ?? null,
+        task.areaId ?? null,
+        Number.isFinite(taskOrder) ? taskOrder : null,
+        Number.isFinite(task.boardOrder) ? task.boardOrder : null,
+        toBool(task.isFocusedToday),
+        task.timeEstimate ?? null,
+        toBool(task.suppressMindwtrReminders),
+        task.reviewAt ?? null,
+        task.completedAt ?? null,
+        task.statusBeforeProjectArchive ?? null,
+        task.completedAtBeforeProjectArchive ?? null,
+        toNullableBool(task.isFocusedTodayBeforeProjectArchive),
+        task.projectArchivedAt ?? null,
+        task.rev ?? null,
+        task.revBy ?? null,
+        task.createdAt,
+        task.updatedAt,
+        task.deletedAt ?? null,
+        task.purgedAt ?? null,
+    ];
+};
 const READ_PAGE_SIZE = 1000;
 const FTS_LOCK_TTL_MS = 5 * 60 * 1000;
 const FTS_LOCK_REFRESH_INTERVAL_MS = Math.max(15_000, Math.floor(FTS_LOCK_TTL_MS / 3));
 const SQLITE_ID_INSERT_BATCH_SIZE = 500;
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const SEARCH_TASK_SELECT = [
     't.id AS id',
     't.title AS title',
@@ -69,6 +271,7 @@ const SEARCH_TASK_SELECT = [
     't.areaId AS areaId',
     't.tags AS tags',
     't.contexts AS contexts',
+    't.location AS location',
 ].join(', ');
 const SEARCH_PROJECT_SELECT = [
     'p.id AS id',
@@ -82,7 +285,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 let tempIdTableCounter = 0;
 
-const createTempIdTableName = (table: 'tasks' | 'projects' | 'sections' | 'areas' | 'saved_filters'): string => {
+const createTempIdTableName = (table: 'tasks' | 'projects' | 'sections' | 'areas' | 'people' | 'saved_filters'): string => {
     tempIdTableCounter = (tempIdTableCounter + 1) % Number.MAX_SAFE_INTEGER;
     const timestamp = Date.now().toString(36);
     const random = Math.random().toString(36).slice(2, 10) || '0';
@@ -168,9 +371,14 @@ export function mapSqliteTaskRow(row: Record<string, unknown>): Task {
         assignedTo: row.assignedTo as string | undefined,
         taskMode: row.taskMode as Task['taskMode'] | undefined,
         startTime: row.startTime as string | undefined,
+        relativeStartOffset: normalizeRelativeStartOffset(fromJson<unknown>(row.relativeStartOffset, undefined)),
         dueDate: row.dueDate as string | undefined,
         recurrence: normalizeRecurrenceForLoad(fromJson<unknown>(row.recurrence, null)),
+        showFutureRecurrence: fromBool(row.showFutureRecurrence),
         pushCount: row.pushCount === null || row.pushCount === undefined ? undefined : Number(row.pushCount),
+        repeatReminderMinutes: row.repeatReminderMinutes === null || row.repeatReminderMinutes === undefined
+            ? undefined
+            : Number(row.repeatReminderMinutes),
         tags: toStringArray(fromJson<unknown>(row.tags, [])),
         contexts: toStringArray(fromJson<unknown>(row.contexts, [])),
         checklist: toChecklist(fromJson<unknown>(row.checklist, undefined)),
@@ -183,8 +391,10 @@ export function mapSqliteTaskRow(row: Record<string, unknown>): Task {
         areaId: row.areaId as string | undefined,
         order,
         orderNum: order,
+        boardOrder: row.boardOrder === null || row.boardOrder === undefined ? undefined : Number(row.boardOrder),
         isFocusedToday: fromBool(row.isFocusedToday),
         timeEstimate: row.timeEstimate as Task['timeEstimate'] | undefined,
+        suppressMindwtrReminders: fromBool(row.suppressMindwtrReminders),
         reviewAt: row.reviewAt as string | undefined,
         completedAt: row.completedAt as string | undefined,
         statusBeforeProjectArchive: row.statusBeforeProjectArchive as Task['statusBeforeProjectArchive'] | undefined,
@@ -208,7 +418,7 @@ export class SqliteAdapter {
         this.client = client;
     }
 
-    private async loadAllRows(table: 'tasks' | 'projects' | 'sections' | 'areas'): Promise<Record<string, unknown>[]> {
+    private async loadAllRows(table: 'tasks' | 'projects' | 'sections' | 'areas' | 'people'): Promise<Record<string, unknown>[]> {
         const rows: Record<string, unknown>[] = [];
         try {
             let lastRowId = 0;
@@ -302,6 +512,7 @@ export class SqliteAdapter {
         await this.ensureProjectColumns();
         await this.ensureSectionColumns();
         await this.ensureAreaColumns();
+        await this.ensurePeopleTable();
         await this.ensureSavedFilterTable();
         if (this.client.exec) {
             await this.client.exec(SQLITE_FTS_SCHEMA);
@@ -312,6 +523,7 @@ export class SqliteAdapter {
         }
         // FTS operations are optional - don't block startup if they fail
         try {
+            await this.ensureFtsSchema();
             await this.ensureFtsTriggers();
             await this.ensureFtsPopulated();
         } catch (error) {
@@ -333,46 +545,74 @@ export class SqliteAdapter {
         await this.schemaReadyPromise;
     }
 
+    private async ensureFtsSchema() {
+        const columns = await this.client.all<{ name?: string }>('PRAGMA table_info(tasks_fts)');
+        const hasChecklist = columns.some((column) => column.name === 'checklist');
+        const hasAssignedTo = columns.some((column) => column.name === 'assignedTo');
+        if (hasChecklist && hasAssignedTo) return;
+
+        await this.client.run('DROP TRIGGER IF EXISTS tasks_ai');
+        await this.client.run('DROP TRIGGER IF EXISTS tasks_ad');
+        await this.client.run('DROP TRIGGER IF EXISTS tasks_au');
+        await this.client.run('DROP TABLE IF EXISTS tasks_fts');
+        await this.client.run(`
+            CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
+              id UNINDEXED,
+              title,
+              description,
+              tags,
+              contexts,
+              checklist,
+              location,
+              assignedTo,
+              content=''
+            )
+        `);
+    }
+
     private async ensureFtsTriggers() {
         // Recreate FTS triggers to use proper contentless FTS5 delete syntax
         // Old triggers used "DELETE FROM tasks_fts WHERE id = ..." which fails on contentless tables
         try {
-            const migrations = await this.client.all<{ version: number }>('SELECT version FROM schema_migrations');
-            const hasV2 = migrations.some((m) => m.version === 2);
-            if (hasV2) return;
-
-            // Drop old triggers and recreate with correct syntax
+            // Drop old triggers and recreate with current indexed columns.
+            await this.client.run('DROP TRIGGER IF EXISTS tasks_ai');
             await this.client.run('DROP TRIGGER IF EXISTS tasks_ad');
             await this.client.run('DROP TRIGGER IF EXISTS tasks_au');
             await this.client.run('DROP TRIGGER IF EXISTS projects_ad');
             await this.client.run('DROP TRIGGER IF EXISTS projects_au');
 
             await this.client.run(`
-                CREATE TRIGGER tasks_ad AFTER DELETE ON tasks BEGIN
-                  INSERT INTO tasks_fts (tasks_fts, id, title, description, tags, contexts)
-                  VALUES ('delete', old.id, old.title, coalesce(old.description, ''), coalesce(old.tags, ''), coalesce(old.contexts, ''));
+                CREATE TRIGGER IF NOT EXISTS tasks_ai AFTER INSERT ON tasks BEGIN
+                  INSERT INTO tasks_fts (rowid, title, description, tags, contexts, checklist, location, assignedTo)
+                  VALUES (new.rowid, new.title, coalesce(new.description, ''), coalesce(new.tags, ''), coalesce(new.contexts, ''), coalesce((SELECT group_concat(json_extract(value, '$.title'), ' ') FROM json_each(new.checklist)), ''), coalesce(new.location, ''), coalesce(new.assignedTo, ''));
                 END
             `);
             await this.client.run(`
-                CREATE TRIGGER tasks_au AFTER UPDATE ON tasks BEGIN
-                  INSERT INTO tasks_fts (tasks_fts, id, title, description, tags, contexts)
-                  VALUES ('delete', old.id, old.title, coalesce(old.description, ''), coalesce(old.tags, ''), coalesce(old.contexts, ''));
-                  INSERT INTO tasks_fts (id, title, description, tags, contexts)
-                  VALUES (new.id, new.title, coalesce(new.description, ''), coalesce(new.tags, ''), coalesce(new.contexts, ''));
+                CREATE TRIGGER IF NOT EXISTS tasks_ad AFTER DELETE ON tasks BEGIN
+                  INSERT INTO tasks_fts (tasks_fts, rowid, title, description, tags, contexts, checklist, location, assignedTo)
+                  VALUES ('delete', old.rowid, old.title, coalesce(old.description, ''), coalesce(old.tags, ''), coalesce(old.contexts, ''), coalesce((SELECT group_concat(json_extract(value, '$.title'), ' ') FROM json_each(old.checklist)), ''), coalesce(old.location, ''), coalesce(old.assignedTo, ''));
                 END
             `);
             await this.client.run(`
-                CREATE TRIGGER projects_ad AFTER DELETE ON projects BEGIN
-                  INSERT INTO projects_fts (projects_fts, id, title, supportNotes, tagIds, areaTitle)
-                  VALUES ('delete', old.id, old.title, coalesce(old.supportNotes, ''), coalesce(old.tagIds, ''), coalesce(old.areaTitle, ''));
+                CREATE TRIGGER IF NOT EXISTS tasks_au AFTER UPDATE ON tasks BEGIN
+                  INSERT INTO tasks_fts (tasks_fts, rowid, title, description, tags, contexts, checklist, location, assignedTo)
+                  VALUES ('delete', old.rowid, old.title, coalesce(old.description, ''), coalesce(old.tags, ''), coalesce(old.contexts, ''), coalesce((SELECT group_concat(json_extract(value, '$.title'), ' ') FROM json_each(old.checklist)), ''), coalesce(old.location, ''), coalesce(old.assignedTo, ''));
+                  INSERT INTO tasks_fts (rowid, title, description, tags, contexts, checklist, location, assignedTo)
+                  VALUES (new.rowid, new.title, coalesce(new.description, ''), coalesce(new.tags, ''), coalesce(new.contexts, ''), coalesce((SELECT group_concat(json_extract(value, '$.title'), ' ') FROM json_each(new.checklist)), ''), coalesce(new.location, ''), coalesce(new.assignedTo, ''));
                 END
             `);
             await this.client.run(`
-                CREATE TRIGGER projects_au AFTER UPDATE ON projects BEGIN
-                  INSERT INTO projects_fts (projects_fts, id, title, supportNotes, tagIds, areaTitle)
-                  VALUES ('delete', old.id, old.title, coalesce(old.supportNotes, ''), coalesce(old.tagIds, ''), coalesce(old.areaTitle, ''));
-                  INSERT INTO projects_fts (id, title, supportNotes, tagIds, areaTitle)
-                  VALUES (new.id, new.title, coalesce(new.supportNotes, ''), coalesce(new.tagIds, ''), coalesce(new.areaTitle, ''));
+                CREATE TRIGGER IF NOT EXISTS projects_ad AFTER DELETE ON projects BEGIN
+                  INSERT INTO projects_fts (projects_fts, rowid, title, supportNotes, tagIds, areaTitle)
+                  VALUES ('delete', old.rowid, old.title, coalesce(old.supportNotes, ''), coalesce(old.tagIds, ''), coalesce(old.areaTitle, ''));
+                END
+            `);
+            await this.client.run(`
+                CREATE TRIGGER IF NOT EXISTS projects_au AFTER UPDATE ON projects BEGIN
+                  INSERT INTO projects_fts (projects_fts, rowid, title, supportNotes, tagIds, areaTitle)
+                  VALUES ('delete', old.rowid, old.title, coalesce(old.supportNotes, ''), coalesce(old.tagIds, ''), coalesce(old.areaTitle, ''));
+                  INSERT INTO projects_fts (rowid, title, supportNotes, tagIds, areaTitle)
+                  VALUES (new.rowid, new.title, coalesce(new.supportNotes, ''), coalesce(new.tagIds, ''), coalesce(new.areaTitle, ''));
                 END
             `);
 
@@ -396,9 +636,12 @@ export class SqliteAdapter {
             { name: 'assignedTo', sql: 'ALTER TABLE tasks ADD COLUMN assignedTo TEXT' },
             { name: 'taskMode', sql: 'ALTER TABLE tasks ADD COLUMN taskMode TEXT' },
             { name: 'startTime', sql: 'ALTER TABLE tasks ADD COLUMN startTime TEXT' },
+            { name: 'relativeStartOffset', sql: 'ALTER TABLE tasks ADD COLUMN relativeStartOffset TEXT' },
             { name: 'dueDate', sql: 'ALTER TABLE tasks ADD COLUMN dueDate TEXT' },
             { name: 'recurrence', sql: 'ALTER TABLE tasks ADD COLUMN recurrence TEXT' },
+            { name: 'showFutureRecurrence', sql: 'ALTER TABLE tasks ADD COLUMN showFutureRecurrence INTEGER' },
             { name: 'pushCount', sql: 'ALTER TABLE tasks ADD COLUMN pushCount INTEGER' },
+            { name: 'repeatReminderMinutes', sql: 'ALTER TABLE tasks ADD COLUMN repeatReminderMinutes INTEGER' },
             { name: 'tags', sql: 'ALTER TABLE tasks ADD COLUMN tags TEXT' },
             { name: 'contexts', sql: 'ALTER TABLE tasks ADD COLUMN contexts TEXT' },
             { name: 'checklist', sql: 'ALTER TABLE tasks ADD COLUMN checklist TEXT' },
@@ -410,8 +653,10 @@ export class SqliteAdapter {
             { name: 'sectionId', sql: 'ALTER TABLE tasks ADD COLUMN sectionId TEXT' },
             { name: 'areaId', sql: 'ALTER TABLE tasks ADD COLUMN areaId TEXT' },
             { name: 'orderNum', sql: 'ALTER TABLE tasks ADD COLUMN orderNum INTEGER' },
+            { name: 'boardOrder', sql: 'ALTER TABLE tasks ADD COLUMN boardOrder INTEGER' },
             { name: 'isFocusedToday', sql: 'ALTER TABLE tasks ADD COLUMN isFocusedToday INTEGER' },
             { name: 'timeEstimate', sql: 'ALTER TABLE tasks ADD COLUMN timeEstimate TEXT' },
+            { name: 'suppressMindwtrReminders', sql: 'ALTER TABLE tasks ADD COLUMN suppressMindwtrReminders INTEGER' },
             { name: 'reviewAt', sql: 'ALTER TABLE tasks ADD COLUMN reviewAt TEXT' },
             { name: 'completedAt', sql: 'ALTER TABLE tasks ADD COLUMN completedAt TEXT' },
             { name: 'statusBeforeProjectArchive', sql: 'ALTER TABLE tasks ADD COLUMN statusBeforeProjectArchive TEXT' },
@@ -424,7 +669,6 @@ export class SqliteAdapter {
             { name: 'updatedAt', sql: 'ALTER TABLE tasks ADD COLUMN updatedAt TEXT' },
             { name: 'deletedAt', sql: 'ALTER TABLE tasks ADD COLUMN deletedAt TEXT' },
             { name: 'purgedAt', sql: 'ALTER TABLE tasks ADD COLUMN purgedAt TEXT' },
-            { name: 'metadata', sql: 'ALTER TABLE tasks ADD COLUMN metadata TEXT' },
         ];
         for (const definition of definitions) {
             if (!names.has(definition.name)) {
@@ -470,6 +714,7 @@ export class SqliteAdapter {
             { name: 'orderNum', sql: 'ALTER TABLE projects ADD COLUMN orderNum INTEGER' },
             { name: 'tagIds', sql: 'ALTER TABLE projects ADD COLUMN tagIds TEXT' },
             { name: 'isSequential', sql: 'ALTER TABLE projects ADD COLUMN isSequential INTEGER' },
+            { name: 'sequentialScope', sql: 'ALTER TABLE projects ADD COLUMN sequentialScope TEXT' },
             { name: 'isFocused', sql: 'ALTER TABLE projects ADD COLUMN isFocused INTEGER' },
             { name: 'supportNotes', sql: 'ALTER TABLE projects ADD COLUMN supportNotes TEXT' },
             { name: 'attachments', sql: 'ALTER TABLE projects ADD COLUMN attachments TEXT' },
@@ -482,6 +727,7 @@ export class SqliteAdapter {
             { name: 'createdAt', sql: 'ALTER TABLE projects ADD COLUMN createdAt TEXT' },
             { name: 'updatedAt', sql: 'ALTER TABLE projects ADD COLUMN updatedAt TEXT' },
             { name: 'deletedAt', sql: 'ALTER TABLE projects ADD COLUMN deletedAt TEXT' },
+            { name: 'purgedAt', sql: 'ALTER TABLE projects ADD COLUMN purgedAt TEXT' },
         ];
         for (const definition of definitions) {
             if (!names.has(definition.name)) {
@@ -547,6 +793,39 @@ export class SqliteAdapter {
         }
     }
 
+    private async ensurePeopleTable() {
+        await this.client.run(`
+            CREATE TABLE IF NOT EXISTS people (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              note TEXT,
+              referenceLink TEXT,
+              rev INTEGER,
+              revBy TEXT,
+              createdAt TEXT NOT NULL,
+              updatedAt TEXT NOT NULL,
+              deletedAt TEXT
+            )
+        `);
+        const columns = await this.client.all<{ name?: string }>('PRAGMA table_info(people)');
+        const names = new Set(columns.map((col) => col.name));
+        const definitions: Array<{ name: string; sql: string }> = [
+            { name: 'note', sql: 'ALTER TABLE people ADD COLUMN note TEXT' },
+            { name: 'referenceLink', sql: 'ALTER TABLE people ADD COLUMN referenceLink TEXT' },
+            { name: 'rev', sql: 'ALTER TABLE people ADD COLUMN rev INTEGER' },
+            { name: 'revBy', sql: 'ALTER TABLE people ADD COLUMN revBy TEXT' },
+            { name: 'createdAt', sql: 'ALTER TABLE people ADD COLUMN createdAt TEXT' },
+            { name: 'updatedAt', sql: 'ALTER TABLE people ADD COLUMN updatedAt TEXT' },
+            { name: 'deletedAt', sql: 'ALTER TABLE people ADD COLUMN deletedAt TEXT' },
+        ];
+        for (const definition of definitions) {
+            if (!names.has(definition.name)) {
+                await this.client.run(definition.sql);
+            }
+        }
+        await this.client.run('CREATE INDEX IF NOT EXISTS idx_people_updatedAt_rev ON people(updatedAt, rev)');
+    }
+
     private async ensureSavedFilterTable() {
         await this.client.run(`
             CREATE TABLE IF NOT EXISTS saved_filters (
@@ -557,13 +836,18 @@ export class SqliteAdapter {
               criteria TEXT NOT NULL,
               sortBy TEXT,
               sortOrder TEXT,
+              groupBy TEXT,
               createdAt TEXT NOT NULL,
               updatedAt TEXT NOT NULL,
               deletedAt TEXT
             )
         `);
         const columns = await this.client.all<{ name?: string }>('PRAGMA table_info(saved_filters)');
-        if (!new Set(columns.map((column) => column.name)).has('deletedAt')) {
+        const columnNames = new Set(columns.map((column) => column.name));
+        if (!columnNames.has('groupBy')) {
+            await this.client.run('ALTER TABLE saved_filters ADD COLUMN groupBy TEXT');
+        }
+        if (!columnNames.has('deletedAt')) {
             await this.client.run('ALTER TABLE saved_filters ADD COLUMN deletedAt TEXT');
         }
         await this.client.run('CREATE INDEX IF NOT EXISTS idx_saved_filters_view ON saved_filters(view)');
@@ -603,11 +887,11 @@ export class SqliteAdapter {
             }>(
                 `SELECT
                     (SELECT COUNT(*) FROM tasks_fts) as task_count,
-                    (SELECT COUNT(*) FROM (SELECT id FROM tasks EXCEPT SELECT id FROM tasks_fts)) as task_missing,
-                    (SELECT COUNT(*) FROM (SELECT id FROM tasks_fts EXCEPT SELECT id FROM tasks)) as task_extra,
+                    (SELECT COUNT(*) FROM (SELECT rowid FROM tasks EXCEPT SELECT rowid FROM tasks_fts)) as task_missing,
+                    (SELECT COUNT(*) FROM (SELECT rowid FROM tasks_fts EXCEPT SELECT rowid FROM tasks)) as task_extra,
                     (SELECT COUNT(*) FROM projects_fts) as project_count,
-                    (SELECT COUNT(*) FROM (SELECT id FROM projects EXCEPT SELECT id FROM projects_fts)) as project_missing,
-                    (SELECT COUNT(*) FROM (SELECT id FROM projects_fts EXCEPT SELECT id FROM projects)) as project_extra
+                    (SELECT COUNT(*) FROM (SELECT rowid FROM projects EXCEPT SELECT rowid FROM projects_fts)) as project_missing,
+                    (SELECT COUNT(*) FROM (SELECT rowid FROM projects_fts EXCEPT SELECT rowid FROM projects)) as project_extra
                 `
             );
             const taskCount = Number(counts?.task_count ?? tasksFtsTotal ?? 0);
@@ -660,16 +944,16 @@ export class SqliteAdapter {
                         // Use FTS5 delete-all command for contentless tables (content='')
                         await this.client.run("INSERT INTO tasks_fts(tasks_fts) VALUES('delete-all')");
                         await this.client.run(
-                            `INSERT INTO tasks_fts (id, title, description, tags, contexts)
-                             SELECT id, title, coalesce(description, ''), coalesce(tags, ''), coalesce(contexts, '') FROM tasks`
+                            `INSERT INTO tasks_fts (rowid, title, description, tags, contexts, checklist, location, assignedTo)
+                             SELECT rowid, title, coalesce(description, ''), coalesce(tags, ''), coalesce(contexts, ''), coalesce((SELECT group_concat(json_extract(value, '$.title'), ' ') FROM json_each(tasks.checklist)), ''), coalesce(location, ''), coalesce(assignedTo, '') FROM tasks`
                         );
                     }
                     if (needsProjectRebuild) {
                         // Use FTS5 delete-all command for contentless tables (content='')
                         await this.client.run("INSERT INTO projects_fts(projects_fts) VALUES('delete-all')");
                         await this.client.run(
-                            `INSERT INTO projects_fts (id, title, supportNotes, tagIds, areaTitle)
-                             SELECT id, title, coalesce(supportNotes, ''), coalesce(tagIds, ''), coalesce(areaTitle, '') FROM projects`
+                            `INSERT INTO projects_fts (rowid, title, supportNotes, tagIds, areaTitle)
+                             SELECT rowid, title, coalesce(supportNotes, ''), coalesce(tagIds, ''), coalesce(areaTitle, '') FROM projects`
                         );
                     }
                     await this.client.run('COMMIT');
@@ -706,6 +990,7 @@ export class SqliteAdapter {
             order: orderNumRaw === null || orderNumRaw === undefined ? fallbackOrder : Number(orderNumRaw),
             tagIds: toStringArray(fromJson<unknown>(row.tagIds, [])),
             isSequential: fromBool(row.isSequential),
+            sequentialScope: normalizeProjectSequentialScope(row.sequentialScope),
             isFocused: fromBool(row.isFocused),
             supportNotes: row.supportNotes as string | undefined,
             attachments: toAttachments(fromJson<unknown>(row.attachments, undefined)),
@@ -718,6 +1003,7 @@ export class SqliteAdapter {
             createdAt: String(row.createdAt ?? ''),
             updatedAt: String(row.updatedAt ?? ''),
             deletedAt: row.deletedAt as string | undefined,
+            purgedAt: row.purgedAt as string | undefined,
         };
     }
 
@@ -732,6 +1018,7 @@ export class SqliteAdapter {
             areaId: row.areaId as string | undefined,
             tags: toStringArray(fromJson<unknown>(row.tags, [])),
             contexts: toStringArray(fromJson<unknown>(row.contexts, [])),
+            location: row.location as string | undefined,
         };
     }
 
@@ -773,6 +1060,7 @@ export class SqliteAdapter {
             criteria: fromJson<unknown>(row.criteria, {}),
             sortBy: row.sortBy,
             sortOrder: row.sortOrder,
+            groupBy: row.groupBy,
             createdAt: row.createdAt,
             updatedAt: row.updatedAt,
             deletedAt: row.deletedAt,
@@ -781,11 +1069,12 @@ export class SqliteAdapter {
 
     async getData(): Promise<AppData> {
         await this.ensureSchema();
-        const [tasksRows, projectsRows, sectionsRows, areasRows, settingsRow, savedFilterRows] = await Promise.all([
+        const [tasksRows, projectsRows, sectionsRows, areasRows, peopleRows, settingsRow, savedFilterRows] = await Promise.all([
             this.loadAllRows('tasks'),
             this.loadAllRows('projects'),
             this.loadAllRows('sections'),
             this.loadAllRows('areas'),
+            this.loadAllRows('people'),
             this.client.get<Record<string, unknown>>('SELECT data FROM settings WHERE id = 1'),
             this.client.all<Record<string, unknown>>('SELECT * FROM saved_filters ORDER BY createdAt, name'),
         ]);
@@ -817,6 +1106,27 @@ export class SqliteAdapter {
                 deletedAt: row.deletedAt as string | undefined,
             };
         });
+        const people: Person[] = peopleRows.map((row) => {
+            const createdAtRaw = typeof row.createdAt === 'string' && row.createdAt.trim().length > 0
+                ? row.createdAt
+                : undefined;
+            const updatedAtRaw = typeof row.updatedAt === 'string' && row.updatedAt.trim().length > 0
+                ? row.updatedAt
+                : undefined;
+            const createdAt = createdAtRaw ?? updatedAtRaw ?? nowIso;
+            const updatedAt = updatedAtRaw ?? createdAtRaw ?? nowIso;
+            return {
+                id: String(row.id),
+                name: String(row.name ?? ''),
+                note: row.note as string | undefined,
+                referenceLink: row.referenceLink as string | undefined,
+                rev: row.rev === null || row.rev === undefined ? undefined : Number(row.rev),
+                revBy: row.revBy as string | undefined,
+                createdAt,
+                updatedAt,
+                deletedAt: row.deletedAt as string | undefined,
+            };
+        });
 
         const settings = settingsRow?.data ? fromJson<AppData['settings']>(settingsRow.data, {}) : {};
         const savedFiltersFromTable = savedFilterRows
@@ -828,7 +1138,7 @@ export class SqliteAdapter {
             settings.savedFilters = normalizeSavedFilters(settings.savedFilters);
         }
 
-        return { tasks, projects, sections, areas, settings };
+        return { tasks, projects, sections, areas, people, settings };
     }
 
     async queryTasks(options: TaskQueryOptions): Promise<Task[]> {
@@ -883,11 +1193,11 @@ export class SqliteAdapter {
         const runSearch = async (): Promise<SearchResults> => {
             const [taskRows, projectRows] = await Promise.all([
                 this.client.all<Record<string, unknown>>(
-                    `SELECT ${SEARCH_TASK_SELECT} FROM tasks_fts f JOIN tasks t ON f.id = t.id WHERE tasks_fts MATCH ? AND t.deletedAt IS NULL ORDER BY bm25(tasks_fts) LIMIT ?`,
+                    `SELECT ${SEARCH_TASK_SELECT} FROM tasks_fts f JOIN tasks t ON f.rowid = t.rowid WHERE tasks_fts MATCH ? AND t.deletedAt IS NULL ORDER BY bm25(tasks_fts) LIMIT ?`,
                     [ftsQuery, SEARCH_RESULT_LIMIT + 1]
                 ),
                 this.client.all<Record<string, unknown>>(
-                    `SELECT ${SEARCH_PROJECT_SELECT} FROM projects_fts f JOIN projects p ON f.id = p.id WHERE projects_fts MATCH ? AND p.deletedAt IS NULL ORDER BY bm25(projects_fts) LIMIT ?`,
+                    `SELECT ${SEARCH_PROJECT_SELECT} FROM projects_fts f JOIN projects p ON f.rowid = p.rowid WHERE projects_fts MATCH ? AND p.deletedAt IS NULL ORDER BY bm25(projects_fts) LIMIT ?`,
                     [ftsQuery, SEARCH_RESULT_LIMIT + 1]
                 ),
             ]);
@@ -913,9 +1223,27 @@ export class SqliteAdapter {
         }
     }
 
+    async saveTask(task: Task): Promise<void> {
+        await this.ensureSchema();
+        await this.client.run('BEGIN IMMEDIATE');
+        try {
+            const columnList = TASK_UPSERT_COLUMNS.join(', ');
+            const placeholders = TASK_UPSERT_COLUMNS.map(() => '?').join(', ');
+            await this.client.run(
+                `INSERT INTO tasks (${columnList}) VALUES (${placeholders}) ON CONFLICT(id) DO UPDATE SET ${TASK_UPSERT_UPDATE_CLAUSE}`,
+                taskToSqliteRow(task)
+            );
+            await this.client.run('COMMIT');
+        } catch (error) {
+            await this.client.run('ROLLBACK').catch(() => undefined);
+            throw error;
+        }
+    }
+
     async saveData(data: AppData): Promise<void> {
         await this.ensureSchema();
         await this.client.run('BEGIN IMMEDIATE');
+        let saveStep = 'begin';
         try {
             const nowIso = new Date().toISOString();
             const chunkArray = <T>(items: T[], size: number): T[][] => {
@@ -951,7 +1279,7 @@ export class SqliteAdapter {
                 }
             };
 
-            const syncIds = async (table: 'tasks' | 'projects' | 'sections' | 'areas' | 'saved_filters', ids: string[]) => {
+            const syncIds = async (table: 'tasks' | 'projects' | 'sections' | 'areas' | 'people' | 'saved_filters', ids: string[]) => {
                 const tempTable = createTempIdTableName(table);
                 try {
                     await this.client.run(`CREATE TEMP TABLE ${tempTable} (id TEXT PRIMARY KEY)`);
@@ -976,6 +1304,7 @@ export class SqliteAdapter {
                 }
             };
 
+            saveStep = 'areas';
             await upsertBatch(
                 'areas',
                 [
@@ -1014,9 +1343,11 @@ export class SqliteAdapter {
                  revBy=excluded.revBy,
                  createdAt=excluded.createdAt,
                  updatedAt=excluded.updatedAt,
-                 deletedAt=excluded.deletedAt`,
+                 deletedAt=excluded.deletedAt
+                 WHERE areas.rev IS NULL OR areas.rev <= excluded.rev`,
             );
 
+            saveStep = 'projects';
             await upsertBatch(
                 'projects',
                 [
@@ -1027,6 +1358,7 @@ export class SqliteAdapter {
                     'orderNum',
                     'tagIds',
                     'isSequential',
+                    'sequentialScope',
                     'isFocused',
                     'supportNotes',
                     'attachments',
@@ -1039,6 +1371,7 @@ export class SqliteAdapter {
                     'createdAt',
                     'updatedAt',
                     'deletedAt',
+                    'purgedAt',
                 ],
                 data.projects.map((project) => [
                     project.id,
@@ -1048,6 +1381,7 @@ export class SqliteAdapter {
                     Number.isFinite(project.order) ? project.order : 0,
                     toJson(project.tagIds ?? []),
                     toBool(project.isSequential),
+                    normalizeProjectSequentialScope(project.sequentialScope) ?? null,
                     toBool(project.isFocused),
                     project.supportNotes ?? null,
                     toJson(project.attachments),
@@ -1060,6 +1394,7 @@ export class SqliteAdapter {
                     project.createdAt,
                     project.updatedAt,
                     project.deletedAt ?? null,
+                    project.purgedAt ?? null,
                 ]),
                 `title=excluded.title,
                  status=excluded.status,
@@ -1067,6 +1402,7 @@ export class SqliteAdapter {
                  orderNum=excluded.orderNum,
                  tagIds=excluded.tagIds,
                  isSequential=excluded.isSequential,
+                 sequentialScope=excluded.sequentialScope,
                  isFocused=excluded.isFocused,
                  supportNotes=excluded.supportNotes,
                  attachments=excluded.attachments,
@@ -1078,9 +1414,53 @@ export class SqliteAdapter {
                  revBy=excluded.revBy,
                  createdAt=excluded.createdAt,
                  updatedAt=excluded.updatedAt,
-                 deletedAt=excluded.deletedAt`,
+                 deletedAt=excluded.deletedAt,
+                 purgedAt=excluded.purgedAt
+                 WHERE projects.rev IS NULL OR projects.rev <= excluded.rev`,
             );
 
+            const people = Array.isArray(data.people) ? data.people : [];
+            saveStep = 'people';
+            await upsertBatch(
+                'people',
+                [
+                    'id',
+                    'name',
+                    'note',
+                    'referenceLink',
+                    'rev',
+                    'revBy',
+                    'createdAt',
+                    'updatedAt',
+                    'deletedAt',
+                ],
+                people.map((person) => {
+                    const createdAt = person.createdAt ?? person.updatedAt ?? nowIso;
+                    const updatedAt = person.updatedAt ?? person.createdAt ?? nowIso;
+                    return [
+                        person.id,
+                        person.name,
+                        person.note ?? null,
+                        person.referenceLink ?? null,
+                        person.rev ?? null,
+                        person.revBy ?? null,
+                        createdAt,
+                        updatedAt,
+                        person.deletedAt ?? null,
+                    ];
+                }),
+                `name=excluded.name,
+                 note=excluded.note,
+                 referenceLink=excluded.referenceLink,
+                 rev=excluded.rev,
+                 revBy=excluded.revBy,
+                 createdAt=excluded.createdAt,
+                 updatedAt=excluded.updatedAt,
+                 deletedAt=excluded.deletedAt
+                 WHERE people.rev IS NULL OR people.rev <= excluded.rev`,
+            );
+
+            saveStep = 'sections';
             await upsertBatch(
                 'sections',
                 [
@@ -1124,134 +1504,32 @@ export class SqliteAdapter {
                  updatedAt=excluded.updatedAt,
                  deletedAt=excluded.deletedAt,
                  deletedAtBeforeProjectArchive=excluded.deletedAtBeforeProjectArchive,
-                 projectArchivedAt=excluded.projectArchivedAt`,
+                 projectArchivedAt=excluded.projectArchivedAt
+                 WHERE sections.rev IS NULL OR sections.rev <= excluded.rev`,
             );
 
+            saveStep = 'tasks';
             await upsertBatch(
                 'tasks',
-                [
-                    'id',
-                    'title',
-                    'status',
-                    'priority',
-                    'energyLevel',
-                    'assignedTo',
-                    'taskMode',
-                    'startTime',
-                    'dueDate',
-                    'recurrence',
-                    'pushCount',
-                    'tags',
-                    'contexts',
-                    'checklist',
-                    'description',
-                    'textDirection',
-                    'attachments',
-                    'location',
-                    'projectId',
-                    'sectionId',
-                    'areaId',
-                    'orderNum',
-                    'isFocusedToday',
-                    'timeEstimate',
-                    'reviewAt',
-                    'completedAt',
-                    'statusBeforeProjectArchive',
-                    'completedAtBeforeProjectArchive',
-                    'isFocusedTodayBeforeProjectArchive',
-                    'projectArchivedAt',
-                    'rev',
-                    'revBy',
-                    'createdAt',
-                    'updatedAt',
-                    'deletedAt',
-                    'purgedAt',
-                ],
-                data.tasks.map((task) => {
-                    const taskOrder = Number.isFinite(task.order) ? task.order : task.orderNum;
-                    return [
-                        task.id,
-                        task.title,
-                        task.status,
-                        task.priority ?? null,
-                        task.energyLevel ?? null,
-                        task.assignedTo ?? null,
-                        task.taskMode ?? null,
-                        task.startTime ?? null,
-                        task.dueDate ?? null,
-                        toJson(task.recurrence),
-                        task.pushCount ?? null,
-                        toJson(task.tags ?? []),
-                        toJson(task.contexts ?? []),
-                        toJson(task.checklist),
-                        task.description ?? null,
-                        task.textDirection ?? null,
-                        toJson(task.attachments),
-                        task.location ?? null,
-                        task.projectId ?? null,
-                        task.sectionId ?? null,
-                        task.areaId ?? null,
-                        taskOrder ?? null,
-                        toBool(task.isFocusedToday),
-                        task.timeEstimate ?? null,
-                        task.reviewAt ?? null,
-                        task.completedAt ?? null,
-                        task.statusBeforeProjectArchive ?? null,
-                        task.completedAtBeforeProjectArchive ?? null,
-                        toNullableBool(task.isFocusedTodayBeforeProjectArchive),
-                        task.projectArchivedAt ?? null,
-                        task.rev ?? null,
-                        task.revBy ?? null,
-                        task.createdAt,
-                        task.updatedAt,
-                        task.deletedAt ?? null,
-                        task.purgedAt ?? null,
-                    ];
-                }),
-                `title=excluded.title,
-                 status=excluded.status,
-                 priority=excluded.priority,
-                 energyLevel=excluded.energyLevel,
-                 assignedTo=excluded.assignedTo,
-                 taskMode=excluded.taskMode,
-                 startTime=excluded.startTime,
-                 dueDate=excluded.dueDate,
-                 recurrence=excluded.recurrence,
-                 pushCount=excluded.pushCount,
-                 tags=excluded.tags,
-                 contexts=excluded.contexts,
-                 checklist=excluded.checklist,
-                 description=excluded.description,
-                 textDirection=excluded.textDirection,
-                 attachments=excluded.attachments,
-                 location=excluded.location,
-                 projectId=excluded.projectId,
-                 sectionId=excluded.sectionId,
-                 areaId=excluded.areaId,
-                 orderNum=excluded.orderNum,
-                 isFocusedToday=excluded.isFocusedToday,
-                 timeEstimate=excluded.timeEstimate,
-                 reviewAt=excluded.reviewAt,
-                 completedAt=excluded.completedAt,
-                 statusBeforeProjectArchive=excluded.statusBeforeProjectArchive,
-                 completedAtBeforeProjectArchive=excluded.completedAtBeforeProjectArchive,
-                 isFocusedTodayBeforeProjectArchive=excluded.isFocusedTodayBeforeProjectArchive,
-                 projectArchivedAt=excluded.projectArchivedAt,
-                 rev=excluded.rev,
-                 revBy=excluded.revBy,
-                 createdAt=excluded.createdAt,
-                 updatedAt=excluded.updatedAt,
-                 deletedAt=excluded.deletedAt,
-                 purgedAt=excluded.purgedAt`,
+                [...TASK_UPSERT_COLUMNS],
+                data.tasks.map(taskToSqliteRow),
+                TASK_UPSERT_UPDATE_CLAUSE,
             );
 
+            saveStep = 'sync-task-ids';
             await syncIds('tasks', data.tasks.map((task) => task.id));
+            saveStep = 'sync-section-ids';
             await syncIds('sections', data.sections.map((section) => section.id));
+            saveStep = 'sync-project-ids';
             await syncIds('projects', data.projects.map((project) => project.id));
+            saveStep = 'sync-area-ids';
             await syncIds('areas', data.areas.map((area) => area.id));
+            saveStep = 'sync-people-ids';
+            await syncIds('people', people.map((person) => person.id));
 
             const rawSavedFilters = data.settings?.savedFilters;
             const savedFilters = normalizeSavedFilters(rawSavedFilters);
+            saveStep = 'saved-filters';
             await upsertBatch(
                 'saved_filters',
                 [
@@ -1262,6 +1540,7 @@ export class SqliteAdapter {
                     'criteria',
                     'sortBy',
                     'sortOrder',
+                    'groupBy',
                     'createdAt',
                     'updatedAt',
                     'deletedAt',
@@ -1274,6 +1553,7 @@ export class SqliteAdapter {
                     toJson(filter.criteria),
                     filter.sortBy ?? null,
                     filter.sortOrder ?? null,
+                    filter.groupBy ?? null,
                     filter.createdAt,
                     filter.updatedAt,
                     filter.deletedAt ?? null,
@@ -1284,10 +1564,12 @@ export class SqliteAdapter {
                  criteria=excluded.criteria,
                  sortBy=excluded.sortBy,
                  sortOrder=excluded.sortOrder,
+                 groupBy=excluded.groupBy,
                  createdAt=excluded.createdAt,
                  updatedAt=excluded.updatedAt,
                  deletedAt=excluded.deletedAt`,
             );
+            saveStep = 'sync-saved-filter-ids';
             await syncIds('saved_filters', savedFilters.map((filter) => filter.id));
 
             const settingsForSave = { ...(data.settings ?? {}) };
@@ -1297,14 +1579,29 @@ export class SqliteAdapter {
                 delete settingsForSave.savedFilters;
             }
 
+            saveStep = 'settings';
             await this.client.run(
                 'INSERT INTO settings (id, data) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
                 [toJson(settingsForSave)]
             );
 
+            saveStep = 'commit';
             await this.client.run('COMMIT');
         } catch (error) {
-            await this.client.run('ROLLBACK');
+            await this.client.run('ROLLBACK').catch((rollbackError) => {
+                logWarn('SQLite saveData rollback failed', {
+                    scope: 'sqlite',
+                    category: 'storage',
+                    error: rollbackError,
+                    context: { step: saveStep },
+                });
+            });
+            logWarn('SQLite saveData failed', {
+                scope: 'sqlite',
+                category: 'storage',
+                error,
+                context: buildSqliteSaveFailureContext(data, saveStep),
+            });
             throw error;
         }
     }

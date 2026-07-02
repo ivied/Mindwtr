@@ -1,10 +1,17 @@
 import {
   DEFAULT_PROJECT_COLOR,
+  TASK_SQLITE_COLUMNS,
+  getTaskFocusEligibility,
   mapSqliteTaskRow,
+  normalizeFocusTaskLimit,
   TASK_STATUS_SET,
   parseQuickAdd as parseQuickAddCore,
+  taskToSqliteRow,
+  type AppData as CoreAppData,
   type Area as CoreArea,
+  type Person as CorePerson,
   type Project as CoreProject,
+  type Section as CoreSection,
   type Task as CoreTask,
   type TaskEnergyLevel as CoreTaskEnergyLevel,
   type TaskPriority as CoreTaskPriority,
@@ -19,6 +26,8 @@ export type TaskStatus = CoreTaskStatus;
 export type Task = CoreTask;
 export type Project = CoreProject & { orderNum?: number };
 export type Area = CoreArea;
+export type Person = CorePerson;
+export type Section = CoreSection;
 export type ProjectRef = Pick<CoreProject, 'id' | 'title'>;
 
 const parseTaskStatusInput = (value: unknown): TaskStatus | undefined => {
@@ -66,6 +75,7 @@ export type AddTaskInput = {
   quickAdd?: string;
   status?: TaskStatus;
   projectId?: string;
+  sectionId?: string;
   dueDate?: string;
   startTime?: string;
   contexts?: string[];
@@ -77,9 +87,67 @@ export type AddTaskInput = {
   timeEstimate?: CoreTimeEstimate;
 };
 
-export type CompleteTaskInput = { id: string };
-
 export type TaskRow = Task;
+
+type ColumnInfoRow = { name?: unknown };
+type SqliteNameRow = { name?: unknown };
+type SettingsRow = { data?: unknown };
+type TaskSqliteRow = Record<string, unknown>;
+type ProjectSqliteRow = Record<string, unknown> & {
+  id: string;
+  title: string;
+  status?: string | null;
+  color?: string | null;
+  orderNum?: number | null;
+  tagIds?: unknown;
+  isSequential?: number | null;
+  sequentialScope?: string | null;
+  isFocused?: number | null;
+  supportNotes?: string | null;
+  attachments?: unknown;
+  dueDate?: string | null;
+  reviewAt?: string | null;
+  areaId?: string | null;
+  areaTitle?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string | null;
+};
+type ProjectRefRow = Pick<ProjectSqliteRow, 'id' | 'title'>;
+type SectionSqliteRow = Record<string, unknown> & {
+  id: string;
+  projectId: string;
+  title: string;
+  description?: string | null;
+  orderNum?: number | null;
+  isCollapsed?: number | null;
+  rev?: number | null;
+  revBy?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string | null;
+};
+type AreaSqliteRow = Record<string, unknown> & {
+  id: string;
+  name: string;
+  color?: string | null;
+  icon?: string | null;
+  orderNum?: number | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string | null;
+};
+type PersonSqliteRow = Record<string, unknown> & {
+  id: string;
+  name: string;
+  note?: string | null;
+  referenceLink?: string | null;
+  rev?: number | null;
+  revBy?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string | null;
+};
 
 // MCP writes go through the core-backed adapter, but reads are intentionally
 // kept as direct SQL so list/search tools stay fast and read-only. Row mapping
@@ -118,22 +186,23 @@ const BASE_TASK_COLUMNS = [
   'purgedAt',
 ];
 
-const taskColumnsCache = new WeakMap<DbClient, { hasOrderNum: boolean; selectColumns: string[] }>();
+const taskColumnsCache = new WeakMap<DbClient, { hasOrderNum: boolean; insertColumns: string[]; selectColumns: string[] }>();
 const tasksFtsCache = new WeakMap<DbClient, boolean>();
 
 const getTaskColumns = (db: DbClient) => {
   const cached = taskColumnsCache.get(db);
   if (cached) return cached;
   try {
-    const columns = db.prepare('PRAGMA table_info(tasks)').all();
-    const names = new Set<string>(columns.map((col: any) => String(col.name)));
+    const columns = db.prepare('PRAGMA table_info(tasks)').all<ColumnInfoRow>();
+    const names = new Set<string>(columns.map((col) => String(col.name)));
     const hasOrderNum = names.has('orderNum');
     const selectColumns = BASE_TASK_COLUMNS.filter((name) => name === 'orderNum' ? hasOrderNum : names.has(name));
-    const resolved = { hasOrderNum, selectColumns };
+    const insertColumns = TASK_SQLITE_COLUMNS.filter((name) => names.has(name));
+    const resolved = { hasOrderNum, insertColumns, selectColumns };
     taskColumnsCache.set(db, resolved);
     return resolved;
   } catch {
-    const fallback = { hasOrderNum: true, selectColumns: BASE_TASK_COLUMNS };
+    const fallback = { hasOrderNum: true, insertColumns: [...TASK_SQLITE_COLUMNS], selectColumns: BASE_TASK_COLUMNS };
     taskColumnsCache.set(db, fallback);
     return fallback;
   }
@@ -143,8 +212,8 @@ const hasTasksFts = (db: DbClient): boolean => {
   const cached = tasksFtsCache.get(db);
   if (cached !== undefined) return cached;
   try {
-    const rows = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tasks_fts'").all();
-    const hasFts = rows.some((row: any) => row?.name === 'tasks_fts');
+    const rows = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'tasks_fts'").all<SqliteNameRow>();
+    const hasFts = rows.some((row) => row.name === 'tasks_fts');
     tasksFtsCache.set(db, hasFts);
     return hasFts;
   } catch {
@@ -167,7 +236,7 @@ const buildTasksFtsQuery = (search: string): string | null => {
   return tokens.map((token) => `${token}*`).join(' ');
 };
 
-function mapTaskRow(row: any): TaskRow {
+function mapTaskRow(row: TaskSqliteRow): TaskRow {
   const task = mapSqliteTaskRow(row);
   return {
     ...task,
@@ -181,7 +250,7 @@ function mapTaskRow(row: any): TaskRow {
 
 export function listTasks(db: DbClient, input: ListTasksInput): TaskRow[] {
   const where: string[] = [];
-  const params: any[] = [];
+  const params: unknown[] = [];
 
   if (!input.includeDeleted) {
     where.push('deletedAt IS NULL');
@@ -197,7 +266,7 @@ export function listTasks(db: DbClient, input: ListTasksInput): TaskRow[] {
   if (input.search) {
     const ftsQuery = buildTasksFtsQuery(input.search);
     if (ftsQuery && hasTasksFts(db)) {
-      where.push("id IN (SELECT id FROM tasks_fts WHERE tasks_fts MATCH ?)");
+      where.push("rowid IN (SELECT rowid FROM tasks_fts WHERE tasks_fts MATCH ?)");
       params.push(ftsQuery);
     } else {
       where.push("(title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\')");
@@ -226,7 +295,7 @@ export function listTasks(db: DbClient, input: ListTasksInput): TaskRow[] {
 
   const { selectColumns } = getTaskColumns(db);
   const sql = `SELECT ${selectColumns.join(', ')} FROM tasks ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY ${sortBy} ${sortOrder} LIMIT ? OFFSET ?`;
-  const rows = db.prepare(sql).all(...params, limit, offset);
+  const rows = db.prepare(sql).all<TaskSqliteRow>(...params, limit, offset);
   return rows.map(mapTaskRow);
 }
 
@@ -239,7 +308,7 @@ export function getTask(db: DbClient, input: GetTaskInput): TaskRow {
   }
   const { selectColumns } = getTaskColumns(db);
   const sql = `SELECT ${selectColumns.join(', ')} FROM tasks WHERE ${where.join(' AND ')}`;
-  const row = db.prepare(sql).get(input.id);
+  const row = db.prepare(sql).get<TaskSqliteRow>(input.id);
   if (!row) {
     throw new NotFoundError(`Task not found: ${input.id}`);
   }
@@ -256,6 +325,7 @@ const BASE_PROJECT_COLUMNS = [
   'orderNum',
   'tagIds',
   'isSequential',
+  'sequentialScope',
   'isFocused',
   'supportNotes',
   'attachments',
@@ -272,12 +342,12 @@ const getProjectColumns = (db: DbClient) => {
   const cached = projectColumnsCache.get(db);
   if (cached) return cached;
   try {
-    const columns = db.prepare('PRAGMA table_info(projects)').all();
-    const names = new Set<string>(columns.map((col: any) => String(col.name)));
+    const columns = db.prepare('PRAGMA table_info(projects)').all<ColumnInfoRow>();
+    const names = new Set<string>(columns.map((col) => String(col.name)));
     const hasOrderNum = names.has('orderNum');
     const hasDueDate = names.has('dueDate');
     const selectColumns = BASE_PROJECT_COLUMNS.filter(
-      (name) => (hasOrderNum || name !== 'orderNum') && (hasDueDate || name !== 'dueDate')
+      (name) => names.has(name) && (hasOrderNum || name !== 'orderNum') && (hasDueDate || name !== 'dueDate')
     );
     const resolved = { hasOrderNum, selectColumns };
     projectColumnsCache.set(db, resolved);
@@ -290,19 +360,19 @@ const getProjectColumns = (db: DbClient) => {
 };
 
 const listProjectRefsForQuickAdd = (db: DbClient): ProjectRef[] => {
-  const rows = db.prepare('SELECT id, title FROM projects WHERE deletedAt IS NULL').all();
+  const rows = db.prepare('SELECT id, title FROM projects WHERE deletedAt IS NULL').all<ProjectRefRow>();
   return rows
-    .filter((row: any) => typeof row.id === 'string' && typeof row.title === 'string')
-    .map((row: any) => ({ id: row.id, title: row.title }));
+    .filter((row): row is ProjectRefRow => typeof row.id === 'string' && typeof row.title === 'string')
+    .map((row) => ({ id: row.id, title: row.title }));
 };
 
 export function listProjects(db: DbClient): Project[] {
   const { selectColumns } = getProjectColumns(db);
-  const rows = db.prepare(`SELECT ${selectColumns.join(', ')} FROM projects WHERE deletedAt IS NULL`).all();
+  const rows = db.prepare(`SELECT ${selectColumns.join(', ')} FROM projects WHERE deletedAt IS NULL`).all<ProjectSqliteRow>();
   return rows.map(mapProjectRow);
 }
 
-const mapProjectRow = (row: any): Project => ({
+const mapProjectRow = (row: ProjectSqliteRow): Project => ({
   id: row.id,
   title: row.title,
   status: row.status === 'someday' || row.status === 'waiting' || row.status === 'archived' ? row.status : 'active',
@@ -311,6 +381,9 @@ const mapProjectRow = (row: any): Project => ({
   orderNum: row.orderNum ?? undefined,
   tagIds: parseJson(row.tagIds, []),
   isSequential: row.isSequential === 1,
+  sequentialScope: row.sequentialScope === 'section' || row.sequentialScope === 'project'
+    ? row.sequentialScope
+    : undefined,
   isFocused: row.isFocused === 1,
   supportNotes: row.supportNotes ?? undefined,
   attachments: parseJson(row.attachments, []),
@@ -331,11 +404,98 @@ export function getProject(db: DbClient, input: GetProjectInput): Project {
   if (!input.includeDeleted) {
     where.push('deletedAt IS NULL');
   }
-  const row = db.prepare(`SELECT ${selectColumns.join(', ')} FROM projects WHERE ${where.join(' AND ')}`).get(input.id);
+  const row = db.prepare(`SELECT ${selectColumns.join(', ')} FROM projects WHERE ${where.join(' AND ')}`).get<ProjectSqliteRow>(input.id);
   if (!row) {
     throw new NotFoundError(`Project not found: ${input.id}`);
   }
   return mapProjectRow(row);
+}
+
+const BASE_SECTION_COLUMNS = [
+  'id',
+  'projectId',
+  'title',
+  'description',
+  'orderNum',
+  'isCollapsed',
+  'rev',
+  'revBy',
+  'createdAt',
+  'updatedAt',
+  'deletedAt',
+];
+
+const sectionColumnsCache = new WeakMap<DbClient, { hasOrderNum: boolean; selectColumns: string[] }>();
+
+const getSectionColumns = (db: DbClient) => {
+  const cached = sectionColumnsCache.get(db);
+  if (cached) return cached;
+  try {
+    const columns = db.prepare('PRAGMA table_info(sections)').all<ColumnInfoRow>();
+    const names = new Set<string>(columns.map((col) => String(col.name)));
+    const hasOrderNum = names.has('orderNum');
+    const selectColumns = BASE_SECTION_COLUMNS.filter((name) => hasOrderNum || name !== 'orderNum');
+    const resolved = { hasOrderNum, selectColumns };
+    sectionColumnsCache.set(db, resolved);
+    return resolved;
+  } catch {
+    const fallback = { hasOrderNum: true, selectColumns: BASE_SECTION_COLUMNS };
+    sectionColumnsCache.set(db, fallback);
+    return fallback;
+  }
+};
+
+const mapSectionRow = (row: SectionSqliteRow): Section => ({
+  id: row.id,
+  projectId: row.projectId,
+  title: row.title,
+  description: row.description ?? undefined,
+  order: row.orderNum ?? 0,
+  isCollapsed: row.isCollapsed === null || row.isCollapsed === undefined ? undefined : row.isCollapsed === 1,
+  rev: row.rev ?? undefined,
+  revBy: row.revBy ?? undefined,
+  createdAt: row.createdAt,
+  updatedAt: row.updatedAt,
+  deletedAt: row.deletedAt ?? undefined,
+});
+
+export type ListSectionsInput = {
+  projectId?: string;
+  includeDeleted?: boolean;
+};
+
+export function listSections(db: DbClient, input: ListSectionsInput = {}): Section[] {
+  const { hasOrderNum, selectColumns } = getSectionColumns(db);
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (input.projectId) {
+    where.push('projectId = ?');
+    params.push(input.projectId);
+  }
+  if (!input.includeDeleted) {
+    where.push('deletedAt IS NULL');
+  }
+  const whereSql = where.length > 0 ? ` WHERE ${where.join(' AND ')}` : '';
+  const orderSql = hasOrderNum ? 'projectId ASC, orderNum ASC, title ASC' : 'projectId ASC, title ASC';
+  const rows = db
+    .prepare(`SELECT ${selectColumns.join(', ')} FROM sections${whereSql} ORDER BY ${orderSql}`)
+    .all<SectionSqliteRow>(...params);
+  return rows.map(mapSectionRow);
+}
+
+export type GetSectionInput = { id: string; includeDeleted?: boolean };
+
+export function getSection(db: DbClient, input: GetSectionInput): Section {
+  const { selectColumns } = getSectionColumns(db);
+  const where = ['id = ?'];
+  if (!input.includeDeleted) {
+    where.push('deletedAt IS NULL');
+  }
+  const row = db.prepare(`SELECT ${selectColumns.join(', ')} FROM sections WHERE ${where.join(' AND ')}`).get<SectionSqliteRow>(input.id);
+  if (!row) {
+    throw new NotFoundError(`Section not found: ${input.id}`);
+  }
+  return mapSectionRow(row);
 }
 
 const BASE_AREA_COLUMNS = [
@@ -355,8 +515,8 @@ const getAreaColumns = (db: DbClient) => {
   const cached = areaColumnsCache.get(db);
   if (cached) return cached;
   try {
-    const columns = db.prepare('PRAGMA table_info(areas)').all();
-    const names = new Set<string>(columns.map((col: any) => String(col.name)));
+    const columns = db.prepare('PRAGMA table_info(areas)').all<ColumnInfoRow>();
+    const names = new Set<string>(columns.map((col) => String(col.name)));
     const hasOrderNum = names.has('orderNum');
     const selectColumns = BASE_AREA_COLUMNS.filter((name) => hasOrderNum || name !== 'orderNum');
     const resolved = { hasOrderNum, selectColumns };
@@ -369,7 +529,7 @@ const getAreaColumns = (db: DbClient) => {
   }
 };
 
-const mapAreaRow = (row: any): Area => ({
+const mapAreaRow = (row: AreaSqliteRow): Area => ({
   id: row.id,
   name: row.name,
   color: row.color ?? undefined,
@@ -382,8 +542,84 @@ const mapAreaRow = (row: any): Area => ({
 
 export function listAreas(db: DbClient): Area[] {
   const { selectColumns } = getAreaColumns(db);
-  const rows = db.prepare(`SELECT ${selectColumns.join(', ')} FROM areas WHERE deletedAt IS NULL ORDER BY orderNum ASC, updatedAt DESC`).all();
+  const rows = db.prepare(`SELECT ${selectColumns.join(', ')} FROM areas WHERE deletedAt IS NULL ORDER BY orderNum ASC, updatedAt DESC`).all<AreaSqliteRow>();
   return rows.map(mapAreaRow);
+}
+
+const BASE_PERSON_COLUMNS = [
+  'id',
+  'name',
+  'note',
+  'referenceLink',
+  'rev',
+  'revBy',
+  'createdAt',
+  'updatedAt',
+  'deletedAt',
+];
+
+const peopleColumnsCache = new WeakMap<DbClient, { exists: boolean; selectColumns: string[] }>();
+
+const getPeopleColumns = (db: DbClient) => {
+  const cached = peopleColumnsCache.get(db);
+  if (cached) return cached;
+  try {
+    const columns = db.prepare('PRAGMA table_info(people)').all<ColumnInfoRow>();
+    const names = new Set<string>(columns.map((col) => String(col.name)));
+    const exists = names.size > 0;
+    const selectColumns = BASE_PERSON_COLUMNS.filter((name) => names.has(name));
+    const resolved = { exists, selectColumns: selectColumns.length > 0 ? selectColumns : BASE_PERSON_COLUMNS };
+    peopleColumnsCache.set(db, resolved);
+    return resolved;
+  } catch {
+    const fallback = { exists: false, selectColumns: BASE_PERSON_COLUMNS };
+    peopleColumnsCache.set(db, fallback);
+    return fallback;
+  }
+};
+
+const mapPersonRow = (row: PersonSqliteRow): Person => ({
+  id: row.id,
+  name: row.name,
+  note: row.note ?? undefined,
+  referenceLink: row.referenceLink ?? undefined,
+  rev: row.rev ?? undefined,
+  revBy: row.revBy ?? undefined,
+  createdAt: row.createdAt,
+  updatedAt: row.updatedAt,
+  deletedAt: row.deletedAt ?? undefined,
+});
+
+export type ListPeopleInput = {
+  includeDeleted?: boolean;
+};
+
+export function listPeople(db: DbClient, input: ListPeopleInput = {}): Person[] {
+  const { exists, selectColumns } = getPeopleColumns(db);
+  if (!exists) return [];
+  const where = input.includeDeleted ? '' : ' WHERE deletedAt IS NULL';
+  const rows = db
+    .prepare(`SELECT ${selectColumns.join(', ')} FROM people${where} ORDER BY lower(name) ASC, updatedAt DESC`)
+    .all<PersonSqliteRow>();
+  return rows.map(mapPersonRow);
+}
+
+export type GetPersonInput = { id: string; includeDeleted?: boolean };
+
+export function getPerson(db: DbClient, input: GetPersonInput): Person {
+  const { exists, selectColumns } = getPeopleColumns(db);
+  if (!exists) {
+    throw new NotFoundError(`Person not found: ${input.id}`);
+  }
+  const where = ['id = ?'];
+  if (!input.includeDeleted) {
+    where.push('deletedAt IS NULL');
+  }
+  const row = db.prepare(`SELECT ${selectColumns.join(', ')} FROM people WHERE ${where.join(' AND ')}`).get<PersonSqliteRow>(input.id);
+  if (!row) {
+    throw new NotFoundError(`Person not found: ${input.id}`);
+  }
+  return mapPersonRow(row);
 }
 
 const runInTransaction = <T>(db: DbClient, fn: () => T): T => {
@@ -399,6 +635,15 @@ const runInTransaction = <T>(db: DbClient, fn: () => T): T => {
       // Best effort rollback.
     }
     throw error;
+  }
+};
+
+const getSettingsForFocus = (db: DbClient): CoreAppData['settings'] => {
+  try {
+    const row = db.prepare('SELECT data FROM settings WHERE id = 1').get<SettingsRow>();
+    return parseJson(row?.data, {});
+  } catch {
+    return {};
   }
 };
 
@@ -450,37 +695,28 @@ export function addTask(db: DbClient, input: AddTaskInput): TaskRow {
       deletedAt: undefined,
       purgedAt: undefined,
     };
+    if (task.isFocusedToday === true) {
+      const existingTasks = listTasks(db, { status: 'all', includeDeleted: false });
+      const projects = listProjects(db);
+      const settings = getSettingsForFocus(db);
+      const focusTaskLimit = normalizeFocusTaskLimit(settings.gtd?.focusTaskLimit);
+      const focusedCount = existingTasks.filter((candidate) => (
+        candidate.isFocusedToday === true
+        && candidate.status !== 'done'
+        && candidate.status !== 'reference'
+      )).length;
+      const focusCandidate: Task = { ...task, isFocusedToday: false };
+      const focusEligibility = getTaskFocusEligibility(focusCandidate, {
+        tasks: [...existingTasks, focusCandidate],
+        projects,
+        showFutureStarts: settings.appearance?.showFutureStarts,
+      });
+      if (!focusEligibility.eligible || focusedCount >= focusTaskLimit) {
+        task.isFocusedToday = false;
+      }
+    }
 
-    const { hasOrderNum } = getTaskColumns(db);
-    const insertColumns = [
-      'id',
-      'title',
-      'status',
-      'priority',
-      'energyLevel',
-      'assignedTo',
-      'taskMode',
-      'startTime',
-      'dueDate',
-      'recurrence',
-      'pushCount',
-      'tags',
-      'contexts',
-      'checklist',
-      'description',
-      'attachments',
-      'location',
-      'projectId',
-      ...(hasOrderNum ? ['orderNum'] : []),
-      'isFocusedToday',
-      'timeEstimate',
-      'reviewAt',
-      'completedAt',
-      'createdAt',
-      'updatedAt',
-      'deletedAt',
-      'purgedAt',
-    ];
+    const { insertColumns } = getTaskColumns(db);
     const insert = db.prepare(`
       INSERT INTO tasks (
         ${insertColumns.join(', ')}
@@ -488,60 +724,15 @@ export function addTask(db: DbClient, input: AddTaskInput): TaskRow {
         ${insertColumns.map((col) => `@${col}`).join(', ')}
       )
     `);
-
-    insert.run({
-      id: task.id,
-      title: task.title,
-      status: task.status,
-      priority: task.priority ?? null,
-      energyLevel: task.energyLevel ?? null,
-      assignedTo: task.assignedTo ?? null,
-      taskMode: task.taskMode ?? null,
-      startTime: task.startTime ?? null,
-      dueDate: task.dueDate ?? null,
-      recurrence: task.recurrence ? JSON.stringify(task.recurrence) : null,
-      pushCount: task.pushCount ?? null,
-      tags: JSON.stringify(task.tags ?? []),
-      contexts: JSON.stringify(task.contexts ?? []),
-      checklist: task.checklist ? JSON.stringify(task.checklist) : null,
-      description: task.description ?? null,
-      attachments: task.attachments ? JSON.stringify(task.attachments) : null,
-      location: task.location ?? null,
-      projectId: task.projectId ?? null,
-      ...(hasOrderNum ? { orderNum: task.orderNum ?? null } : {}),
-      isFocusedToday: task.isFocusedToday ? 1 : 0,
-      timeEstimate: task.timeEstimate ?? null,
-      reviewAt: task.reviewAt ?? null,
-      completedAt: task.completedAt ?? null,
-      createdAt: task.createdAt,
-      updatedAt: task.updatedAt,
-      deletedAt: task.deletedAt ?? null,
-      purgedAt: task.purgedAt ?? null,
-    });
+    const taskValues = taskToSqliteRow(task);
+    const taskSqliteRow = Object.fromEntries(
+      TASK_SQLITE_COLUMNS
+        .map((column, index) => [column, taskValues[index]] as const)
+        .filter(([column]) => insertColumns.includes(column))
+    );
+    insert.run(taskSqliteRow);
 
     return task as TaskRow;
-  });
-}
-
-export function completeTask(db: DbClient, input: CompleteTaskInput): TaskRow {
-  return runInTransaction(db, () => {
-    const now = new Date().toISOString();
-    const update = db.prepare(`
-      UPDATE tasks
-      SET status = 'done', completedAt = ?, updatedAt = ?
-      WHERE id = ? AND deletedAt IS NULL
-    `);
-    const info = update.run(now, now, input.id);
-    if (!info.changes || info.changes === 0) {
-      throw new NotFoundError(`Task not found: ${input.id}`);
-    }
-
-    const { selectColumns } = getTaskColumns(db);
-    const row = db.prepare(`SELECT ${selectColumns.join(', ')} FROM tasks WHERE id = ?`).get(input.id);
-    if (!row) {
-      throw new NotFoundError(`Task not found after update: ${input.id}`);
-    }
-    return mapTaskRow(row);
   });
 }
 
@@ -550,6 +741,7 @@ export type UpdateTaskInput = {
   title?: string;
   status?: TaskStatus;
   projectId?: string | null;
+  sectionId?: string | null;
   dueDate?: string | null;
   startTime?: string | null;
   contexts?: string[] | null;
@@ -562,125 +754,3 @@ export type UpdateTaskInput = {
   reviewAt?: string | null;
   isFocusedToday?: boolean;
 };
-
-export function updateTask(db: DbClient, input: UpdateTaskInput): TaskRow {
-  return runInTransaction(db, () => {
-    const { selectColumns } = getTaskColumns(db);
-    const existing = db.prepare(`SELECT ${selectColumns.join(', ')} FROM tasks WHERE id = ? AND deletedAt IS NULL`).get(input.id);
-    if (!existing) {
-      throw new NotFoundError(`Task not found: ${input.id}`);
-    }
-    const current = mapTaskRow(existing);
-    const now = new Date().toISOString();
-
-    const updated: TaskRow = {
-      ...current,
-      title: input.title ?? current.title,
-      status: parseTaskStatusInput(input.status) ?? current.status,
-      projectId: input.projectId === null ? undefined : input.projectId ?? current.projectId,
-      dueDate: input.dueDate === null ? undefined : input.dueDate ?? current.dueDate,
-      startTime: input.startTime === null ? undefined : input.startTime ?? current.startTime,
-      contexts: input.contexts === null ? [] : input.contexts ?? current.contexts ?? [],
-      tags: input.tags === null ? [] : input.tags ?? current.tags ?? [],
-      description: input.description === null ? undefined : input.description ?? current.description,
-      priority: input.priority === null ? undefined : input.priority ?? current.priority,
-      energyLevel: input.energyLevel === null ? undefined : input.energyLevel ?? current.energyLevel,
-      assignedTo: input.assignedTo === null ? undefined : input.assignedTo ?? current.assignedTo,
-      timeEstimate: input.timeEstimate === null ? undefined : input.timeEstimate ?? current.timeEstimate,
-      reviewAt: input.reviewAt === null ? undefined : input.reviewAt ?? current.reviewAt,
-      isFocusedToday: input.isFocusedToday ?? current.isFocusedToday,
-      updatedAt: now,
-    };
-
-    const update = db.prepare(`
-      UPDATE tasks
-      SET title = @title,
-          status = @status,
-          projectId = @projectId,
-          dueDate = @dueDate,
-          startTime = @startTime,
-          contexts = @contexts,
-          tags = @tags,
-          description = @description,
-          priority = @priority,
-          energyLevel = @energyLevel,
-          assignedTo = @assignedTo,
-          timeEstimate = @timeEstimate,
-          reviewAt = @reviewAt,
-          isFocusedToday = @isFocusedToday,
-          updatedAt = @updatedAt
-      WHERE id = @id
-    `);
-
-    update.run({
-      id: updated.id,
-      title: updated.title,
-      status: updated.status,
-      projectId: updated.projectId ?? null,
-      dueDate: updated.dueDate ?? null,
-      startTime: updated.startTime ?? null,
-      contexts: JSON.stringify(updated.contexts ?? []),
-      tags: JSON.stringify(updated.tags ?? []),
-      description: updated.description ?? null,
-      priority: updated.priority ?? null,
-      energyLevel: updated.energyLevel ?? null,
-      assignedTo: updated.assignedTo ?? null,
-      timeEstimate: updated.timeEstimate ?? null,
-      reviewAt: updated.reviewAt ?? null,
-      isFocusedToday: updated.isFocusedToday ? 1 : 0,
-      updatedAt: updated.updatedAt,
-    });
-
-    const row = db.prepare(`SELECT ${selectColumns.join(', ')} FROM tasks WHERE id = ?`).get(input.id);
-    if (!row) {
-      throw new NotFoundError(`Task not found after update: ${input.id}`);
-    }
-    return mapTaskRow(row);
-  });
-}
-
-export type DeleteTaskInput = { id: string };
-
-export function deleteTask(db: DbClient, input: DeleteTaskInput): TaskRow {
-  return runInTransaction(db, () => {
-    const now = new Date().toISOString();
-    const update = db.prepare(`
-      UPDATE tasks
-      SET deletedAt = ?, updatedAt = ?
-      WHERE id = ? AND deletedAt IS NULL
-    `);
-    const info = update.run(now, now, input.id);
-    if (!info.changes || info.changes === 0) {
-      throw new NotFoundError(`Task not found or already deleted: ${input.id}`);
-    }
-    const { selectColumns } = getTaskColumns(db);
-    const row = db.prepare(`SELECT ${selectColumns.join(', ')} FROM tasks WHERE id = ?`).get(input.id);
-    if (!row) {
-      throw new NotFoundError(`Task not found after delete: ${input.id}`);
-    }
-    return mapTaskRow(row);
-  });
-}
-
-export type RestoreTaskInput = { id: string };
-
-export function restoreTask(db: DbClient, input: RestoreTaskInput): TaskRow {
-  return runInTransaction(db, () => {
-    const now = new Date().toISOString();
-    const update = db.prepare(`
-      UPDATE tasks
-      SET deletedAt = NULL, updatedAt = ?
-      WHERE id = ? AND deletedAt IS NOT NULL
-    `);
-    const info = update.run(now, input.id);
-    if (!info.changes || info.changes === 0) {
-      throw new NotFoundError(`Task not found or not deleted: ${input.id}`);
-    }
-    const { selectColumns } = getTaskColumns(db);
-    const row = db.prepare(`SELECT ${selectColumns.join(', ')} FROM tasks WHERE id = ?`).get(input.id);
-    if (!row) {
-      throw new NotFoundError(`Task not found after restore: ${input.id}`);
-    }
-    return mapTaskRow(row);
-  });
-}

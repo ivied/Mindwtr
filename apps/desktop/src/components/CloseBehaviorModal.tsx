@@ -1,3 +1,4 @@
+import { ModalPortal } from './ModalPortal';
 import { Button } from './ui/Button';
 
 type CloseBehaviorModalProps = {
@@ -31,7 +32,12 @@ export function CloseBehaviorModal({
 }: CloseBehaviorModalProps) {
     if (!isOpen) return null;
     return (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <ModalPortal>
+        <div
+            className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+            role="dialog"
+            aria-modal="true"
+        >
             <div className="bg-card border border-border rounded-lg shadow-xl max-w-md w-full mx-4">
                 <div className="p-6 border-b border-border">
                     <h3 className="text-lg font-semibold">{title}</h3>
@@ -61,5 +67,6 @@ export function CloseBehaviorModal({
                 </div>
             </div>
         </div>
+        </ModalPortal>
     );
 }

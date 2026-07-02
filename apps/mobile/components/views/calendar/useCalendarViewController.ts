@@ -1,17 +1,38 @@
-import { Alert, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
+import {
+  Alert,
+  AppState,
+  type AlertButton,
+  type AppStateStatus,
+  type LayoutChangeEvent,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+} from 'react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DEFAULT_CALENDAR_DAY_END_HOUR,
   DEFAULT_CALENDAR_DAY_START_HOUR,
+  DEFAULT_PROJECT_COLOR,
   addCalendarMinutes,
+  addCalendarMonths as addCalendarSystemMonths,
+  buildCalendarEventTaskDraft,
+  buildCalendarQuickAddTaskDraft,
+  expandCalendarRecurringTasks,
   formatCalendarTimeInputValue,
   formatI18nTemplate,
+  getCalendarPlanningCandidates,
+  getCalendarMonthIndex,
   normalizeDateFormatSetting,
+  resolveCalendarSystemSetting,
   resolveDateLocaleTag,
   findFreeSlotForDay as findCalendarFreeSlotForDay,
   getEnglishI18nValue,
-  hasTimeComponent,
+  getWeekStartsOnIndex,
+  getQuickAddProjectInitialProps,
   isSlotFreeForDay as isCalendarSlotFreeForDay,
+  isProjectedRecurringTask,
+  isProjectedRecurringTaskId,
+  isTaskInActiveProject,
   minutesToTimeEstimate,
   normalizeCalendarDurationMinutes,
   parseCalendarTimeOnDate,
@@ -19,6 +40,8 @@ import {
   safeParseDate,
   safeParseDueDate,
   shallow,
+  startOfCalendarMonth,
+  getExternalCalendarColorForId,
   timeEstimateToMinutes as resolveTimeEstimateToMinutes,
   translateText,
   type CalendarSettings,
@@ -32,7 +55,7 @@ import { useTheme } from '../../../contexts/theme-context';
 import { useToast } from '../../../contexts/toast-context';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import { useMobileAreaFilter } from '@/hooks/use-mobile-area-filter';
-import { taskMatchesAreaFilter } from '@/lib/area-filter';
+import { taskMatchesAreaFilter } from '@mindwtr/core';
 import { useLanguage } from '../../../contexts/language-context';
 import { canOpenExternalCalendarEvent, fetchExternalCalendarEvents, openExternalCalendarEvent } from '../../../lib/external-calendar';
 import { logError } from '../../../lib/app-log';
@@ -46,14 +69,33 @@ import {
   needsCalendarSelectedDate,
   type CalendarViewMode,
 } from './calendar-view-mode';
+import {
+  addCalendarMapItem,
+  buildScheduledTasksByDate,
+  calendarDateKey,
+  isAllDayScheduledTask,
+  isTimedScheduledTask,
+} from './calendar-task-items';
+import {
+  EXTERNAL_CALENDAR_REFRESH_THROTTLE_MS,
+  shouldRefreshExternalCalendarOnAppStateChange,
+} from './calendar-external-refresh';
 
-function getDaysInMonth(year: number, month: number): number {
-  return new Date(year, month + 1, 0).getDate();
+function getFirstDayOfMonth(monthDate: Date, weekStartIndex: number): number {
+  const day = monthDate.getDay();
+  return (day - weekStartIndex + 7) % 7;
 }
 
-function getFirstDayOfMonth(year: number, month: number, weekStartIndex: number): number {
-  const day = new Date(year, month, 1).getDay();
-  return (day - weekStartIndex + 7) % 7;
+function getCalendarMonthDates(monthDate: Date, calendarSystem: string): Date[] {
+  const firstOfMonth = startOfCalendarMonth(monthDate, calendarSystem);
+  const monthIndex = getCalendarMonthIndex(firstOfMonth, calendarSystem);
+  const dates: Date[] = [];
+  const cursor = new Date(firstOfMonth);
+  while (dates.length < 32 && getCalendarMonthIndex(cursor, calendarSystem) === monthIndex) {
+    dates.push(new Date(cursor));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return dates;
 }
 
 function getWeekStart(date: Date, weekStartIndex: number): Date {
@@ -94,46 +136,22 @@ type CalendarTaskComposerState = {
   title: string;
 };
 
-const SOURCE_COLORS = ['#2563EB', '#7C3AED', '#DB2777', '#EA580C', '#059669', '#0891B2', '#4F46E5', '#65A30D'];
-const sourceColorCache = new Map<string, string>();
-
-const sourceColorForId = (sourceId: string): string => {
-  const cached = sourceColorCache.get(sourceId);
-  if (cached) return cached;
-  let hash = 0;
-  for (let index = 0; index < sourceId.length; index += 1) {
-    hash = ((hash << 5) - hash) + sourceId.charCodeAt(index);
-    hash |= 0;
-  }
-  const color = SOURCE_COLORS[Math.abs(hash) % SOURCE_COLORS.length] ?? SOURCE_COLORS[0];
-  sourceColorCache.set(sourceId, color);
-  return color;
-};
+const sourceColorForId = (sourceId: string, override?: string): string => (
+  override ?? getExternalCalendarColorForId(sourceId || 'calendar')
+);
 
 const addMinutesToDate = addCalendarMinutes;
 const formatTimeInputValue = formatCalendarTimeInputValue;
 const parseTimeOnDate = parseCalendarTimeOnDate;
 
-const calendarDateKey = (date: Date): string => (
-  `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
-);
-
-const addMapItem = <T,>(map: Map<string, T[]>, date: Date, item: T) => {
-  const key = calendarDateKey(date);
-  const items = map.get(key);
-  if (items) {
-    items.push(item);
-    return;
-  }
-  map.set(key, [item]);
-};
-
 const normalizeDurationMinutes = normalizeCalendarDurationMinutes;
 
 export function useCalendarViewController() {
-  const { tasks, projects, addTask, updateTask, deleteTask, updateSettings, settings } = useTaskStore((state) => ({
+  const { tasks, projects, areas, addTask, addProject, updateTask, deleteTask, updateSettings, settings } = useTaskStore((state) => ({
     tasks: state.tasks,
     projects: state.projects,
+    areas: state.areas,
+    addProject: state.addProject,
     addTask: state.addTask,
     updateTask: state.updateTask,
     deleteTask: state.deleteTask,
@@ -170,8 +188,13 @@ export function useCalendarViewController() {
   };
 
   const timeEstimatesEnabled = settings?.features?.timeEstimates !== false;
+  const prioritiesEnabled = settings?.features?.priorities !== false;
   const calendarSettings: CalendarSettings | undefined = settings?.calendar;
   const today = new Date();
+  const systemLocale = typeof Intl !== 'undefined' && typeof Intl.DateTimeFormat === 'function'
+    ? Intl.DateTimeFormat().resolvedOptions().locale
+    : '';
+  const calendarSystem = resolveCalendarSystemSetting(settings?.calendarSystem, { language, systemLocale });
   const initialViewMode = coerceCalendarViewMode(calendarSettings?.viewMode);
   const calendarWeekVisibleDays = coerceCalendarWeekVisibleDays(calendarSettings?.weekVisibleDays);
   const [currentMonth, setCurrentMonth] = useState(today.getMonth());
@@ -186,7 +209,11 @@ export function useCalendarViewController() {
   const [externalEvents, setExternalEvents] = useState<ExternalCalendarEvent[]>([]);
   const [externalError, setExternalError] = useState<string | null>(null);
   const [isExternalLoading, setIsExternalLoading] = useState(false);
+  const [externalRefreshToken, setExternalRefreshToken] = useState(0);
   const [nowTick, setNowTick] = useState(() => Date.now());
+  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+  const hasHandledInitialFocusRef = useRef(false);
+  const lastExternalRefreshRequestMsRef = useRef(0);
   const timelineScrollRef = useRef<any>(null);
   const timelineScrollOffsetRef = useRef(0);
   const timelineContentTopRef = useRef(0);
@@ -255,18 +282,23 @@ export function useCalendarViewController() {
     ensureSelectedDateForViewMode(nextMode);
   }, [calendarSettings?.viewMode, ensureSelectedDateForViewMode]);
 
-  const weekStartIndex = settings?.weekStart === 'monday' ? 1 : 0;
-  const daysInMonth = getDaysInMonth(currentYear, currentMonth);
-  const firstDay = getFirstDayOfMonth(currentYear, currentMonth, weekStartIndex);
-  const systemLocale = typeof Intl !== 'undefined' && typeof Intl.DateTimeFormat === 'function'
-    ? Intl.DateTimeFormat().resolvedOptions().locale
-    : '';
+  const weekStartIndex = getWeekStartsOnIndex(settings?.weekStart);
+  const currentMonthDate = useMemo(
+    () => startOfCalendarMonth(new Date(currentYear, currentMonth, 1), calendarSystem),
+    [calendarSystem, currentMonth, currentYear],
+  );
+  const monthDates = useMemo(
+    () => getCalendarMonthDates(currentMonthDate, calendarSystem),
+    [calendarSystem, currentMonthDate],
+  );
+  const firstDay = getFirstDayOfMonth(currentMonthDate, weekStartIndex);
   const locale = resolveDateLocaleTag({
     language,
     dateFormat: normalizeDateFormatSetting(settings?.dateFormat),
+    calendarSystem: settings?.calendarSystem,
     systemLocale,
   });
-  const monthLabel = new Date(currentYear, currentMonth, 1).toLocaleDateString(locale, {
+  const monthLabel = currentMonthDate.toLocaleDateString(locale, {
     year: 'numeric',
     month: 'long',
   });
@@ -275,8 +307,8 @@ export function useCalendarViewController() {
     return base.toLocaleDateString(locale, { weekday: 'short' });
   });
   const weekStartDate = useMemo(() => (
-    getWeekStart(selectedDate ?? new Date(currentYear, currentMonth, 1), weekStartIndex)
-  ), [currentMonth, currentYear, selectedDate, weekStartIndex]);
+    getWeekStart(selectedDate ?? currentMonthDate, weekStartIndex)
+  ), [currentMonthDate, selectedDate, weekStartIndex]);
   const weekStartTime = weekStartDate.getTime();
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, index) => {
     const date = new Date(weekStartTime);
@@ -293,10 +325,16 @@ export function useCalendarViewController() {
   }), [selectedDate, viewMode, weekStartTime]);
 
   const areaVisibleTasks = useMemo(() => (
-    tasks.filter((task) => taskMatchesAreaFilter(task, resolvedAreaFilter, projectById, areaById))
+    tasks.filter((task) => (
+      isTaskInActiveProject(task, projectById)
+      && taskMatchesAreaFilter(task, resolvedAreaFilter, projectById, areaById)
+    ))
   ), [tasks, resolvedAreaFilter, projectById, areaById]);
 
-  const visibleTasks = areaVisibleTasks;
+  const visibleTasks = useMemo(() => {
+    const projectedAtIso = new Date(nowTick).toISOString();
+    return areaVisibleTasks.flatMap((task) => expandCalendarRecurringTasks(task, projectedAtIso));
+  }, [areaVisibleTasks, nowTick]);
 
   const schedulableTasks = useMemo(() => (
     areaVisibleTasks
@@ -306,23 +344,14 @@ export function useCalendarViewController() {
 
   const visibleSchedulableTasks = schedulableTasks;
 
-  const scheduledTasksByDate = useMemo(() => {
-    const map = new Map<string, Task[]>();
-    for (const task of visibleTasks) {
-      if (!task.startTime) continue;
-      if (!hasTimeComponent(task.startTime)) continue;
-      const startTime = safeParseDate(task.startTime);
-      if (startTime) addMapItem(map, startTime, task);
-    }
-    return map;
-  }, [visibleTasks]);
+  const scheduledTasksByDate = useMemo(() => buildScheduledTasksByDate(visibleTasks), [visibleTasks]);
 
   const deadlineTasksByDate = useMemo(() => {
     const map = new Map<string, Task[]>();
     for (const task of visibleTasks) {
       if (!task.dueDate) continue;
       const dueDate = safeParseDueDate(task.dueDate);
-      if (dueDate) addMapItem(map, dueDate, task);
+      if (dueDate) addCalendarMapItem(map, dueDate, task);
     }
     return map;
   }, [visibleTasks]);
@@ -339,7 +368,7 @@ export function useCalendarViewController() {
         endDay.setDate(endDay.getDate() - 1);
       }
       for (let guard = 0; day.getTime() <= endDay.getTime() && guard < 370; guard += 1) {
-        addMapItem(map, day, event);
+        addCalendarMapItem(map, day, event);
         day.setDate(day.getDate() + 1);
       }
     }
@@ -437,28 +466,37 @@ export function useCalendarViewController() {
     const rangeStart = viewMode === 'week'
       ? weekStart
       : viewMode === 'schedule'
-        ? new Date(selectedDate ?? new Date(currentYear, currentMonth, 1))
-        : new Date(currentYear, currentMonth, 1, 0, 0, 0, 0);
+        ? new Date(selectedDate ?? currentMonthDate)
+        : new Date(currentMonthDate);
     rangeStart.setHours(0, 0, 0, 0);
     const rangeEnd = viewMode === 'week'
       ? new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + 6, 23, 59, 59, 999)
       : viewMode === 'schedule'
         ? new Date(rangeStart.getFullYear(), rangeStart.getMonth(), rangeStart.getDate() + 45, 23, 59, 59, 999)
-        : new Date(currentYear, currentMonth + 1, 0, 23, 59, 59, 999);
+        : new Date(addCalendarSystemMonths(currentMonthDate, 1, calendarSystem).getTime() - 1);
     return { rangeStart, rangeEnd };
-  }, [currentMonth, currentYear, selectedDate, viewMode, weekStartTime]);
+  }, [calendarSystem, currentMonthDate, selectedDate, viewMode, weekStartTime]);
 
   const externalRangeStartMs = externalCalendarRange.rangeStart.getTime();
   const externalRangeEndMs = externalCalendarRange.rangeEnd.getTime();
+  const externalCalendarSettings = settings?.externalCalendars;
+
+  const requestExternalCalendarRefresh = useCallback(() => {
+    const nowMs = Date.now();
+    if (nowMs - lastExternalRefreshRequestMsRef.current < EXTERNAL_CALENDAR_REFRESH_THROTTLE_MS) return;
+    lastExternalRefreshRequestMsRef.current = nowMs;
+    setExternalRefreshToken((token) => token + 1);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     setIsExternalLoading(true);
     setExternalError(null);
     const rangeStart = new Date(externalRangeStartMs);
     const rangeEnd = new Date(externalRangeEndMs);
 
-    fetchExternalCalendarEvents(rangeStart, rangeEnd)
+    fetchExternalCalendarEvents(rangeStart, rangeEnd, { signal: controller?.signal })
       .then(({ calendars, events }) => {
         if (cancelled) return;
         setExternalCalendars(calendars);
@@ -477,21 +515,54 @@ export function useCalendarViewController() {
 
     return () => {
       cancelled = true;
+      controller?.abort();
     };
-  }, [externalRangeEndMs, externalRangeStartMs]);
+  }, [externalCalendarSettings, externalRangeEndMs, externalRangeStartMs, externalRefreshToken]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!hasHandledInitialFocusRef.current) {
+        hasHandledInitialFocusRef.current = true;
+        return undefined;
+      }
+      requestExternalCalendarRefresh();
+      return undefined;
+    }, [requestExternalCalendarRefresh]),
+  );
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (shouldRefreshExternalCalendarOnAppStateChange(appStateRef.current, nextAppState)) {
+        requestExternalCalendarRefresh();
+      }
+      appStateRef.current = nextAppState;
+    });
+
+    return () => subscription.remove();
+  }, [requestExternalCalendarRefresh]);
 
   const calendarNameById = useMemo(
     () => new Map(externalCalendars.map((calendar) => [calendar.id, calendar.name])),
     [externalCalendars],
   );
+  const calendarColorById = useMemo(
+    () => new Map(externalCalendars.map((calendar) => [calendar.id, sourceColorForId(calendar.id, calendar.color)])),
+    [externalCalendars],
+  );
+  const getSourceColorForId = useCallback(
+    (sourceId: string) => calendarColorById.get(sourceId) ?? sourceColorForId(sourceId),
+    [calendarColorById],
+  );
 
-  const nextQuickScheduleCandidates = useMemo(() => {
+  const planningTasks = useMemo(() => {
     if (!selectedDate) return [];
-    return visibleSchedulableTasks
-      .filter((task) => task.status === 'next')
-      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-      .slice(0, 6);
-  }, [selectedDate, visibleSchedulableTasks]);
+    return getCalendarPlanningCandidates(areaVisibleTasks, {
+      limit: 6,
+      now: new Date(nowTick),
+      prioritizeByPriority: prioritiesEnabled,
+      projects,
+    });
+  }, [areaVisibleTasks, nowTick, prioritiesEnabled, projects, selectedDate]);
 
   const searchCandidates = useMemo(() => {
     if (!selectedDate) return [];
@@ -646,7 +717,42 @@ export function useCalendarViewController() {
       if (selectedTaskId) {
         await updateTask(selectedTaskId, updates);
       } else {
-        const result = await addTask(calendarComposer.title.trim(), { status: 'next', ...updates });
+        const draft = buildCalendarQuickAddTaskDraft(calendarComposer.title, {
+          areas,
+          durationMinutes,
+          now: new Date(),
+          projects,
+          start,
+        });
+        if (draft.invalidDateCommands.length > 0) {
+          setCalendarComposer((prev) => prev ? {
+            ...prev,
+            error: `${t('quickAdd.invalidDateCommand')}: ${draft.invalidDateCommands.join(', ')}`,
+          } : prev);
+          return;
+        }
+        if (draft.dateCoherenceIssues.some((issue) => issue.code === 'start_after_due')) {
+          setCalendarComposer((prev) => prev ? { ...prev, error: t('task.dateIssue.startAfterDue') } : prev);
+          return;
+        }
+        if (!draft.title) {
+          setCalendarComposer((prev) => prev ? { ...prev, error: t('calendar.enterTaskTitle') } : prev);
+          return;
+        }
+        if (!draft.props.projectId && draft.projectTitle) {
+          const created = await addProject(
+            draft.projectTitle,
+            DEFAULT_PROJECT_COLOR,
+            getQuickAddProjectInitialProps(draft.props),
+          );
+          if (!created) {
+            setCalendarComposer((prev) => prev ? { ...prev, error: t('calendar.saveTaskFailed') } : prev);
+            return;
+          }
+          draft.props.projectId = created.id;
+          draft.props.areaId = undefined;
+        }
+        const result = await addTask(draft.title, draft.props);
         if (!result.success) {
           setCalendarComposer((prev) => prev ? { ...prev, error: result.error ?? t('calendar.saveTaskFailed') } : prev);
           return;
@@ -799,13 +905,15 @@ export function useCalendarViewController() {
     return `${startLabel}-${endLabel}`;
   };
 
-  const getScheduleSlotLabel = (date: Date, task: Task) => {
+  const getScheduleSlotLabel = (date: Date | null, task: Task) => {
+    if (!date) return null;
     const durationMinutes = timeEstimateToMinutes(task.timeEstimate);
     const slot = findFreeSlotForDay(date, durationMinutes, task.id);
     return slot ? formatTimeRange(slot, durationMinutes) : null;
   };
 
   const commitTaskDrag = (taskId: string, dayStartMs: number, startMinutes: number, durationMinutes: number) => {
+    if (isProjectedRecurringTaskId(taskId)) return;
     const day = new Date(dayStartMs);
     const nextStart = new Date(dayStartMs + startMinutes * 60 * 1000);
     const ok = isSlotFreeForDay(day, nextStart, durationMinutes, taskId);
@@ -834,6 +942,15 @@ export function useCalendarViewController() {
   const openTaskActions = (taskId: string) => {
     const task = visibleTasks.find((item) => item.id === taskId);
     if (!task) return;
+    if (isProjectedRecurringTask(task)) {
+      Alert.alert(
+        task.title,
+        tr('calendar.projectedRecurrenceDescription'),
+        [{ text: t('common.ok') }],
+        { cancelable: true },
+      );
+      return;
+    }
 
     const buttons = [
       {
@@ -867,17 +984,7 @@ export function useCalendarViewController() {
     Alert.alert(task.title, undefined, buttons, { cancelable: true });
   };
 
-  const openExternalEvent = (event: ExternalCalendarEvent) => {
-    if (!canOpenExternalCalendarEvent(event)) {
-      showToast({
-        title: t('calendar.cannotOpenEventTitle'),
-        message: t('calendar.openDeviceEventOnly'),
-        tone: 'info',
-        durationMs: 3600,
-      });
-      return;
-    }
-
+  const openExternalEventInCalendar = (event: ExternalCalendarEvent) => {
     openExternalCalendarEvent(event)
       .then((opened) => {
         if (opened) return;
@@ -899,27 +1006,84 @@ export function useCalendarViewController() {
       });
   };
 
-  const handlePrevMonth = () => {
-    if (currentMonth === 0) {
-      setCurrentMonth(11);
-      setCurrentYear(currentYear - 1);
-    } else {
-      setCurrentMonth(currentMonth - 1);
+  const createTaskFromExternalEvent = async (event: ExternalCalendarEvent) => {
+    try {
+      const { initialProps, title } = buildCalendarEventTaskDraft(event, {
+        calendarName: calendarNameById.get(event.sourceId),
+        fallbackTitle: t('calendar.eventFallbackTitle'),
+      });
+      const result = await addTask(title, initialProps);
+      if (!result.success) {
+        showToast({
+          title: t('calendar.saveTaskFailed'),
+          message: result.error ?? t('calendar.saveTaskFailed'),
+          tone: 'warning',
+          durationMs: 4200,
+        });
+        return;
+      }
+
+      const nextDate = safeParseDate(initialProps.startTime ?? initialProps.dueDate ?? event.start);
+      if (nextDate) {
+        setSelectedDate(nextDate);
+        setCurrentMonth(nextDate.getMonth());
+        setCurrentYear(nextDate.getFullYear());
+      }
+      showToast({
+        title: t('calendar.eventTaskCreatedTitle'),
+        message: t('calendar.eventTaskCreated'),
+        tone: 'success',
+        durationMs: 3000,
+      });
+    } catch (error) {
+      logCalendarError(error);
+      showToast({
+        title: t('calendar.saveTaskFailed'),
+        message: t('calendar.saveTaskFailed'),
+        tone: 'warning',
+        durationMs: 4200,
+      });
     }
+  };
+
+  const openExternalEvent = (event: ExternalCalendarEvent) => {
+    const buttons: AlertButton[] = [
+      {
+        text: t('calendar.createTaskFromEvent'),
+        onPress: () => {
+          void createTaskFromExternalEvent(event);
+        },
+      },
+    ];
+
+    if (canOpenExternalCalendarEvent(event)) {
+      buttons.push({
+        text: t('calendar.openInCalendar'),
+        onPress: () => openExternalEventInCalendar(event),
+      });
+    }
+
+    buttons.push({ text: t('common.cancel'), style: 'cancel' });
+    Alert.alert(event.title || t('calendar.eventFallbackTitle'), undefined, buttons, { cancelable: true });
+  };
+
+  const setVisibleMonth = (date: Date) => {
+    const nextMonth = startOfCalendarMonth(date, calendarSystem);
+    setCurrentMonth(nextMonth.getMonth());
+    setCurrentYear(nextMonth.getFullYear());
+  };
+
+  const handlePrevMonth = () => {
+    setVisibleMonth(addCalendarSystemMonths(currentMonthDate, -1, calendarSystem));
   };
 
   const handleNextMonth = () => {
-    if (currentMonth === 11) {
-      setCurrentMonth(0);
-      setCurrentYear(currentYear + 1);
-    } else {
-      setCurrentMonth(currentMonth + 1);
-    }
+    setVisibleMonth(addCalendarSystemMonths(currentMonthDate, 1, calendarSystem));
   };
 
-  const calendarDays: (number | null)[] = [];
+  const calendarDays: (Date | null)[] = [];
   for (let i = 0; i < firstDay; i++) calendarDays.push(null);
-  for (let day = 1; day <= daysInMonth; day++) calendarDays.push(day);
+  calendarDays.push(...monthDates);
 
   const selectedDateExternalEvents = useMemo(
     () => (selectedDate ? getExternalEventsForDate(selectedDate) : []),
@@ -936,6 +1100,15 @@ export function useCalendarViewController() {
   const selectedDateAllDayEvents = useMemo(
     () => selectedDateExternalEvents.filter((event) => event.allDay),
     [selectedDateExternalEvents],
+  );
+  const selectedDateAllDayScheduledTasks = useMemo(
+    () => selectedDateScheduled.filter((task) =>
+      isAllDayScheduledTask(task)
+      && !task.deletedAt
+      && task.status !== 'done'
+      && task.status !== 'reference'
+    ),
+    [selectedDateScheduled],
   );
   const selectedDateTimedEvents = useMemo(
     () => selectedDateExternalEvents.filter((event) => !event.allDay),
@@ -956,7 +1129,12 @@ export function useCalendarViewController() {
   const selectedDayMinutes = DAY_TIMELINE_MINUTES;
   const timelineHeight = selectedDayMinutes * PIXELS_PER_MINUTE;
   const selectedDayScheduledTasks = useMemo(
-    () => selectedDateScheduled.filter((task) => !task.deletedAt && task.status !== 'done' && task.status !== 'reference'),
+    () => selectedDateScheduled.filter((task) =>
+      isTimedScheduledTask(task)
+      && !task.deletedAt
+      && task.status !== 'done'
+      && task.status !== 'reference'
+    ),
     [selectedDateScheduled],
   );
   const selectedDayNowTop = useMemo(() => {
@@ -974,11 +1152,16 @@ export function useCalendarViewController() {
         day: 'numeric',
       })
     : '';
+  const selectedDatePlanningLabel = selectedDate
+    ? tr('calendar.planningForDate', {
+        date: selectedDate.toLocaleDateString(locale, { weekday: 'short', month: 'short', day: 'numeric' }),
+      })
+    : '';
   const selectedDayModeLabel = selectedDate
     ? `${selectedDate.toLocaleDateString(locale, { weekday: 'short', month: 'long', day: 'numeric' })}${isToday(selectedDate) ? ` · ${t('filters.datePreset.today')}` : ''}`
     : '';
   const scheduleSections = useMemo(() => {
-    const start = selectedDate ?? new Date(currentYear, currentMonth, 1);
+    const start = selectedDate ?? currentMonthDate;
     const sections: { date: Date; id: string; items: ReturnType<typeof getCalendarItemsForDate> }[] = [];
     for (let offset = 0; offset < 45; offset += 1) {
       const date = new Date(start);
@@ -989,7 +1172,7 @@ export function useCalendarViewController() {
       if (sections.length >= 18) break;
     }
     return sections;
-  }, [currentMonth, currentYear, getCalendarItemsForDate, selectedDate]);
+  }, [currentMonthDate, getCalendarItemsForDate, selectedDate]);
 
   const closeEditingTask = () => setEditingTask(null);
   const saveEditingTask = (taskId: string, updates: Partial<Task>) => updateTask(taskId, updates);
@@ -1003,6 +1186,7 @@ export function useCalendarViewController() {
     calendarComposer,
     calendarComposerCandidates,
     calendarComposerSelectedTask,
+    calendarSystem,
     calendarWeekVisibleDays,
     calendarNameById,
     closeCalendarComposer,
@@ -1033,7 +1217,7 @@ export function useCalendarViewController() {
     locale,
     markTaskDone,
     monthLabel,
-    nextQuickScheduleCandidates,
+    planningTasks,
     tr,
     openQuickAddAtDateTime,
     openQuickAddForDate,
@@ -1045,9 +1229,11 @@ export function useCalendarViewController() {
     searchCandidates,
     selectedDate,
     selectedDateAllDayEvents,
+    selectedDateAllDayScheduledTasks,
     selectedDateDeadlines,
     selectedDateExternalEvents,
     selectedDateLongLabel,
+    selectedDatePlanningLabel,
     selectedDateScheduled,
     selectedDateTimedEvents,
     selectedDayMinutes,
@@ -1075,7 +1261,7 @@ export function useCalendarViewController() {
     setViewMode,
     shiftSelectedDate,
     showToast,
-    sourceColorForId,
+    sourceColorForId: getSourceColorForId,
     t,
     tc,
     timeEstimateToMinutes,

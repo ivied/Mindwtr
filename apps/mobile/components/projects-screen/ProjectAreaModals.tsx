@@ -3,6 +3,7 @@ import { Modal, Pressable, ScrollView, Text, TextInput, TouchableOpacity, View }
 import type { Area, Project } from '@mindwtr/core';
 
 import { projectsScreenStyles as styles } from './projects-screen.styles';
+import { useAndroidKeyboardInset } from '../../lib/use-android-keyboard-inset';
 
 type ThemeColors = {
     border: string;
@@ -76,6 +77,7 @@ export function ProjectAreaModals({
     updateArea,
     updateProject,
 }: ProjectAreaModalsProps) {
+    const keyboardInset = useAndroidKeyboardInset(showAreaManager);
     return (
         <>
             <Modal
@@ -141,7 +143,10 @@ export function ProjectAreaModals({
                 presentationStyle={overlayModalPresentation}
                 onRequestClose={onCloseAreaManager}
             >
-                <Pressable style={styles.overlay} onPress={onCloseAreaManager}>
+                <Pressable
+                    style={keyboardInset > 0 ? [styles.overlay, { paddingBottom: keyboardInset }] : styles.overlay}
+                    onPress={onCloseAreaManager}
+                >
                     <Pressable
                         style={[styles.pickerCard, { backgroundColor: tc.cardBg, borderColor: tc.border, maxHeight: pickerCardMaxHeight }]}
                         onPress={(event) => event.stopPropagation()}

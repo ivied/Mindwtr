@@ -18,7 +18,9 @@ use std::fs::OpenOptions;
 use std::io::{self, Read, Write};
 use std::net::TcpListener;
 #[cfg(target_os = "macos")]
-use std::os::raw::c_char;
+use std::os::raw::{c_char, c_int};
+#[cfg(target_os = "linux")]
+use std::os::unix::net::{UnixListener, UnixStream};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::path::Path;
@@ -44,6 +46,7 @@ mod audio;
 mod autostart;
 mod config;
 mod install;
+mod local_api;
 mod logging;
 mod obsidian_paths;
 mod obsidian_watcher;
@@ -53,17 +56,24 @@ mod storage;
 mod sync;
 mod ui;
 
-use audio::{start_audio_recording, stop_audio_recording, transcribe_whisper};
+use audio::{
+    download_parakeet_model, download_whisper_model, start_audio_recording, stop_audio_recording,
+    transcribe_parakeet, transcribe_whisper,
+};
 use autostart::{get_launch_at_startup_enabled, set_launch_at_startup_enabled};
 use config::{
-    check_obsidian_vault_marker, expand_external_calendar_file_scopes, get_ai_key,
-    get_cloud_config, get_external_calendars, get_obsidian_config, get_sync_backend,
+    check_obsidian_vault_marker, expand_external_calendar_file_scopes, expand_obsidian_vault_scope,
+    get_ai_key, get_cloud_config, get_external_calendars, get_obsidian_config, get_sync_backend,
     get_webdav_config, get_webdav_password, set_ai_key, set_cloud_config, set_external_calendars,
     set_obsidian_config, set_sync_backend, set_webdav_config,
 };
 use install::{
-    diagnostics_enabled, get_install_source, get_linux_distro, is_flatpak, is_niri_session,
-    is_windows_store_install,
+    check_microsoft_store_update, diagnostics_enabled, get_install_source, get_linux_distro,
+    is_flatpak, is_niri_session, is_windows_store_install,
+};
+use local_api::{
+    get_local_api_server_status, set_local_api_server_config, start_configured_local_api_server,
+    LocalApiServerState,
 };
 use logging::{append_log_line, clear_log_file, log_ai_debug};
 use obsidian_paths::default_obsidian_inbox_file;
@@ -75,26 +85,31 @@ use obsidian_writer::{
 use platform::{
     cloudkit_account_status, cloudkit_consume_pending_remote_change, cloudkit_delete_records,
     cloudkit_ensure_subscription, cloudkit_ensure_zone, cloudkit_fetch_all_records,
-    cloudkit_fetch_changes, cloudkit_register_for_notifications, cloudkit_save_records,
-    get_macos_calendar_events, get_macos_calendar_permission_status, open_path,
-    request_macos_calendar_permission, set_macos_activation_policy,
+    cloudkit_fetch_attachment_asset, cloudkit_fetch_changes, cloudkit_register_for_notifications,
+    cloudkit_save_attachment_asset, cloudkit_save_records, create_macos_calendar_event,
+    delete_macos_calendar_event, ensure_macos_mindwtr_calendar, get_macos_calendar_events,
+    get_macos_calendar_permission_status, get_macos_writable_calendars, open_path,
+    request_macos_calendar_permission, set_macos_activation_policy, update_macos_calendar_event,
 };
 use storage::{
-    create_data_snapshot, get_config_path_cmd, get_data, get_data_path_cmd, get_db_path_cmd,
-    list_data_snapshots, query_tasks, read_data_json, restore_data_snapshot, save_data, search_fts,
+    create_data_snapshot, delete_calendar_sync_entry, get_all_calendar_sync_entries,
+    get_calendar_sync_entry, get_config_path_cmd, get_config_path_for_startup, get_data,
+    get_data_path_cmd, get_db_path_cmd, list_data_snapshots, query_tasks, read_data_json,
+    restore_data_snapshot, save_data, save_task, search_fts, upsert_calendar_sync_entry,
 };
 use sync::{
-    connect_dropbox, disconnect_dropbox, get_dropbox_access_token, get_dropbox_redirect_uri,
-    get_sync_path, is_dropbox_connected, read_sync_file, set_sync_path, webdav_get_json,
-    webdav_put_json, write_sync_file,
+    cloud_get_json, cloud_put_json, connect_dropbox, disconnect_dropbox, get_dropbox_access_token,
+    get_dropbox_redirect_uri, get_sync_path, is_dropbox_connected, read_sync_file, set_sync_path,
+    webdav_get_json, webdav_put_json, write_sync_file,
 };
 use ui::{
     acknowledge_close_request, apply_global_quick_add_shortcut, consume_quick_add_pending,
-    create_quick_add_window, quit_app, set_global_quick_add_shortcut, set_tray_visible, show_main,
-    show_quick_add_window,
+    create_quick_add_window, get_system_theme_preference, hide_quick_add_window,
+    hide_quick_add_window_for_app, quit_app, set_global_quick_add_shortcut, set_tray_visible,
+    show_main, show_quick_add_window,
 };
 
-#[cfg(test)]
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
 use config::read_config_toml;
 pub(crate) use config::{
     get_keyring_secret, parse_toml_string_value, read_config, set_keyring_secret,
@@ -139,6 +154,14 @@ const DROPBOX_OAUTH_TIMEOUT_SECS: u64 = 180;
 const DROPBOX_TOKEN_REFRESH_SKEW_MS: i64 = 60_000;
 const DROPBOX_DEFAULT_TOKEN_LIFETIME_SECS: i64 = 4 * 60 * 60;
 const QUICK_ADD_CLI_FLAG: &str = "--quick-add";
+#[cfg(target_os = "linux")]
+const FLATPAK_INSTANCE_REQUEST_SHOW: &str = "show\n";
+#[cfg(target_os = "linux")]
+const FLATPAK_INSTANCE_REQUEST_QUICK_ADD: &str = "quick-add\n";
+#[cfg(target_os = "linux")]
+const FLATPAK_INSTANCE_SOCKET_FILE_NAME: &str = "instance.sock";
+#[cfg(target_os = "linux")]
+const FLATPAK_TRAY_ICON_DIR_NAME: &str = "tray-icon";
 const QUICK_ADD_WINDOW_LABEL: &str = "quick-add";
 const QUICK_ADD_WINDOW_URL: &str = "index.html?quickAddWindow=1";
 const QUICK_ADD_TARGET_MAIN: &str = "main";
@@ -148,6 +171,68 @@ const GLOBAL_QUICK_ADD_SHORTCUT_ALTERNATE_N: &str = "Control+Alt+N";
 const GLOBAL_QUICK_ADD_SHORTCUT_ALTERNATE_Q: &str = "Control+Alt+Q";
 const GLOBAL_QUICK_ADD_SHORTCUT_LEGACY: &str = "CommandOrControl+Shift+A";
 const GLOBAL_QUICK_ADD_SHORTCUT_DISABLED: &str = "disabled";
+#[cfg(any(target_os = "windows", test))]
+const WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS_ENV: &str = "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS";
+#[cfg(any(target_os = "windows", test))]
+const WEBVIEW2_DISABLE_GPU_ARG: &str = "--disable-gpu";
+#[cfg(any(target_os = "linux", test))]
+const WEBKIT_DISABLE_DMABUF_RENDERER_ENV: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
+#[cfg(any(target_os = "linux", test))]
+const WEBKIT_DISABLE_DMABUF_RENDERER_VALUE: &str = "1";
+#[cfg(any(target_os = "linux", test))]
+const WEBKIT_DISABLE_COMPOSITING_MODE_ENV: &str = "WEBKIT_DISABLE_COMPOSITING_MODE";
+#[cfg(any(target_os = "linux", test))]
+const WEBKIT_DISABLE_COMPOSITING_MODE_VALUE: &str = "1";
+#[cfg(any(target_os = "linux", test))]
+const MINDWTR_WEBKIT_ENABLE_DMABUF_ENV: &str = "MINDWTR_WEBKIT_ENABLE_DMABUF";
+
+#[cfg(target_os = "linux")]
+fn flatpak_notification_id() -> String {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    let random = rand::thread_rng().next_u32();
+    format!("mindwtr-{millis}-{random}")
+}
+
+#[cfg(target_os = "linux")]
+#[tauri::command]
+async fn send_flatpak_notification(title: String, body: Option<String>) -> Result<(), String> {
+    if !is_flatpak() {
+        return Err("Flatpak notification portal is only available inside Flatpak".to_string());
+    }
+
+    let trimmed_title = title.trim();
+    if trimmed_title.is_empty() {
+        return Err("Notification title is required".to_string());
+    }
+
+    let mut notification = ashpd::desktop::notification::Notification::new(trimmed_title)
+        .priority(ashpd::desktop::notification::Priority::Normal);
+    if let Some(body) = body
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        notification = notification.body(body);
+    }
+
+    let proxy = ashpd::desktop::notification::NotificationProxy::new()
+        .await
+        .map_err(|error| format!("Failed to connect to notification portal: {error}"))?;
+    proxy
+        .add_notification(&flatpak_notification_id(), notification)
+        .await
+        .map_err(|error| format!("Failed to send notification through portal: {error}"))
+}
+
+#[cfg(not(target_os = "linux"))]
+#[tauri::command]
+async fn send_flatpak_notification(_title: String, _body: Option<String>) -> Result<(), String> {
+    Err("Flatpak notification portal is only available on Linux".to_string())
+}
+
 #[cfg(target_os = "macos")]
 const MENU_HELP_DOCS_ID: &str = "help_docs";
 #[cfg(target_os = "macos")]
@@ -168,23 +253,33 @@ CREATE TABLE IF NOT EXISTS tasks (
   assignedTo TEXT,
   taskMode TEXT,
   startTime TEXT,
+  relativeStartOffset TEXT,
   dueDate TEXT,
   recurrence TEXT,
+  showFutureRecurrence INTEGER,
   pushCount INTEGER,
   tags TEXT,
   contexts TEXT,
   checklist TEXT,
   description TEXT,
+  textDirection TEXT,
   attachments TEXT,
   location TEXT,
   projectId TEXT,
   sectionId TEXT,
   areaId TEXT,
   orderNum INTEGER,
+  boardOrder INTEGER,
   isFocusedToday INTEGER,
   timeEstimate TEXT,
+  suppressMindwtrReminders INTEGER,
+  repeatReminderMinutes INTEGER,
   reviewAt TEXT,
   completedAt TEXT,
+  statusBeforeProjectArchive TEXT,
+  completedAtBeforeProjectArchive TEXT,
+  isFocusedTodayBeforeProjectArchive INTEGER,
+  projectArchivedAt TEXT,
   rev INTEGER,
   revBy TEXT,
   createdAt TEXT NOT NULL,
@@ -212,6 +307,7 @@ CREATE TABLE IF NOT EXISTS projects (
   orderNum INTEGER,
   tagIds TEXT,
   isSequential INTEGER,
+  sequentialScope TEXT,
   isFocused INTEGER,
   supportNotes TEXT,
   attachments TEXT,
@@ -223,7 +319,8 @@ CREATE TABLE IF NOT EXISTS projects (
   revBy TEXT,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL,
-  deletedAt TEXT
+  deletedAt TEXT,
+  purgedAt TEXT
 );
 
 CREATE TABLE IF NOT EXISTS areas (
@@ -233,6 +330,8 @@ CREATE TABLE IF NOT EXISTS areas (
   icon TEXT,
   orderNum INTEGER NOT NULL,
   deletedAt TEXT,
+  deletedAtBeforeProjectArchive TEXT,
+  projectArchivedAt TEXT,
   rev INTEGER,
   revBy TEXT,
   createdAt TEXT,
@@ -250,12 +349,39 @@ CREATE TABLE IF NOT EXISTS sections (
   revBy TEXT,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL,
+  deletedAt TEXT,
+  deletedAtBeforeProjectArchive TEXT,
+  projectArchivedAt TEXT
+);
+
+CREATE TABLE IF NOT EXISTS people (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  note TEXT,
+  referenceLink TEXT,
+  rev INTEGER,
+  revBy TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
   deletedAt TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_people_updated_at ON people(updatedAt);
+CREATE INDEX IF NOT EXISTS idx_people_deleted_at ON people(deletedAt);
+CREATE INDEX IF NOT EXISTS idx_people_updatedAt_rev ON people(updatedAt, rev);
 
 CREATE TABLE IF NOT EXISTS settings (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   data TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS calendar_sync (
+  task_id TEXT NOT NULL,
+  calendar_event_id TEXT NOT NULL,
+  calendar_id TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  last_synced_at TEXT NOT NULL,
+  PRIMARY KEY (task_id, platform)
 );
 
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -270,6 +396,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
   description,
   tags,
   contexts,
+  checklist,
+  location,
   content=''
 );
 
@@ -283,37 +411,37 @@ CREATE VIRTUAL TABLE IF NOT EXISTS projects_fts USING fts5(
 );
 
 CREATE TRIGGER IF NOT EXISTS tasks_ai AFTER INSERT ON tasks BEGIN
-  INSERT INTO tasks_fts (id, title, description, tags, contexts)
-  VALUES (new.id, new.title, coalesce(new.description, ''), coalesce(new.tags, ''), coalesce(new.contexts, ''));
+  INSERT INTO tasks_fts (rowid, title, description, tags, contexts, checklist, location)
+  VALUES (new.rowid, new.title, coalesce(new.description, ''), coalesce(new.tags, ''), coalesce(new.contexts, ''), coalesce((SELECT group_concat(json_extract(value, '$.title'), ' ') FROM json_each(new.checklist)), ''), coalesce(new.location, ''));
 END;
 
 CREATE TRIGGER IF NOT EXISTS tasks_ad AFTER DELETE ON tasks BEGIN
-  INSERT INTO tasks_fts (tasks_fts, id, title, description, tags, contexts)
-  VALUES ('delete', old.id, old.title, coalesce(old.description, ''), coalesce(old.tags, ''), coalesce(old.contexts, ''));
+  INSERT INTO tasks_fts (tasks_fts, rowid, title, description, tags, contexts, checklist, location)
+  VALUES ('delete', old.rowid, old.title, coalesce(old.description, ''), coalesce(old.tags, ''), coalesce(old.contexts, ''), coalesce((SELECT group_concat(json_extract(value, '$.title'), ' ') FROM json_each(old.checklist)), ''), coalesce(old.location, ''));
 END;
 
 CREATE TRIGGER IF NOT EXISTS tasks_au AFTER UPDATE ON tasks BEGIN
-  INSERT INTO tasks_fts (tasks_fts, id, title, description, tags, contexts)
-  VALUES ('delete', old.id, old.title, coalesce(old.description, ''), coalesce(old.tags, ''), coalesce(old.contexts, ''));
-  INSERT INTO tasks_fts (id, title, description, tags, contexts)
-  VALUES (new.id, new.title, coalesce(new.description, ''), coalesce(new.tags, ''), coalesce(new.contexts, ''));
+  INSERT INTO tasks_fts (tasks_fts, rowid, title, description, tags, contexts, checklist, location)
+  VALUES ('delete', old.rowid, old.title, coalesce(old.description, ''), coalesce(old.tags, ''), coalesce(old.contexts, ''), coalesce((SELECT group_concat(json_extract(value, '$.title'), ' ') FROM json_each(old.checklist)), ''), coalesce(old.location, ''));
+  INSERT INTO tasks_fts (rowid, title, description, tags, contexts, checklist, location)
+  VALUES (new.rowid, new.title, coalesce(new.description, ''), coalesce(new.tags, ''), coalesce(new.contexts, ''), coalesce((SELECT group_concat(json_extract(value, '$.title'), ' ') FROM json_each(new.checklist)), ''), coalesce(new.location, ''));
 END;
 
 CREATE TRIGGER IF NOT EXISTS projects_ai AFTER INSERT ON projects BEGIN
-  INSERT INTO projects_fts (id, title, supportNotes, tagIds, areaTitle)
-  VALUES (new.id, new.title, coalesce(new.supportNotes, ''), coalesce(new.tagIds, ''), coalesce(new.areaTitle, ''));
+  INSERT INTO projects_fts (rowid, title, supportNotes, tagIds, areaTitle)
+  VALUES (new.rowid, new.title, coalesce(new.supportNotes, ''), coalesce(new.tagIds, ''), coalesce(new.areaTitle, ''));
 END;
 
 CREATE TRIGGER IF NOT EXISTS projects_ad AFTER DELETE ON projects BEGIN
-  INSERT INTO projects_fts (projects_fts, id, title, supportNotes, tagIds, areaTitle)
-  VALUES ('delete', old.id, old.title, coalesce(old.supportNotes, ''), coalesce(old.tagIds, ''), coalesce(old.areaTitle, ''));
+  INSERT INTO projects_fts (projects_fts, rowid, title, supportNotes, tagIds, areaTitle)
+  VALUES ('delete', old.rowid, old.title, coalesce(old.supportNotes, ''), coalesce(old.tagIds, ''), coalesce(old.areaTitle, ''));
 END;
 
 CREATE TRIGGER IF NOT EXISTS projects_au AFTER UPDATE ON projects BEGIN
-  INSERT INTO projects_fts (projects_fts, id, title, supportNotes, tagIds, areaTitle)
-  VALUES ('delete', old.id, old.title, coalesce(old.supportNotes, ''), coalesce(old.tagIds, ''), coalesce(old.areaTitle, ''));
-  INSERT INTO projects_fts (id, title, supportNotes, tagIds, areaTitle)
-  VALUES (new.id, new.title, coalesce(new.supportNotes, ''), coalesce(new.tagIds, ''), coalesce(new.areaTitle, ''));
+  INSERT INTO projects_fts (projects_fts, rowid, title, supportNotes, tagIds, areaTitle)
+  VALUES ('delete', old.rowid, old.title, coalesce(old.supportNotes, ''), coalesce(old.tagIds, ''), coalesce(old.areaTitle, ''));
+  INSERT INTO projects_fts (rowid, title, supportNotes, tagIds, areaTitle)
+  VALUES (new.rowid, new.title, coalesce(new.supportNotes, ''), coalesce(new.tagIds, ''), coalesce(new.areaTitle, ''));
 END;
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
@@ -355,6 +483,10 @@ struct AppConfigToml {
     ai_key_openai: Option<String>,
     ai_key_anthropic: Option<String>,
     ai_key_gemini: Option<String>,
+    local_api_enabled: Option<String>,
+    local_api_port: Option<String>,
+    local_api_token: Option<String>,
+    disable_hardware_acceleration: Option<String>,
 }
 
 fn default_obsidian_scan_folders() -> Vec<String> {
@@ -376,6 +508,8 @@ struct ObsidianConfigPayload {
     inbox_file: String,
     #[serde(default)]
     task_notes_include_archived: bool,
+    #[serde(default)]
+    dataview_metadata_enabled: bool,
     #[serde(default = "default_obsidian_new_task_format")]
     new_task_format: String,
     last_scanned_at: Option<String>,
@@ -390,6 +524,7 @@ impl Default for ObsidianConfigPayload {
             scan_folders: default_obsidian_scan_folders(),
             inbox_file: default_obsidian_inbox_file(),
             task_notes_include_archived: false,
+            dataview_metadata_enabled: false,
             new_task_format: default_obsidian_new_task_format(),
             last_scanned_at: None,
             enabled: false,
@@ -403,6 +538,7 @@ struct ExternalCalendarSubscription {
     name: String,
     url: String,
     enabled: bool,
+    color: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -426,6 +562,37 @@ struct MacOsCalendarReadResult {
     events: Vec<ExternalCalendarEventRecord>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct MacOsCalendarPushTarget {
+    id: String,
+    name: String,
+    source_name: Option<String>,
+    color: Option<String>,
+    is_mindwtr_dedicated: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct MacOsCalendarEventPayload {
+    calendar_id: String,
+    title: String,
+    start: String,
+    end: String,
+    all_day: bool,
+    notes: Option<String>,
+    location: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+struct MacOsCalendarEventWriteResult {
+    #[serde(default)]
+    ok: bool,
+    event_id: Option<String>,
+    error: Option<String>,
+}
+
 #[cfg(target_os = "macos")]
 unsafe extern "C" {
     fn mindwtr_macos_calendar_permission_status_json() -> *mut c_char;
@@ -434,10 +601,21 @@ unsafe extern "C" {
         range_start: *const c_char,
         range_end: *const c_char,
     ) -> *mut c_char;
+    fn mindwtr_macos_writable_calendars_json() -> *mut c_char;
+    fn mindwtr_macos_ensure_mindwtr_calendar_json(stored_calendar_id: *const c_char)
+        -> *mut c_char;
+    fn mindwtr_macos_create_calendar_event_json(event_json: *const c_char) -> *mut c_char;
+    fn mindwtr_macos_update_calendar_event_json(
+        event_id: *const c_char,
+        event_json: *const c_char,
+    ) -> *mut c_char;
+    fn mindwtr_macos_delete_calendar_event_json(event_id: *const c_char) -> *mut c_char;
     fn mindwtr_macos_calendar_free_string(value: *mut c_char);
     fn mindwtr_macos_create_security_bookmark(path_cstr: *const c_char) -> *mut c_char;
     fn mindwtr_macos_resolve_security_bookmark(base64_cstr: *const c_char) -> *mut c_char;
     fn mindwtr_macos_free_bookmark_string(ptr: *mut c_char);
+    fn mindwtr_macos_frontmost_application_pid() -> c_int;
+    fn mindwtr_macos_activate_application(pid: c_int);
 
     fn mindwtr_cloudkit_account_status() -> *mut c_char;
     fn mindwtr_cloudkit_ensure_zone() -> *mut c_char;
@@ -447,6 +625,15 @@ unsafe extern "C" {
     fn mindwtr_cloudkit_save_records(
         record_type: *const c_char,
         records_json: *const c_char,
+    ) -> *mut c_char;
+    fn mindwtr_cloudkit_save_attachment_asset(
+        record_name: *const c_char,
+        file_path: *const c_char,
+        metadata_json: *const c_char,
+    ) -> *mut c_char;
+    fn mindwtr_cloudkit_fetch_attachment_asset(
+        record_name: *const c_char,
+        target_path: *const c_char,
     ) -> *mut c_char;
     fn mindwtr_cloudkit_delete_records(
         record_type: *const c_char,
@@ -494,7 +681,19 @@ struct QuickAddPending(Mutex<Option<String>>);
 struct CloseRequestHandled(AtomicBool);
 struct GlobalQuickAddShortcutState(Mutex<Option<String>>);
 
-struct AudioRecorderState(Mutex<Option<AudioRecorderHandle>>);
+#[derive(Clone, Copy, Debug, Default)]
+struct QuickAddFocusSnapshot {
+    macos_pid: Option<i32>,
+    windows_hwnd: Option<isize>,
+}
+
+#[derive(Default)]
+struct QuickAddFocusState(Mutex<QuickAddFocusSnapshot>);
+
+struct AudioRecorderState {
+    recorder: Mutex<Option<AudioRecorderHandle>>,
+    starting: AtomicBool,
+}
 
 #[derive(Clone, Debug)]
 struct RecorderInfo {
@@ -506,6 +705,7 @@ struct AudioRecorderHandle {
     stop_tx: mpsc::Sender<()>,
     samples: Arc<Mutex<Vec<i16>>>,
     info: Arc<Mutex<Option<RecorderInfo>>>,
+    limit_hit: Arc<AtomicBool>,
     join: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -552,9 +752,427 @@ where
         .any(|arg| arg.as_ref().eq_ignore_ascii_case(QUICK_ADD_CLI_FLAG))
 }
 
+#[cfg(any(target_os = "windows", test))]
+fn with_webview2_disable_gpu_argument(existing: Option<&str>) -> String {
+    let existing = existing.unwrap_or_default().trim();
+    if existing
+        .split_whitespace()
+        .any(|argument| argument == WEBVIEW2_DISABLE_GPU_ARG)
+    {
+        return existing.to_string();
+    }
+    if existing.is_empty() {
+        WEBVIEW2_DISABLE_GPU_ARG.to_string()
+    } else {
+        format!("{existing} {WEBVIEW2_DISABLE_GPU_ARG}")
+    }
+}
+
+fn bool_setting_enabled(value: Option<&str>) -> bool {
+    value
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn hardware_acceleration_disabled(config: &AppConfigToml) -> bool {
+    bool_setting_enabled(config.disable_hardware_acceleration.as_deref())
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
+fn read_startup_disable_hardware_acceleration() -> bool {
+    let config = read_config_toml(&get_config_path_for_startup());
+    hardware_acceleration_disabled(&config)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn should_configure_windows_webview2_disable_gpu(disable_hardware_acceleration: bool) -> bool {
+    disable_hardware_acceleration
+}
+
+#[cfg(target_os = "windows")]
+fn configure_windows_webview2_browser_arguments(disable_hardware_acceleration: bool) {
+    if !should_configure_windows_webview2_disable_gpu(disable_hardware_acceleration) {
+        return;
+    }
+    let existing = env::var(WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS_ENV).ok();
+    let arguments = with_webview2_disable_gpu_argument(existing.as_deref());
+    env::set_var(WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS_ENV, arguments);
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn is_nvidia_vendor_id(value: &str) -> bool {
+    value.trim().eq_ignore_ascii_case("0x10de")
+}
+
+#[cfg(target_os = "linux")]
+fn linux_nvidia_gpu_detected() -> bool {
+    linux_sysfs_has_nvidia_gpu(Path::new("/sys/class/drm"))
+}
+
+#[cfg(target_os = "linux")]
+fn linux_sysfs_has_nvidia_gpu(root: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(root) else {
+        return false;
+    };
+    let mut any_nvidia = false;
+    let mut saw_primary_marker = false;
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if !file_name.starts_with("card") || file_name.contains('-') {
+            continue;
+        }
+        let device_dir = entry.path().join("device");
+        let vendor = fs::read_to_string(device_dir.join("vendor")).unwrap_or_default();
+        let is_nvidia = is_nvidia_vendor_id(&vendor);
+        any_nvidia |= is_nvidia;
+        let boot_vga = fs::read_to_string(device_dir.join("boot_vga")).unwrap_or_default();
+        let is_primary = boot_vga.trim() == "1";
+        saw_primary_marker |= !boot_vga.trim().is_empty();
+        if is_primary && is_nvidia {
+            return true;
+        }
+    }
+    !saw_primary_marker && any_nvidia
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn should_configure_linux_webkit_disable_dmabuf(
+    existing_disable_dmabuf: Option<&str>,
+    enable_dmabuf_override: Option<&str>,
+    disable_hardware_acceleration: bool,
+    detected_nvidia: bool,
+) -> bool {
+    existing_disable_dmabuf.is_none()
+        && (disable_hardware_acceleration
+            || (!bool_setting_enabled(enable_dmabuf_override) && detected_nvidia))
+}
+
+#[cfg(target_os = "linux")]
+fn configure_linux_webkit_renderer(disable_hardware_acceleration: bool) {
+    let existing_disable_dmabuf = env::var(WEBKIT_DISABLE_DMABUF_RENDERER_ENV).ok();
+    let enable_dmabuf_override = env::var(MINDWTR_WEBKIT_ENABLE_DMABUF_ENV).ok();
+    if should_configure_linux_webkit_disable_dmabuf(
+        existing_disable_dmabuf.as_deref(),
+        enable_dmabuf_override.as_deref(),
+        disable_hardware_acceleration,
+        linux_nvidia_gpu_detected(),
+    ) {
+        // WebKitGTK's DMABUF renderer can fail before a window appears on NVIDIA GBM setups.
+        env::set_var(
+            WEBKIT_DISABLE_DMABUF_RENDERER_ENV,
+            WEBKIT_DISABLE_DMABUF_RENDERER_VALUE,
+        );
+    }
+    if disable_hardware_acceleration && env::var(WEBKIT_DISABLE_COMPOSITING_MODE_ENV).is_err() {
+        env::set_var(
+            WEBKIT_DISABLE_COMPOSITING_MODE_ENV,
+            WEBKIT_DISABLE_COMPOSITING_MODE_VALUE,
+        );
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopRenderingConfig {
+    disable_hardware_acceleration: bool,
+}
+
+fn desktop_rendering_config_from(config: &AppConfigToml) -> DesktopRenderingConfig {
+    DesktopRenderingConfig {
+        disable_hardware_acceleration: hardware_acceleration_disabled(config),
+    }
+}
+
+#[tauri::command]
+fn get_desktop_rendering_config(app: tauri::AppHandle) -> DesktopRenderingConfig {
+    desktop_rendering_config_from(&read_config(&app))
+}
+
+#[tauri::command]
+fn set_desktop_rendering_config(
+    app: tauri::AppHandle,
+    disable_hardware_acceleration: bool,
+) -> Result<DesktopRenderingConfig, String> {
+    let mut config = read_config(&app);
+    config.disable_hardware_acceleration = Some(
+        if disable_hardware_acceleration {
+            "true"
+        } else {
+            "false"
+        }
+        .to_string(),
+    );
+    let config_path = get_config_path(&app);
+    let secrets_path = get_secrets_path(&app);
+    write_config_files(&config_path, &secrets_path, &config)?;
+    Ok(desktop_rendering_config_from(&config))
+}
+
+#[cfg(target_os = "linux")]
+struct FlatpakInstanceListener {
+    listener: UnixListener,
+    socket_path: PathBuf,
+}
+
+#[cfg(target_os = "linux")]
+struct FlatpakInstanceSocketCleanup(PathBuf);
+
+#[cfg(target_os = "linux")]
+impl Drop for FlatpakInstanceSocketCleanup {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn flatpak_runtime_dir() -> PathBuf {
+    env::var_os("XDG_RUNTIME_DIR")
+        .and_then(|value| {
+            if value.as_os_str().is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(value))
+            }
+        })
+        .unwrap_or_else(env::temp_dir)
+}
+
+#[cfg(target_os = "linux")]
+fn flatpak_app_runtime_dir(runtime_dir: &Path) -> PathBuf {
+    runtime_dir.join(APP_NAME)
+}
+
+#[cfg(target_os = "linux")]
+fn flatpak_instance_socket_path(runtime_dir: &Path) -> PathBuf {
+    flatpak_app_runtime_dir(runtime_dir).join(FLATPAK_INSTANCE_SOCKET_FILE_NAME)
+}
+
+#[cfg(target_os = "linux")]
+fn flatpak_tray_icon_temp_dir(app_cache_dir: &Path) -> PathBuf {
+    app_cache_dir.join(FLATPAK_TRAY_ICON_DIR_NAME)
+}
+
+#[cfg(target_os = "linux")]
+fn flatpak_instance_request<I, S>(args: I) -> &'static str
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    if launch_requests_quick_add(args) {
+        FLATPAK_INSTANCE_REQUEST_QUICK_ADD
+    } else {
+        FLATPAK_INSTANCE_REQUEST_SHOW
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn notify_existing_flatpak_instance(socket_path: &Path, args: &[String]) -> io::Result<()> {
+    let mut stream = UnixStream::connect(socket_path)?;
+    stream.write_all(flatpak_instance_request(args.iter()).as_bytes())?;
+    stream.flush()
+}
+
+#[cfg(target_os = "linux")]
+fn bind_flatpak_instance_listener(args: &[String]) -> io::Result<FlatpakInstanceListener> {
+    let runtime_dir = flatpak_runtime_dir();
+    let socket_path = flatpak_instance_socket_path(&runtime_dir);
+    if let Some(parent) = socket_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    if socket_path.exists() {
+        match notify_existing_flatpak_instance(&socket_path, args) {
+            Ok(()) => std::process::exit(0),
+            Err(error) => {
+                log::warn!("Removing stale Flatpak instance socket after notify failed: {error}");
+                let _ = fs::remove_file(&socket_path);
+            }
+        }
+    }
+
+    match UnixListener::bind(&socket_path) {
+        Ok(listener) => Ok(FlatpakInstanceListener {
+            listener,
+            socket_path,
+        }),
+        Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
+            if notify_existing_flatpak_instance(&socket_path, args).is_ok() {
+                std::process::exit(0);
+            }
+            Err(error)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn prepare_flatpak_instance_listener(args: &[String]) -> Option<FlatpakInstanceListener> {
+    if !is_flatpak() {
+        return None;
+    }
+
+    match bind_flatpak_instance_listener(args) {
+        Ok(listener) => Some(listener),
+        Err(error) => {
+            log::warn!("Failed to prepare Flatpak single-instance fallback: {error}");
+            None
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn handle_flatpak_instance_request(app: &tauri::AppHandle, request: &str) {
+    if request.trim().eq_ignore_ascii_case("quick-add") {
+        show_quick_add_window(app);
+    } else {
+        show_main(app);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn run_flatpak_instance_listener(app: tauri::AppHandle, listener: UnixListener) {
+    for stream in listener.incoming() {
+        match stream {
+            Ok(mut stream) => {
+                let mut request = String::new();
+                if let Err(error) = stream.read_to_string(&mut request) {
+                    log::warn!("Failed to read Flatpak instance request: {error}");
+                    continue;
+                }
+                handle_flatpak_instance_request(&app, &request);
+            }
+            Err(error) => {
+                log::warn!("Flatpak instance listener stopped: {error}");
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn start_flatpak_instance_listener(
+    app: &tauri::AppHandle,
+    flatpak_instance_listener: FlatpakInstanceListener,
+) {
+    let FlatpakInstanceListener {
+        listener,
+        socket_path,
+    } = flatpak_instance_listener;
+    let app_for_thread = app.clone();
+    let cleanup_path = socket_path.clone();
+
+    match std::thread::Builder::new()
+        .name("flatpak-instance-listener".to_string())
+        .spawn(move || run_flatpak_instance_listener(app_for_thread, listener))
+    {
+        Ok(_) => {
+            let _ = app.manage(FlatpakInstanceSocketCleanup(cleanup_path));
+        }
+        Err(error) => {
+            log::warn!("Failed to start Flatpak instance listener: {error}");
+            let _ = fs::remove_file(cleanup_path);
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn normalize_spellcheck_language(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let without_codeset = trimmed.split('.').next().unwrap_or(trimmed);
+    let without_modifier = without_codeset
+        .split('@')
+        .next()
+        .unwrap_or(without_codeset)
+        .trim()
+        .replace('-', "_");
+    if without_modifier.is_empty()
+        || without_modifier.eq_ignore_ascii_case("c")
+        || without_modifier.eq_ignore_ascii_case("posix")
+    {
+        return None;
+    }
+    Some(without_modifier)
+}
+
+#[cfg(target_os = "linux")]
+fn push_spellcheck_language(languages: &mut Vec<String>, language: String) {
+    if !languages.iter().any(|existing| existing == &language) {
+        languages.push(language);
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn collect_spellcheck_languages(values: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut languages = Vec::new();
+    for value in values {
+        for raw_language in value.split(':') {
+            let Some(language) = normalize_spellcheck_language(raw_language) else {
+                continue;
+            };
+            push_spellcheck_language(&mut languages, language.clone());
+            if let Some((base_language, _region)) = language.split_once('_') {
+                push_spellcheck_language(&mut languages, base_language.to_string());
+            }
+        }
+    }
+    if languages.is_empty() {
+        languages.push("en_US".to_string());
+        languages.push("en".to_string());
+    }
+    languages
+}
+
+#[cfg(target_os = "linux")]
+fn linux_spellcheck_languages() -> Vec<String> {
+    collect_spellcheck_languages(
+        ["LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"]
+            .into_iter()
+            .filter_map(|key| env::var(key).ok()),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn enable_desktop_spellcheck(window: &tauri::WebviewWindow) {
+    let languages = linux_spellcheck_languages();
+    if let Err(error) = window.with_webview(move |webview| {
+        use webkit2gtk::{WebContextExt, WebViewExt};
+
+        let Some(context) = webview.inner().context() else {
+            return;
+        };
+        let language_refs = languages.iter().map(String::as_str).collect::<Vec<_>>();
+        context.set_spell_checking_languages(&language_refs);
+        context.set_spell_checking_enabled(true);
+    }) {
+        log::warn!("Failed to enable WebKit spell checking: {error}");
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn enable_desktop_spellcheck(_window: &tauri::WebviewWindow) {}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let initial_launch_requests_quick_add = launch_requests_quick_add(env::args());
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    let disable_hardware_acceleration = read_startup_disable_hardware_acceleration();
+    #[cfg(target_os = "windows")]
+    configure_windows_webview2_browser_arguments(disable_hardware_acceleration);
+    #[cfg(target_os = "linux")]
+    configure_linux_webkit_renderer(disable_hardware_acceleration);
+
+    let launch_args = env::args().collect::<Vec<_>>();
+    let initial_launch_requests_quick_add = launch_requests_quick_add(launch_args.iter());
+    #[cfg(target_os = "linux")]
+    let flatpak_instance_listener = prepare_flatpak_instance_listener(&launch_args);
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
@@ -567,6 +1185,8 @@ pub fn run() {
         .manage(QuickAddPending(Mutex::new(None)))
         .manage(CloseRequestHandled(AtomicBool::new(false)))
         .manage(GlobalQuickAddShortcutState(Mutex::new(None)))
+        .manage(QuickAddFocusState::default())
+        .manage(LocalApiServerState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_http::init())
@@ -619,7 +1239,7 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 if window.label() == QUICK_ADD_WINDOW_LABEL {
-                    let _ = window.hide();
+                    let _ = hide_quick_add_window_for_app(window.app_handle());
                     return;
                 }
                 window
@@ -696,8 +1316,9 @@ pub fn run() {
             }
 
             let diagnostics_enabled = diagnostics_enabled();
-            let is_windows_store = is_windows_store_install();
+            let is_flatpak_install = cfg!(target_os = "linux") && is_flatpak();
             if let Some(window) = app.get_webview_window("main") {
+                enable_desktop_spellcheck(&window);
                 #[cfg(target_os = "linux")]
                 if let Ok(icon) = Image::from_bytes(include_bytes!("../icons/icon.png")) {
                     let _ = window.set_icon(icon);
@@ -712,79 +1333,98 @@ pub fn run() {
                         let _ = window.open_devtools();
                     }
                 }
-                if cfg!(target_os = "linux") && is_flatpak() {
+                if is_flatpak_install {
                     let _ = window.eval("window.__MINDWTR_FLATPAK__ = true;");
                 }
             }
 
             let handle = app.handle();
+            #[cfg(target_os = "linux")]
+            if let Some(listener) = flatpak_instance_listener {
+                start_flatpak_instance_listener(&handle, listener);
+            }
             if let Err(error) = create_quick_add_window(&handle) {
                 log::warn!("{error}");
             }
-            if !(cfg!(target_os = "linux") && is_flatpak()) && !is_windows_store {
-                let tray_init_result: tauri::Result<()> = (|| {
-                    let quick_add_item =
-                        MenuItem::with_id(handle, "quick_add", "Quick Add", true, None::<&str>)?;
-                    let show_item =
-                        MenuItem::with_id(handle, "show", "Show Mindwtr", true, None::<&str>)?;
-                    let quit_item = MenuItem::with_id(handle, "quit", "Quit", true, None::<&str>)?;
-                    let tray_menu =
-                        Menu::with_items(handle, &[&quick_add_item, &show_item, &quit_item])?;
+            let tray_init_result: tauri::Result<()> = (|| {
+                let quick_add_item =
+                    MenuItem::with_id(handle, "quick_add", "Quick Add", true, None::<&str>)?;
+                let show_item =
+                    MenuItem::with_id(handle, "show", "Show Mindwtr", true, None::<&str>)?;
+                let quit_item = MenuItem::with_id(handle, "quit", "Quit", true, None::<&str>)?;
+                let tray_menu =
+                    Menu::with_items(handle, &[&quick_add_item, &show_item, &quit_item])?;
 
-                    let tray_icon = Image::from_bytes(include_bytes!("../icons/tray.png"))
-                        .ok()
-                        .or_else(|| handle.default_window_icon().cloned());
+                let tray_icon = Image::from_bytes(include_bytes!("../icons/tray.png"))
+                    .ok()
+                    .or_else(|| handle.default_window_icon().cloned());
 
-                    if let Some(tray_icon) = tray_icon {
-                        let _ = TrayIconBuilder::with_id("main")
-                            .icon(tray_icon)
-                            .menu(&tray_menu)
-                            .show_menu_on_left_click(false)
-                            .on_menu_event(move |app, event| match event.id().as_ref() {
-                                "quick_add" => {
-                                    show_quick_add_window(app);
+                if let Some(tray_icon) = tray_icon {
+                    let mut tray_builder = TrayIconBuilder::with_id("main")
+                        .icon(tray_icon)
+                        .menu(&tray_menu)
+                        .show_menu_on_left_click(false);
+                    #[cfg(target_os = "linux")]
+                    if is_flatpak_install {
+                        match handle.path().app_cache_dir() {
+                            Ok(app_cache_dir) => {
+                                let tray_icon_temp_dir = flatpak_tray_icon_temp_dir(&app_cache_dir);
+                                if let Err(error) = fs::create_dir_all(&tray_icon_temp_dir) {
+                                    log::warn!(
+                                        "Failed to prepare Flatpak tray icon directory: {error}"
+                                    );
+                                } else {
+                                    tray_builder = tray_builder.temp_dir_path(tray_icon_temp_dir);
                                 }
-                                "show" => {
-                                    show_main(app);
-                                }
-                                "quit" => {
-                                    app.exit(0);
-                                }
-                                _ => {}
-                            })
-                            .on_tray_icon_event(|tray, event| {
-                                if let TrayIconEvent::Click {
-                                    button,
-                                    button_state,
-                                    ..
-                                } = event
-                                {
-                                    if button == MouseButton::Left
-                                        && button_state == MouseButtonState::Up
-                                    {
-                                        show_main(tray.app_handle());
-                                    }
-                                }
-                            })
-                            .build(handle)?;
-                    } else {
-                        log::warn!("No tray icon available; skipping tray initialization.");
+                            }
+                            Err(error) => {
+                                log::warn!(
+                                    "Failed to resolve Flatpak tray icon cache directory: {error}"
+                                );
+                            }
+                        }
                     }
-
-                    Ok(())
-                })();
-
-                if let Err(error) = tray_init_result {
-                    log::warn!("Failed to initialize tray support: {error}");
+                    let _ = tray_builder
+                        .on_menu_event(move |app, event| match event.id().as_ref() {
+                            "quick_add" => {
+                                show_quick_add_window(app);
+                            }
+                            "show" => {
+                                show_main(app);
+                            }
+                            "quit" => {
+                                app.exit(0);
+                            }
+                            _ => {}
+                        })
+                        .on_tray_icon_event(|tray, event| {
+                            if let TrayIconEvent::Click {
+                                button,
+                                button_state,
+                                ..
+                            } = event
+                            {
+                                if button == MouseButton::Left
+                                    && button_state == MouseButtonState::Up
+                                {
+                                    show_main(tray.app_handle());
+                                }
+                            }
+                        })
+                        .build(handle)?;
+                } else {
+                    log::warn!("No tray icon available; skipping tray initialization.");
                 }
-            } else if is_windows_store {
-                log::info!("Tray disabled for Microsoft Store install.");
-            } else {
-                log::info!("Tray disabled inside Flatpak sandbox.");
+
+                Ok(())
+            })();
+
+            if let Err(error) = tray_init_result {
+                log::warn!("Failed to initialize tray support: {error}");
             }
 
             let shortcut_state = app.state::<GlobalQuickAddShortcutState>();
-            let default_shortcut = if cfg!(target_os = "linux") && is_flatpak() {
+            let default_shortcut = if is_flatpak_install {
                 GLOBAL_QUICK_ADD_SHORTCUT_DISABLED
             } else {
                 default_global_quick_add_shortcut()
@@ -803,6 +1443,11 @@ pub fn run() {
                 show_quick_add_window(&handle);
             }
 
+            {
+                let local_api_state = app.state::<LocalApiServerState>();
+                start_configured_local_api_server(&handle, &local_api_state);
+            }
+
             if cfg!(debug_assertions) || diagnostics_enabled {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -812,12 +1457,17 @@ pub fn run() {
             }
             Ok(())
         })
-        .manage(AudioRecorderState(Mutex::new(None)))
+        .manage(AudioRecorderState {
+            recorder: Mutex::new(None),
+            starting: AtomicBool::new(false),
+        })
         .manage(ObsidianWatcherState::default())
         .invoke_handler(tauri::generate_handler![
+            check_microsoft_store_update,
             get_data,
             read_data_json,
             save_data,
+            save_task,
             create_data_snapshot,
             list_data_snapshots,
             restore_data_snapshot,
@@ -835,6 +1485,7 @@ pub fn run() {
             set_sync_backend,
             get_obsidian_config,
             set_obsidian_config,
+            expand_obsidian_vault_scope,
             check_obsidian_vault_marker,
             start_obsidian_watcher,
             stop_obsidian_watcher,
@@ -849,6 +1500,8 @@ pub fn run() {
             webdav_put_json,
             get_cloud_config,
             set_cloud_config,
+            cloud_get_json,
+            cloud_put_json,
             get_dropbox_redirect_uri,
             is_dropbox_connected,
             connect_dropbox,
@@ -859,11 +1512,22 @@ pub fn run() {
             get_macos_calendar_permission_status,
             request_macos_calendar_permission,
             get_macos_calendar_events,
+            get_macos_writable_calendars,
+            ensure_macos_mindwtr_calendar,
+            create_macos_calendar_event,
+            update_macos_calendar_event,
+            delete_macos_calendar_event,
+            get_calendar_sync_entry,
+            upsert_calendar_sync_entry,
+            delete_calendar_sync_entry,
+            get_all_calendar_sync_entries,
             cloudkit_account_status,
             cloudkit_ensure_zone,
             cloudkit_ensure_subscription,
             cloudkit_fetch_all_records,
             cloudkit_fetch_changes,
+            cloudkit_fetch_attachment_asset,
+            cloudkit_save_attachment_asset,
             cloudkit_save_records,
             cloudkit_delete_records,
             cloudkit_consume_pending_remote_change,
@@ -877,15 +1541,25 @@ pub fn run() {
             start_audio_recording,
             stop_audio_recording,
             transcribe_whisper,
+            transcribe_parakeet,
+            download_parakeet_model,
+            download_whisper_model,
             log_ai_debug,
             append_log_line,
             clear_log_file,
             consume_quick_add_pending,
+            get_system_theme_preference,
             set_global_quick_add_shortcut,
+            hide_quick_add_window,
             is_windows_store_install,
             get_install_source,
             get_launch_at_startup_enabled,
             set_launch_at_startup_enabled,
+            send_flatpak_notification,
+            get_local_api_server_status,
+            set_local_api_server_config,
+            get_desktop_rendering_config,
+            set_desktop_rendering_config,
             quit_app
         ])
         .run(tauri::generate_context!())
@@ -940,6 +1614,32 @@ mod tests {
     }
 
     #[test]
+    fn hardware_acceleration_setting_round_trips_in_public_config() {
+        let dir = unique_test_dir("hardware-acceleration");
+        fs::create_dir_all(&dir).expect("should create temp config dir");
+
+        let config_path = dir.join("config.toml");
+        let secrets_path = dir.join("secrets.toml");
+        let config = AppConfigToml {
+            disable_hardware_acceleration: Some("true".to_string()),
+            ..AppConfigToml::default()
+        };
+
+        write_config_files(&config_path, &secrets_path, &config)
+            .expect("should write config files");
+
+        let public_config = read_config_toml(&config_path);
+        assert_eq!(
+            public_config.disable_hardware_acceleration.as_deref(),
+            Some("true")
+        );
+        assert!(hardware_acceleration_disabled(&public_config));
+        assert!(!secrets_path.exists());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn flatpak_install_channel_reads_branch_from_instance_section() {
         let contents = r#"
 [Application]
@@ -963,5 +1663,116 @@ arch=x86_64
         assert!(launch_requests_quick_add(["mindwtr", "--QUICK-ADD"]));
         assert!(!launch_requests_quick_add(["mindwtr"]));
         assert!(!launch_requests_quick_add(["mindwtr", "--foo"]));
+    }
+
+    #[test]
+    fn webview2_browser_arguments_add_disable_gpu_once() {
+        assert_eq!(with_webview2_disable_gpu_argument(None), "--disable-gpu");
+        assert_eq!(
+            with_webview2_disable_gpu_argument(Some("--foo=bar")),
+            "--foo=bar --disable-gpu",
+        );
+        assert_eq!(
+            with_webview2_disable_gpu_argument(Some("--foo=bar --disable-gpu")),
+            "--foo=bar --disable-gpu",
+        );
+    }
+
+    #[test]
+    fn webview2_disable_gpu_requires_local_setting() {
+        assert!(!should_configure_windows_webview2_disable_gpu(false));
+        assert!(should_configure_windows_webview2_disable_gpu(true));
+    }
+
+    #[test]
+    fn linux_webkit_dmabuf_renderer_is_targeted_to_nvidia_or_local_setting() {
+        assert!(!should_configure_linux_webkit_disable_dmabuf(
+            None, None, false, false,
+        ));
+        assert!(should_configure_linux_webkit_disable_dmabuf(
+            None, None, false, true,
+        ));
+        assert!(!should_configure_linux_webkit_disable_dmabuf(
+            None,
+            Some("1"),
+            false,
+            true,
+        ));
+        assert!(should_configure_linux_webkit_disable_dmabuf(
+            None,
+            Some("1"),
+            true,
+            true,
+        ));
+        assert!(!should_configure_linux_webkit_disable_dmabuf(
+            Some("0"),
+            None,
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn nvidia_vendor_id_matches_sysfs_value() {
+        assert!(is_nvidia_vendor_id("0x10de\n"));
+        assert!(is_nvidia_vendor_id("0X10DE"));
+        assert!(!is_nvidia_vendor_id("0x8086"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn flatpak_instance_request_preserves_quick_add_launches() {
+        assert_eq!(
+            flatpak_instance_request(["mindwtr", "--quick-add"]),
+            FLATPAK_INSTANCE_REQUEST_QUICK_ADD
+        );
+        assert_eq!(
+            flatpak_instance_request(["mindwtr"]),
+            FLATPAK_INSTANCE_REQUEST_SHOW
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn flatpak_runtime_paths_are_app_scoped() {
+        let runtime_dir = Path::new("/run/user/1000");
+
+        assert_eq!(
+            flatpak_instance_socket_path(runtime_dir),
+            PathBuf::from("/run/user/1000/mindwtr/instance.sock")
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn flatpak_tray_icon_path_uses_app_cache_dir() {
+        let app_cache_dir = Path::new("/home/user/.var/app/tech.dongdongbh.mindwtr/cache");
+
+        assert_eq!(
+            flatpak_tray_icon_temp_dir(app_cache_dir),
+            PathBuf::from("/home/user/.var/app/tech.dongdongbh.mindwtr/cache/tray-icon")
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn collect_spellcheck_languages_normalizes_locale_values() {
+        assert_eq!(
+            collect_spellcheck_languages([
+                "en_US.UTF-8".to_string(),
+                "de-DE:fr_CA@euro".to_string(),
+                "C".to_string(),
+            ]),
+            vec!["en_US", "en", "de_DE", "de", "fr_CA", "fr"]
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn collect_spellcheck_languages_falls_back_to_english() {
+        assert_eq!(
+            collect_spellcheck_languages(["C.UTF-8".to_string(), "POSIX".to_string()]),
+            vec!["en_US", "en"]
+        );
     }
 }

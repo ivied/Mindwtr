@@ -79,4 +79,102 @@ describe('buildTaskUpdatesFromSpeechResult', () => {
             suggestedProjectTitle: undefined,
         });
     });
+
+    it('ignores bracket-only caption transcripts from local Whisper', () => {
+        const plan = buildTaskUpdatesFromSpeechResult(
+            {
+                title: '',
+                description: undefined,
+                dueDate: undefined,
+                startTime: undefined,
+                tags: [],
+                contexts: [],
+                projectId: undefined,
+            },
+            {
+                transcript: '[Unrecognized speech]',
+            },
+            {
+                ai: {
+                    speechToText: {
+                        mode: 'transcribe_only',
+                        fieldStrategy: 'smart',
+                    },
+                },
+            },
+        );
+
+        expect(plan).toEqual({
+            updates: {},
+            suggestedProjectTitle: undefined,
+        });
+    });
+
+    it('extracts text from structured local ASR transcript metadata', () => {
+        const plan = buildTaskUpdatesFromSpeechResult(
+            {
+                title: 'Audio Note',
+                description: undefined,
+                dueDate: undefined,
+                startTime: undefined,
+                tags: [],
+                contexts: [],
+                projectId: undefined,
+            },
+            {
+                transcript: JSON.stringify({
+                    lang: '',
+                    emotion: '',
+                    event: '',
+                    text: 'How I want to play basketball tomorrow. Money.',
+                    timestamps: [0.64, 1.2],
+                    durations: [0.24, 0.32],
+                    tokens: ['H', 'ow'],
+                    words: [],
+                }),
+            },
+            {
+                ai: {
+                    speechToText: {
+                        mode: 'smart_parse',
+                        fieldStrategy: 'smart',
+                    },
+                },
+            },
+        );
+
+        expect(plan).toEqual({
+            updates: {
+                title: 'How I want to play basketball tomorrow. Money.',
+            },
+            suggestedProjectTitle: undefined,
+        });
+    });
+
+    it('keeps normal transcripts that contain bracketed text', () => {
+        const plan = buildTaskUpdatesFromSpeechResult(
+            {
+                title: '',
+                description: undefined,
+                dueDate: undefined,
+                startTime: undefined,
+                tags: [],
+                contexts: [],
+                projectId: undefined,
+            },
+            {
+                transcript: 'Buy [AAA] batteries',
+            },
+            {
+                ai: {
+                    speechToText: {
+                        mode: 'transcribe_only',
+                        fieldStrategy: 'smart',
+                    },
+                },
+            },
+        );
+
+        expect(plan.updates.title).toBe('Buy [AAA] batteries');
+    });
 });

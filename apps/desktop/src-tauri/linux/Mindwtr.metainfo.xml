@@ -5,6 +5,7 @@
   <project_license>AGPL-3.0-only</project_license>
   <name>Mindwtr</name>
   <summary>Plan tasks and projects</summary>
+  <summary xml:lang="de">Aufgaben und Projekte planen</summary>
   <developer id="tech.dongdongbh">
     <name>Dongda Li</name>
   </developer>
@@ -14,47 +15,63 @@
   </provides>
   <description>
     <p>Capture tasks, organize projects, and keep work moving with a simple personal system that keeps your data on your device.</p>
+    <p xml:lang="de">Erfasse Aufgaben, organisiere Projekte und halte Arbeit mit einem einfachen persoenlichen System in Bewegung, das deine Daten auf deinem Geraet laesst.</p>
     <p>Mindwtr helps you sort inbox items, review commitments, and plan next actions without requiring an account or locking you into a proprietary service.</p>
+    <p xml:lang="de">Mindwtr hilft dir, Inbox-Eintraege zu sortieren, Verpflichtungen zu pruefen und naechste Aktionen zu planen, ohne ein Konto zu verlangen oder dich an einen proprietaeren Dienst zu binden.</p>
     <ul>
       <li>Capture tasks, notes, and ideas quickly</li>
+      <li xml:lang="de">Aufgaben, Notizen und Ideen schnell erfassen</li>
       <li>Organize work with projects, areas, sections, tags, and contexts</li>
+      <li xml:lang="de">Arbeit mit Projekten, Bereichen, Abschnitten, Tags und Kontexten organisieren</li>
       <li>Review your lists daily or weekly to stay current</li>
+      <li xml:lang="de">Listen taeglich oder woechentlich pruefen, um aktuell zu bleiben</li>
       <li>Plan with list, board, and calendar views</li>
+      <li xml:lang="de">Mit Listen-, Board- und Kalenderansichten planen</li>
       <li>Add notes, reminders, and attachments to your work</li>
+      <li xml:lang="de">Notizen, Erinnerungen und Anhaenge zu deiner Arbeit hinzufuegen</li>
       <li>Sync through local folders, WebDAV, Dropbox, or a self-hosted cloud</li>
+      <li xml:lang="de">Ueber lokale Ordner, WebDAV, Dropbox oder eine selbst gehostete Cloud synchronisieren</li>
     </ul>
   </description>
   <screenshots>
-    <screenshot type="default" xml:lang="en">
+    <screenshot type="default">
       <caption>Capture and triage tasks in Inbox</caption>
+      <caption xml:lang="de">Aufgaben in der Inbox erfassen und klaeren</caption>
       <image>https://raw.githubusercontent.com/dongdongbh/Mindwtr/main/apps/desktop/screenshots/flathub/inbox_light.png</image>
     </screenshot>
-    <screenshot xml:lang="en">
+    <screenshot>
       <caption>Focus on your next actions for today</caption>
+      <caption xml:lang="de">Naechste Aktionen fuer heute fokussieren</caption>
       <image>https://raw.githubusercontent.com/dongdongbh/Mindwtr/main/apps/desktop/screenshots/flathub/focus_light.png</image>
     </screenshot>
-    <screenshot xml:lang="en">
+    <screenshot>
       <caption>Organize work in the projects workspace</caption>
+      <caption xml:lang="de">Arbeit im Projektbereich organisieren</caption>
       <image>https://raw.githubusercontent.com/dongdongbh/Mindwtr/main/apps/desktop/screenshots/flathub/projects_workspace_light.png</image>
     </screenshot>
-    <screenshot xml:lang="en">
+    <screenshot>
       <caption>Plan visually with board view</caption>
+      <caption xml:lang="de">Visuell mit der Board-Ansicht planen</caption>
       <image>https://raw.githubusercontent.com/dongdongbh/Mindwtr/main/apps/desktop/screenshots/flathub/board_view_light.png</image>
     </screenshot>
-    <screenshot xml:lang="en">
+    <screenshot>
       <caption>Adjust appearance and workflow settings</caption>
+      <caption xml:lang="de">Darstellung und Workflow-Einstellungen anpassen</caption>
       <image>https://raw.githubusercontent.com/dongdongbh/Mindwtr/main/apps/desktop/screenshots/flathub/settings_light.png</image>
     </screenshot>
-    <screenshot xml:lang="en">
+    <screenshot>
       <caption>Keep supporting material in Reference</caption>
+      <caption xml:lang="de">Begleitmaterial in Referenz aufbewahren</caption>
       <image>https://raw.githubusercontent.com/dongdongbh/Mindwtr/main/apps/desktop/screenshots/flathub/reference_light.png</image>
     </screenshot>
-    <screenshot xml:lang="en">
+    <screenshot>
       <caption>Review due dates in calendar view</caption>
+      <caption xml:lang="de">Faelligkeiten in der Kalenderansicht pruefen</caption>
       <image>https://raw.githubusercontent.com/dongdongbh/Mindwtr/main/apps/desktop/screenshots/flathub/calendar_light.png</image>
     </screenshot>
-    <screenshot xml:lang="en">
+    <screenshot>
       <caption>Group and filter work by context</caption>
+      <caption xml:lang="de">Arbeit nach Kontext gruppieren und filtern</caption>
       <image>https://raw.githubusercontent.com/dongdongbh/Mindwtr/main/apps/desktop/screenshots/flathub/contexts_light.png</image>
     </screenshot>
   </screenshots>
@@ -66,11 +83,178 @@
     <category>Office</category>
     <category>Utility</category>
   </categories>
-  <url type="homepage">https://github.com/dongdongbh/Mindwtr</url>
+  <url type="homepage">https://mindwtr.app</url>
   <url type="donation">https://ko-fi.com/dongdongbh</url>
   <url type="bugtracker">https://github.com/dongdongbh/Mindwtr/issues</url>
   <url type="vcs-browser">https://github.com/dongdongbh/Mindwtr</url>
   <releases>
+    <release version="1.0.5" date="2026-06-28">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v1.0.5</url>
+      <description>
+        <p>Mindwtr 1.0.5 improves desktop planning, import, sync diagnostics, local dictation, and Linux release coverage.</p>
+        <p xml:lang="de">Mindwtr 1.0.5 verbessert Desktop-Planung, Import, Sync-Diagnosen, lokale Diktatfunktion und Linux-Release-Kanaele.</p>
+        <ul>
+          <li>Added repeat reminders, relative start offsets, date-only scheduling, and board filters for contexts, tags, and dates.</li>
+          <li xml:lang="de">Wiederhol-Erinnerungen, relative Startzeiten, Datum-only-Planung und Board-Filter fuer Kontexte, Tags und Daten hinzugefuegt.</li>
+          <li>Added TickTick and Obsidian import improvements, desktop reference fields, and a slash-command title picker.</li>
+          <li xml:lang="de">TickTick- und Obsidian-Importverbesserungen, Desktop-Referenzfelder und eine Slash-Command-Titelauswahl hinzugefuegt.</li>
+          <li>Made local dictation downloads, WebDAV reads, task recurrence, project editing, and parent-reference repair steadier.</li>
+          <li xml:lang="de">Lokale Diktat-Downloads, WebDAV-Lesezugriffe, Aufgabenwiederholungen, Projektbearbeitung und Parent-Referenzreparatur stabiler gemacht.</li>
+          <li>Added release candidate automation, AppImage packaging fixes, and Linux beta testing channels.</li>
+          <li xml:lang="de">Release-Candidate-Automation, AppImage-Paketkorrekturen und Linux-Beta-Testkanaele hinzugefuegt.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="1.0.0" date="2026-06-15">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v1.0.0</url>
+      <description>
+        <p>Mindwtr 1.0.0 improves desktop sync safety, local storage, task editing, and published local automation helpers.</p>
+        <p xml:lang="de">Mindwtr 1.0.0 verbessert Desktop-Sync-Sicherheit, lokalen Speicher, Aufgabenbearbeitung und veroeffentlichte lokale Automationshelfer.</p>
+        <ul>
+          <li>Preserved people data, shared attachments, project delete outcomes, and recurring task creation more reliably.</li>
+          <li xml:lang="de">Personendaten, gemeinsame Anhaenge, Projektloeschungen und wiederkehrende Aufgaben zuverlaessiger erhalten.</li>
+          <li>Made desktop task input, autocomplete, Markdown link lookup, and container-delete feedback steadier.</li>
+          <li xml:lang="de">Aufgabeneingabe, Autovervollstaendigung, Markdown-Linksuche und Container-Loeschhinweise im Desktop stabiler gemacht.</li>
+          <li>Published the local MCP helper as an npm package with registry metadata for local automation setups.</li>
+          <li xml:lang="de">Den lokalen MCP-Helfer als npm-Paket mit Registry-Metadaten fuer lokale Automationsumgebungen veroeffentlicht.</li>
+          <li>Added stricter PWA security headers plus broader sync, cloud, recurrence, and write-path tests.</li>
+          <li xml:lang="de">Strengere PWA-Sicherheitsheader sowie breitere Tests fuer Sync, Cloud, Wiederholungen und Schreibpfade hinzugefuegt.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.9.10" date="2026-06-11">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.9.10</url>
+      <description>
+        <p>Mindwtr 0.9.10 adds Guided Mind Sweep, people planning, board ordering, Obsidian metadata import, and safer desktop sync and attachment cleanup.</p>
+        <p xml:lang="de">Mindwtr 0.9.10 fuegt Guided Mind Sweep, Personenplanung, Board-Sortierung, Obsidian-Metadatenimport sowie sichereren Desktop-Sync und Anhangsbereinigung hinzu.</p>
+        <ul>
+          <li>Added Guided Mind Sweep in Inbox with personal and work prompt groups.</li>
+          <li xml:lang="de">Guided Mind Sweep in der Inbox mit privaten und beruflichen Prompt-Gruppen hinzugefuegt.</li>
+          <li>Added people/assignee planning and MCP people tools.</li>
+          <li xml:lang="de">Personen- und Verantwortlichenplanung sowie MCP-Personenwerkzeuge hinzugefuegt.</li>
+          <li>Added board column ordering, quick process submit, and weekly inbox processing.</li>
+          <li xml:lang="de">Board-Spaltensortierung, Schnellverarbeitung und woechentliche Inbox-Verarbeitung hinzugefuegt.</li>
+          <li>Imported Obsidian Dataview metadata and improved sync merge guidance.</li>
+          <li xml:lang="de">Obsidian-Dataview-Metadaten importiert und Sync-Merge-Hinweise verbessert.</li>
+          <li>Made desktop sync and attachments safer with bounded requests, tombstone fixes, and remote-delete cleanup.</li>
+          <li xml:lang="de">Desktop-Sync und Anhaenge durch begrenzte Anfragen, Tombstone-Fixes und Remote-Loeschbereinigung sicherer gemacht.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.9.9" date="2026-06-08">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.9.9</url>
+      <description>
+        <p>Mindwtr 0.9.9 improves desktop feedback, planning metadata, large-library performance, Markdown editing, and Linux startup and theme reliability.</p>
+        <p xml:lang="de">Mindwtr 0.9.9 verbessert Desktop-Feedback, Planungsmetadaten, Leistung bei grossen Sammlungen, Markdown-Bearbeitung sowie Linux-Start- und Designzuverlaessigkeit.</p>
+        <ul>
+          <li>Added a Settings feedback flow for configured desktop builds.</li>
+          <li xml:lang="de">Feedback in den Einstellungen fuer konfigurierte Desktop-Builds hinzugefuegt.</li>
+          <li>Added custom time estimates, project sequencing cues, and a task-menu Focus action.</li>
+          <li xml:lang="de">Eigene Zeitschaetzungen, Projekt-Sequenzhinweise und eine Focus-Aktion im Aufgabenmenue hinzugefuegt.</li>
+          <li>Made large project lists faster with virtualization, derived indexes, and incremental task persistence.</li>
+          <li xml:lang="de">Grosse Projektlisten durch Virtualisierung, abgeleitete Indizes und inkrementelles Speichern von Aufgaben beschleunigt.</li>
+          <li>Refreshed after external SQLite writes while ignoring local watcher echoes.</li>
+          <li xml:lang="de">Nach externen SQLite-Schreibvorgaengen aktualisiert und lokale Watcher-Echos ignoriert.</li>
+          <li>Improved GNOME system theme detection on startup plus Markdown shortcuts and email links.</li>
+          <li xml:lang="de">GNOME-Systemdesign beim Start sowie Markdown-Kuerzel und E-Mail-Links verbessert.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.9.8" date="2026-06-04">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.9.8</url>
+      <description>
+        <p>Mindwtr 0.9.8 improves project planning, desktop selection, attachment handling, search, restore safety, and Linux Flatpak reminders.</p>
+        <p xml:lang="de">Mindwtr 0.9.8 verbessert Projektplanung, Desktop-Auswahl, Umgang mit Anhaengen, Suche, Wiederherstellungssicherheit und Linux-Flatpak-Erinnerungen.</p>
+        <ul>
+          <li>Added due-date sorting in projects and grouped completed tasks below active work.</li>
+          <li xml:lang="de">Faelligkeitssortierung in Projekten hinzugefuegt und erledigte Aufgaben unter aktiver Arbeit gruppiert.</li>
+          <li>Added project task select mode, range selection, and aligned Contexts filters.</li>
+          <li xml:lang="de">Projektauswahlmodus, Bereichsauswahl und angeglichene Kontextfilter hinzugefuegt.</li>
+          <li>Made checklist item text searchable and improved editor and checklist stability.</li>
+          <li xml:lang="de">Checklistenpunkte durchsuchbar gemacht und Editor- sowie Checklisten-Stabilitaet verbessert.</li>
+          <li>Opened external, link, and portal attachments more reliably.</li>
+          <li xml:lang="de">Externe, Link- und Portal-Anhaenge zuverlaessiger geoeffnet.</li>
+          <li>Sent Flatpak reminders through the desktop notification portal and made close behavior more predictable.</li>
+          <li xml:lang="de">Flatpak-Erinnerungen ueber das Desktop-Benachrichtigungsportal gesendet und Schliessverhalten berechenbarer gemacht.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.9.7" date="2026-06-01">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.9.7</url>
+      <description>
+        <p>Mindwtr 0.9.7 improves first-run setup, desktop task editing, Focus planning, sync safety, and Linux desktop integration.</p>
+        <p xml:lang="de">Mindwtr 0.9.7 verbessert Ersteinrichtung, Aufgabenbearbeitung im Desktop, Focus-Planung, Sync-Sicherheit und die Linux-Desktop-Integration.</p>
+        <ul>
+          <li>Added clearer first-run setup and fuller Getting Started guidance.</li>
+          <li xml:lang="de">Klarere Ersteinrichtung und vollere Erste-Schritte-Hilfe hinzugefuegt.</li>
+          <li>Added checklist drag reorder, metadata autocomplete, stronger task labels, and bulk selection controls across desktop Select-mode views.</li>
+          <li xml:lang="de">Checklisten-Sortierung per Ziehen, Metadaten-Autovervollstaendigung, staerkere Aufgabenbeschriftungen und Mehrfachauswahl in Desktop-Auswahlansichten hinzugefuegt.</li>
+          <li>Improved Focus planning with simpler filters, clearer copy, a defer action, and warnings for incoherent task dates.</li>
+          <li xml:lang="de">Focus-Planung mit einfacheren Filtern, klareren Texten, einer Verschiebeaktion und Warnungen fuer unstimmige Aufgabendaten verbessert.</li>
+          <li>Made sync safer with clearer backend selection, stale cache cleanup, and preserved area merge tombstones.</li>
+          <li xml:lang="de">Sync mit klarerer Backend-Auswahl, Aufraeumen veralteter Cache-Eintraege und beibehaltenen Bereichs-Loeschmarken sicherer gemacht.</li>
+          <li>Improved Linux desktop reliability with Flatpak tray icon cache handling and launch handoff behavior.</li>
+          <li xml:lang="de">Linux-Desktop-Zuverlaessigkeit durch Flatpak-Tray-Icon-Cache und Startuebergabe verbessert.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.9.6" date="2026-05-29">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.9.6</url>
+      <description>
+        <p>Mindwtr 0.9.6 improves desktop planning, recurrence previews, project navigation, Markdown editing, and Linux desktop integration.</p>
+        <p xml:lang="de">Mindwtr 0.9.6 verbessert Desktop-Planung, Wiederholungsvorschauen, Projektnavigation, Markdown-Bearbeitung und die Linux-Desktop-Integration.</p>
+        <ul>
+          <li>Added planning-only next recurrence previews in Calendar and synced that setting reliably.</li>
+          <li xml:lang="de">Planungsbezogene Vorschauen fuer die naechste Wiederholung im Kalender hinzugefuegt und diese Einstellung zuverlaessig synchronisiert.</li>
+          <li>Added a collapsible project panel and clearer selected task metadata and status pills.</li>
+          <li xml:lang="de">Ein einklappbares Projektpanel sowie klarere ausgewaehlte Metadaten- und Status-Pills fuer Aufgaben hinzugefuegt.</li>
+          <li>Improved Markdown and checklist editing with list-aware shortcuts, native spellcheck, inline previews, and steadier cursor handling.</li>
+          <li xml:lang="de">Markdown- und Checklisten-Bearbeitung mit listenbewussten Kuerzeln, nativer Rechtschreibpruefung, Inline-Vorschauen und stabilerer Cursorbehandlung verbessert.</li>
+          <li>Made Linux desktop integration more reliable with Flatpak tray behavior and GNOME system theme polling.</li>
+          <li xml:lang="de">Linux-Desktop-Integration mit Flatpak-Tray-Verhalten und GNOME-Systemdesign-Abfrage zuverlaessiger gemacht.</li>
+          <li>Reduced duplicate sync conflict toasts and improved diagnostics copy.</li>
+          <li xml:lang="de">Doppelte Sync-Konfliktmeldungen reduziert und Diagnose-Texte verbessert.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.9.5" date="2026-05-25">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.9.5</url>
+      <description>
+        <p>Mindwtr 0.9.5 improves task locations, calendar planning, Markdown editing, and Linux desktop reliability.</p>
+        <p xml:lang="de">Mindwtr 0.9.5 verbessert Aufgabenorte, Kalenderplanung, Markdown-Bearbeitung und die Zuverlaessigkeit des Linux-Desktops.</p>
+        <ul>
+          <li>Made task locations editable, filterable, and searchable from desktop global search.</li>
+          <li xml:lang="de">Aufgabenorte sind jetzt im Desktop bearbeitbar, filterbar und in der globalen Suche auffindbar.</li>
+          <li>Improved calendar scheduling with all-day date-only tasks, location-preserving event tasks, gzip ICS subscriptions, and cleaner exported titles.</li>
+          <li xml:lang="de">Kalenderplanung mit ganztagigen reinen Datumsaufgaben, Aufgabenorten aus Ereignissen, gzip-ICS-Abos und saubereren exportierten Titeln verbessert.</li>
+          <li>Improved Markdown description editing and previews, including preserved blank lines.</li>
+          <li xml:lang="de">Markdown-Beschreibungen und Vorschauen verbessert, einschliesslich beibehaltener Leerzeilen.</li>
+          <li>Made desktop date pickers, wheel zoom, quick add positioning, and collapsed area filters more reliable.</li>
+          <li xml:lang="de">Datumsauswahl, Mausrad-Zoom, Schnellhinzufuegen-Position und eingeklappte Bereichsfilter im Desktop zuverlaessiger gemacht.</li>
+          <li>Restored Flatpak reminders, improved Obsidian vault scan retries, and kept Flathub-facing metadata localized.</li>
+          <li xml:lang="de">Flatpak-Erinnerungen wiederhergestellt, Wiederholungen fuer Obsidian-Vault-Scans verbessert und Flathub-Metadaten lokalisiert gehalten.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.9.4" date="2026-05-23">
+      <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.9.4</url>
+      <description>
+        <p>Mindwtr 0.9.4 expands desktop planning, local automation, project navigation, and Linux desktop reliability.</p>
+        <p xml:lang="de">Mindwtr 0.9.4 erweitert Desktop-Planung, lokale Automatisierung, Projektnavigation und die Zuverlaessigkeit des Linux-Desktops.</p>
+        <ul>
+          <li>Added drag-to-calendar planning, local ICS calendar file support, and task description previews.</li>
+          <li xml:lang="de">Kalenderplanung per Drag-and-drop, lokale ICS-Kalenderdateien und Vorschauen fuer Aufgabenbeschreibungen hinzugefuegt.</li>
+          <li>Added a local API server toggle with bearer-token protection for desktop automation.</li>
+          <li xml:lang="de">Einen Schalter fuer einen lokalen API-Server mit Bearer-Token-Schutz fuer Desktop-Automatisierung hinzugefuegt.</li>
+          <li>Improved keyboard task selectors, global search reveal behavior, project split sizing, and task metadata wrapping.</li>
+          <li xml:lang="de">Tastaturbasierte Aufgabenauswahl, Anzeige globaler Suchergebnisse, Projektaufteilungsgroessen und Umbrueche fuer Aufgabenmetadaten verbessert.</li>
+          <li>Preserved WebView zoom, followed the system theme by default, and clarified the Flatpak quick-add shortcut fallback.</li>
+          <li xml:lang="de">WebView-Zoom beibehalten, standardmaessig dem Systemdesign gefolgt und den Flatpak-Fallback fuer Schnellhinzufuegen-Kuerzel klaerer gemacht.</li>
+          <li>Improved sync warning cleanup, file lock contention handling, and desktop calendar accessibility.</li>
+          <li xml:lang="de">Aufraeumen von Sync-Warnungen, Umgang mit Dateisperren und Barrierefreiheit des Desktop-Kalenders verbessert.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.9.3" date="2026-05-13">
       <url type="details">https://github.com/dongdongbh/Mindwtr/releases/tag/v0.9.3</url>
       <description translate="no">

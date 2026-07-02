@@ -1,0 +1,4 @@
+- Se agrega bloqueo opcional de la app movil con autenticacion del dispositivo.
+- El texto compartido se importa como nota de tarea con guia mas clara.
+- Captura rapida, contadores de proyectos, teclado, canales de recordatorio, horas programadas, sync de listas y bibliotecas grandes son mas estables.
+- La busqueda encuentra elementos de listas.

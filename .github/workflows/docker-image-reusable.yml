@@ -33,13 +33,89 @@ jobs:
     env:
       REGISTRY: ghcr.io
       IMAGE_NAME: ${{ github.repository_owner }}/${{ inputs.image_name }}
+      IMAGE_SUFFIX: ${{ inputs.image_name }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           ref: ${{ inputs.tag || github.ref }}
 
+      - name: Check Docker-relevant changes since previous RC
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-rc.') }}
+        id: rc_changes
+        run: |
+          set -euo pipefail
+
+          CURRENT_TAG="${GITHUB_REF_NAME}"
+          if [[ ! "$CURRENT_TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-rc\.([0-9]+)$ ]]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "reason=not an RC semver tag" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          BASE_VERSION="${BASH_REMATCH[1]}"
+          RC_NUMBER="${BASH_REMATCH[2]}"
+          if [[ "$RC_NUMBER" == "1" ]]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "reason=first RC for ${BASE_VERSION}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch --force --tags origin
+          PREVIOUS_TAG=""
+          while IFS= read -r candidate; do
+            if [[ "$candidate" != "$CURRENT_TAG" ]]; then
+              PREVIOUS_TAG="$candidate"
+              break
+            fi
+          done < <(git tag --list "v${BASE_VERSION}-rc.*" --sort=-v:refname)
+
+          if [[ -z "$PREVIOUS_TAG" ]]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "reason=no previous RC tag for ${BASE_VERSION}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed_files="$(git diff --name-only "$PREVIOUS_TAG" "$CURRENT_TAG")"
+          common_pattern="^(\.github/workflows/docker-image-reusable\.yml|package\.json|bun\.lock|\.bun-version|bunfig\.toml|tsconfig(\..*)?\.json|packages/core/)"
+          case "$IMAGE_SUFFIX" in
+            mindwtr-app)
+              image_pattern="^(\.github/workflows/docker-image-app\.yml|docker/app/|apps/desktop/)"
+              ;;
+            mindwtr-cloud)
+              image_pattern="^(\.github/workflows/docker-image-cloud\.yml|docker/cloud/|apps/cloud/)"
+              ;;
+            *)
+              image_pattern="^$"
+              ;;
+          esac
+
+          relevant_changes="$(
+            printf "%s\n" "$changed_files" \
+              | grep -E "(${common_pattern})|(${image_pattern})" \
+              || true
+          )"
+
+          if [[ -z "$relevant_changes" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "reason=no ${IMAGE_SUFFIX} Docker-relevant changes since ${PREVIOUS_TAG}" >> "$GITHUB_OUTPUT"
+            {
+              echo "No ${IMAGE_SUFFIX} Docker-relevant changes since ${PREVIOUS_TAG}; skipping ${CURRENT_TAG} image build."
+              echo "Changed files:"
+              printf "%s\n" "$changed_files"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "reason=${IMAGE_SUFFIX} Docker-relevant changes since ${PREVIOUS_TAG}" >> "$GITHUB_OUTPUT"
+          {
+            echo "${IMAGE_SUFFIX} Docker-relevant changes since ${PREVIOUS_TAG}; building ${CURRENT_TAG} image."
+            printf "%s\n" "$relevant_changes"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Log in to GitHub Package Container registry
+        if: ${{ steps.rc_changes.outputs.skip != 'true' }}
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -47,12 +123,15 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up QEMU
+        if: ${{ steps.rc_changes.outputs.skip != 'true' }}
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
 
       - name: Set up Docker Buildx
+        if: ${{ steps.rc_changes.outputs.skip != 'true' }}
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Extract metadata (tags, labels) for Docker
+        if: ${{ steps.rc_changes.outputs.skip != 'true' }}
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
@@ -64,7 +143,23 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
 
+      - name: Check existing Docker image tag
+        if: ${{ steps.rc_changes.outputs.skip != 'true' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+        id: existing_image
+        run: |
+          set -euo pipefail
+          VERSION_TAG="${GITHUB_REF_NAME#v}"
+          IMAGE_REF="${REGISTRY}/${IMAGE_NAME}:${VERSION_TAG}"
+          if docker buildx imagetools inspect "$IMAGE_REF" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "$IMAGE_REF already exists; skipping same-tag rebuild."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "$IMAGE_REF does not exist yet; building."
+          fi
+
       - name: Build and push Docker image
+        if: ${{ steps.rc_changes.outputs.skip != 'true' && steps.existing_image.outputs.exists != 'true' }}
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           platforms: linux/amd64,linux/arm64

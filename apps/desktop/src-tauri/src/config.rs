@@ -186,6 +186,14 @@ pub(crate) fn read_config_toml(path: &Path) -> AppConfigToml {
             config.ai_key_anthropic = parse_toml_string_value(value);
         } else if key == "ai_key_gemini" {
             config.ai_key_gemini = parse_toml_string_value(value);
+        } else if key == "local_api_enabled" {
+            config.local_api_enabled = parse_toml_string_value(value);
+        } else if key == "local_api_port" {
+            config.local_api_port = parse_toml_string_value(value);
+        } else if key == "local_api_token" {
+            config.local_api_token = parse_toml_string_value(value);
+        } else if key == "disable_hardware_acceleration" {
+            config.disable_hardware_acceleration = parse_toml_string_value(value);
         }
     }
     config
@@ -312,6 +320,30 @@ fn write_config_toml_with_header(
             serialize_toml_string_value(ai_key_gemini)
         ));
     }
+    if let Some(local_api_enabled) = &config.local_api_enabled {
+        lines.push(format!(
+            "local_api_enabled = {}",
+            serialize_toml_string_value(local_api_enabled)
+        ));
+    }
+    if let Some(local_api_port) = &config.local_api_port {
+        lines.push(format!(
+            "local_api_port = {}",
+            serialize_toml_string_value(local_api_port)
+        ));
+    }
+    if let Some(local_api_token) = &config.local_api_token {
+        lines.push(format!(
+            "local_api_token = {}",
+            serialize_toml_string_value(local_api_token)
+        ));
+    }
+    if let Some(disable_hardware_acceleration) = &config.disable_hardware_acceleration {
+        lines.push(format!(
+            "disable_hardware_acceleration = {}",
+            serialize_toml_string_value(disable_hardware_acceleration)
+        ));
+    }
     let content = format!("{}\n", lines.join("\n"));
     fs::write(path, content).map_err(|e| e.to_string())
 }
@@ -368,6 +400,18 @@ fn merge_config(base: &mut AppConfigToml, overrides: AppConfigToml) {
     if overrides.ai_key_gemini.is_some() {
         base.ai_key_gemini = overrides.ai_key_gemini;
     }
+    if overrides.local_api_enabled.is_some() {
+        base.local_api_enabled = overrides.local_api_enabled;
+    }
+    if overrides.local_api_port.is_some() {
+        base.local_api_port = overrides.local_api_port;
+    }
+    if overrides.local_api_token.is_some() {
+        base.local_api_token = overrides.local_api_token;
+    }
+    if overrides.disable_hardware_acceleration.is_some() {
+        base.disable_hardware_acceleration = overrides.disable_hardware_acceleration;
+    }
 }
 
 pub(crate) fn read_config(app: &tauri::AppHandle) -> AppConfigToml {
@@ -415,6 +459,10 @@ fn split_config_for_secrets(config: &AppConfigToml) -> (AppConfigToml, AppConfig
         secrets_config.ai_key_gemini = Some(value);
         public_config.ai_key_gemini = None;
     }
+    if let Some(value) = config.local_api_token.clone() {
+        secrets_config.local_api_token = Some(value);
+        public_config.local_api_token = None;
+    }
 
     (public_config, secrets_config)
 }
@@ -437,6 +485,10 @@ fn config_has_values(config: &AppConfigToml) -> bool {
         || config.ai_key_openai.is_some()
         || config.ai_key_anthropic.is_some()
         || config.ai_key_gemini.is_some()
+        || config.local_api_enabled.is_some()
+        || config.local_api_port.is_some()
+        || config.local_api_token.is_some()
+        || config.disable_hardware_acceleration.is_some()
 }
 
 pub(crate) fn write_config_files(
@@ -704,6 +756,7 @@ fn normalize_obsidian_config_payload(payload: ObsidianConfigPayload) -> Obsidian
         scan_folders: normalize_obsidian_scan_folders(payload.scan_folders),
         inbox_file: normalize_obsidian_inbox_file(&payload.inbox_file),
         task_notes_include_archived: payload.task_notes_include_archived,
+        dataview_metadata_enabled: payload.dataview_metadata_enabled,
         new_task_format: normalize_obsidian_new_task_format(payload.new_task_format),
         last_scanned_at,
     }
@@ -716,6 +769,13 @@ fn read_obsidian_config_payload(config: &AppConfigToml) -> ObsidianConfigPayload
     serde_json::from_str::<ObsidianConfigPayload>(raw)
         .map(normalize_obsidian_config_payload)
         .unwrap_or_default()
+}
+
+fn expand_obsidian_payload_scope(app: &tauri::AppHandle, payload: &ObsidianConfigPayload) {
+    let Some(vault_path) = payload.vault_path.as_ref() else {
+        return;
+    };
+    expand_tauri_fs_scope(app, &PathBuf::from(vault_path));
 }
 
 #[tauri::command]
@@ -755,7 +815,21 @@ pub(crate) fn set_obsidian_config(app: tauri::AppHandle, config: Value) -> Resul
             .map_err(|e| format!("Failed to encode Obsidian config: {e}"))?,
     );
     write_config_files(&config_path, &get_secrets_path(&app), &current)?;
+    expand_obsidian_payload_scope(&app, &payload);
     serde_json::to_value(payload).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub(crate) fn expand_obsidian_vault_scope(
+    app: tauri::AppHandle,
+    vault_path: String,
+) -> Result<bool, String> {
+    let trimmed = vault_path.trim();
+    if trimmed.is_empty() {
+        return Ok(false);
+    }
+    expand_tauri_fs_scope(&app, &PathBuf::from(trimmed));
+    Ok(true)
 }
 
 #[tauri::command]

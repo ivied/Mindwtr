@@ -15,6 +15,10 @@
 
 ---
 
+> **New docs site:** Mindwtr documentation is gradually moving to [docs.mindwtr.app](https://docs.mindwtr.app/) for better search and navigation. The GitHub Wiki remains available during the transition.
+>
+> **Main website:** [mindwtr.app](https://mindwtr.app/)
+
 ## 🧠 Design Philosophy
 
 Mindwtr is **simple by default and powerful when needed**. We focus on reducing cognitive load, cutting the fat, and keeping you in flow.
@@ -37,6 +41,7 @@ Mindwtr is **simple by default and powerful when needed**. We focus on reducing 
   - Keyboard shortcuts now live in [[User Guide Desktop]]
 - [[User Guide Mobile]] — Complete mobile app documentation
   - [[Mobile Installation]] — Install on Android and iOS (App Store/TestFlight)
+  - [[Apple Shortcuts]] — Capture tasks and open GTD views from Apple Shortcuts
 - [[Pomodoro Focus]] — Optional deep-work timer in Focus view
 - [[Docker Deployment]] — Run PWA and Cloud Server with Docker
 
@@ -49,6 +54,8 @@ Mindwtr is **simple by default and powerful when needed**. We focus on reducing 
 ### Data & Sync
 - [[Data and Sync]] — Storage locations and sync setup
 - [[Backup and Restore]] — Export backups, restore local data, and use recovery snapshots
+- [[Importing Data From Other Apps]] — Native importers plus paste, text, script, and API migration paths
+- [[TickTick Import]] — Import TickTick CSV or ZIP backups into Mindwtr
 - [[Todoist Import]] — Import Todoist CSV or ZIP exports into Mindwtr
 - [[DGT GTD Import]] — Import DGT GTD JSON or ZIP exports into Mindwtr
 - [[OmniFocus Import]] — Import OmniFocus CSV, JSON, or ZIP exports into Mindwtr
@@ -58,7 +65,7 @@ Mindwtr is **simple by default and powerful when needed**. We focus on reducing 
 - [[Dropbox Sync]] — Native Dropbox OAuth sync setup
 - [[Cloud Deployment]] — Cloud deployment and operations runbook
 - [[Obsidian Integration]] — Desktop vault import and deep links
-- [[Calendar Integration]] — External calendars (ICS)
+- [[Calendar Integration]] — External calendars and mobile task push
 - [[AI Assistant]] — Optional BYOK assistant
 - [[Reusable Lists]] — Templates and checklist reset
 - [[Attachments]] — Files, links, and audio notes
@@ -89,7 +96,7 @@ Mindwtr is **simple by default and powerful when needed**. We focus on reducing 
 | 🧭 **Areas of Focus**  | Group projects by higher-level areas               |
 | 🏷️ **Contexts & Tags** | @home, @work, #focused, #lowenergy                 |
 | 📋 **Board View**      | Kanban-style drag-and-drop                         |
-| 📅 **Calendar**        | Time-based planning + external calendars (ICS)     |
+| 📅 **Calendar**        | Time-based planning + external calendars           |
 | 📋 **Weekly Review**   | Guided GTD review wizard                           |
 | 🔁 **Recurring Tasks** | Daily/weekly/monthly + completion-based            |
 | 📎 **Attachments**     | Files, links, and audio notes                      |
@@ -97,10 +104,11 @@ Mindwtr is **simple by default and powerful when needed**. We focus on reducing 
 | 🤖 **AI Assistant**    | Clarify, break down, review (optional)             |
 | 🧩 **Copilot**         | Context/tag/time suggestions while typing          |
 | ♻️ **Reusable Lists**  | Duplicate projects or reset checklists             |
-| 🔄 **Sync Options**    | iCloud (Apple), File, WebDAV, Cloud, Local API     |
+| 🔄 **Sync Options**    | iCloud (Apple), File, WebDAV, Cloud                |
 | 📲 **Android Widget**  | Home screen focus/next widget                      |
+| **Apple Shortcuts** | iOS capture and GTD navigation actions             |
 | 🌐 **Web App (PWA)**   | Offline-capable browser version                    |
-| 🌍 **i18n**            | EN, 中文, ES, HI, AR, DE, RU, JA, FR, PT, PL, KO, IT, TR, NL |
+| 🌍 **i18n**            | EN, VI, 中文, ES, HI, AR, DE, RU, JA, FR, PT, PL, KO, CS, IT, TR, NL |
 | 🖥️ **Cross-Platform**  | Desktop (Tauri) + Mobile (React Native)            |
 
 ## 📱 Feature Parity Matrix
@@ -122,10 +130,11 @@ Mindwtr is **simple by default and powerful when needed**. We focus on reducing 
 | **Widgets** | ❌ | ✅ (Android) |
 | **Global Hotkey** | ✅ | ❌ |
 | **Share Sheet** | ❌ | ✅ |
+| **Apple Shortcuts** | ❌ | ✅ |
 | **Keyboard Shortcuts** | ✅ (Vim/Emacs) | ❌ |
 | **File Sync** | ✅ | ✅ |
 | **WebDAV Sync** | ✅ | ✅ |
-| **External Calendars (ICS)** | ✅ | ✅ |
+| **External Calendars** | ✅ (ICS + macOS Apple Calendar) | ✅ (System calendars + ICS) |
 | **Audio Capture** | ✅ (Whisper/Cloud) | ✅ |
 | **AI Assistant** | ✅ | ✅ |
 

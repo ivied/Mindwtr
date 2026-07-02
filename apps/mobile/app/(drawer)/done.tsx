@@ -1,8 +1,9 @@
+import { useState } from 'react';
 import { View, StyleSheet, Platform } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { translateWithFallback } from '@mindwtr/core';
 
-import { TaskList } from '../../components/task-list';
+import { TaskList, type ReferenceGroupBy } from '../../components/task-list';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import { useLanguage } from '../../contexts/language-context';
 
@@ -10,6 +11,7 @@ export default function DoneScreen() {
   const tc = useThemeColors();
   const insets = useSafeAreaInsets();
   const { t } = useLanguage();
+  const [groupBy, setGroupBy] = useState<ReferenceGroupBy>('none');
   const resolveText = (key: string, fallback: string) => {
     return translateWithFallback(t, key, fallback);
   };
@@ -29,6 +31,8 @@ export default function DoneScreen() {
         allowAdd={false}
         showQuickAddHelp={false}
         showTimeEstimateFilters={false}
+        groupBy={groupBy}
+        onChangeGroupBy={setGroupBy}
         defaultEditTab="view"
         contentPaddingBottom={navBarInset}
       />

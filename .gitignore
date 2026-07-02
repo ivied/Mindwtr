@@ -84,12 +84,16 @@ aur/src/
 .flatpak-builder/
 
 # Agent files
+AGENT.md
 AGENTS.md
-.codex/
-.agents/
-.claude/
-.gemini/
-.kiro/
+.codex
+.codegraph/
+.agents
+.serena
+.claude
+.cursor/
+.gemini
+.kiro
 skills-lock.json
 
 # CI artifacts
@@ -99,6 +103,7 @@ scripts/ci/__pycache__/
 Mindwtr.wiki/
 
 # Local workspace configuration
+.worktrees/
 pnpm-workspace.yaml
 
 # Docker local data
@@ -108,8 +113,10 @@ docker/ai-service-backups/
 
 # Tesseract OCR trained data (downloaded on first run)
 **/*.traineddata
-.worktrees/
 
 # Local-only scratch / analysis artifacts
 *.code-workspace
 productivity-plugin.zip
+
+# Brainstorming/implementation working files (decisions distilled to docs/adr/)
+docs/superpowers/

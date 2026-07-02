@@ -1,5 +1,5 @@
-import { View, Text, ScrollView, StyleSheet, TouchableOpacity, Platform } from 'react-native';
-import { useTaskStore } from '@mindwtr/core';
+import { View, Text, FlatList, StyleSheet, TouchableOpacity, Platform } from 'react-native';
+import { getTranslationsSync, isTaskInActiveProject, shallow, useTaskStore } from '@mindwtr/core';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Task, TaskStatus } from '@mindwtr/core';
 import { useTheme } from '../../contexts/theme-context';
@@ -11,25 +11,49 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useMobileAreaFilter } from '@/hooks/use-mobile-area-filter';
 import { useThemeColors } from '@/hooks/use-theme-colors';
-import { projectMatchesAreaFilter, taskMatchesAreaFilter } from '@/lib/area-filter';
+import { projectMatchesAreaFilter, taskMatchesAreaFilter } from '@mindwtr/core';
 import { openContextsScreen, openProjectScreen } from '@/lib/task-meta-navigation';
 import { SwipeableTaskItem } from '../swipeable-task-item';
 import { TaskEditModal } from '../task-edit-modal';
+import { TaskListBulkBar, getBulkMoveStatusOptions } from '../task-list/TaskListBulkBar';
+import { useTaskListSelection } from '../use-task-list-selection';
+import { TaskListTagModal } from '../task-list/TaskListTagModal';
 
 
 
 export function SomedayView() {
-  const { tasks, projects, updateTask, updateProject, deleteTask, highlightTaskId, setHighlightTask } = useTaskStore();
+  const { tasks, projects, updateTask, updateProject, deleteTask, restoreTask, batchMoveTasks, batchDeleteTasks, batchUpdateTasks, highlightTaskId, setHighlightTask } = useTaskStore((state) => ({
+    tasks: state.tasks,
+    projects: state.projects,
+    updateTask: state.updateTask,
+    updateProject: state.updateProject,
+    deleteTask: state.deleteTask,
+    restoreTask: state.restoreTask,
+    batchMoveTasks: state.batchMoveTasks,
+    batchDeleteTasks: state.batchDeleteTasks,
+    batchUpdateTasks: state.batchUpdateTasks,
+    highlightTaskId: state.highlightTaskId,
+    setHighlightTask: state.setHighlightTask,
+  }), shallow);
   const { isDark } = useTheme();
-  const { t } = useLanguage();
+  const { language, t } = useLanguage();
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const router = useRouter();
+  const restoreActionLabel = getTranslationsSync(language)['trash.restoreToInbox']
+    || getTranslationsSync('en')['trash.restoreToInbox']
+    || 'Restore';
 
   const tc = useThemeColors();
   const insets = useSafeAreaInsets();
   const { areaById, resolvedAreaFilter } = useMobileAreaFilter();
   const projectById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
   const navBarInset = Platform.OS === 'android' && insets.bottom >= 24 ? insets.bottom : 0;
+  const tasksById = useMemo(() => {
+    return tasks.reduce((acc, task) => {
+      acc[task.id] = task;
+      return acc;
+    }, {} as Record<string, Task>);
+  }, [tasks]);
   const taskListContentStyle = useMemo(
     () => [styles.taskListContent, navBarInset ? { paddingBottom: 16 + navBarInset } : null],
     [navBarInset],
@@ -39,6 +63,7 @@ export function SomedayView() {
     .filter((task) => (
       !task.deletedAt
       && task.status === 'someday'
+      && isTaskInActiveProject(task, projectById)
       && taskMatchesAreaFilter(task, resolvedAreaFilter, projectById, areaById)
     ))
     .sort((a, b) => {
@@ -59,8 +84,37 @@ export function SomedayView() {
       });
   }, [projects, resolvedAreaFilter, areaById]);
 
+  const {
+    bulkActionLabel,
+    bulkActionLoading,
+    exitSelectionMode,
+    handleBatchAddTag,
+    handleBatchDelete,
+    handleBatchMove,
+    hasSelection,
+    multiSelectedIds,
+    rangeSelectMode,
+    selectedIdsArray,
+    selectionMode,
+    setTagInput,
+    setTagModalVisible,
+    tagInput,
+    tagModalVisible,
+    toggleRangeSelectMode,
+    toggleMultiSelect,
+  } = useTaskListSelection({
+    batchDeleteTasks,
+    batchMoveTasks,
+    batchUpdateTasks,
+    restoreActionLabel,
+    restoreTask,
+    t,
+    tasksById,
+  });
+  const bulkMoveStatusOptions = useMemo(() => getBulkMoveStatusOptions('someday'), []);
+
   const handleStatusChange = (id: string, status: TaskStatus) => {
-    updateTask(id, { status });
+    return updateTask(id, { status });
   };
   const handleActivateProject = (projectId: string) => {
     updateProject(projectId, { status: 'active' });
@@ -104,8 +158,54 @@ export function SomedayView() {
         </View>
       </View>
 
-      <ScrollView style={styles.taskList} showsVerticalScrollIndicator={false} contentContainerStyle={taskListContentStyle}>
-        {deferredProjects.length > 0 && (
+      {selectionMode ? (
+        <TaskListBulkBar
+          bulkActionLabel={bulkActionLabel}
+          bulkActionLoading={bulkActionLoading}
+          handleBatchDelete={handleBatchDelete}
+          handleBatchMove={handleBatchMove}
+          hasSelection={hasSelection}
+          onExitSelectionMode={exitSelectionMode}
+          onOpenTagModal={() => setTagModalVisible(true)}
+          onToggleRangeSelectMode={toggleRangeSelectMode}
+          rangeSelectMode={rangeSelectMode}
+          selectedCount={selectedIdsArray.length}
+          statusOptions={bulkMoveStatusOptions}
+          t={t}
+          themeColors={tc}
+        />
+      ) : null}
+
+      <FlatList
+        data={somedayTasks}
+        renderItem={({ item: task }) => (
+          <SwipeableTaskItem
+            task={task}
+            isDark={isDark}
+            tc={tc}
+            onPress={() => setEditingTask(task)}
+            selectionMode={selectionMode}
+            isMultiSelected={multiSelectedIds.has(task.id)}
+            onToggleSelect={() => toggleMultiSelect(task.id, { visibleTaskIds: somedayTasks.map((visibleTask) => visibleTask.id) })}
+            onStatusChange={(status) => handleStatusChange(task.id, status as TaskStatus)}
+            onDelete={() => { void deleteTask(task.id); }}
+            isHighlighted={task.id === highlightTaskId}
+            statusBadgeAsIcon
+            onProjectPress={openProjectScreen}
+            onContextPress={openContextsScreen}
+            onTagPress={openContextsScreen}
+          />
+        )}
+        keyExtractor={(task) => task.id}
+        style={styles.taskList}
+        contentContainerStyle={taskListContentStyle}
+        initialNumToRender={12}
+        maxToRenderPerBatch={12}
+        windowSize={5}
+        updateCellsBatchingPeriod={50}
+        removeClippedSubviews={false}
+        showsVerticalScrollIndicator={false}
+        ListHeaderComponent={deferredProjects.length > 0 ? (
           <View style={[styles.projectSection, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>
             <Text style={[styles.sectionLabel, { color: tc.secondaryText }]}>
               {t('projects.title') || 'Projects'}
@@ -142,24 +242,8 @@ export function SomedayView() {
               );
             })}
           </View>
-        )}
-        {somedayTasks.length > 0 ? (
-          somedayTasks.map((task) => (
-            <SwipeableTaskItem
-              key={task.id}
-              task={task}
-              isDark={isDark}
-              tc={tc}
-              onPress={() => setEditingTask(task)}
-              onStatusChange={(status) => handleStatusChange(task.id, status as TaskStatus)}
-              onDelete={() => { void deleteTask(task.id); }}
-              isHighlighted={task.id === highlightTaskId}
-              onProjectPress={openProjectScreen}
-              onContextPress={openContextsScreen}
-              onTagPress={openContextsScreen}
-            />
-          ))
-        ) : deferredProjects.length === 0 ? (
+        ) : null}
+        ListEmptyComponent={deferredProjects.length === 0 ? (
           <View style={styles.emptyState}>
             <Lightbulb size={48} color={tc.secondaryText} strokeWidth={1.5} style={styles.emptyIcon} />
             <Text style={[styles.emptyTitle, { color: tc.text }]}>{t('someday.empty')}</Text>
@@ -168,7 +252,20 @@ export function SomedayView() {
             </Text>
           </View>
         ) : null}
-      </ScrollView>
+      />
+
+      <TaskListTagModal
+        onChangeTag={setTagInput}
+        onClose={() => {
+          setTagModalVisible(false);
+          setTagInput('');
+        }}
+        onSave={handleBatchAddTag}
+        t={t}
+        tagInput={tagInput}
+        themeColors={tc}
+        visible={tagModalVisible}
+      />
 
       <TaskEditModal
         visible={editingTask !== null}

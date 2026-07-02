@@ -1,5 +1,5 @@
 import { readFileSync } from 'fs';
-import { createHash } from 'crypto';
+import { createHash, timingSafeEqual, type BinaryLike } from 'crypto';
 import { BEARER_TOKEN_PATTERN, logWarn } from './server-config';
 
 export function getToken(req: Request): string | null {
@@ -13,6 +13,35 @@ export function getToken(req: Request): string | null {
 
 export function tokenToKey(token: string): string {
     return createHash('sha256').update(token).digest('hex');
+}
+
+export type AllowedAuthTokens = {
+    readonly digests: readonly Buffer[];
+    readonly size: number;
+};
+
+export type AllowedAuthTokenInput = AllowedAuthTokens | Iterable<string> | null;
+
+function tokenToDigest(token: BinaryLike): Buffer {
+    return createHash('sha256').update(token).digest();
+}
+
+function isAllowedAuthTokens(value: AllowedAuthTokenInput): value is AllowedAuthTokens {
+    return Boolean(value && typeof value === 'object' && 'digests' in value);
+}
+
+export function createAllowedAuthTokens(tokens: Iterable<string>): AllowedAuthTokens {
+    const uniqueTokens = Array.from(new Set(tokens));
+    return {
+        digests: uniqueTokens.map((token) => tokenToDigest(token)),
+        size: uniqueTokens.length,
+    };
+}
+
+export function normalizeAllowedAuthTokens(allowedTokens: AllowedAuthTokenInput): AllowedAuthTokens | null {
+    if (!allowedTokens) return null;
+    if (isAllowedAuthTokens(allowedTokens)) return allowedTokens;
+    return createAllowedAuthTokens(allowedTokens);
 }
 
 function normalizeProxyIp(value: string | null | undefined): string | null {
@@ -115,12 +144,12 @@ export function getAuthFailureTokenRateKey(options: {
     return null;
 }
 
-export function parseAllowedAuthTokens(rawValue?: string): Set<string> | null {
+export function parseAllowedAuthTokens(rawValue?: string): AllowedAuthTokens | null {
     const tokens = String(rawValue || '')
         .split(',')
         .map((item) => item.trim())
         .filter((item) => item.length > 0);
-    return tokens.length > 0 ? new Set(tokens) : null;
+    return tokens.length > 0 ? createAllowedAuthTokens(tokens) : null;
 }
 
 export function parseBoolEnv(value: string | undefined): boolean {
@@ -140,7 +169,7 @@ function readOptionalEnvFile(env: Record<string, string | undefined>, fileVarNam
     }
 }
 
-export function resolveAllowedAuthTokensFromEnv(env: Record<string, string | undefined>): Set<string> | null {
+export function resolveAllowedAuthTokensFromEnv(env: Record<string, string | undefined>): AllowedAuthTokens | null {
     const values = [
         env.MINDWTR_CLOUD_AUTH_TOKENS,
         readOptionalEnvFile(env, 'MINDWTR_CLOUD_AUTH_TOKENS_FILE'),
@@ -161,9 +190,14 @@ export function resolveAllowedAuthTokensFromEnv(env: Record<string, string | und
     return parseAllowedAuthTokens(values.join(','));
 }
 
-export function isAuthorizedToken(token: string, allowedTokens: Set<string> | null): boolean {
+export function isAuthorizedToken(token: string, allowedTokens: AllowedAuthTokens | null): boolean {
     if (!allowedTokens) return true;
-    return allowedTokens.has(token);
+    const tokenDigest = tokenToDigest(token);
+    let authorized = false;
+    for (const allowedDigest of allowedTokens.digests) {
+        authorized = timingSafeEqual(tokenDigest, allowedDigest) || authorized;
+    }
+    return authorized;
 }
 
 export function toRateLimitRoute(pathname: string): string {

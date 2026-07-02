@@ -2,6 +2,8 @@ import React, { Component, ErrorInfo, ReactNode, useContext } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { AlertTriangle } from 'lucide-react-native';
 import { resolveThemeColors } from '@/hooks/use-theme-colors';
+import { resolveThemeTokens } from '@/hooks/use-theme-tokens';
+import { resolveFilledButtonColors } from '@/hooks/use-filled-button-colors';
 import { logError } from '@/lib/app-log';
 import { LanguageContext } from '@/contexts/language-context';
 import { ThemeContext } from '@/contexts/theme-context';
@@ -25,6 +27,7 @@ function ErrorFallback({ error, onRetry }: { error: Error | null; onRetry: () =>
     const themeContext = useContext(ThemeContext);
     const languageContext = useContext(LanguageContext);
     const tc = resolveThemeColors(themeContext);
+    const filledButton = resolveFilledButtonColors(resolveThemeTokens(themeContext), tc);
     const t = (key: string) => languageContext?.t(key) ?? FALLBACK_ERROR_STRINGS[key] ?? key;
     return (
         <View style={[styles.container, { backgroundColor: tc.bg }]}>
@@ -38,8 +41,8 @@ function ErrorFallback({ error, onRetry }: { error: Error | null; onRetry: () =>
                     {error?.message}
                 </Text>
             </View>
-            <TouchableOpacity style={[styles.button, { backgroundColor: tc.tint }]} onPress={onRetry}>
-                <Text style={[styles.buttonText, { color: tc.onTint }]}>{t('errorBoundary.retry')}</Text>
+            <TouchableOpacity style={[styles.button, { backgroundColor: filledButton.backgroundColor }]} onPress={onRetry}>
+                <Text style={[styles.buttonText, { color: filledButton.textColor ?? tc.onTint }]}>{t('errorBoundary.retry')}</Text>
             </TouchableOpacity>
         </View>
     );

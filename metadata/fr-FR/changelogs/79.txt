@@ -1,0 +1,4 @@
+- Guided Mind Sweep capture les elements personnels et de travail directement dans l'Inbox.
+- Personnes, ordre du tableau, traitement d'inbox et suivis du jour ameliorent l'organisation.
+- Sync et pieces jointes sont plus sures avec requetes bornees, suppressions distantes, tombstones et meilleurs fallbacks.
+- Les actions mobiles, le texte partage et l'organisation de revue sont plus stables.

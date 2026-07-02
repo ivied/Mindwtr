@@ -15,7 +15,10 @@ type WidgetElement = ReactElement<{
     style?: {
         flex?: number;
         fontSize?: number;
+        height?: number;
     };
+    maxLines?: number;
+    truncate?: string;
 }>;
 
 const asWidgetChildren = (children: WidgetElement['props']['children']): WidgetElement[] => {
@@ -67,8 +70,11 @@ describe('TasksWidget', () => {
         const tree = buildTasksWidgetTree(basePayload) as WidgetElement;
         const [content, button] = asWidgetChildren(tree.props.children);
 
+        expect(content?.props.style?.height).toBe(0);
         expect(content?.props.style?.flex).toBe(1);
         expect(button?.props.text).toBe('Quick capture');
+        expect(button?.props.maxLines).toBe(1);
+        expect(button?.props.truncate).toBe('END');
     });
 
     it('uses a compact layout for narrow Android widgets', () => {

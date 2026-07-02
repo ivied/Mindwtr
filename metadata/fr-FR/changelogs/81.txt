@@ -1,0 +1,4 @@
+- Rappels repetes pour les taches avec une heure precise.
+- Capture Bulk Quick Add et saisie Quick Add plus sure.
+- Meilleur rafraichissement Focus/projets, popups clavier, grands textes et controles Material 3.
+- Reparation sync renforcee avec erreurs WebDAV/natives plus claires.

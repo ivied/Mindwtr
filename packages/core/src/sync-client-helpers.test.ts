@@ -7,6 +7,7 @@ import {
     DEFAULT_ATTACHMENT_CLEANUP_INTERVAL_MS,
     LocalSyncAbort,
     createAbortableFetch,
+    ensureFreshLocalSyncSnapshot,
     getInMemoryAppDataSnapshot,
     normalizeCloudProvider,
     shouldRunAttachmentCleanup,
@@ -21,13 +22,16 @@ describe('sync-client-helpers', () => {
             _allProjects: [{ id: 'p1', title: 'Project', status: 'active', color: '#000000', createdAt: now, updatedAt: now }],
             _allSections: [],
             _allAreas: [],
+            _allPeople: [{ id: 'person-1', name: 'Alex', createdAt: now, updatedAt: now }],
             settings: { gtd: { autoArchiveDays: 7 } },
         }));
 
         const snapshot = getInMemoryAppDataSnapshot();
         snapshot.tasks[0]!.title = 'Changed';
+        snapshot.people![0]!.name = 'Changed';
 
         expect(useTaskStore.getState()._allTasks[0]!.title).toBe('Task');
+        expect(useTaskStore.getState()._allPeople[0]!.name).toBe('Alex');
     });
 
     it('evaluates attachment cleanup windows', () => {
@@ -46,6 +50,51 @@ describe('sync-client-helpers', () => {
         const error = new LocalSyncAbort();
         expect(error.name).toBe('LocalSyncAbort');
         expect(error.message).toContain('Local changes detected');
+    });
+
+
+    it('keeps a fresh local sync snapshot without queueing follow-up work', () => {
+        const requestFollowUp = vi.fn();
+
+        const currentChangeAt = ensureFreshLocalSyncSnapshot({
+            localSnapshotChangeAt: 10,
+            getCurrentChangeAt: () => 10,
+            requestFollowUp,
+        });
+
+        expect(currentChangeAt).toBe(10);
+        expect(requestFollowUp).not.toHaveBeenCalled();
+    });
+
+    it('accepts a stale local sync snapshot when the caller proves it is covered', () => {
+        const requestFollowUp = vi.fn();
+        const acceptCoveredSnapshot = vi.fn(() => true);
+
+        const currentChangeAt = ensureFreshLocalSyncSnapshot({
+            localSnapshotChangeAt: 10,
+            getCurrentChangeAt: () => 11,
+            requestFollowUp,
+            acceptCoveredSnapshot,
+        });
+
+        expect(currentChangeAt).toBe(11);
+        expect(acceptCoveredSnapshot).toHaveBeenCalledWith(11);
+        expect(requestFollowUp).not.toHaveBeenCalled();
+    });
+
+    it('queues a follow-up and aborts when the local sync snapshot is stale', () => {
+        const requestFollowUp = vi.fn();
+        const onStale = vi.fn();
+
+        expect(() => ensureFreshLocalSyncSnapshot({
+            localSnapshotChangeAt: 10,
+            getCurrentChangeAt: () => 12,
+            requestFollowUp,
+            onStale,
+        })).toThrow(LocalSyncAbort);
+
+        expect(onStale).toHaveBeenCalledWith({ localSnapshotChangeAt: 10, currentChangeAt: 12 });
+        expect(requestFollowUp).toHaveBeenCalledOnce();
     });
 
     it('normalizes cloud provider values', () => {

@@ -1,28 +1,33 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { generateUUID, useTaskStore } from '@mindwtr/core';
-import { Check, ArrowLeft, Trash2, Plus } from 'lucide-react-native';
+import { Check, Trash2, Plus } from 'lucide-react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useLanguage } from '../contexts/language-context';
 
 export default function FocusChecklistPage() {
     const { id } = useLocalSearchParams();
+    const taskId = Array.isArray(id) ? id[0] : id;
     const router = useRouter();
     const { t } = useLanguage();
-    const { tasks, updateTask } = useTaskStore();
-    const [task, setTask] = useState(tasks.find(t => t.id === id));
+    const storeTask = useTaskStore(useCallback(
+        (state) => state.tasks.find((candidate) => candidate.id === taskId),
+        [taskId]
+    ));
+    const updateTask = useTaskStore((state) => state.updateTask);
+    const [task, setTask] = useState(storeTask);
 
     // Local state for immediate feedback
     const [checklist, setChecklist] = useState(task?.checklist || []);
 
     useEffect(() => {
-        const found = tasks.find(t => t.id === id);
-        if (found) {
-            setTask(found);
-            setChecklist(found.checklist || []);
+        if (storeTask) {
+            setTask(storeTask);
+            setChecklist(storeTask.checklist || []);
         }
-    }, [id, tasks]);
+    }, [storeTask]);
 
     const handleToggle = (index: number) => {
         if (!task) return;
@@ -74,9 +79,13 @@ export default function FocusChecklistPage() {
     return (
         <SafeAreaView style={styles.container}>
             <View style={styles.header}>
-                <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
-                    <ArrowLeft color="#000" size={24} />
-                    <Text style={styles.backText}>Back</Text>
+                <TouchableOpacity
+                    onPress={() => router.back()}
+                    style={styles.backBtn}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('common.back') || 'Back'}
+                >
+                    <Ionicons name="chevron-back" color="#000" size={24} />
                 </TouchableOpacity>
             </View>
 
@@ -143,10 +152,6 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 8,
-    },
-    backText: {
-        fontSize: 16,
-        color: '#000',
     },
     titleContainer: {
         padding: 20,

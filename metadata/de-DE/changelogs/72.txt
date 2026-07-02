@@ -1,0 +1,4 @@
+- Ersteinrichtung und vollere Erste-Schritte-Hilfe hinzugefuegt.
+- Focus oeffnet konsistenter und Aufgabenbearbeitung ist schneller.
+- Geloeschte Projektfelder bleiben leer und Kontextautomation ist leiser.
+- Sync-Bereinigung, Datumswarnungen, Wiederholungen und grosse Datenbanken sind stabiler.

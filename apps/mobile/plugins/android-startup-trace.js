@@ -30,6 +30,101 @@ inline fun <T> startupSection(phase: String, block: () -> T): T {
 }
 `;
 
+const buildContextAutomationReceiverSource = (packageName) => `package ${packageName}
+
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import com.facebook.react.HeadlessJsTaskService
+
+private const val ACTIVATE_CONTEXT_ACTION = "tech.dongdongbh.mindwtr.action.ACTIVATE_CONTEXT"
+private const val DEACTIVATE_CONTEXT_ACTION = "tech.dongdongbh.mindwtr.action.DEACTIVATE_CONTEXT"
+
+class ContextAutomationReceiver : BroadcastReceiver() {
+  override fun onReceive(context: Context, intent: Intent?) {
+    val payload = ContextAutomationPayload.fromIntent(intent) ?: return
+    val serviceIntent = Intent(context, ContextAutomationHeadlessService::class.java).apply {
+      putExtra("action", payload.action)
+      putExtra("context", payload.context)
+      putExtra("source", "android_broadcast")
+    }
+
+    context.startService(serviceIntent)
+    HeadlessJsTaskService.acquireWakeLockNow(context)
+  }
+}
+
+private data class ContextAutomationPayload(
+  val action: String,
+  val context: String
+) {
+  companion object {
+    fun fromIntent(intent: Intent?): ContextAutomationPayload? {
+      val contextAction = when (intent?.action) {
+        ACTIVATE_CONTEXT_ACTION -> "activate"
+        DEACTIVATE_CONTEXT_ACTION -> "deactivate"
+        else -> return null
+      }
+
+      fun clean(value: String?): String? {
+        val trimmed = value?.trim().orEmpty()
+        return if (trimmed.isBlank()) null else trimmed
+      }
+
+      val data = intent.data
+      val ignoredPathSegments = setOf("context", "contexts", "activate", "deactivate")
+      val pathContext = data?.pathSegments
+        ?.filter { segment -> !ignoredPathSegments.contains(segment) }
+        ?.joinToString("/")
+      val hostContext = data?.host?.takeIf { host -> host != "context" && host != "contexts" }
+      val rawContext = clean(intent.getStringExtra("context"))
+        ?: clean(intent.getStringExtra("name"))
+        ?: clean(intent.getStringExtra("token"))
+        ?: clean(intent.getStringExtra(Intent.EXTRA_TEXT))
+        ?: clean(data?.getQueryParameter("context"))
+        ?: clean(data?.getQueryParameter("name"))
+        ?: clean(data?.getQueryParameter("token"))
+        ?: clean(pathContext)
+        ?: clean(hostContext)
+        ?: return null
+
+      return ContextAutomationPayload(contextAction, rawContext)
+    }
+  }
+}
+`;
+
+const buildContextAutomationHeadlessServiceSource = (packageName) => `package ${packageName}
+
+import android.content.Intent
+import com.facebook.react.HeadlessJsTaskService
+import com.facebook.react.bridge.Arguments
+import com.facebook.react.jstasks.HeadlessJsTaskConfig
+
+private const val CONTEXT_AUTOMATION_HEADLESS_TASK_NAME = "MindwtrContextAutomation"
+private const val CONTEXT_AUTOMATION_HEADLESS_TIMEOUT_MS = 15_000L
+
+class ContextAutomationHeadlessService : HeadlessJsTaskService() {
+  override fun getTaskConfig(intent: Intent?): HeadlessJsTaskConfig? {
+    val action = intent?.getStringExtra("action")?.trim().orEmpty()
+    val context = intent?.getStringExtra("context")?.trim().orEmpty()
+    if (action.isBlank() || context.isBlank()) return null
+
+    val data = Arguments.createMap().apply {
+      putString("action", action)
+      putString("context", context)
+    }
+
+    return HeadlessJsTaskConfig(
+      CONTEXT_AUTOMATION_HEADLESS_TASK_NAME,
+      data,
+      CONTEXT_AUTOMATION_HEADLESS_TIMEOUT_MS,
+      true
+    )
+  }
+}
+`;
+
 const notificationCacheFunction = `  private fun cacheNotificationOpenPayload(intent: Intent?): LinkedHashMap<String, String>? {
     val extras = intent?.extras ?: return null
     val payload = LinkedHashMap<String, String>()
@@ -39,14 +134,14 @@ const notificationCacheFunction = `  private fun cacheNotificationOpenPayload(in
     fun copyNestedData(value: Any?) {
       when (value) {
         is Bundle -> {
-            listOf("alarmKey", "id", "taskId", "projectId", "kind", "actionIdentifier").forEach { key ->
+            listOf("alarmKey", "id", "taskId", "projectId", "context", "kind", "actionIdentifier").forEach { key ->
               copyPayloadValue(key, value.get(key))
             }
         }
         is String -> {
           runCatching {
             val json = JSONObject(value)
-            listOf("alarmKey", "id", "taskId", "projectId", "kind", "actionIdentifier").forEach { key ->
+            listOf("alarmKey", "id", "taskId", "projectId", "context", "kind", "actionIdentifier").forEach { key ->
               copyPayloadValue(key, json.opt(key))
             }
           }
@@ -54,14 +149,14 @@ const notificationCacheFunction = `  private fun cacheNotificationOpenPayload(in
         else -> {
           runCatching {
             val json = JSONObject(value.toString())
-            listOf("alarmKey", "id", "taskId", "projectId", "kind", "actionIdentifier").forEach { key ->
+            listOf("alarmKey", "id", "taskId", "projectId", "context", "kind", "actionIdentifier").forEach { key ->
               copyPayloadValue(key, json.opt(key))
             }
           }
         }
       }
     }
-    listOf("alarmKey", "id", "taskId", "projectId", "kind", "actionIdentifier").forEach { key ->
+    listOf("alarmKey", "id", "taskId", "projectId", "context", "kind", "actionIdentifier").forEach { key ->
       copyPayloadValue(key, extras.get(key))
     }
     copyNestedData(extras.get("data"))
@@ -95,6 +190,45 @@ const createNoteIntentFunction = `  private fun normalizeCreateNoteIntent(intent
 
     intent.action = Intent.ACTION_VIEW
     intent.data = builder.build()
+  }`;
+
+const contextAutomationIntentFunction = `  private fun normalizeContextAutomationIntent(intent: Intent?) {
+    val contextAction = when (intent?.action) {
+      "tech.dongdongbh.mindwtr.action.ACTIVATE_CONTEXT" -> "activate"
+      "tech.dongdongbh.mindwtr.action.DEACTIVATE_CONTEXT" -> "deactivate"
+      else -> return
+    }
+
+    fun clean(value: String?): String? {
+      val trimmed = value?.trim().orEmpty()
+      return if (trimmed.isBlank()) null else trimmed
+    }
+
+    val data = intent.data
+    val ignoredPathSegments = setOf("context", "contexts", "activate", "deactivate")
+    val pathContext = data?.pathSegments
+      ?.filter { segment -> !ignoredPathSegments.contains(segment) }
+      ?.joinToString("/")
+    val hostContext = data?.host?.takeIf { host -> host != "context" && host != "contexts" }
+    val rawContext = clean(intent.getStringExtra("context"))
+      ?: clean(intent.getStringExtra("name"))
+      ?: clean(intent.getStringExtra("token"))
+      ?: clean(intent.getStringExtra(Intent.EXTRA_TEXT))
+      ?: clean(data?.getQueryParameter("context"))
+      ?: clean(data?.getQueryParameter("name"))
+      ?: clean(data?.getQueryParameter("token"))
+      ?: clean(pathContext)
+      ?: clean(hostContext)
+      ?: return
+
+    intent.action = Intent.ACTION_VIEW
+    intent.data = Uri.Builder()
+      .scheme("mindwtr")
+      .path("contexts")
+      .appendQueryParameter("token", rawContext)
+      .appendQueryParameter("contextAction", contextAction)
+      .appendQueryParameter("source", "android_intent")
+      .build()
   }`;
 
 const patchMainApplication = (source) => {
@@ -231,6 +365,13 @@ const patchMainActivity = (source) => {
     );
   }
 
+  if (!next.includes('normalizeContextAutomationIntent(intent)')) {
+    next = next.replace(
+      '    normalizeCreateNoteIntent(intent)\n',
+      '    normalizeCreateNoteIntent(intent)\n    normalizeContextAutomationIntent(intent)\n'
+    );
+  }
+
   if (!next.includes('override fun onNewIntent(intent: Intent)')) {
     next = next.replace(
       '\n  override fun getMainComponentName(): String = "main"\n',
@@ -254,9 +395,16 @@ const patchMainActivity = (source) => {
     );
   }
 
+  if (!next.includes('normalizeContextAutomationIntent(intent)\n    super.onNewIntent(intent)')) {
+    next = next.replace(
+      '  override fun onNewIntent(intent: Intent) {\n    normalizeCreateNoteIntent(intent)\n    super.onNewIntent(intent)',
+      '  override fun onNewIntent(intent: Intent) {\n    normalizeCreateNoteIntent(intent)\n    normalizeContextAutomationIntent(intent)\n    super.onNewIntent(intent)'
+    );
+  }
+
   if (
     next.includes('private fun cacheNotificationOpenPayload(intent: Intent?)')
-    && !next.includes('copyNestedData(extras.get("data"))')
+    && (!next.includes('copyNestedData(extras.get("data"))') || !next.includes('"projectId", "context", "kind"'))
   ) {
     next = next.replace(
       /  private fun cacheNotificationOpenPayload\(intent: Intent\?\): LinkedHashMap<String, String>\? \{[\s\S]*?\n  \}\n\n  private fun emitNotificationOpenPayload/,
@@ -269,6 +417,8 @@ const patchMainActivity = (source) => {
       '\n}\n',
       `
 ${createNoteIntentFunction}
+
+${contextAutomationIntentFunction}
 
 ${notificationCacheFunction}
 
@@ -294,6 +444,16 @@ ${notificationCacheFunction}
     );
   }
 
+  if (
+    next.includes('private fun cacheNotificationOpenPayload(intent: Intent?)')
+    && !next.includes('private fun normalizeContextAutomationIntent(intent: Intent?)')
+  ) {
+    next = next.replace(
+      '\n  private fun cacheNotificationOpenPayload(intent: Intent?)',
+      `\n${contextAutomationIntentFunction}\n\n  private fun cacheNotificationOpenPayload(intent: Intent?)`
+    );
+  }
+
   next = next.replace(
     '    pendingNotificationOpenPayload = LinkedHashMap(payload)\n',
     '    NotificationOpenPayloadStore.cache(payload)\n'
@@ -311,6 +471,8 @@ module.exports = function withAndroidStartupTrace(config) {
         return cfg;
       }
       const startupTraceSource = buildStartupTraceSource(packageName);
+      const contextAutomationReceiverSource = buildContextAutomationReceiverSource(packageName);
+      const contextAutomationHeadlessServiceSource = buildContextAutomationHeadlessServiceSource(packageName);
       const packageDir = packageName.replace(/\./g, path.sep);
       const sourceDir = path.join(
         cfg.modRequest.platformProjectRoot,
@@ -323,6 +485,8 @@ module.exports = function withAndroidStartupTrace(config) {
       const mainApplicationPath = path.join(sourceDir, 'MainApplication.kt');
       const mainActivityPath = path.join(sourceDir, 'MainActivity.kt');
       const startupTracePath = path.join(sourceDir, 'StartupTrace.kt');
+      const contextAutomationReceiverPath = path.join(sourceDir, 'ContextAutomationReceiver.kt');
+      const contextAutomationHeadlessServicePath = path.join(sourceDir, 'ContextAutomationHeadlessService.kt');
 
       if (fs.existsSync(mainApplicationPath)) {
         const original = fs.readFileSync(mainApplicationPath, 'utf8');
@@ -347,10 +511,16 @@ module.exports = function withAndroidStartupTrace(config) {
       }
 
       if (fs.existsSync(sourceDir)) {
-        const existing = fs.existsSync(startupTracePath) ? fs.readFileSync(startupTracePath, 'utf8') : null;
-        if (existing !== startupTraceSource) {
-          fs.writeFileSync(startupTracePath, startupTraceSource);
-        }
+        [
+          [startupTracePath, startupTraceSource],
+          [contextAutomationReceiverPath, contextAutomationReceiverSource],
+          [contextAutomationHeadlessServicePath, contextAutomationHeadlessServiceSource],
+        ].forEach(([filePath, source]) => {
+          const existing = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : null;
+          if (existing !== source) {
+            fs.writeFileSync(filePath, source);
+          }
+        });
       }
 
       return cfg;
@@ -359,6 +529,8 @@ module.exports = function withAndroidStartupTrace(config) {
 };
 
 module.exports.__testables = {
+  buildContextAutomationHeadlessServiceSource,
+  buildContextAutomationReceiverSource,
   buildStartupTraceSource,
   patchMainApplication,
   patchMainActivity,

@@ -26,15 +26,17 @@ Revisit ADR 0008 only if snapshot files regularly exceed 5 MB, sync round-trips 
 1. Entities are matched by `id`.
 2. If entity exists on one side only, it is kept.
 3. If both exist, merge uses revision-aware LWW:
-   - Compare `rev` first (higher wins).
+   - When revision metadata exists, compare `rev` first (higher wins). `rev` is a per-entity edit counter, not a vector clock, so several offline edits on one device can beat one newer edit on another device.
    - If revisions tie, compare `updatedAt` (newer wins).
-   - If timestamps tie, apply deterministic tie-break by normalized content signature.
+   - If timestamps tie, compare `revBy` lexicographically when both sides have different device IDs, then apply the deterministic tie-break by normalized content signature. The `revBy` step is not about device priority; it makes same-revision, same-timestamp conflicts converge to the same winner on every peer before the content signature fallback runs.
+   - Legacy entities without revision metadata treat `updatedAt` values within the 5-minute clock-skew threshold as an ambiguous tie and use the deterministic signature winner. Outside that window, newer `updatedAt` wins.
 4. Soft-deletes use operation time:
    - Operation time = `max(updatedAt, deletedAt)` for tombstones.
    - Live-vs-deleted conflicts choose newer operation time.
    - If the delete-vs-live operation times are within 30 seconds of each other and the revision numbers tie, Mindwtr preserves the live item instead of immediately letting the tombstone win. This is the deliberate ambiguous-window rule that can make a just-deleted task reappear after a concurrent edit on another device.
    - If revisions differ inside that 30-second window, the higher revision still wins.
    - Legacy records without revision metadata prefer the tombstone inside that same window.
+   - Backup restore is the one deliberate exception outside the ambiguous window: if the live side has `revBy = "backup-restore"` and its operation time is at least the tombstone operation time, the restored live item wins.
    - When a delete wins over a live edit, Mindwtr emits a bounded `syncConflictDiscarded` diagnostic entry with entity type, ID, operation timing, and revision metadata.
    - When the ambiguous-window live item is preserved, Mindwtr emits a bounded `Preserved live item during ambiguous delete-vs-live merge` diagnostic entry and stores conflict metadata in sync history/settings.
 5. Invalid `deletedAt` falls back to `updatedAt` for conservative operation timing.
@@ -53,6 +55,7 @@ Revisit ADR 0008 only if snapshot files regularly exceed 5 MB, sync round-trips 
    - Appearance/language/GTD scheduling/external calendars/AI/saved filters can be merged independently.
    - Conflict resolution uses group-level timestamps (`appearance`, `language`, `gtd`, `externalCalendars`, `ai`, `savedFilters`).
    - Concurrent edits to different fields inside the same group can still collapse to the newer group update.
+   - Saved filters merge by filter `id`. Live-vs-live saved-filter conflicts use the filter `updatedAt` strictly; deterministic tie-break applies only when the timestamps tie or are unusable.
    - A local `syncPreferences` opt-out is bidirectional for that group: Mindwtr does not send that group to remote and does not accept incoming remote changes for it.
    - Secrets (API keys, local model paths) are never synced.
 10. Remote-write recovery is explicit:
@@ -64,7 +67,7 @@ Revisit ADR 0008 only if snapshot files regularly exceed 5 MB, sync round-trips 
 11. Clock skew telemetry:
    - Merge stats record the largest observed skew.
    - Warnings surface when skew exceeds 5 minutes.
-   - Future `updatedAt` values are clamped to the merge-time clock for comparison and counted in `futureTimestampClamps`.
+   - Future `updatedAt` values more than 5 minutes beyond the merge-time clock are clamped for comparison and counted in `futureTimestampClamps`.
    - If both sides of the same record are future-clamped, Mindwtr emits a bounded `Both merge candidates had future updatedAt timestamps clamped` diagnostic with the record ID and clamp time.
 12. Local edits during sync do not take a hard lock:
    - Desktop and mobile detect when local state changed during the sync write phase.

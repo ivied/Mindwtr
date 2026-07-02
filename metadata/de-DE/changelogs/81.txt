@@ -1,0 +1,4 @@
+- Wiederhol-Erinnerungen fuer Aufgaben mit genauer Uhrzeit.
+- Bulk Quick Add und sichererer Umgang mit getipptem Quick-Add-Text.
+- Bessere Focus/Projekt-Aktualisierung, Tastatur-Popups, grosse Schrift und Material-3-Steuerung.
+- Staerkere Sync-Reparatur mit klareren WebDAV/native Fehlerdetails.

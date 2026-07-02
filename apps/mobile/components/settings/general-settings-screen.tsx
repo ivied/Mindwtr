@@ -1,9 +1,16 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { Modal, Pressable, ScrollView, Switch, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { normalizeDateFormatSetting, normalizeTimeFormatSetting, useTaskStore } from '@mindwtr/core';
+import {
+    canUseJalaliCalendar,
+    normalizeDateFormatSetting,
+    normalizeTimeFormatSetting,
+    normalizeWeekStartSetting,
+    resolveCalendarSystemSetting,
+    useTaskStore,
+} from '@mindwtr/core';
 
 import { useTheme } from '@/contexts/theme-context';
 import { useThemeColors } from '@/hooks/use-theme-colors';
@@ -11,6 +18,7 @@ import {
     coerceMobileQuickAccessView,
     MOBILE_QUICK_ACCESS_VIEWS,
 } from '@/lib/mobile-quick-access-view';
+import { authenticateWithDeviceLock, getMobileAppLockErrorKey } from '@/lib/mobile-app-lock';
 
 import { LANGUAGES } from './settings.constants';
 import { useSettingsLocalization, useSettingsScrollContent } from './settings.hooks';
@@ -27,14 +35,23 @@ export function GeneralSettingsScreen() {
     const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
     const [weekStartPickerOpen, setWeekStartPickerOpen] = useState(false);
     const [dateFormatPickerOpen, setDateFormatPickerOpen] = useState(false);
+    const [calendarSystemPickerOpen, setCalendarSystemPickerOpen] = useState(false);
     const [timeFormatPickerOpen, setTimeFormatPickerOpen] = useState(false);
     const [quickAccessPickerOpen, setQuickAccessPickerOpen] = useState(false);
+    const [appLockBusy, setAppLockBusy] = useState(false);
+    const [appLockErrorKey, setAppLockErrorKey] = useState<string | null>(null);
 
-    const weekStart = settings.weekStart === 'monday' ? 'monday' : 'sunday';
+    const weekStart = normalizeWeekStartSetting(settings.weekStart);
     const dateFormat = normalizeDateFormatSetting(settings.dateFormat);
     const timeFormat = normalizeTimeFormatSetting(settings.timeFormat);
+    const systemLocale = typeof Intl !== 'undefined' && typeof Intl.DateTimeFormat === 'function'
+        ? Intl.DateTimeFormat().resolvedOptions().locale
+        : '';
+    const showCalendarSystem = canUseJalaliCalendar({ language, systemLocale });
+    const calendarSystem = resolveCalendarSystemSetting(settings.calendarSystem, { language, systemLocale });
     const showTaskAge = settings.appearance?.showTaskAge === true;
     const quickAccessView = coerceMobileQuickAccessView(settings.appearance?.mobileQuickAccessView);
+    const appLockEnabled = settings.security?.mobileAppLockEnabled === true;
     const themeOptions: { value: typeof themeMode; label: string }[] = [
         { value: 'system', label: t('settings.system') },
         { value: 'light', label: t('settings.light') },
@@ -58,9 +75,10 @@ export function GeneralSettingsScreen() {
                     : t('nav.contexts'),
     }));
     const currentQuickAccessLabel = quickAccessOptions.find((opt) => opt.value === quickAccessView)?.label ?? t('tab.review');
-    const weekStartOptions: { value: 'sunday' | 'monday'; label: string }[] = [
+    const weekStartOptions: { value: 'sunday' | 'monday' | 'saturday'; label: string }[] = [
         { value: 'sunday', label: t('settings.weekStartSunday') },
         { value: 'monday', label: t('settings.weekStartMonday') },
+        { value: 'saturday', label: t('settings.weekStartSaturday') },
     ];
     const currentWeekStartLabel = weekStartOptions.find((opt) => opt.value === weekStart)?.label ?? t('settings.weekStartSunday');
     const dateFormatOptions: { value: 'system' | 'dmy' | 'mdy' | 'ymd'; label: string }[] = [
@@ -70,12 +88,53 @@ export function GeneralSettingsScreen() {
         { value: 'ymd', label: t('settings.dateFormatYmd') },
     ];
     const currentDateFormatLabel = dateFormatOptions.find((opt) => opt.value === dateFormat)?.label ?? t('settings.dateFormatSystem');
+    const calendarSystemOptions: { value: 'gregorian' | 'jalali'; label: string }[] = [
+        { value: 'gregorian', label: t('settings.calendarSystemGregorian') },
+        { value: 'jalali', label: t('settings.calendarSystemJalali') },
+    ];
+    const currentCalendarSystemLabel = calendarSystemOptions.find((opt) => opt.value === calendarSystem)?.label
+        ?? t('settings.calendarSystemGregorian');
     const timeFormatOptions: { value: 'system' | '12h' | '24h'; label: string }[] = [
         { value: 'system', label: t('settings.timeFormatSystem') },
         { value: '12h', label: t('settings.timeFormat12h') },
         { value: '24h', label: t('settings.timeFormat24h') },
     ];
     const currentTimeFormatLabel = timeFormatOptions.find((opt) => opt.value === timeFormat)?.label ?? t('settings.timeFormatSystem');
+    const handleAppLockToggle = useCallback((value: boolean) => {
+        setAppLockErrorKey(null);
+        if (!value) {
+            updateSettings({
+                security: {
+                    ...(settings.security ?? {}),
+                    mobileAppLockEnabled: false,
+                },
+            }).catch(console.error);
+            return;
+        }
+
+        if (appLockBusy) return;
+        setAppLockBusy(true);
+        authenticateWithDeviceLock({
+            promptMessage: tr('appLock.enablePrompt'),
+            cancelLabel: tr('common.cancel'),
+            fallbackLabel: tr('appLock.useDevicePasscode'),
+        })
+            .then((result) => {
+                if (!result.success) {
+                    setAppLockErrorKey(getMobileAppLockErrorKey(result.reason));
+                    return;
+                }
+                updateSettings({
+                    security: {
+                        ...(settings.security ?? {}),
+                        mobileAppLockEnabled: true,
+                    },
+                }).catch(console.error);
+            })
+            .catch(() => setAppLockErrorKey('appLock.failed'))
+            .finally(() => setAppLockBusy(false));
+    }, [appLockBusy, settings.security, tr, updateSettings]);
+    const appLockError = appLockErrorKey ? tr(appLockErrorKey) : null;
 
     return (
         <SafeAreaView style={[styles.container, { backgroundColor: tc.bg }]} edges={['bottom']}>
@@ -127,6 +186,30 @@ export function GeneralSettingsScreen() {
                         <Ionicons color={tc.secondaryText} name="chevron-down" size={18} />
                     </TouchableOpacity>
                 </View>
+
+                <Text style={[styles.sectionTitle, { color: tc.secondaryText, marginTop: 16 }]}>{tr('settings.privacy')}</Text>
+                <View style={[styles.settingCard, { backgroundColor: tc.cardBg }]}>
+                    <View style={styles.settingRow}>
+                        <View style={styles.settingInfo}>
+                            <Text style={[styles.settingLabel, { color: tc.text }]}>{tr('settings.mobile.appLock')}</Text>
+                            <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+                                {tr('settings.mobile.appLockDesc')}
+                            </Text>
+                            {appLockError && (
+                                <Text style={[styles.settingDescription, { color: tc.danger, marginTop: 6 }]}>
+                                    {appLockError}
+                                </Text>
+                            )}
+                        </View>
+                        <Switch
+                            disabled={appLockBusy}
+                            value={appLockEnabled}
+                            onValueChange={handleAppLockToggle}
+                            trackColor={{ false: '#767577', true: '#3B82F6' }}
+                        />
+                    </View>
+                </View>
+
                 <Modal
                     transparent
                     visible={themePickerOpen}
@@ -358,6 +441,58 @@ export function GeneralSettingsScreen() {
                         </View>
                     </Pressable>
                 </Modal>
+
+                {showCalendarSystem && (
+                    <>
+                        <View style={[styles.settingCard, { backgroundColor: tc.cardBg, marginTop: 12 }]}>
+                            <TouchableOpacity style={styles.settingRow} onPress={() => setCalendarSystemPickerOpen(true)}>
+                                <View style={styles.settingInfo}>
+                                    <Text style={[styles.settingLabel, { color: tc.text }]}>{t('settings.calendarSystem')}</Text>
+                                    <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>{currentCalendarSystemLabel}</Text>
+                                </View>
+                                <Ionicons color={tc.secondaryText} name="chevron-down" size={18} />
+                            </TouchableOpacity>
+                        </View>
+                        <Modal
+                            transparent
+                            visible={calendarSystemPickerOpen}
+                            animationType="fade"
+                            onRequestClose={() => setCalendarSystemPickerOpen(false)}
+                        >
+                            <Pressable style={styles.pickerOverlay} onPress={() => setCalendarSystemPickerOpen(false)}>
+                                <View
+                                    style={[styles.pickerCard, { backgroundColor: tc.cardBg, borderColor: tc.border }]}
+                                    onStartShouldSetResponder={() => true}
+                                >
+                                    <Text style={[styles.pickerTitle, { color: tc.text }]}>{t('settings.calendarSystem')}</Text>
+                                    <ScrollView style={styles.pickerList} contentContainerStyle={styles.pickerListContent}>
+                                        {calendarSystemOptions.map((option) => {
+                                            const selected = calendarSystem === option.value;
+                                            return (
+                                                <TouchableOpacity
+                                                    key={option.value}
+                                                    style={[
+                                                        styles.pickerOption,
+                                                        { borderColor: tc.border, backgroundColor: selected ? tc.filterBg : 'transparent' },
+                                                    ]}
+                                                    onPress={() => {
+                                                        updateSettings({ calendarSystem: option.value }).catch(console.error);
+                                                        setCalendarSystemPickerOpen(false);
+                                                    }}
+                                                >
+                                                    <Text style={[styles.pickerOptionText, { color: selected ? tc.tint : tc.text }]}>
+                                                        {option.label}
+                                                    </Text>
+                                                    {selected && <Ionicons color={tc.tint} name="checkmark" size={18} />}
+                                                </TouchableOpacity>
+                                            );
+                                        })}
+                                    </ScrollView>
+                                </View>
+                            </Pressable>
+                        </Modal>
+                    </>
+                )}
 
                 <View style={[styles.settingCard, { backgroundColor: tc.cardBg, marginTop: 12 }]}>
                     <TouchableOpacity style={styles.settingRow} onPress={() => setTimeFormatPickerOpen(true)}>

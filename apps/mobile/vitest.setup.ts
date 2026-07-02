@@ -118,6 +118,11 @@ vi.mock('expo-file-system/legacy', () => ({
   moveAsync: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock('expo-clipboard', () => ({
+  __esModule: true,
+  setStringAsync: vi.fn().mockResolvedValue(true),
+}));
+
 vi.mock('@expo/vector-icons', () => {
   const Icon = (props: any) => React.createElement('Icon', props, props.children);
   return {

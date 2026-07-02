@@ -54,6 +54,7 @@ type ObsidianStoreState = {
 
 const defaultConfig = normalizeObsidianConfig({});
 let watchUpdateQueue: Promise<ObsidianWatchUpdateResult | null> = Promise.resolve(null);
+let activeScan: { key: string; promise: Promise<void> } | null = null;
 
 const toErrorMessage = (error: unknown, fallback: string): string => {
     if (error instanceof Error && error.message.trim()) return error.message.trim();
@@ -87,8 +88,17 @@ const normalizeEventPaths = (paths: string[], config: ObsidianConfig): string[] 
 const scanConfigChanged = (left: ObsidianConfig, right: ObsidianConfig): boolean => {
     return left.vaultPath !== right.vaultPath
         || left.scanFolders.join('\n') !== right.scanFolders.join('\n')
-        || left.taskNotesIncludeArchived !== right.taskNotesIncludeArchived;
+        || left.taskNotesIncludeArchived !== right.taskNotesIncludeArchived
+        || left.dataviewMetadataEnabled !== right.dataviewMetadataEnabled;
 };
+
+const buildScanKey = (config: ObsidianConfig): string => JSON.stringify({
+    enabled: config.enabled,
+    scanFolders: config.scanFolders,
+    taskNotesIncludeArchived: config.taskNotesIncludeArchived,
+    dataviewMetadataEnabled: config.dataviewMetadataEnabled,
+    vaultPath: config.vaultPath,
+});
 
 export const useObsidianStore = createWithEqualityFn<ObsidianStoreState>()((set, get) => ({
     config: defaultConfig,
@@ -224,7 +234,17 @@ export const useObsidianStore = createWithEqualityFn<ObsidianStoreState>()((set,
         await get().rescan();
     },
     rescan: async () => {
-        if (get().isScanning) return;
+        const requestedScanKey = buildScanKey(get().config);
+        if (activeScan) {
+            if (activeScan.key === requestedScanKey) {
+                return activeScan.promise;
+            }
+            await activeScan.promise.catch(() => undefined);
+            if (buildScanKey(get().config) !== requestedScanKey) {
+                return get().rescan();
+            }
+        }
+
         const config = get().config;
         if (!config.enabled || !config.vaultPath) {
             set({
@@ -239,35 +259,58 @@ export const useObsidianStore = createWithEqualityFn<ObsidianStoreState>()((set,
             return;
         }
 
+        const scanKey = buildScanKey(config);
         const startedAt = new Date().toISOString();
-        set({ isScanning: true, error: null });
-        try {
-            const result = await ObsidianService.scanVault(config);
-            const savedConfig = await ObsidianService.setConfig({
-                ...config,
-                lastScannedAt: startedAt,
-            });
-            set({
-                config: savedConfig,
-                tasks: result.tasks,
-                scannedFileCount: result.scannedFileCount,
-                scannedRelativePaths: result.scannedRelativePaths,
-                taskNotesDetectedPaths: result.taskNotesDetectedPaths,
-                warnings: result.warnings,
-                importMode: result.importMode,
-                hasScannedThisSession: true,
-                isScanning: false,
-                error: null,
-            });
-        } catch (error) {
-            set({
-                warnings: [],
-                importMode: 'inline',
-                hasScannedThisSession: true,
-                isScanning: false,
-                error: toErrorMessage(error, 'Failed to scan Obsidian vault.'),
-            });
-        }
+        const currentScan: { promise: Promise<void> | null } = { promise: null };
+        const scanPromise = (async () => {
+            set({ isScanning: true, error: null });
+            try {
+                const result = await ObsidianService.scanVault(config);
+                if (buildScanKey(get().config) !== scanKey) {
+                    set({ isScanning: false });
+                    return;
+                }
+                const savedConfig = await ObsidianService.setConfig({
+                    ...config,
+                    lastScannedAt: startedAt,
+                });
+                if (buildScanKey(get().config) !== scanKey) {
+                    set({ isScanning: false });
+                    return;
+                }
+                set({
+                    config: savedConfig,
+                    tasks: result.tasks,
+                    scannedFileCount: result.scannedFileCount,
+                    scannedRelativePaths: result.scannedRelativePaths,
+                    taskNotesDetectedPaths: result.taskNotesDetectedPaths,
+                    warnings: result.warnings,
+                    importMode: result.importMode,
+                    hasScannedThisSession: true,
+                    isScanning: false,
+                    error: null,
+                });
+            } catch (error) {
+                if (buildScanKey(get().config) !== scanKey) {
+                    set({ isScanning: false });
+                    return;
+                }
+                set({
+                    warnings: [],
+                    importMode: 'inline',
+                    hasScannedThisSession: true,
+                    isScanning: false,
+                    error: toErrorMessage(error, 'Failed to scan Obsidian vault.'),
+                });
+            } finally {
+                if (activeScan?.promise === currentScan.promise) {
+                    activeScan = null;
+                }
+            }
+        })();
+        currentScan.promise = scanPromise;
+        activeScan = { key: scanKey, promise: scanPromise };
+        return scanPromise;
     },
     startWatcher: async () => {
         const config = get().config;

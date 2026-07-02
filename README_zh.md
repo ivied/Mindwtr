@@ -8,9 +8,11 @@
 
 免费、开源、跨平台的 GTD 应用。本地优先，无需账号。*Mind Like Water.*
 
+项目统一使用 Mindwtr 作为正式名称；中文社区也可以亲切地简称为「如水」，呼应 *Mind Like Water*。
+
 *GTD 新手？可阅读 [15 分钟入门 GTD](https://hamberg.no/gtd)。*
 
-[立即安装](#安装) · [快速开始](https://github.com/dongdongbh/Mindwtr/wiki/Getting-Started) · [数据与同步](https://github.com/dongdongbh/Mindwtr/wiki/Data-and-Sync) · [云端部署](https://github.com/dongdongbh/Mindwtr/wiki/Cloud-Deployment) · [MCP 服务器](https://github.com/dongdongbh/Mindwtr/wiki/MCP-Server)
+[快速开始](https://docs.mindwtr.app/start/getting-started) · [常见问题](https://docs.mindwtr.app/start/faq) · [文档](https://docs.mindwtr.app/) · [数据与同步](https://docs.mindwtr.app/data-sync/) · [云端部署](https://docs.mindwtr.app/data-sync/cloud-deployment) · [MCP 服务器](https://docs.mindwtr.app/power-users/mcp)
 
 [![CI](https://github.com/dongdongbh/Mindwtr/actions/workflows/ci.yml/badge.svg)](https://github.com/dongdongbh/Mindwtr/actions/workflows/ci.yml)
 [![GitHub license](https://img.shields.io/github/license/dongdongbh/Mindwtr?color=brightgreen)](LICENSE)
@@ -32,8 +34,8 @@
     <img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png"
          align="center"
          alt="Google Play"
-         style="height: 56px"
-         height="56" />
+         style="height: 74px"
+         height="74" />
   </a>
   <a href="https://apps.apple.com/app/mindwtr/id6758597144" target="_blank">
     <img src="https://tools.applemediaservices.com/api/badges/download-on-the-app-store/black/en-us?size=250x83"
@@ -42,16 +44,30 @@
          style="height: 50px"
          height="50" />
   </a>
-  <a href="https://apt.izzysoft.de/fdroid/index/apk/tech.dongdongbh.mindwtr" target="_blank">
-    <img src="https://gitlab.com/IzzyOnDroid/repo/-/raw/master/assets/IzzyOnDroidButtonGreyBorder_nofont.png"
-         align="center"
-         alt="Get it on IzzyOnDroid"
-         style="height: 50px"
-         height="50" />
-  </a>
   <a href="https://flathub.org/apps/tech.dongdongbh.mindwtr" target="_blank">
     <img alt="在 Flathub 获取"
          src="https://flathub.org/api/badge?locale=zh-Hans"
+         align="center"
+         style="height: 50px"
+         height="50" />
+  </a>
+  <a href="https://apt.izzysoft.de/packages/tech.dongdongbh.mindwtr" target="_blank">
+    <img src="https://gitlab.com/IzzyOnDroid/repo/-/raw/master/assets/IzzyOnDroid.png"
+         align="center"
+         alt="在 IzzyOnDroid 获取"
+         style="height: 74px"
+         height="74" />
+  </a>
+  <a href="https://f-droid.org/en/packages/tech.dongdongbh.mindwtr/" target="_blank">
+    <img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png"
+         align="center"
+         alt="Get it on F-Droid"
+         style="height: 74px"
+         height="74" />
+  </a>
+  <a href="https://snapcraft.io/mindwtr" target="_blank">
+    <img alt="从 Snap Store 获取"
+         src="https://snapcraft.io/en/dark/install.svg"
          align="center"
          style="height: 50px"
          height="50" />
@@ -107,7 +123,7 @@ Mindwtr **默认简单，需要时也足够强大**。我们专注于降低认�
 - 桌面端支持 Obsidian 仓库任务导入与笔记深度链接。
 - 可选 AI Copilot（BYOK + 本地/自托管兼容模型）。
 - 桌面端、移动端与 PWA 全平台可用。
-- 内置 CLI、REST API 与 MCP 自动化能力。
+- 桌面端可开启本地 REST API；CLI 为仓库辅助工具，MCP 服务器以已发布的 [`mindwtr-mcp`](https://www.npmjs.com/package/mindwtr-mcp) 包提供。
 
 <details>
 <summary>查看完整功能列表</summary>
@@ -133,7 +149,7 @@ Mindwtr **默认简单，需要时也足够强大**。我们专注于降低认�
 - 📦 **归档** - 隐藏历史，按需搜索
 
 ### 生产力功能
-- 🔍 **全局搜索** - 全领域搜索，并支持搜索操作符（status:, context:, assigned:, due:<=7d）
+- 🔍 **全局搜索** - 全领域搜索，并支持搜索操作符（`status:`、`context:`、`assigned:`、`location:`、`where:`、`id:`、`-id:`、`due:<=7d`）
 - 📦 **批量操作** - 多选、批量移动/打标签/删除
 - 📎 **附件** - 任务支持文件与链接
 - ✏️ **Markdown 备注** - 富文本描述与预览
@@ -149,20 +165,22 @@ Mindwtr **默认简单，需要时也足够强大**。我们专注于降低认�
 - 📅 **每周回顾** - 可定制的每周提醒
 
 ### 数据与同步
-- 🔄 **同步选项** - 支持后端与配置方式请见 [数据与同步 Wiki](https://github.com/dongdongbh/Mindwtr/wiki/Data-and-Sync)
+- 🔄 **同步选项** - 支持后端与配置方式请见 [数据与同步文档](https://docs.mindwtr.app/data-sync/)
 - 🍎 **原生 iCloud / CloudKit 同步** - 在受支持的 iPhone、iPad 与 macOS 构建中提供 Apple 平台专属结构化同步
 - ☁️ **Dropbox OAuth 同步（可选）** - 在支持的非 FOSS 构建中提供原生 Dropbox App Folder 同步
 - 📤 **导出/备份** - 导出 JSON 数据
 - ♻️ **从备份恢复** - 先创建恢复快照，再用已验证的 Mindwtr 备份替换本地数据
-- 📥 **Todoist + DGT GTD + OmniFocus 导入** - 将 Todoist CSV/ZIP、DGT GTD JSON/ZIP 或 OmniFocus CSV 导出导入到 Mindwtr
+- 📥 **TickTick + Todoist + DGT GTD + OmniFocus + Apple Reminders 导入** - 将 TickTick CSV/ZIP、Todoist CSV/ZIP、DGT GTD JSON/ZIP、OmniFocus 导出或未完成的 Apple Reminders 导入到 Mindwtr
 - 🔗 **Obsidian 集成** - 桌面端导入 Vault 中的任务，并可深度链接回源笔记
-- 🗓️ **外部日历（系统日历 + ICS）** - 移动端读取系统日历；桌面端支持 ICS 订阅
+- 🗓️ **外部日历（系统日历 + ICS）** - 移动端读取系统日历并推送带日期的任务；macOS 桌面端可读取 Apple Calendar 并推送带日期的任务；桌面/Web 也支持 ICS 订阅与从事件创建任务
 
 ### 自动化
-- 🔌 **CLI** - 终端添加/列出/完成/搜索
-- 🌐 **REST API** - 本地 API 便于脚本化
+- 🔌 **CLI** - 仓库辅助工具，可从终端添加/列出/完成/搜索
+- 🌐 **REST API** - 桌面端本地 API，使用设置中生成的 bearer token 进行脚本化访问
 - 🌍 **Web 应用（PWA）** - 浏览器离线访问
-- 🧠 **MCP 服务器** - 本地 Model Context Protocol 服务用于 LLM 自动化
+- 🧠 **MCP 服务器** - 用于 LLM 自动化的可选本地 stdio Model Context Protocol 服务，可通过 [`mindwtr-mcp`](https://www.npmjs.com/package/mindwtr-mcp) 或 [MCP Registry](https://registry.modelcontextprotocol.io/) 获取
+
+桌面端可在 **设置 -> 高级** 启动本地 REST API，默认监听 `127.0.0.1:3456` 并使用生成的 bearer token。CLI 仍是仓库辅助工具；stdio MCP 服务器可用 `npm install -g mindwtr-mcp` 安装，或由 MCP 客户端通过 `npx -y mindwtr-mcp` 启动。
 
 ### 跨平台
 - 🖥️ **桌面端** - Tauri v2（macOS、Linux、Windows）
@@ -170,159 +188,40 @@ Mindwtr **默认简单，需要时也足够强大**。我们专注于降低认�
 - 📲 **Android 小部件** - 桌面焦点/下一步小组件
 - ⌨️ **键盘快捷键** - Vim 与 Emacs 预设
 - 🎨 **主题** - 明/暗模式
-- 🌍 **国际化** - 英文、简体中文、繁體中文、西班牙语、印地语、阿拉伯语、德语、俄语、日语、法语、葡萄牙语、波兰语、韩语、意大利语、土耳其语、荷兰语
+- 🌍 **国际化** - 英文、越南语、简体中文、繁體中文、西班牙语、印地语、阿拉伯语、德语、俄语、日语、法语、葡萄牙语、波兰语、韩语、捷克语、意大利语、土耳其语、荷兰语
 - 🐳 **Docker** - 使用 Docker 运行 PWA + 自托管同步服务
 
 </details>
 
 ## 安装
 
-### 桌面端（Linux）
+完整且最新的安装指南请见[桌面端安装](https://docs.mindwtr.app/start/desktop-installation)与[移动端安装](https://docs.mindwtr.app/start/mobile-installation)。
 
-**Arch Linux（AUR，推荐预编译包）：**
-<a href="https://aur.archlinux.org/packages/mindwtr-bin">
-  <img src="https://img.shields.io/aur/version/mindwtr-bin?logo=arch-linux&logoColor=white&color=1793d1&label=mindwtr-bin" alt="AUR mindwtr-bin Version">
-</a>
+快速选择：
 
-```bash
-# 使用 yay
-yay -S mindwtr-bin
+- Windows：Microsoft Store、Winget、Chocolatey、Scoop 或 GitHub Releases。
+- macOS：Mac App Store、Homebrew、TestFlight 测试版或 GitHub Releases。
+- Linux：Flathub、Snap、AUR、APT/RPM 仓库或 GitHub Releases。
+- Android：Google Play、F-Droid、IzzyOnDroid 或 GitHub Releases APK。
+- iOS：App Store 或 TestFlight 测试版。
+- Web / 自托管：[云端部署](https://docs.mindwtr.app/data-sync/cloud-deployment)或 [Docker 指南](docker/README.md)。
 
-# 使用 paru
-paru -S mindwtr-bin
-```
+<details>
+<summary>包管理器快速命令</summary>
 
-**Arch Linux（AUR，源码构建包）：**
-<a href="https://aur.archlinux.org/packages/mindwtr">
-  <img src="https://img.shields.io/aur/version/mindwtr?logo=arch-linux&logoColor=white&color=1793d1&label=mindwtr" alt="AUR mindwtr Version">
-</a>
-
-```bash
-# 使用 yay
-yay -S mindwtr
-
-# 使用 paru
-paru -S mindwtr
-```
-
-**Debian / Ubuntu（APT 仓库，推荐）：**
-```bash
-curl -fsSL https://dongdongbh.github.io/Mindwtr/mindwtr.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/mindwtr-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/mindwtr-archive-keyring.gpg] https://dongdongbh.github.io/Mindwtr/deb ./" | sudo tee /etc/apt/sources.list.d/mindwtr.list
-sudo apt update
-sudo apt install mindwtr
-```
-
-**Fedora / RHEL / openSUSE（DNF/YUM 仓库，推荐）：**
-```bash
-cat <<'EOF' | sudo tee /etc/yum.repos.d/mindwtr.repo
-[mindwtr]
-name=Mindwtr Repository
-baseurl=https://dongdongbh.github.io/Mindwtr/rpm
-enabled=1
-gpgcheck=0
-EOF
-
-sudo dnf install mindwtr
-```
-
-**Flatpak（Flathub）：**
-<a href="https://flathub.org/apps/tech.dongdongbh.mindwtr">
-  <img src="https://img.shields.io/badge/Flathub-Install-000000?logo=flathub&logoColor=white" alt="在 Flathub 获取">
-</a>
 ```bash
 flatpak install flathub tech.dongdongbh.mindwtr
+yay -S mindwtr-bin
+brew install --cask mindwtr
 ```
 
-**其他方式：** 从 [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases) 获取 AppImage 或 `.deb` / `.rpm`。
-
-### 桌面端（Windows）
-
-**Microsoft Store（推荐）：**
-<a href="https://apps.microsoft.com/detail/9n0v5b0b6frx?ocid=webpdpshare">
-  <img src="https://img.shields.io/badge/Microsoft_Store-Install-0078D6?logo=microsoft&logoColor=white" alt="Microsoft Store">
-</a>
-
-**Winget：**
-<a href="https://winstall.app/apps/dongdongbh.Mindwtr">
-  <img src="https://img.shields.io/winget/v/dongdongbh.Mindwtr?label=Winget&logo=windows&logoColor=white&color=00D2FF" alt="Winget Version">
-</a>
 ```powershell
 winget install dongdongbh.Mindwtr
 ```
 
-**Scoop：**
-<a href="https://github.com/dongdongbh/homebrew-mindwtr">
-  <img src="https://img.shields.io/scoop/v/mindwtr?bucket=https://github.com/dongdongbh/homebrew-mindwtr&label=Scoop&logo=scoop&logoColor=white&color=E6E6E6" alt="Scoop Version">
-</a>
-```powershell
-scoop bucket add mindwtr https://github.com/dongdongbh/homebrew-mindwtr
-scoop install mindwtr
-```
+APT/RPM 仓库配置、源码构建、便携版 ZIP、移动商店变体与 Docker 设置请参考上方完整安装指南。
 
-**便携版 ZIP（无需管理员权限）：**
-
-- 从 [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases) 下载 `mindwtr_<version>_windows_x64_portable.zip`。
-- 解压到可写目录，并将 `portable.txt` 与 `mindwtr.exe` 放在同一目录。
-- Mindwtr 会将数据保存在解压目录下的 `profile/` 中。
-
-**其他方式：** 从 [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases) 获取 `.exe`。
-
-### 桌面端（macOS）
-
-**Mac App Store（推荐）：**
-<a href="https://apps.apple.com/app/mindwtr/id6758597144">
-  <img src="https://img.shields.io/badge/Mac_App_Store-Install-0A84FF?logo=apple&logoColor=white" alt="Mac App Store">
-</a>
-
-通过 Mac App Store 安装：[Mindwtr（Mac App Store）](https://apps.apple.com/app/mindwtr/id6758597144)。
-TestFlight 测试版（macOS）：[加入测试版](https://testflight.apple.com/join/7SMJCTSR)。
-
-**Homebrew：**
-<a href="https://formulae.brew.sh/cask/mindwtr">
-  <img src="https://img.shields.io/homebrew/cask/v/mindwtr?label=Homebrew&logo=homebrew&logoColor=white" alt="Homebrew Cask Version">
-</a>
-```bash
-brew install --cask mindwtr
-```
-
-**其他方式：** 从 [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases) 获取 `.dmg`。
-
-### 移动端
-
-**Android：**
-<a href="https://play.google.com/store/apps/details?id=tech.dongdongbh.mindwtr">
-  <img src="https://img.shields.io/badge/Google_Play-Install-414141?logo=googleplay&logoColor=white" alt="Get it on Google Play">
-</a>
-<a href="https://apt.izzysoft.de/fdroid/index/apk/tech.dongdongbh.mindwtr">
-  <img src="https://img.shields.io/endpoint?url=https://apt.izzysoft.de/fdroid/api/v1/shield/tech.dongdongbh.mindwtr&label=IzzyOnDroid" alt="IzzyOnDroid">
-</a>
-
-通过 IzzyOnDroid 安装：
-1. 安装兼容 F-Droid 的客户端（Droid-ify、Neo Store 或 F-Droid）。
-2. 添加 IzzyOnDroid 仓库：`https://apt.izzysoft.de/fdroid/repo`。
-3. 打开 [Mindwtr（IzzyOnDroid）](https://apt.izzysoft.de/fdroid/index/apk/tech.dongdongbh.mindwtr) 并安装。
-
-其他方式：从 [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases) 下载 APK。
-
-**iOS：**
-<a href="https://apps.apple.com/app/mindwtr/id6758597144">
-  <img src="https://img.shields.io/badge/App_Store-iOS-0A84FF?logo=apple&logoColor=white" alt="App Store">
-</a>
-
-已上线 App Store：[Mindwtr for iOS](https://apps.apple.com/app/mindwtr/id6758597144)。
-TestFlight 测试版：[加入测试版](https://testflight.apple.com/join/7SMJCTSR)。
-
-不过，维护 iOS 版上架 App Store 需要支付较高的年费（参考 [Apple Developer Program](https://developer.apple.com/support/enrollment/)），目前由我自费承担。
-
-为了让 Mindwtr 能持续发展和维护，非常感谢你的支持！如果你觉得这款应用有价值，欢迎通过 [GitHub Sponsors](https://github.com/sponsors/dongdongbh) 或 [Ko-fi](https://ko-fi.com/D1D01T20WK) 支持项目。
-
-### Docker（PWA + 云同步）
-
-使用 Docker 运行 Web 应用（PWA）和自托管同步服务：
-- 指南：[`docker/README.md`](docker/README.md)
-
-安装指南：🚀 [快速开始](https://github.com/dongdongbh/Mindwtr/wiki/Getting-Started)
+</details>
 
 ## 社区
 
@@ -341,27 +240,19 @@ Mindwtr 的发展离不开用户与贡献者的支持，感谢大家一起把它
 5. **加入社区讨论：** 欢迎加入 [Discord](https://discord.gg/ahhFxuDBb4)。
 6. **参与翻译：** 在 [`packages/core/src/i18n/locales/`](packages/core/src/i18n/locales/) 提交语言翻译改进。
 7. **贡献代码或文档：** 提交 PR，并遵循[贡献指南](docs/CONTRIBUTING.md)和提交规范。
-8. **认领并实现：** 欢迎社区成员从[路线图](#路线图)或任何开放 issue 中认领条目并提交 PR。
+8. **认领并实现：** 欢迎社区成员从任何开放 issue 中认领条目并提交 PR。
 9. **赞助项目：** 可通过 [GitHub Sponsors](https://github.com/sponsors/dongdongbh) 或 [Ko-fi](https://ko-fi.com/D1D01T20WK) 支持持续开发。
-
-## 路线图
-
-- 🤖 上架 F-Droid（[#219](https://github.com/dongdongbh/Mindwtr/issues/219)）
-- 🗣️ Siri 直接收集到 Mindwtr 收件箱（[#388](https://github.com/dongdongbh/Mindwtr/issues/388)）
-- 📥 Apple 提醒事项导入到 Mindwtr 收件箱（[#387](https://github.com/dongdongbh/Mindwtr/issues/387)）
-- ✉️ 邮件添加到收件箱（[#35](https://github.com/dongdongbh/Mindwtr/issues/35)）
-- 🗓️ Mindwtr 单向同步到本地系统日历（移动端优先）（[#361](https://github.com/dongdongbh/Mindwtr/issues/361)）
 
 ## 文档
 
-- 📚 [Wiki](https://github.com/dongdongbh/Mindwtr/wiki) - 完整用户指南
-- 🚀 [快速开始](https://github.com/dongdongbh/Mindwtr/wiki/Getting-Started)
-- ❓ [FAQ](https://github.com/dongdongbh/Mindwtr/wiki/FAQ)
-- 🔄 [数据与同步](https://github.com/dongdongbh/Mindwtr/wiki/Data-and-Sync)
-- 🔗 [Markdown 链接](https://github.com/dongdongbh/Mindwtr/wiki/Markdown-Links)
-- 🛠️ [云端部署](https://github.com/dongdongbh/Mindwtr/wiki/Cloud-Deployment)
-- ☁️ [云端 API](https://github.com/dongdongbh/Mindwtr/wiki/Cloud-API)
-- 🧠 [MCP 服务器](https://github.com/dongdongbh/Mindwtr/wiki/MCP-Server)
+- 📚 [官方文档](https://docs.mindwtr.app/) - 搜索与导航体验更好的文档站
+- 🚀 [快速开始](https://docs.mindwtr.app/start/getting-started)
+- ❓ [FAQ](https://docs.mindwtr.app/start/faq)
+- 🔄 [数据与同步](https://docs.mindwtr.app/data-sync/)
+- 🔗 [Markdown 链接](https://docs.mindwtr.app/use/markdown-links)
+- 🛠️ [云端部署](https://docs.mindwtr.app/data-sync/cloud-deployment)
+- ☁️ [云端 API](https://docs.mindwtr.app/developers/cloud-api)
+- 🧠 [MCP 服务器](https://docs.mindwtr.app/power-users/mcp)
 - 📝 [版本说明索引](docs/release-notes/README.md)
 
 ## Star History
@@ -385,14 +276,20 @@ Mindwtr 的发展离不开用户与贡献者的支持，感谢大家一起把它
   <a href="https://github.com/ronmolenda" title="@ronmolenda">
     <img src="docs/assets/sponsors/ronmolenda.png" width="60" height="60" alt="@ronmolenda" />
   </a>
-  <a href="https://github.com/laripernu" title="@laripernu">
-    <img src="docs/assets/sponsors/laripernu.png" width="60" height="60" alt="@laripernu" />
+  <a href="https://github.com/bepolymathe" title="@bepolymathe">
+    <img src="docs/assets/sponsors/bepolymathe.png" width="60" height="60" alt="@bepolymathe" />
   </a>
   <a href="https://github.com/karl1990" title="@karl1990">
     <img src="docs/assets/sponsors/karl1990.png" width="60" height="60" alt="@karl1990" />
   </a>
+  <a href="https://github.com/srijan" title="@srijan">
+    <img src="docs/assets/sponsors/srijan.png" width="60" height="60" alt="@srijan" />
+  </a>
+  <a href="https://github.com/davibicudo" title="@davibicudo">
+    <img src="docs/assets/sponsors/davibicudo.png" width="60" height="60" alt="@davibicudo" />
+  </a>
 </p>
 
 <p align="center">
-  <sub><a href="https://github.com/jarrydstan">@jarrydstan</a> · <a href="https://github.com/ronmolenda">@ronmolenda</a> · <a href="https://github.com/laripernu">@laripernu</a> · <a href="https://github.com/karl1990">@karl1990</a></sub>
+  <sub><a href="https://github.com/jarrydstan">@jarrydstan</a> · <a href="https://github.com/ronmolenda">@ronmolenda</a> · <a href="https://github.com/bepolymathe">@bepolymathe</a> · <a href="https://github.com/karl1990">@karl1990</a> · <a href="https://github.com/srijan">@srijan</a> · <a href="https://github.com/davibicudo">@davibicudo</a></sub>
 </p>

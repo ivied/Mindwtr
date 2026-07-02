@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { Area } from '@mindwtr/core';
-import { Check, ChevronDown } from 'lucide-react';
+import { Check, ChevronDown, Layers } from 'lucide-react';
 
-import { AREA_FILTER_ALL, AREA_FILTER_NONE } from '../../lib/area-filter';
+import { AREA_FILTER_ALL, AREA_FILTER_NONE } from '@mindwtr/core';
 import { cn } from '../../lib/utils';
 import { useDropdownPosition } from './use-dropdown-position';
 
@@ -13,6 +13,7 @@ interface SidebarAreaFilterProps {
     ariaLabel: string;
     allAreasLabel: string;
     noAreaLabel: string;
+    collapsed?: boolean;
 }
 
 export function SidebarAreaFilter({
@@ -22,6 +23,7 @@ export function SidebarAreaFilter({
     ariaLabel,
     allAreasLabel,
     noAreaLabel,
+    collapsed = false,
 }: SidebarAreaFilterProps) {
     const [open, setOpen] = useState(false);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -39,6 +41,7 @@ export function SidebarAreaFilter({
     ]), [allAreasLabel, areas, noAreaLabel]);
 
     const selectedLabel = options.find((option) => option.id === value)?.label ?? allAreasLabel;
+    const triggerLabel = collapsed ? `${ariaLabel}: ${selectedLabel}` : ariaLabel;
 
     useEffect(() => {
         if (!open) return;
@@ -94,20 +97,33 @@ export function SidebarAreaFilter({
                         closeDropdown();
                     }
                 }}
-                className="w-full flex items-center justify-between text-[13px] bg-muted/40 border-none rounded-lg px-3 py-2 text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+                className={cn(
+                    'flex items-center text-[13px] bg-muted/40 border-none rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40',
+                    collapsed
+                        ? 'h-10 w-10 justify-center hover:bg-accent hover:text-accent-foreground'
+                        : 'w-full justify-between px-3 py-2',
+                )}
                 aria-haspopup="listbox"
                 aria-expanded={open}
-                aria-label={ariaLabel}
+                aria-label={triggerLabel}
+                title={triggerLabel}
             >
-                <span className="truncate">{selectedLabel}</span>
-                <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                {collapsed ? (
+                    <Layers className="h-4 w-4 shrink-0" aria-hidden="true" />
+                ) : (
+                    <>
+                        <span className="truncate">{selectedLabel}</span>
+                        <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                    </>
+                )}
             </button>
             {open && (
                 <div
                     ref={dropdownRef}
                     className={cn(
-                        'absolute z-20 w-full rounded-lg border border-border bg-popover p-1 shadow-lg',
-                        dropdownClassName,
+                        'absolute z-20 rounded-lg border border-border bg-popover p-1 shadow-lg',
+                        collapsed ? 'bottom-0 left-full ml-2 w-52' : 'w-full',
+                        !collapsed && dropdownClassName,
                     )}
                     onKeyDown={handleKeyDown}
                 >

@@ -30,16 +30,48 @@ vi.mock('./projects/AreaManagerModal', () => ({
 }));
 
 vi.mock('./projects/ProjectsSidebar', () => ({
-    ProjectsSidebar: () => <div data-testid="projects-sidebar">Projects sidebar</div>,
+    ProjectsSidebar: ({
+        collapseLabel,
+        onToggleCollapsed,
+    }: {
+        collapseLabel?: string;
+        onToggleCollapsed?: () => void;
+    }) => (
+        <div data-testid="projects-sidebar">
+            Projects sidebar
+            {collapseLabel && onToggleCollapsed && (
+                <button type="button" aria-label={collapseLabel} onClick={onToggleCollapsed}>
+                    Collapse
+                </button>
+            )}
+        </div>
+    ),
 }));
 
 vi.mock('./projects/ProjectWorkspace', () => ({
-    ProjectWorkspace: () => <div data-testid="project-workspace">Workspace</div>,
+    ProjectWorkspace: ({
+        projectsSidebarCollapsed,
+        onToggleProjectsSidebar,
+    }: {
+        projectsSidebarCollapsed?: boolean;
+        onToggleProjectsSidebar?: () => void;
+    }) => (
+        <div data-testid="project-workspace">
+            Workspace
+            {projectsSidebarCollapsed && onToggleProjectsSidebar && (
+                <button type="button" aria-label="Expand projects panel" onClick={onToggleProjectsSidebar}>
+                    Expand
+                </button>
+            )}
+        </div>
+    ),
 }));
 
 vi.mock('../../contexts/language-context', () => ({
     useLanguage: () => ({
         t: (key: string) => ({
+            'projects.collapseSidebar': 'Collapse projects panel',
+            'projects.expandSidebar': 'Expand projects panel',
             'projects.resizeSidebar': 'Resize projects panel',
         }[key] ?? key),
         language: 'en',
@@ -100,12 +132,15 @@ vi.mock('./projects/useProjectsViewStore', () => ({
         addProject: vi.fn(),
         updateProject: vi.fn(),
         deleteProject: vi.fn(),
+        restoreProject: vi.fn(),
         duplicateProject: vi.fn(),
         updateTask: vi.fn(),
+        batchMoveTasks: vi.fn(),
+        batchDeleteTasks: vi.fn(),
+        batchUpdateTasks: vi.fn(),
         addSection: vi.fn(),
         updateSection: vi.fn(),
         deleteSection: vi.fn(),
-        addTask: vi.fn(),
         toggleProjectFocus: vi.fn(),
         allTasks: [],
         highlightTaskId: null,
@@ -195,7 +230,7 @@ describe('ProjectsView', () => {
             expect(sidebar).toHaveStyle({ width: '328px' });
         });
         await waitFor(() => {
-            expect(layout).toHaveStyle({ maxWidth: '1368px' });
+            expect(layout).toHaveStyle({ maxWidth: '1416px' });
         });
         await waitFor(() => {
             expect(window.localStorage.getItem('mindwtr:projects:sidebarWidth')).toBe('328');
@@ -235,16 +270,16 @@ describe('ProjectsView', () => {
 
         expect(sidebar).not.toBeNull();
         expect(layout).not.toBeNull();
-        expect(separator).toHaveAttribute('aria-valuemax', '1920');
-        expect(layout).not.toHaveClass('mx-auto');
+        expect(separator).toHaveAttribute('aria-valuemax', '1200');
+        expect(layout).toHaveClass('mx-auto');
 
         fireEvent.keyDown(separator, { key: 'End' });
 
         await waitFor(() => {
-            expect(sidebar).toHaveStyle({ width: '1920px' });
+            expect(sidebar).toHaveStyle({ width: '1200px' });
         });
         await waitFor(() => {
-            expect(layout).toHaveStyle({ maxWidth: '3024px' });
+            expect(layout).toHaveStyle({ maxWidth: '4096px' });
         });
 
         if (originalClientWidthDescriptor) {
@@ -275,5 +310,61 @@ describe('ProjectsView', () => {
         });
 
         expect(requestAnimationFrameMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('collapses and restores the projects sidebar panel', async () => {
+        const originalInnerWidth = window.innerWidth;
+        const originalClientWidthDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
+        Object.defineProperty(window, 'innerWidth', {
+            configurable: true,
+            value: 1500,
+        });
+        Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+            configurable: true,
+            get: () => 1800,
+        });
+
+        render(<ProjectsView />);
+        act(() => {
+            flushAnimationFrames();
+        });
+
+        const sidebarFrame = screen.getByTestId('projects-sidebar').parentElement?.parentElement;
+        const layout = sidebarFrame?.parentElement;
+        expect(sidebarFrame).toHaveStyle({ width: '304px' });
+        expect(layout).toHaveStyle({ maxWidth: '1344px' });
+        expect(screen.getByRole('separator', { name: 'Resize projects panel' })).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Collapse projects panel' }));
+
+        await waitFor(() => {
+            expect(screen.queryByTestId('projects-sidebar')).not.toBeInTheDocument();
+        });
+        expect(screen.queryByTestId('projects-sidebar-collapsed')).not.toBeInTheDocument();
+        expect(sidebarFrame).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Expand projects panel' })).toBeInTheDocument();
+        expect(layout).toHaveStyle({ maxWidth: '1592px' });
+        expect(screen.queryByRole('separator', { name: 'Resize projects panel' })).not.toBeInTheDocument();
+        expect(window.localStorage.getItem('mindwtr:view:projects:v1')).toContain('"projectsSidebarCollapsed":true');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Expand projects panel' }));
+
+        await waitFor(() => {
+            expect(screen.getByTestId('projects-sidebar')).toBeInTheDocument();
+        });
+        const restoredSidebarFrame = screen.getByTestId('projects-sidebar').parentElement?.parentElement;
+        expect(restoredSidebarFrame).toHaveStyle({ width: '304px' });
+        expect(layout).toHaveStyle({ maxWidth: '1344px' });
+        expect(screen.getByRole('separator', { name: 'Resize projects panel' })).toBeInTheDocument();
+
+        if (originalClientWidthDescriptor) {
+            Object.defineProperty(HTMLElement.prototype, 'clientWidth', originalClientWidthDescriptor);
+        } else {
+            delete (HTMLElement.prototype as { clientWidth?: number }).clientWidth;
+        }
+        Object.defineProperty(window, 'innerWidth', {
+            configurable: true,
+            value: originalInnerWidth,
+        });
     });
 });

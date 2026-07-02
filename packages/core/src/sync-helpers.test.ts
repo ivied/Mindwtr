@@ -4,7 +4,9 @@ import {
     assertNoPendingAttachmentUploads,
     computeSyncPayloadFingerprint,
     findPendingAttachmentUploads,
+    hasPendingSyncSideEffects,
     normalizeCloudUrl,
+    normalizeWebdavUrl,
     sanitizeAppDataForRemote,
 } from './sync-helpers';
 import type { AppData, Attachment } from './types';
@@ -57,6 +59,23 @@ describe('sync-helpers normalizeCloudUrl', () => {
     });
 });
 
+describe('sync-helpers normalizeWebdavUrl', () => {
+    it('strips cache-busting query strings before appending data.json', () => {
+        expect(normalizeWebdavUrl('https://dav.example.com/mindwtr?_=1782668355219')).toBe(
+            'https://dav.example.com/mindwtr/data.json'
+        );
+        expect(normalizeWebdavUrl('https://dav.example.com/mindwtr/#sync')).toBe(
+            'https://dav.example.com/mindwtr/data.json#sync'
+        );
+    });
+
+    it('strips cache-busting query strings from existing WebDAV data file URLs', () => {
+        expect(normalizeWebdavUrl('https://dav.example.com/mindwtr/data.json?_=1782668355219')).toBe(
+            'https://dav.example.com/mindwtr/data.json'
+        );
+    });
+});
+
 describe('sync-helpers pending attachment uploads', () => {
     it('detects file attachments with local uri and missing cloud key', () => {
         const data = createData([fileAttachment()]);
@@ -68,6 +87,8 @@ describe('sync-helpers pending attachment uploads', () => {
                 ownerId: 'task-1',
                 attachmentId: 'att-1',
                 title: 'photo.jpg',
+                uriScheme: 'file',
+                localStatus: undefined,
             },
         ]);
     });
@@ -109,6 +130,32 @@ describe('sync-helpers pending attachment uploads', () => {
     });
 });
 
+describe('sync-helpers pending sync side effects', () => {
+    it('stays false for clean sync data', () => {
+        expect(hasPendingSyncSideEffects(createData([]))).toBe(false);
+    });
+
+    it('detects pending remote writes, uploads, and remote deletes', () => {
+        const pendingWrite = createData([]);
+        pendingWrite.settings.pendingRemoteWriteAt = now;
+        expect(hasPendingSyncSideEffects(pendingWrite)).toBe(true);
+
+        expect(hasPendingSyncSideEffects(createData([fileAttachment()]))).toBe(true);
+
+        const pendingDelete = createData([]);
+        pendingDelete.settings.attachments = {
+            pendingRemoteDeletes: [{
+                attachmentId: 'att-1',
+                cloudKey: 'attachments/att-1.jpg',
+                queuedAt: now,
+                ownerType: 'task',
+                ownerId: 'task-1',
+            }],
+        };
+        expect(hasPendingSyncSideEffects(pendingDelete)).toBe(true);
+    });
+});
+
 describe('sync-helpers sanitizeAppDataForRemote', () => {
     it('keeps only sync-eligible settings groups for remote payloads', () => {
         const data: AppData = {
@@ -124,6 +171,7 @@ describe('sync-helpers sanitizeAppDataForRemote', () => {
                 window: { decorations: false, closeBehavior: 'tray' },
                 diagnostics: { loggingEnabled: true },
                 analytics: { heartbeatEnabled: false },
+                network: { proxyUrl: 'http://user:pass@proxy.local:8080' },
                 taskSortBy: 'updatedAt',
                 sidebarCollapsed: true,
                 deviceId: 'local-device-id',
@@ -156,7 +204,7 @@ describe('sync-helpers sanitizeAppDataForRemote', () => {
                     preferences: now,
                 },
                 theme: 'dark',
-                appearance: { density: 'compact', textSize: 'large', mobileQuickAccessView: 'contexts' },
+                appearance: { density: 'compact', textSize: 'small', mobileQuickAccessView: 'contexts' },
                 keybindingStyle: 'emacs',
                 globalQuickAddShortcut: 'ctrl+alt+m',
                 language: 'zh',
@@ -166,6 +214,7 @@ describe('sync-helpers sanitizeAppDataForRemote', () => {
                 externalCalendars: [
                     { id: 'cal-1', name: 'Work', url: 'https://example.com/work.ics', enabled: true },
                     { id: 'cal-local', name: 'Local', url: 'file:///home/user/agenda.ics', enabled: true },
+                    { id: 'cal-android-local', name: 'Android Local', url: 'content://com.android.providers.media.documents/document/calendar.ics', enabled: true },
                 ],
                 savedFilters: [{
                     id: 'filter-1',
@@ -193,7 +242,7 @@ describe('sync-helpers sanitizeAppDataForRemote', () => {
         expect(sanitized.settings.syncPreferences).toEqual(data.settings.syncPreferences);
         expect(sanitized.settings.syncPreferencesUpdatedAt).toEqual(data.settings.syncPreferencesUpdatedAt);
         expect(sanitized.settings.theme).toBe('dark');
-        expect(sanitized.settings.appearance).toEqual({ density: 'compact', textSize: 'large', mobileQuickAccessView: 'contexts' });
+        expect(sanitized.settings.appearance).toEqual({ density: 'compact', textSize: 'small', mobileQuickAccessView: 'contexts' });
         expect(sanitized.settings.keybindingStyle).toBe('emacs');
         expect(sanitized.settings.externalCalendars).toEqual([
             { id: 'cal-1', name: 'Work', url: 'https://example.com/work.ics', enabled: true },
@@ -218,6 +267,7 @@ describe('sync-helpers sanitizeAppDataForRemote', () => {
         expect(sanitized.settings.notificationsEnabled).toBeUndefined();
         expect(sanitized.settings.diagnostics).toBeUndefined();
         expect(sanitized.settings.analytics).toBeUndefined();
+        expect(sanitized.settings.network).toBeUndefined();
         expect(sanitized.settings.gtd).toBeUndefined();
         expect(sanitized.settings.features).toBeUndefined();
         expect(sanitized.settings.taskSortBy).toBeUndefined();
@@ -231,6 +281,8 @@ describe('sync-helpers sanitizeAppDataForRemote', () => {
             gtd: {
                 defaultScheduleTime: '09:30',
                 focusTaskLimit: 5,
+                focusGroupBy: 'project',
+                defaultProjectFlowMode: 'sequential',
                 inboxProcessing: { scheduleEnabled: true },
             },
             language: 'en',
@@ -239,7 +291,12 @@ describe('sync-helpers sanitizeAppDataForRemote', () => {
 
         const sanitized = sanitizeAppDataForRemote(data);
 
-        expect(sanitized.settings.gtd).toEqual({ defaultScheduleTime: '09:30', focusTaskLimit: 5 });
+        expect(sanitized.settings.gtd).toEqual({
+            defaultScheduleTime: '09:30',
+            focusTaskLimit: 5,
+            focusGroupBy: 'project',
+            defaultProjectFlowMode: 'sequential',
+        });
         expect(sanitized.settings.language).toBe('en');
         expect(sanitized.settings.timeFormat).toBe('24h');
     });
@@ -448,5 +505,21 @@ describe('sync-helpers computeSyncPayloadFingerprint', () => {
         right.tasks[0].title = 'Changed';
 
         expect(computeSyncPayloadFingerprint(left)).not.toBe(computeSyncPayloadFingerprint(right));
+    });
+
+    it('uses a deterministic fallback timestamp for missing file attachments', () => {
+        const data = createData([
+            fileAttachment({
+                updatedAt: '',
+                localStatus: 'missing',
+                cloudKey: undefined,
+            }),
+        ]);
+
+        const sanitized = sanitizeAppDataForRemote(data);
+        const attachment = sanitized.tasks[0].attachments?.[0];
+        expect(attachment?.updatedAt).toBe('1970-01-01T00:00:00.000Z');
+        expect(attachment?.deletedAt).toBe('1970-01-01T00:00:00.000Z');
+        expect(computeSyncPayloadFingerprint(data)).toBe(computeSyncPayloadFingerprint(data));
     });
 });

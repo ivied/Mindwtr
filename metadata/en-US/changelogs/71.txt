@@ -1,0 +1,5 @@
+- Added task-list filters and clearer active filter labels.
+- Added Android context automation intents.
+- Improved Markdown snippets, toolbar placement, and adaptive editor buttons.
+- Checklist and task editing now stay visible above the keyboard more reliably.
+- Project next-action prompts and calendar push retries handle failures more clearly.

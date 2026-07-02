@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useTransition, useCallback, Suspense, lazy } from 'react';
+import { useEffect, useState, useRef, useTransition, useCallback, useMemo, Suspense, lazy } from 'react';
 import { Layout } from './components/Layout';
 import { ListView } from './components/views/ListView';
 import { CalendarView } from './components/views/CalendarView';
@@ -20,27 +20,61 @@ import { ArchiveView } from './components/views/ArchiveView';
 import { TrashView } from './components/views/TrashView';
 import { AgendaView } from './components/views/AgendaView';
 import { SearchView } from './components/views/SearchView';
-import { addBreadcrumb, useTaskStore, configureDateFormatting, flushPendingSave, isSupportedLanguage, translateWithFallback } from '@mindwtr/core';
+import {
+    ACTIVE_APP_ANNOUNCEMENT,
+    APP_ANNOUNCEMENT_DISMISSED_VALUE,
+    DONATION_PROMPT_ANNOUNCEMENT,
+    addBreadcrumb,
+    configureDateFormatting,
+    flushPendingSave,
+    getAnnouncementDismissalStorageKey,
+    isSupportedLanguage,
+    recordDonationPromptShown,
+    recordDonationPromptSupportClicked,
+    recordUpdateReminderChecked,
+    recordUpdateReminderDismissed,
+    recordUpdateReminderShown,
+    shouldShowAppAnnouncement,
+    shouldShowDonationPrompt,
+    shouldCheckUpdateReminder,
+    shouldShowUpdateReminder,
+    summarizeMergeStats,
+    translateWithFallback,
+    useTaskStore,
+    type AppAnnouncement,
+    type AppAnnouncementAction,
+} from '@mindwtr/core';
 import { GlobalSearch } from './components/GlobalSearch';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { AppAnnouncementModal } from './components/AppAnnouncementModal';
+import { DesktopOnboardingFlow } from './components/DesktopOnboardingFlow';
+import { ModalPortal } from './components/ModalPortal';
 import { useLanguage } from './contexts/language-context';
 import { KeybindingProvider } from './contexts/keybinding-context';
 import { QuickAddModal } from './components/QuickAddModal';
 import { CloseBehaviorModal } from './components/CloseBehaviorModal';
 import { startDesktopNotifications, stopDesktopNotifications } from './lib/notification-service';
+import {
+    runFullDesktopCalendarPushSync,
+    startDesktopCalendarPushSync,
+    stopDesktopCalendarPushSync,
+} from './lib/desktop-calendar-push-sync';
 import { SyncService } from './lib/sync-service';
 import type { ExternalSyncChange, ExternalSyncChangeResolution } from './lib/sync-service';
 import * as LocalDataWatcher from './lib/local-data-watcher';
-import { isFlatpakRuntime, isTauriRuntime } from './lib/runtime';
-import { logError } from './lib/app-log';
+import { getInstallSourceOrFallback, isFlatpakRuntime, isTauriRuntime } from './lib/runtime';
+import { logError, logInfo } from './lib/app-log';
 import { createDesktopAutoSyncController } from './lib/auto-sync-controller';
 import { canDesktopAutoSync } from './lib/desktop-auto-sync-eligibility';
 import { beginSettingsOpenTrace, markSettingsOpenTrace, wrapSettingsOpenImport } from './lib/settings-open-diagnostics';
 import {
     THEME_STORAGE_KEY,
+    applyNativeTheme,
     applyThemeMode,
-    mapSyncedThemeToDesktop,
+    resolveDesktopThemeMode,
     resolveNativeTheme,
+    resolveSystemThemeCommandPreference,
+    watchSystemThemeCommandPreference,
     watchNativeSystemThemePreference,
     watchSystemThemePreference,
 } from './lib/theme';
@@ -51,9 +85,36 @@ import {
     coerceDesktopTextSize,
 } from './lib/text-size';
 import { saveStoredFullscreen } from './lib/window-state';
+import { installWebviewZoomShortcuts } from './lib/webview-zoom';
+import { isEditableManualSyncShortcutTarget, isManualSyncShortcut } from './lib/manual-sync-shortcut';
+import {
+    isDesktopSyncRuntimeActive,
+    resolveVisibilitySyncAction,
+    shouldHandleDesktopManualSyncShortcut,
+} from './lib/desktop-sync-runtime';
+import { resolveCloseBehavior } from './lib/window-behavior';
+import { handleDesktopCloseRequest } from './lib/close-request-handler';
 import { subscribeNavigateEvent } from './lib/navigation-events';
+import { shouldOpenDesktopFirstRunOnboarding, subscribeDesktopOnboardingEvent } from './lib/desktop-onboarding-events';
+import { QUICK_ADD_SAVED_EVENT } from './lib/quick-add-saved-event';
+import {
+    readLocalUserPromptState,
+    recordLocalPromptActivity,
+    updateLocalUserPromptState,
+} from './lib/user-prompt-state';
+import {
+    checkForUpdates,
+    normalizeInstallSource,
+    type InstallSource,
+} from './lib/update-service';
+import { getDesktopUpdateTarget, isDesktopUpdateReminderAllowed } from './lib/desktop-update-targets';
+import {
+    PROMPT_TEST_CONTROLS_ENABLED,
+    subscribePromptTest,
+} from './lib/prompt-test-controls';
 import { useUiStore } from './store/ui-store';
 import { useObsidianStore } from './store/obsidian-store';
+import type { SettingsOnboardingHintPage, SettingsPage } from './components/views/SettingsView';
 
 const ProjectsView = import.meta.env.DEV
     ? ProjectsViewEager
@@ -63,30 +124,152 @@ const SettingsView = lazy(wrapSettingsOpenImport(
     () => import('./components/views/SettingsView').then((m) => ({ default: m.SettingsView }))
 ));
 
+const DEFAULT_DESKTOP_VIEW = 'agenda';
+const DESKTOP_ONBOARDING_STORAGE_KEY = 'mindwtr:desktop:first-run-onboarding:v1';
+const DONATION_PROMPT_ENABLED = (
+    import.meta.env.VITE_DONATION_PROMPT_ENABLED === '1'
+    || import.meta.env.VITE_DONATION_PROMPT_ENABLED === 'true'
+);
+const DONATION_PROMPT_STARTUP_DELAY_MS = 2000;
+const MS_STORE_REVIEW_URL = 'ms-windows-store://review/?ProductId=9N0V5B0B6FRX';
+const MAC_APP_STORE_REVIEW_URL = 'macappstore://itunes.apple.com/app/id6758597144?action=write-review';
+
+type DesktopUpdateReminderInfo = {
+    currentVersion: string;
+    latestVersion: string;
+    latestReleasedAt: string | null;
+    releaseUrl: string;
+    actionLabel?: string;
+    testOnly?: boolean;
+};
+
+const isDesktopDonationPromptAllowed = (installSource: string | null | undefined): boolean => (
+    DONATION_PROMPT_ENABLED && normalizeInstallSource(installSource) !== 'unknown'
+);
+
+const readDesktopOnboardingDismissed = () => {
+    if (typeof window === 'undefined') return true;
+    try {
+        return window.localStorage.getItem(DESKTOP_ONBOARDING_STORAGE_KEY) === 'dismissed';
+    } catch {
+        return false;
+    }
+};
+
+const writeDesktopOnboardingDismissed = () => {
+    if (typeof window === 'undefined') return;
+    try {
+        window.localStorage.setItem(DESKTOP_ONBOARDING_STORAGE_KEY, 'dismissed');
+    } catch {
+        // If localStorage is unavailable, keep the in-memory dismissal for this session.
+    }
+};
+
+const buildUpdateReminderAnnouncement = (info: DesktopUpdateReminderInfo): AppAnnouncement => ({
+    id: `update-reminder-${info.latestVersion}`,
+    title: 'Update available',
+    body: `Mindwtr ${info.latestVersion} is available. You are using ${info.currentVersion}. Update when you have a minute to keep fixes and improvements current.`,
+    action: {
+        type: 'url',
+        label: info.actionLabel ?? 'View release',
+        url: info.releaseUrl,
+    },
+});
+
+const PROMPT_TEST_ANNOUNCEMENT: AppAnnouncement = {
+    id: 'prompt-test-announcement',
+    title: 'Test announcement',
+    body: 'This is the temporary announcement template test. It uses the same popup surface as a real maintainer announcement.',
+};
+
+const getDesktopPlatform = (): 'windows' | 'macos' | 'linux' | 'other' => {
+    const userAgent = typeof navigator === 'undefined' ? '' : navigator.userAgent.toLowerCase();
+    if (userAgent.includes('win')) return 'windows';
+    if (userAgent.includes('mac')) return 'macos';
+    if (userAgent.includes('linux')) return 'linux';
+    return 'other';
+};
+
+const getDesktopReviewTarget = (installSource: InstallSource | null): { label: string; url: string } | null => {
+    const platform = getDesktopPlatform();
+    if (platform === 'linux') return null;
+    if (installSource === 'microsoft-store' || platform === 'windows') {
+        return { label: 'Rate Mindwtr', url: MS_STORE_REVIEW_URL };
+    }
+    if (installSource === 'mac-app-store' || platform === 'macos') {
+        return { label: 'Rate Mindwtr', url: MAC_APP_STORE_REVIEW_URL };
+    }
+    return {
+        label: 'Open GitHub',
+        url: 'https://github.com/dongdongbh/Mindwtr',
+    };
+};
+
+const buildPromptTestReviewAnnouncement = (installSource: InstallSource | null): AppAnnouncement | null => {
+    const target = getDesktopReviewTarget(installSource);
+    if (!target) return null;
+    return {
+        id: 'prompt-test-review',
+        title: 'Enjoying Mindwtr?',
+        body: 'A quick rating helps others discover it. It only takes a moment.',
+        action: {
+            type: 'url',
+            label: target.label,
+            url: target.url,
+        },
+    };
+};
+
 function App() {
     // Honor `?view=<name>` from the URL on first mount (TG deep-links land here).
     const initialView = (() => {
-        if (typeof window === 'undefined') return 'inbox';
+        if (typeof window === 'undefined') return DEFAULT_DESKTOP_VIEW;
         const v = new URLSearchParams(window.location.search).get('view');
-        return v && v.trim() ? v.trim() : 'inbox';
+        return v && v.trim() ? v.trim() : DEFAULT_DESKTOP_VIEW;
     })();
     const [currentView, setCurrentView] = useState(initialView);
     const [activeView, setActiveView] = useState(initialView);
+    const [settingsInitialPage, setSettingsInitialPage] = useState<SettingsPage | undefined>();
+    const [settingsOnboardingHintPage, setSettingsOnboardingHintPage] = useState<
+        SettingsOnboardingHintPage | undefined
+    >();
+    const [desktopOnboardingDismissed, setDesktopOnboardingDismissed] = useState(readDesktopOnboardingDismissed);
+    const [desktopOnboardingOpen, setDesktopOnboardingOpen] = useState(false);
+    const [desktopOnboardingBusy, setDesktopOnboardingBusy] = useState(false);
+    const [desktopOnboardingError, setDesktopOnboardingError] = useState<string | null>(null);
+    const [desktopOnboardingGateSettled, setDesktopOnboardingGateSettled] = useState(false);
+    const [announcementOpen, setAnnouncementOpen] = useState(false);
+    const [announcementDismissedInSession, setAnnouncementDismissedInSession] = useState(false);
+    const [donationPromptOpen, setDonationPromptOpen] = useState(false);
+    const [donationDismissedInSession, setDonationDismissedInSession] = useState(false);
+    const [donationPromptAllowed, setDonationPromptAllowed] = useState<boolean | null>(null);
+    const [desktopInstallSource, setDesktopInstallSource] = useState<InstallSource | null>(null);
+    const [updateReminderOpen, setUpdateReminderOpen] = useState(false);
+    const [updateReminderDismissedInSession, setUpdateReminderDismissedInSession] = useState(false);
+    const [updateReminderInfo, setUpdateReminderInfo] = useState<DesktopUpdateReminderInfo | null>(null);
+    const [testAnnouncement, setTestAnnouncement] = useState<AppAnnouncement | null>(null);
     const [, startTransition] = useTransition();
     const fetchData = useTaskStore((state) => state.fetchData);
+    const seedGettingStarted = useTaskStore((state) => state.seedGettingStarted);
     const isLoading = useTaskStore((state) => state.isLoading);
+    const visibleDataCount = useTaskStore((state) => (
+        state.tasks.length + state.projects.length + state.sections.length + state.areas.length
+    ));
     const setError = useTaskStore((state) => state.setError);
+    const isFlatpak = isFlatpakRuntime();
     const windowDecorations = useTaskStore((state) => state.settings?.window?.decorations);
-    const closeBehavior = useTaskStore((state) => state.settings?.window?.closeBehavior ?? 'ask');
+    const closeBehavior = useTaskStore((state) => (
+        resolveCloseBehavior(state.settings?.window?.closeBehavior, isFlatpak)
+    ));
     const showTray = useTaskStore((state) => state.settings?.window?.showTray);
     const settingsTheme = useTaskStore((state) => state.settings?.theme);
     const settingsTextSize = useTaskStore((state) => state.settings?.appearance?.textSize);
     const settingsLanguage = useTaskStore((state) => state.settings?.language);
     const settingsDateFormat = useTaskStore((state) => state.settings?.dateFormat);
+    const settingsCalendarSystem = useTaskStore((state) => state.settings?.calendarSystem);
     const settingsTimeFormat = useTaskStore((state) => state.settings?.timeFormat);
     const updateSettings = useTaskStore((state) => state.updateSettings);
     const showToast = useUiStore((state) => state.showToast);
-    const isFlatpak = isFlatpakRuntime();
     const { t, language, setLanguage } = useLanguage();
     const isActiveRef = useRef(true);
     const lastSyncErrorRef = useRef<string | null>(null);
@@ -97,15 +280,23 @@ function App() {
     const [resolvingExternalSync, setResolvingExternalSync] = useState(false);
     const [hasHydratedSettings, setHasHydratedSettings] = useState(false);
     const closePromptRememberRef = useRef(false);
+    const closePromptOpenRef = useRef(false);
+    const localPromptActivityRecordedRef = useRef(false);
     const lastViewBreadcrumbRef = useRef<string | null>(null);
     const isObsidianEnabled = useObsidianStore((state) => state.config.enabled);
     const obsidianVaultPath = useObsidianStore((state) => state.config.vaultPath);
     const startObsidianWatcher = useObsidianStore((state) => state.startWatcher);
     const stopObsidianWatcher = useObsidianStore((state) => state.stopWatcher);
+    const activeAnnouncement = testAnnouncement ?? ACTIVE_APP_ANNOUNCEMENT;
 
     const setClosePromptRememberValue = useCallback((next: boolean) => {
         closePromptRememberRef.current = next;
         setClosePromptRemember(next);
+    }, []);
+
+    const setClosePromptOpenValue = useCallback((next: boolean) => {
+        closePromptOpenRef.current = next;
+        setClosePromptOpen(next);
     }, []);
 
     const resolveExternalSync = useCallback(async (resolution: ExternalSyncChangeResolution) => {
@@ -118,7 +309,7 @@ function App() {
                 } else if (resolution === 'use-external') {
                     showToast('Loaded external sync file changes.', 'success');
                 } else {
-                    const conflicts = (result.stats?.tasks.conflicts || 0) + (result.stats?.projects.conflicts || 0);
+                    const conflicts = summarizeMergeStats(result.stats).conflicts;
                     showToast(
                         conflicts > 0
                             ? `Sync merged with ${conflicts} conflict${conflicts === 1 ? '' : 's'} resolved.`
@@ -145,18 +336,57 @@ function App() {
         await flushPendingSave();
     }, [updateSettings]);
 
+    const getActiveThemeMode = useCallback(() => (
+        resolveDesktopThemeMode(settingsTheme, localStorage.getItem(THEME_STORAGE_KEY))
+    ), [settingsTheme]);
+
+    const applyActiveNativeTheme = useCallback((stepPrefix = 'apply') => {
+        if (!isTauriRuntime()) return;
+        const nativeTheme = resolveNativeTheme(getActiveThemeMode());
+        void applyNativeTheme(
+            nativeTheme,
+            () => import('@tauri-apps/api/app'),
+            () => import('@tauri-apps/api/window'),
+            (step, error) => void logError(error, { scope: 'theme', step: `${stepPrefix}:${step}` }),
+        );
+    }, [getActiveThemeMode]);
+
     useEffect(() => {
-        const normalizedTheme = mapSyncedThemeToDesktop(settingsTheme);
-        if (!normalizedTheme) return;
+        if (!hasHydratedSettings) return;
+        let cancelled = false;
+        const normalizedTheme = getActiveThemeMode();
         localStorage.setItem(THEME_STORAGE_KEY, normalizedTheme);
         applyThemeMode(normalizedTheme);
+        if (normalizedTheme === 'system' && isTauriRuntime()) {
+            void resolveSystemThemeCommandPreference(
+                () => import('@tauri-apps/api/core'),
+                (step, error) => void logError(error, { scope: 'theme', step: `initial-command:${step}` }),
+            ).then((theme) => {
+                if (!cancelled && theme) applyThemeMode('system', theme);
+            });
+        }
+        applyActiveNativeTheme();
+        return () => {
+            cancelled = true;
+        };
+    }, [applyActiveNativeTheme, getActiveThemeMode, hasHydratedSettings]);
 
-        if (!isTauriRuntime()) return;
-        const nativeTheme = resolveNativeTheme(normalizedTheme);
-        import('@tauri-apps/api/app')
-            .then(({ setTheme }) => setTheme(nativeTheme))
-            .catch((error) => void logError(error, { scope: 'theme', step: 'apply' }));
-    }, [settingsTheme]);
+    useEffect(() => {
+        if (!hasHydratedSettings || !isTauriRuntime()) return;
+        const reapplyTheme = () => applyActiveNativeTheme('reapply');
+        const reapplyThemeWhenVisible = () => {
+            if (document.visibilityState === 'visible') {
+                reapplyTheme();
+            }
+        };
+
+        window.addEventListener('focus', reapplyTheme);
+        document.addEventListener('visibilitychange', reapplyThemeWhenVisible);
+        return () => {
+            window.removeEventListener('focus', reapplyTheme);
+            document.removeEventListener('visibilitychange', reapplyThemeWhenVisible);
+        };
+    }, [applyActiveNativeTheme, hasHydratedSettings]);
 
     useEffect(() => {
         if (!hasHydratedSettings) return;
@@ -170,7 +400,8 @@ function App() {
     }, [hasHydratedSettings, settingsTextSize]);
 
     useEffect(() => {
-        const normalizedTheme = mapSyncedThemeToDesktop(settingsTheme);
+        if (!hasHydratedSettings) return;
+        const normalizedTheme = getActiveThemeMode();
         if (normalizedTheme !== 'system') return;
 
         const stopWatchingSystemTheme = watchSystemThemePreference((theme) => {
@@ -192,12 +423,22 @@ function App() {
                 void logError(error, { scope: 'theme', step });
             }
         );
+        const stopWatchingCommandTheme = watchSystemThemeCommandPreference(
+            () => import('@tauri-apps/api/core'),
+            (theme) => {
+                applyThemeMode('system', theme);
+            },
+            (step, error) => {
+                void logError(error, { scope: 'theme', step: `command:${step}` });
+            }
+        );
 
         return () => {
             stopWatchingSystemTheme();
             stopWatchingNativeTheme();
+            stopWatchingCommandTheme();
         };
-    }, [settingsTheme]);
+    }, [getActiveThemeMode, hasHydratedSettings]);
 
     useEffect(() => {
         if (!settingsLanguage || !isSupportedLanguage(settingsLanguage)) return;
@@ -220,14 +461,31 @@ function App() {
         configureDateFormatting({
             language: settingsLanguage || language,
             dateFormat: settingsDateFormat,
+            calendarSystem: settingsCalendarSystem,
             timeFormat: settingsTimeFormat,
             systemLocale,
         });
-    }, [language, settingsDateFormat, settingsLanguage, settingsTimeFormat]);
+    }, [language, settingsCalendarSystem, settingsDateFormat, settingsLanguage, settingsTimeFormat]);
 
     const translateOrFallback = useCallback((key: string, fallback: string) => {
         return translateWithFallback(t, key, fallback);
     }, [t]);
+
+    const donationPromptAnnouncement = useMemo<AppAnnouncement>(() => ({
+        ...DONATION_PROMPT_ANNOUNCEMENT,
+        title: translateOrFallback('donationPrompt.title', DONATION_PROMPT_ANNOUNCEMENT.title),
+        body: translateOrFallback('donationPrompt.body', DONATION_PROMPT_ANNOUNCEMENT.body),
+        dismissLabel: translateOrFallback(
+            'donationPrompt.dismiss',
+            DONATION_PROMPT_ANNOUNCEMENT.dismissLabel ?? DONATION_PROMPT_ANNOUNCEMENT.title,
+        ),
+        action: DONATION_PROMPT_ANNOUNCEMENT.action
+            ? {
+                ...DONATION_PROMPT_ANNOUNCEMENT.action,
+                label: translateOrFallback('donationPrompt.action', DONATION_PROMPT_ANNOUNCEMENT.action.label),
+            }
+            : undefined,
+    }), [translateOrFallback]);
 
     const hideToTray = useCallback(async () => {
         const { getCurrentWindow } = await import('@tauri-apps/api/window');
@@ -248,20 +506,31 @@ function App() {
     useEffect(() => {
         if (import.meta.env.MODE === 'test' || import.meta.env.VITEST || process.env.NODE_ENV === 'test') return;
         let cancelled = false;
-        fetchData()
-            .finally(() => {
-                if (!cancelled) {
-                    setHasHydratedSettings(true);
-                }
-            });
-        useObsidianStore.getState().loadConfig().catch((error) => reportError('Obsidian init failed', error));
-        const unsubscribeExternalSync = SyncService.subscribeExternalSyncChange(setExternalSyncChange);
+        let disposed = false;
+        let stopCalendarPush: (() => void) | null = null;
 
         const reportError = (label: string, error: unknown) => {
             const message = error instanceof Error ? error.message : String(error);
             setError(`${label}: ${message}`);
             void logError(error, { scope: 'app', step: label });
         };
+
+        fetchData()
+            .finally(() => {
+                if (!cancelled) {
+                    setHasHydratedSettings(true);
+                }
+            })
+            .then(() => {
+                if (!disposed && isTauriRuntime()) {
+                    stopCalendarPush = startDesktopCalendarPushSync();
+                    runFullDesktopCalendarPushSync()
+                        .catch((error) => reportError('Calendar push failed', error));
+                }
+            })
+            .catch((error) => reportError('Data load failed', error));
+        useObsidianStore.getState().loadConfig().catch((error) => reportError('Obsidian init failed', error));
+        const unsubscribeExternalSync = SyncService.subscribeExternalSyncChange(setExternalSyncChange);
 
         const handleUnload = () => {
             flushPendingSave().catch((error) => reportError('Save failed', error));
@@ -270,7 +539,6 @@ function App() {
         let unlistenClose: (() => void) | null = null;
         let closingPromise: Promise<void> | null = null;
         let isClosing = false;
-        let disposed = false;
         if (isTauriRuntime()) {
             import('@tauri-apps/api/window')
                 .then(async ({ getCurrentWindow }) => {
@@ -300,10 +568,15 @@ function App() {
             startDesktopNotifications().catch((error) => reportError('Notifications failed', error));
             SyncService.startFileWatcher().catch((error) => reportError('File watcher failed', error));
 
-            // Watch local data.json for external changes (e.g. from the CLI)
+            // Watch local data.json and SQLite sidecar files for external changes (CLI/MCP/Local REST).
             import('@tauri-apps/api/core')
-                .then((mod) => mod.invoke<string>('get_data_path_cmd'))
-                .then((dataPath) => LocalDataWatcher.start(dataPath))
+                .then(async (mod) => {
+                    const [dataPath, dbPath] = await Promise.all([
+                        mod.invoke<string>('get_data_path_cmd'),
+                        mod.invoke<string>('get_db_path_cmd'),
+                    ]);
+                    await LocalDataWatcher.start(dataPath, dbPath);
+                })
                 .catch((error) => reportError('Local data watcher failed', error));
         }
 
@@ -332,11 +605,15 @@ function App() {
             flushPendingSave,
             reportError,
             onSyncFailure: handleSyncFailure,
-            isRuntimeActive: () => isActiveRef.current && isTauriRuntime(),
+            isRuntimeActive: () => isDesktopSyncRuntimeActive(isActiveRef.current),
             shouldPauseWindowSync: () => (
                 useTaskStore.getState().editLockCount > 0
                 || useUiStore.getState().editingTaskId !== null
             ),
+            hasPendingLocalChanges: () => SyncService.hasPendingLocalChangesForAutoSync(),
+            logInfo: (message, extra) => {
+                void logInfo(message, { scope: 'sync', extra });
+            },
         });
 
         const focusListener = () => {
@@ -347,6 +624,24 @@ function App() {
             autoSyncController.handleBlur();
         };
 
+        const manualSyncShortcutListener = (event: KeyboardEvent) => {
+            if (!shouldHandleDesktopManualSyncShortcut({
+                isEditableTarget: isEditableManualSyncShortcutTarget(event.target),
+                isShortcut: isManualSyncShortcut(event),
+            })) return;
+            event.preventDefault();
+            void autoSyncController.requestSync(0).catch((error) => reportError('Sync failed', error));
+        };
+
+        const visibilityListener = () => {
+            const action = resolveVisibilitySyncAction(document.visibilityState);
+            if (action === 'focus') {
+                autoSyncController.handleFocus();
+            } else if (action === 'blur') {
+                autoSyncController.handleBlur();
+            }
+        };
+
         const storeUnsubscribe = useTaskStore.subscribe((state, prevState) => {
             if (state.lastDataChangeAt === prevState.lastDataChangeAt) return;
             autoSyncController.handleDataChange();
@@ -354,6 +649,8 @@ function App() {
 
         window.addEventListener('focus', focusListener);
         window.addEventListener('blur', blurListener);
+        window.addEventListener('keydown', manualSyncShortcutListener);
+        document.addEventListener('visibilitychange', visibilityListener);
         autoSyncController.scheduleInitialSync();
 
         return () => {
@@ -363,11 +660,15 @@ function App() {
             window.removeEventListener('beforeunload', handleUnload);
             window.removeEventListener('focus', focusListener);
             window.removeEventListener('blur', blurListener);
+            window.removeEventListener('keydown', manualSyncShortcutListener);
+            document.removeEventListener('visibilitychange', visibilityListener);
             if (unlistenClose) {
                 unlistenClose();
             }
             storeUnsubscribe();
             autoSyncController.dispose();
+            stopCalendarPush?.();
+            stopDesktopCalendarPushSync();
             stopDesktopNotifications();
             LocalDataWatcher.stop();
             SyncService.stopFileWatcher().catch((error) => reportError('File watcher failed', error));
@@ -377,6 +678,37 @@ function App() {
 
     useEffect(() => {
         if (!isTauriRuntime()) return;
+        let disposed = false;
+        let unlisten: (() => void) | undefined;
+        const reportQuickAddRefreshError = (error: unknown) => {
+            const message = error instanceof Error ? error.message : String(error);
+            setError(`Quick add refresh failed: ${message}`);
+            void logError(error, { scope: 'quick-add', step: 'refreshAfterStandaloneSave' });
+        };
+
+        const setup = async () => {
+            const { listen } = await import('@tauri-apps/api/event');
+            const nextUnlisten = await listen(QUICK_ADD_SAVED_EVENT, async () => {
+                await LocalDataWatcher.refreshFromDiskNow().catch(reportQuickAddRefreshError);
+            });
+            if (disposed) {
+                nextUnlisten();
+                return;
+            }
+            unlisten = nextUnlisten;
+        };
+
+        setup().catch(reportQuickAddRefreshError);
+
+        return () => {
+            disposed = true;
+            if (unlisten) unlisten();
+        };
+    }, [setError]);
+
+    useEffect(() => {
+        if (!isTauriRuntime()) return;
+        let disposed = false;
         let unlisten: (() => void) | undefined;
         const reportCloseError = (label: string, error: unknown) => {
             const message = error instanceof Error ? error.message : String(error);
@@ -387,40 +719,35 @@ function App() {
         const setup = async () => {
             const { listen } = await import('@tauri-apps/api/event');
             const { invoke } = await import('@tauri-apps/api/core');
-            unlisten = await listen('close-requested', async () => {
+            const nextUnlisten = await listen('close-requested', async () => {
                 await invoke('acknowledge_close_request').catch((error) => {
                     void logError(error, { scope: 'app', step: 'acknowledgeCloseRequest' });
                 });
-                if (isFlatpak) {
-                    await quitApp().catch((error) => reportCloseError('Quit failed', error));
-                    return;
-                }
-                if (closeBehavior === 'quit') {
-                    await quitApp().catch((error) => reportCloseError('Quit failed', error));
-                    return;
-                }
-                if (closeBehavior === 'tray') {
-                    // If tray is hidden, quit instead of trying to hide to an invisible tray
-                    if (showTray === false) {
-                        await quitApp().catch((error) => reportCloseError('Quit failed', error));
-                        return;
-                    }
-                    await hideToTray().catch((error) => reportCloseError('Hide failed', error));
-                    return;
-                }
-                if (!closePromptOpen) {
-                    setClosePromptRememberValue(false);
-                    setClosePromptOpen(true);
-                }
+                await handleDesktopCloseRequest({
+                    getWindowSettings: () => useTaskStore.getState().settings?.window,
+                    hideToTray,
+                    isFlatpak,
+                    promptOpenRef: closePromptOpenRef,
+                    quitApp,
+                    reportCloseError,
+                    setPromptOpen: setClosePromptOpenValue,
+                    setPromptRemember: setClosePromptRememberValue,
+                });
             });
+            if (disposed) {
+                nextUnlisten();
+                return;
+            }
+            unlisten = nextUnlisten;
         };
 
         setup().catch((error) => reportCloseError('Close listener failed', error));
 
         return () => {
+            disposed = true;
             if (unlisten) unlisten();
         };
-    }, [closeBehavior, closePromptOpen, hideToTray, isFlatpak, quitApp, setClosePromptRememberValue, setError, showTray]);
+    }, [hideToTray, isFlatpak, quitApp, setClosePromptOpenValue, setClosePromptRememberValue, setError]);
 
     useEffect(() => {
         if (!isTauriRuntime()) return;
@@ -473,6 +800,14 @@ function App() {
             cancelled = true;
             if (unlistenResize) unlistenResize();
         };
+    }, []);
+
+    useEffect(() => {
+        if (!isTauriRuntime()) return;
+        return installWebviewZoomShortcuts({
+            storage: localStorage,
+            onError: (error) => void logError(error, { scope: 'window', step: 'setWebviewZoom' }),
+        });
     }, []);
 
     useEffect(() => {
@@ -586,7 +921,13 @@ function App() {
             case 'control-center':
                 return <ControlCenterView />;
             case 'settings':
-                return <SettingsView />;
+                return (
+                    <SettingsView
+                        initialPage={settingsInitialPage}
+                        onboardingHintPage={settingsOnboardingHintPage}
+                        onResumeOnboarding={resumeDesktopOnboarding}
+                    />
+                );
             case 'archived':
                 return <ArchiveView />;
             case 'trash':
@@ -598,6 +939,10 @@ function App() {
 
     const handleViewChange = useCallback((view: string) => {
         const nextView = view === 'obsidian' && !useObsidianStore.getState().config.enabled ? 'settings' : view;
+        if (nextView !== 'settings') {
+            setSettingsInitialPage(undefined);
+            setSettingsOnboardingHintPage(undefined);
+        }
         setCurrentView(nextView);
         if (nextView === 'settings') {
             beginSettingsOpenTrace('handleViewChange');
@@ -613,6 +958,466 @@ function App() {
         if (isObsidianEnabled || currentView !== 'obsidian') return;
         handleViewChange('settings');
     }, [currentView, handleViewChange, isObsidianEnabled]);
+
+    useEffect(() => {
+        if (!hasHydratedSettings || isLoading) return;
+        if (desktopOnboardingDismissed || visibleDataCount > 0) {
+            setDesktopOnboardingGateSettled(true);
+            return;
+        }
+
+        let cancelled = false;
+        setDesktopOnboardingGateSettled(false);
+        SyncService.getSyncBackend()
+            .then((backend) => {
+                if (cancelled) return;
+                if (shouldOpenDesktopFirstRunOnboarding({
+                    hasHydratedSettings,
+                    isLoading,
+                    dismissed: desktopOnboardingDismissed,
+                    visibleDataCount,
+                    syncBackend: backend,
+                })) {
+                    setDesktopOnboardingOpen(true);
+                }
+                setDesktopOnboardingGateSettled(true);
+            })
+            .catch((error) => {
+                void logError(error, { scope: 'onboarding', step: 'readSyncBackend' });
+                if (!cancelled && shouldOpenDesktopFirstRunOnboarding({
+                    hasHydratedSettings,
+                    isLoading,
+                    dismissed: desktopOnboardingDismissed,
+                    visibleDataCount,
+                    syncBackend: 'off',
+                })) {
+                    setDesktopOnboardingOpen(true);
+                }
+                if (!cancelled) {
+                    setDesktopOnboardingGateSettled(true);
+                }
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [desktopOnboardingDismissed, hasHydratedSettings, isLoading, visibleDataCount]);
+
+    const dismissDesktopOnboarding = useCallback(() => {
+        writeDesktopOnboardingDismissed();
+        setDesktopOnboardingDismissed(true);
+        setDesktopOnboardingOpen(false);
+    }, []);
+
+    const resumeDesktopOnboarding = useCallback(() => {
+        setDesktopOnboardingBusy(false);
+        setDesktopOnboardingError(null);
+        setDesktopOnboardingDismissed(false);
+        setDesktopOnboardingOpen(true);
+    }, []);
+
+    const openSettingsPage = useCallback((page: SettingsOnboardingHintPage) => {
+        setDesktopOnboardingOpen(false);
+        setSettingsInitialPage(page);
+        setSettingsOnboardingHintPage(page);
+        handleViewChange('settings');
+    }, [handleViewChange]);
+
+    const handleStartFreshOnboarding = useCallback(() => {
+        if (desktopOnboardingBusy) return;
+        setDesktopOnboardingBusy(true);
+        setDesktopOnboardingError(null);
+        seedGettingStarted()
+            .then((result) => {
+                if (!result.id) {
+                    setDesktopOnboardingError('Getting Started was not created. Try again or import your data instead.');
+                    showToast('Getting Started was not created.', 'info');
+                    return;
+                }
+                dismissDesktopOnboarding();
+                useUiStore.getState().setProjectView({ selectedProjectId: result.id });
+                handleViewChange('projects');
+                showToast('Getting Started is ready in Projects.', 'success');
+            })
+            .catch((error) => {
+                setDesktopOnboardingError('Failed to create Getting Started onboarding. Try again, or use Import/Sync instead.');
+                showToast('Failed to create Getting Started onboarding.', 'error');
+                void logError(error, { scope: 'onboarding', step: 'seedGettingStarted' });
+            })
+            .finally(() => setDesktopOnboardingBusy(false));
+    }, [desktopOnboardingBusy, dismissDesktopOnboarding, handleViewChange, seedGettingStarted, showToast]);
+
+    const dismissAppAnnouncement = useCallback(() => {
+        if (testAnnouncement) {
+            setTestAnnouncement(null);
+            setAnnouncementOpen(false);
+            return;
+        }
+        const announcement = ACTIVE_APP_ANNOUNCEMENT;
+        if (announcement && typeof window !== 'undefined') {
+            try {
+                window.localStorage.setItem(
+                    getAnnouncementDismissalStorageKey(announcement.id),
+                    APP_ANNOUNCEMENT_DISMISSED_VALUE,
+                );
+            } catch {
+                // Keep the in-memory dismissal for this session when localStorage is unavailable.
+            }
+        }
+        setAnnouncementDismissedInSession(true);
+        setAnnouncementOpen(false);
+    }, [testAnnouncement]);
+
+    const openAnnouncementUrl = useCallback(async (url: string) => {
+        const nextUrl = url.trim();
+        if (!nextUrl) return;
+        let openError: unknown = null;
+        if (isTauriRuntime()) {
+            try {
+                const { open } = await import('@tauri-apps/plugin-shell');
+                await open(nextUrl);
+                return;
+            } catch (error) {
+                openError = error;
+            }
+        }
+
+        const opened = window.open(nextUrl, '_blank', 'noopener,noreferrer');
+        if (!opened) {
+            void logError(openError ?? new Error('Failed to open announcement link'), {
+                scope: 'announcement',
+                step: 'openUrl',
+            });
+        }
+    }, []);
+
+    const handleAppAnnouncementAction = useCallback((action: AppAnnouncementAction) => {
+        dismissAppAnnouncement();
+        if (action.type === 'feedback') {
+            setSettingsInitialPage('about');
+            setSettingsOnboardingHintPage(undefined);
+            handleViewChange('settings');
+            return;
+        }
+        void openAnnouncementUrl(action.url);
+    }, [dismissAppAnnouncement, handleViewChange, openAnnouncementUrl]);
+
+    const dismissDonationPrompt = useCallback(() => {
+        setDonationDismissedInSession(true);
+        setDonationPromptOpen(false);
+    }, []);
+
+    const handleDonationPromptAction = useCallback((action: AppAnnouncementAction) => {
+        dismissDonationPrompt();
+        if (action.type === 'feedback') {
+            setSettingsInitialPage('about');
+            setSettingsOnboardingHintPage(undefined);
+            handleViewChange('settings');
+            return;
+        }
+        try {
+            updateLocalUserPromptState((state) => recordDonationPromptSupportClicked(state, Date.now()));
+        } catch (error) {
+            void logError(error, { scope: 'prompt-state', step: 'recordDonationSupportClicked' });
+        }
+        void openAnnouncementUrl(action.url);
+    }, [dismissDonationPrompt, handleViewChange, openAnnouncementUrl]);
+
+    const recordDonationPromptVisible = useCallback(() => {
+        try {
+            updateLocalUserPromptState((state) => recordDonationPromptShown(state, Date.now()));
+        } catch (error) {
+            void logError(error, { scope: 'prompt-state', step: 'recordDonationShown' });
+        }
+    }, []);
+
+    const dismissUpdateReminder = useCallback(() => {
+        const latestVersion = updateReminderInfo?.latestVersion;
+        if (latestVersion && updateReminderInfo?.testOnly !== true) {
+            try {
+                updateLocalUserPromptState((state) => recordUpdateReminderDismissed(state, latestVersion));
+            } catch (error) {
+                void logError(error, { scope: 'prompt-state', step: 'dismissUpdateReminder' });
+            }
+        }
+        setUpdateReminderDismissedInSession(true);
+        setUpdateReminderOpen(false);
+    }, [updateReminderInfo?.latestVersion, updateReminderInfo?.testOnly]);
+
+    const handleUpdateReminderAction = useCallback((action: AppAnnouncementAction) => {
+        dismissUpdateReminder();
+        if (action.type === 'feedback') {
+            setSettingsInitialPage('about');
+            setSettingsOnboardingHintPage(undefined);
+            handleViewChange('settings');
+            return;
+        }
+        void openAnnouncementUrl(action.url);
+    }, [dismissUpdateReminder, handleViewChange, openAnnouncementUrl]);
+
+    useEffect(() => {
+        if (!PROMPT_TEST_CONTROLS_ENABLED) return;
+        let disposed = false;
+        const closePromptSurfaces = () => {
+            setAnnouncementOpen(false);
+            setDonationPromptOpen(false);
+            setUpdateReminderOpen(false);
+            setTestAnnouncement(null);
+        };
+
+        const unsubscribe = subscribePromptTest((kind) => {
+            closePromptSurfaces();
+            if (kind === 'announcement') {
+                setTestAnnouncement(PROMPT_TEST_ANNOUNCEMENT);
+                setAnnouncementOpen(true);
+                return;
+            }
+            if (kind === 'donation') {
+                setDonationPromptOpen(true);
+                return;
+            }
+            if (kind === 'review') {
+                const reviewAnnouncement = buildPromptTestReviewAnnouncement(desktopInstallSource);
+                if (!reviewAnnouncement) return;
+                setTestAnnouncement(reviewAnnouncement);
+                setAnnouncementOpen(true);
+                return;
+            }
+            const openUpdateTest = async () => {
+                let currentVersion = 'this build';
+                try {
+                    const { getVersion } = await import('@tauri-apps/api/app');
+                    currentVersion = await getVersion();
+                } catch {
+                    currentVersion = 'this build';
+                }
+                if (disposed) return;
+                const updateTarget = getDesktopUpdateTarget(desktopInstallSource);
+                setUpdateReminderInfo({
+                    currentVersion,
+                    latestVersion: '99.99.99',
+                    latestReleasedAt: new Date().toISOString(),
+                    releaseUrl: updateTarget.url,
+                    actionLabel: updateTarget.label,
+                    testOnly: true,
+                });
+                setUpdateReminderOpen(true);
+            };
+            void openUpdateTest();
+        });
+        return () => {
+            disposed = true;
+            unsubscribe();
+        };
+    }, [desktopInstallSource]);
+
+    useEffect(() => {
+        if (import.meta.env.MODE === 'test' || import.meta.env.VITEST || process.env.NODE_ENV === 'test') return;
+        if (
+            announcementDismissedInSession
+            || !hasHydratedSettings
+            || isLoading
+            || !desktopOnboardingGateSettled
+            || desktopOnboardingOpen
+            || closePromptOpen
+            || externalSyncChange
+        ) {
+            return;
+        }
+
+        const announcement = ACTIVE_APP_ANNOUNCEMENT;
+        if (!shouldShowAppAnnouncement(announcement, null)) return;
+
+        let dismissedValue: string | null = null;
+        try {
+            dismissedValue = window.localStorage.getItem(getAnnouncementDismissalStorageKey(announcement.id));
+        } catch {
+            dismissedValue = null;
+        }
+        if (!shouldShowAppAnnouncement(announcement, dismissedValue)) return;
+
+        const timer = window.setTimeout(() => setAnnouncementOpen(true), 250);
+        return () => window.clearTimeout(timer);
+    }, [
+        announcementDismissedInSession,
+        closePromptOpen,
+        desktopOnboardingGateSettled,
+        desktopOnboardingOpen,
+        externalSyncChange,
+        hasHydratedSettings,
+        isLoading,
+    ]);
+
+    useEffect(() => {
+        if (import.meta.env.MODE === 'test' || import.meta.env.VITEST || process.env.NODE_ENV === 'test') return;
+        if (localPromptActivityRecordedRef.current || !hasHydratedSettings || isLoading) return;
+        localPromptActivityRecordedRef.current = true;
+        try {
+            recordLocalPromptActivity();
+        } catch (error) {
+            void logError(error, { scope: 'prompt-state', step: 'recordActivity' });
+        }
+    }, [hasHydratedSettings, isLoading]);
+
+    useEffect(() => {
+        if (import.meta.env.MODE === 'test' || import.meta.env.VITEST || process.env.NODE_ENV === 'test') return;
+        let cancelled = false;
+        getInstallSourceOrFallback('unknown')
+            .then((installSource) => {
+                if (cancelled) return;
+                const normalized = normalizeInstallSource(installSource);
+                setDesktopInstallSource(normalized);
+                setDonationPromptAllowed(isDesktopDonationPromptAllowed(normalized));
+            })
+            .catch((error) => {
+                if (!cancelled) {
+                    setDesktopInstallSource('unknown');
+                    setDonationPromptAllowed(false);
+                }
+                void logError(error, { scope: 'prompt-state', step: 'resolveDonationInstallSource' });
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, []);
+
+    useEffect(() => {
+        if (import.meta.env.MODE === 'test' || import.meta.env.VITEST || process.env.NODE_ENV === 'test') return;
+        if (
+            donationDismissedInSession
+            || donationPromptOpen
+            || updateReminderOpen
+            || donationPromptAllowed !== true
+            || ACTIVE_APP_ANNOUNCEMENT
+            || announcementOpen
+            || !hasHydratedSettings
+            || isLoading
+            || !desktopOnboardingGateSettled
+            || desktopOnboardingOpen
+            || closePromptOpen
+            || externalSyncChange
+        ) {
+            return;
+        }
+
+        const nowMs = Date.now();
+        let promptState: ReturnType<typeof readLocalUserPromptState>;
+        try {
+            promptState = readLocalUserPromptState();
+        } catch (error) {
+            setDonationDismissedInSession(true);
+            void logError(error, { scope: 'prompt-state', step: 'readDonationPromptState' });
+            return;
+        }
+        if (!shouldShowDonationPrompt({ nowMs, promptState, donationAllowed: true })) return;
+
+        const timer = window.setTimeout(() => {
+            setDonationPromptOpen(true);
+        }, DONATION_PROMPT_STARTUP_DELAY_MS);
+        return () => window.clearTimeout(timer);
+    }, [
+        announcementOpen,
+        closePromptOpen,
+        desktopOnboardingGateSettled,
+        desktopOnboardingOpen,
+        donationDismissedInSession,
+        donationPromptAllowed,
+        donationPromptOpen,
+        externalSyncChange,
+        hasHydratedSettings,
+        isLoading,
+        updateReminderOpen,
+    ]);
+
+    useEffect(() => {
+        if (import.meta.env.MODE === 'test' || import.meta.env.VITEST || process.env.NODE_ENV === 'test') return;
+        if (
+            updateReminderDismissedInSession
+            || updateReminderOpen
+            || !desktopInstallSource
+            || !isDesktopUpdateReminderAllowed(desktopInstallSource)
+            || ACTIVE_APP_ANNOUNCEMENT
+            || announcementOpen
+            || donationPromptOpen
+            || !hasHydratedSettings
+            || isLoading
+            || !desktopOnboardingGateSettled
+            || desktopOnboardingOpen
+            || closePromptOpen
+            || externalSyncChange
+        ) {
+            return;
+        }
+
+        const nowMs = Date.now();
+        let promptState: ReturnType<typeof readLocalUserPromptState>;
+        try {
+            promptState = readLocalUserPromptState();
+        } catch (error) {
+            setUpdateReminderDismissedInSession(true);
+            void logError(error, { scope: 'prompt-state', step: 'readUpdateReminderState' });
+            return;
+        }
+        if (!shouldCheckUpdateReminder({ nowMs, promptState, updateReminderAllowed: true })) return;
+        try {
+            updateLocalUserPromptState((state) => recordUpdateReminderChecked(state, nowMs));
+        } catch (error) {
+            setUpdateReminderDismissedInSession(true);
+            void logError(error, { scope: 'prompt-state', step: 'recordUpdateReminderChecked' });
+            return;
+        }
+
+        let cancelled = false;
+        const timer = window.setTimeout(() => {
+            const check = async () => {
+                const { getVersion } = await import('@tauri-apps/api/app');
+                const currentVersion = await getVersion();
+                const info = await checkForUpdates(currentVersion, { installSource: desktopInstallSource });
+                if (cancelled || !info.hasUpdate) return;
+                const latestPromptState = readLocalUserPromptState();
+                if (!shouldShowUpdateReminder({
+                    nowMs: Date.now(),
+                    promptState: latestPromptState,
+                    updateReminderAllowed: true,
+                    currentVersion: info.currentVersion,
+                    latestVersion: info.latestVersion,
+                    latestReleasedAt: info.latestReleasedAt,
+                })) {
+                    return;
+                }
+                updateLocalUserPromptState((state) => recordUpdateReminderShown(state, Date.now()));
+                if (cancelled) return;
+                const updateTarget = getDesktopUpdateTarget(desktopInstallSource);
+                setUpdateReminderInfo({
+                    currentVersion: info.currentVersion,
+                    latestVersion: info.latestVersion,
+                    latestReleasedAt: info.latestReleasedAt,
+                    releaseUrl: updateTarget.url,
+                    actionLabel: updateTarget.label,
+                });
+                setUpdateReminderOpen(true);
+            };
+            check().catch((error) => {
+                if (!cancelled) setUpdateReminderDismissedInSession(true);
+                void logError(error, { scope: 'prompt-state', step: 'checkUpdateReminder' });
+            });
+        }, 1750);
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timer);
+        };
+    }, [
+        announcementOpen,
+        closePromptOpen,
+        desktopInstallSource,
+        desktopOnboardingGateSettled,
+        desktopOnboardingOpen,
+        donationPromptOpen,
+        externalSyncChange,
+        hasHydratedSettings,
+        isLoading,
+        updateReminderDismissedInSession,
+        updateReminderOpen,
+    ]);
 
     const LoadingFallback = ({ view }: { view: string }) => {
         useEffect(() => {
@@ -636,6 +1441,12 @@ function App() {
             handleViewChange(view);
         });
     }, [handleViewChange]);
+
+    useEffect(() => {
+        return subscribeDesktopOnboardingEvent(() => {
+            resumeDesktopOnboarding();
+        });
+    }, [resumeDesktopOnboarding]);
 
     return (
         <ErrorBoundary>
@@ -667,17 +1478,17 @@ function App() {
                         cancelLabel={translateOrFallback('common.cancel', 'Cancel')}
                         remember={closePromptRemember}
                         onRememberChange={setClosePromptRememberValue}
-                        onCancel={() => setClosePromptOpen(false)}
+                        onCancel={() => setClosePromptOpenValue(false)}
                         onStay={() => {
                             const apply = async () => {
                                 if (closePromptRememberRef.current) {
                                     await persistCloseBehavior('tray');
                                 }
-                                setClosePromptOpen(false);
+                                setClosePromptOpenValue(false);
                                 await hideToTray();
                             };
                             apply().catch((error) => {
-                                setClosePromptOpen(false);
+                                setClosePromptOpenValue(false);
                                 void logError(error, { scope: 'app', step: 'close-tray' });
                             });
                         }}
@@ -686,16 +1497,63 @@ function App() {
                                 if (closePromptRememberRef.current) {
                                     await persistCloseBehavior('quit');
                                 }
-                                setClosePromptOpen(false);
+                                setClosePromptOpenValue(false);
                                 await quitApp();
                             };
                             apply().catch((error) => {
-                                setClosePromptOpen(false);
+                                setClosePromptOpenValue(false);
                                 void logError(error, { scope: 'app', step: 'close-quit' });
                             });
                         }}
                     />
+                    <DesktopOnboardingFlow
+                        isOpen={desktopOnboardingOpen}
+                        busy={desktopOnboardingBusy}
+                        error={desktopOnboardingError}
+                        onOpenSync={() => openSettingsPage('sync')}
+                        onOpenImport={() => openSettingsPage('data')}
+                        onStartFresh={handleStartFreshOnboarding}
+                        onSkip={dismissDesktopOnboarding}
+                    />
+                    <AppAnnouncementModal
+                        announcement={activeAnnouncement}
+                        isOpen={
+                            announcementOpen
+                            && !desktopOnboardingOpen
+                            && !closePromptOpen
+                            && !externalSyncChange
+                        }
+                        onAction={handleAppAnnouncementAction}
+                        onDismiss={dismissAppAnnouncement}
+                    />
+                    <AppAnnouncementModal
+                        announcement={donationPromptAnnouncement}
+                        isOpen={
+                            donationPromptOpen
+                            && !announcementOpen
+                            && !desktopOnboardingOpen
+                            && !closePromptOpen
+                            && !externalSyncChange
+                        }
+                        onAction={handleDonationPromptAction}
+                        onDismiss={dismissDonationPrompt}
+                        onShown={recordDonationPromptVisible}
+                    />
+                    <AppAnnouncementModal
+                        announcement={updateReminderInfo ? buildUpdateReminderAnnouncement(updateReminderInfo) : null}
+                        isOpen={
+                            updateReminderOpen
+                            && !announcementOpen
+                            && !donationPromptOpen
+                            && !desktopOnboardingOpen
+                            && !closePromptOpen
+                            && !externalSyncChange
+                        }
+                        onAction={handleUpdateReminderAction}
+                        onDismiss={dismissUpdateReminder}
+                    />
                     {externalSyncChange && (
+                        <ModalPortal>
                         <div
                             className="fixed inset-0 bg-black/50 flex items-start justify-center pt-[20vh] z-50"
                             role="dialog"
@@ -756,6 +1614,7 @@ function App() {
                                 </div>
                             </div>
                         </div>
+                        </ModalPortal>
                     )}
                 </Layout>
             </KeybindingProvider>

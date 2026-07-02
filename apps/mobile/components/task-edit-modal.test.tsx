@@ -1,16 +1,27 @@
 import React from 'react';
-import { Alert } from 'react-native';
+import { Alert, Text } from 'react-native';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import renderer, { act } from 'react-test-renderer';
 
 import { TaskEditModal } from './task-edit-modal';
+import { MarkdownFormatToolbar } from './markdown-format-toolbar';
 import { syncTaskEditPagerPosition } from './task-edit/task-edit-modal.utils';
 
 vi.mock('@mindwtr/core', async () => {
   const actual = await vi.importActual<typeof import('@mindwtr/core')>('@mindwtr/core');
   const storeState = {
     tasks: [],
-    projects: [],
+    projects: [{
+      id: 'project-1',
+      title: 'Project',
+      status: 'active',
+      color: '#3b82f6',
+      order: 0,
+      tagIds: [],
+      areaId: 'area-1',
+      createdAt: '2025-01-01T00:00:00.000Z',
+      updatedAt: '2025-01-01T00:00:00.000Z',
+    }],
     sections: [],
     areas: [],
     settings: { features: {}, ai: {}, gtd: { taskEditor: { order: [], hidden: [] } } },
@@ -108,6 +119,12 @@ vi.mock('expo-router', () => ({
     back: vi.fn(),
     canGoBack: vi.fn(() => false),
   },
+}));
+
+vi.mock('react-native-draggable-flatlist', () => ({
+  NestableDraggableFlatList: (props: any) => React.createElement('NestableDraggableFlatList', props, props.children),
+  NestableScrollContainer: (props: any) => React.createElement('NestableScrollContainer', props, props.children),
+  ScaleDecorator: (props: any) => React.createElement(React.Fragment, null, props.children),
 }));
 
 vi.mock('./task-edit/task-edit-modal.utils', async () => {
@@ -308,6 +325,282 @@ describe('TaskEditModal', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps quick-add-looking text literal when saving an existing task title', () => {
+    const onClose = vi.fn();
+    const onSave = vi.fn();
+    let tree: renderer.ReactTestRenderer;
+
+    act(() => {
+      tree = renderer.create(
+        <TaskEditModal
+          visible
+          task={{
+            id: 't1',
+            title: 'Test task',
+            status: 'inbox',
+            tags: [],
+            contexts: [],
+            createdAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z',
+          }}
+          onClose={onClose}
+          onSave={onSave}
+        />
+      );
+    });
+
+    const formTab = tree!.root.findAll((node) => typeof node.props.onTitleDraftChange === 'function')[0];
+    const literalTitle = 'Email @home #note +Home /due:tomorrow';
+    act(() => {
+      formTab.props.onTitleDraftChange(literalTitle);
+    });
+
+    const header = tree!.root.find((node) =>
+      typeof node.props.onDone === 'function'
+      && typeof node.props.onDelete === 'function'
+    );
+    act(() => {
+      header.props.onDone();
+    });
+
+    expect(onSave).toHaveBeenCalledWith('t1', expect.objectContaining({
+      title: literalTitle,
+    }));
+    expect(onSave.mock.calls[0]?.[1]).not.toHaveProperty('contexts');
+    expect(onSave.mock.calls[0]?.[1]).not.toHaveProperty('tags');
+    expect(onSave.mock.calls[0]?.[1]).not.toHaveProperty('dueDate');
+    expect(onSave.mock.calls[0]?.[1]).not.toHaveProperty('projectId');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('saves clearing a project and moving the task to an area in one edit', () => {
+    const onClose = vi.fn();
+    const onSave = vi.fn();
+    let tree: renderer.ReactTestRenderer;
+
+    act(() => {
+      tree = renderer.create(
+        <TaskEditModal
+          visible
+          task={{
+            id: 't1',
+            title: 'Test task',
+            status: 'next',
+            projectId: 'project-1',
+            sectionId: 'section-1',
+            tags: [],
+            contexts: [],
+            createdAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z',
+          }}
+          onClose={onClose}
+          onSave={onSave}
+        />
+      );
+    });
+
+    const formTab = tree!.root.findAll((node) =>
+      typeof node.props.setEditedTask === 'function'
+      && typeof node.props.renderField === 'function'
+    )[0];
+    act(() => {
+      formTab.props.setEditedTask((prev: any) => ({
+        ...prev,
+        projectId: undefined,
+        sectionId: undefined,
+        areaId: 'area-1',
+      }));
+    });
+
+    const header = tree!.root.find((node) =>
+      typeof node.props.onDone === 'function'
+      && typeof node.props.onDelete === 'function'
+    );
+    act(() => {
+      header.props.onDone();
+    });
+
+    expect(onSave).toHaveBeenCalledWith('t1', expect.objectContaining({
+      projectId: undefined,
+      sectionId: undefined,
+      areaId: 'area-1',
+    }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('asks who or what is being waited on before setting status to waiting', async () => {
+    const onClose = vi.fn();
+    const onSave = vi.fn();
+    let tree: renderer.ReactTestRenderer;
+
+    act(() => {
+      tree = renderer.create(
+        <TaskEditModal
+          visible
+          task={{
+            id: 't1',
+            title: 'Test task',
+            status: 'next',
+            tags: [],
+            contexts: [],
+            createdAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z',
+          }}
+          onClose={onClose}
+          onSave={onSave}
+        />
+      );
+    });
+
+    const viewTab = tree!.root.find((node) => typeof node.props.onStatusUpdate === 'function');
+    await act(async () => {
+      viewTab.props.onStatusUpdate('waiting');
+    });
+
+    const waitingInput = tree!.root.findByProps({ placeholder: 'Who is this waiting for?' });
+    await act(async () => {
+      waitingInput.props.onChangeText('Alex');
+    });
+
+    await act(async () => {
+      waitingInput.props.onSubmitEditing();
+    });
+
+    const header = tree!.root.find((node) =>
+      typeof node.props.onDone === 'function'
+      && typeof node.props.onDelete === 'function'
+    );
+    await act(async () => {
+      header.props.onDone();
+    });
+
+    expect(onSave).toHaveBeenCalledWith('t1', expect.objectContaining({
+      status: 'waiting',
+      assignedTo: 'Alex',
+    }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the project area when clearing a task project', () => {
+    const onClose = vi.fn();
+    const onSave = vi.fn();
+    let tree: renderer.ReactTestRenderer;
+
+    act(() => {
+      tree = renderer.create(
+        <TaskEditModal
+          visible
+          task={{
+            id: 't1',
+            title: 'Test task',
+            status: 'next',
+            projectId: 'project-1',
+            sectionId: 'section-1',
+            tags: [],
+            contexts: [],
+            createdAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z',
+          }}
+          onClose={onClose}
+          onSave={onSave}
+        />
+      );
+    });
+
+    const formTab = tree!.root.findAll((node) =>
+      typeof node.props.setEditedTask === 'function'
+      && typeof node.props.renderField === 'function'
+    )[0];
+    let projectField!: renderer.ReactTestRenderer;
+    act(() => {
+      projectField = renderer.create(formTab.props.renderField('project'));
+    });
+
+    const clearProjectButton = projectField!.root.findAll((node) => (
+      typeof node.props.onPress === 'function'
+      && node.findAllByType(Text).some((textNode) => textNode.props.children === 'common.clear')
+    ))[0];
+    act(() => {
+      clearProjectButton.props.onPress();
+    });
+
+    const header = tree!.root.find((node) =>
+      typeof node.props.onDone === 'function'
+      && typeof node.props.onDelete === 'function'
+    );
+    act(() => {
+      header.props.onDone();
+    });
+
+    expect(onSave).toHaveBeenCalledWith('t1', expect.objectContaining({
+      projectId: undefined,
+      sectionId: undefined,
+      areaId: 'area-1',
+    }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not overwrite an explicit task area when clearing a task project', () => {
+    const onClose = vi.fn();
+    const onSave = vi.fn();
+    let tree: renderer.ReactTestRenderer;
+
+    act(() => {
+      tree = renderer.create(
+        <TaskEditModal
+          visible
+          task={{
+            id: 't1',
+            title: 'Test task',
+            status: 'next',
+            projectId: 'project-1',
+            sectionId: 'section-1',
+            areaId: 'area-2',
+            tags: [],
+            contexts: [],
+            createdAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z',
+          }}
+          onClose={onClose}
+          onSave={onSave}
+        />
+      );
+    });
+
+    const formTab = tree!.root.findAll((node) =>
+      typeof node.props.setEditedTask === 'function'
+      && typeof node.props.renderField === 'function'
+    )[0];
+    let projectField!: renderer.ReactTestRenderer;
+    act(() => {
+      projectField = renderer.create(formTab.props.renderField('project'));
+    });
+
+    const clearProjectButton = projectField!.root.findAll((node) => (
+      typeof node.props.onPress === 'function'
+      && node.findAllByType(Text).some((textNode) => textNode.props.children === 'common.clear')
+    ))[0];
+    act(() => {
+      clearProjectButton.props.onPress();
+    });
+
+    const header = tree!.root.find((node) =>
+      typeof node.props.onDone === 'function'
+      && typeof node.props.onDelete === 'function'
+    );
+    act(() => {
+      header.props.onDone();
+    });
+
+    expect(onSave).toHaveBeenCalledWith('t1', expect.objectContaining({
+      projectId: undefined,
+      sectionId: undefined,
+    }));
+    const updates = onSave.mock.calls[0]?.[1] ?? {};
+    expect(Object.prototype.hasOwnProperty.call(updates, 'areaId')).toBe(false);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('does not prompt after reopening a task that was just saved', () => {
     const onClose = vi.fn();
     const onSave = vi.fn();
@@ -435,6 +728,151 @@ describe('TaskEditModal', () => {
         ([args]) => args?.mode === 'view'
       )
     ).toBe(true);
+  });
+
+  it('disables horizontal pager gestures while the description editor is focused', async () => {
+    const onClose = vi.fn();
+    const onSave = vi.fn();
+    let tree: renderer.ReactTestRenderer;
+
+    act(() => {
+      tree = renderer.create(
+        <TaskEditModal
+          visible
+          task={{
+            id: 't1',
+            title: 'Test task',
+            status: 'inbox',
+            description: 'Long description',
+            tags: [],
+            contexts: [],
+            createdAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z',
+          }}
+          onClose={onClose}
+          onSave={onSave}
+        />
+      );
+    });
+
+    const findPager = () => tree!.root.find((node) =>
+      node.props.horizontal === true
+      && node.props.pagingEnabled === true
+      && typeof node.props.scrollEnabled === 'boolean'
+    );
+    const formTab = tree!.root.findAll((node) => typeof node.props.renderField === 'function')[0];
+
+    expect(findPager().props.scrollEnabled).toBe(true);
+
+    await act(async () => {
+      const descriptionField = formTab.props.renderField('description');
+      descriptionField.props.setIsDescriptionInputFocused(true);
+    });
+
+    expect(findPager().props.scrollEnabled).toBe(false);
+
+    await act(async () => {
+      const descriptionField = formTab.props.renderField('description');
+      descriptionField.props.setIsDescriptionInputFocused(false);
+    });
+
+    expect(findPager().props.scrollEnabled).toBe(true);
+  });
+
+  it('enables native spell checking for the mobile description editor', () => {
+    let tree: renderer.ReactTestRenderer;
+
+    act(() => {
+      tree = renderer.create(
+        <TaskEditModal
+          visible
+          task={{
+            id: 't1',
+            title: 'Test task',
+            status: 'inbox',
+            description: 'Fix teh typo',
+            tags: [],
+            contexts: [],
+            createdAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z',
+          }}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+        />
+      );
+    });
+
+    const formTab = tree!.root.findAll((node) => typeof node.props.renderField === 'function')[0];
+    let descriptionTree: renderer.ReactTestRenderer;
+    act(() => {
+      descriptionTree = renderer.create(formTab.props.renderField('description'));
+    });
+
+    const descriptionInput = descriptionTree!.root.findByProps({
+      accessibilityLabel: 'taskEdit.descriptionLabel',
+    });
+
+    expect(descriptionInput.props.spellCheck).toBe(true);
+    expect(descriptionInput.props.autoCorrect).toBe(true);
+    expect(descriptionInput.props.autoCapitalize).toBe('sentences');
+    expect(descriptionInput.props.keyboardType).toBe('default');
+
+    act(() => {
+      descriptionTree!.unmount();
+      tree!.unmount();
+    });
+  });
+
+  it('keeps the mobile description Markdown toolbar attached to the keyboard', () => {
+    let tree: renderer.ReactTestRenderer;
+
+    act(() => {
+      tree = renderer.create(
+        <TaskEditModal
+          visible
+          task={{
+            id: 't1',
+            title: 'Test task',
+            status: 'inbox',
+            description: 'A note',
+            tags: [],
+            contexts: [],
+            createdAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z',
+          }}
+          onClose={vi.fn()}
+          onSave={vi.fn()}
+          defaultTab="task"
+        />
+      );
+    });
+
+    const formTab = tree!.root.findAll((node) => typeof node.props.renderField === 'function')[0];
+    let descriptionTree: renderer.ReactTestRenderer;
+    act(() => {
+      descriptionTree = renderer.create(formTab.props.renderField('description'));
+    });
+
+    const descriptionInput = descriptionTree!.root.findByProps({
+      accessibilityLabel: 'taskEdit.descriptionLabel',
+    });
+
+    act(() => {
+      descriptionInput.props.onFocus({ nativeEvent: { target: 1 } });
+    });
+
+    const inlineToolbars = descriptionTree!.root.findAllByType(MarkdownFormatToolbar);
+    const modalToolbars = tree!.root.findAllByType(MarkdownFormatToolbar);
+    const visibleModalToolbars = modalToolbars.filter((toolbar) => toolbar.props.visible);
+
+    expect(inlineToolbars).toHaveLength(0);
+    expect(visibleModalToolbars).toHaveLength(1);
+    expect(visibleModalToolbars[0].props.placement).toBeUndefined();
+
+    act(() => {
+      descriptionTree!.unmount();
+      tree!.unmount();
+    });
   });
 
   it('closes and delegates preview navigation actions', () => {

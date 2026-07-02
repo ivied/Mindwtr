@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { safeFormatDate } from '@mindwtr/core';
+import { safeFormatDate, summarizeMergeStats } from '@mindwtr/core';
 import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 import { cn } from '../../../../lib/utils';
 import { ConfirmModal } from '../../../ConfirmModal';
@@ -91,12 +91,10 @@ export function SyncStatusSection({
     syncQueued,
     t,
 }: SyncStatusSectionProps) {
-    const maxClockSkewMs = Math.max(lastSyncStats?.tasks.maxClockSkewMs ?? 0, lastSyncStats?.projects.maxClockSkewMs ?? 0);
-    const timestampAdjustments = (lastSyncStats?.tasks.timestampAdjustments ?? 0) + (lastSyncStats?.projects.timestampAdjustments ?? 0);
-    const conflictIds = [
-        ...(lastSyncStats?.tasks.conflictIds ?? []),
-        ...(lastSyncStats?.projects.conflictIds ?? []),
-    ].slice(0, 6);
+    const lastSyncSummary = summarizeMergeStats(lastSyncStats);
+    const maxClockSkewMs = lastSyncSummary.maxClockSkewMs;
+    const timestampAdjustments = lastSyncSummary.timestampAdjustments;
+    const conflictIds = lastSyncSummary.conflictIds.slice(0, 6);
     const historyEntries = (lastSyncHistory ?? []).slice(0, 6);
     const syncPrefs = syncPreferences ?? {};
     const recentResultLabel = (() => {

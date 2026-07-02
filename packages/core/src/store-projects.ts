@@ -1,5 +1,6 @@
 import { createAreaActions } from './store-projects/area-actions';
 import { createOrderingActions } from './store-projects/ordering-actions';
+import { createPeopleActions } from './store-projects/people-actions';
 import { createProjectCoreActions } from './store-projects/project-actions';
 import { createSectionActions } from './store-projects/section-actions';
 import type { ProjectActionContext, ProjectActions } from './store-projects/shared';
@@ -10,5 +11,6 @@ export const createProjectActions = (context: ProjectActionContext): ProjectActi
     ...createSectionActions(context),
     ...createAreaActions(context),
     ...createOrderingActions(context),
+    ...createPeopleActions(context),
     ...createTaxonomyActions(context),
 });

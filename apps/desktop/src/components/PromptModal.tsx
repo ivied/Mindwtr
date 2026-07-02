@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from 'react';
 import { useLanguage } from '../contexts/language-context';
+import { ModalPortal } from './ModalPortal';
 import { Button } from './ui/Button';
 
 interface PromptModalProps {
@@ -52,6 +53,7 @@ export function PromptModal({
     if (!isOpen) return null;
 
     return (
+        <ModalPortal>
         <div
             className="fixed inset-0 bg-black/50 flex items-start justify-center pt-[20vh] z-50"
             role="dialog"
@@ -133,5 +135,6 @@ export function PromptModal({
                 </div>
             </div>
         </div>
+        </ModalPortal>
     );
 }

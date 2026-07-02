@@ -1,0 +1,4 @@
+- Guided Mind Sweep helps capture personal and work items directly into Inbox.
+- People/assignee planning, board column ordering, weekly inbox processing, and follow-up-today review actions improve organization.
+- Sync and attachments are safer with bounded requests, remote-delete cleanup, tombstone fixes, and better fallback handling.
+- Mobile Inbox actions, shared text capture, and bulk review organization are steadier.

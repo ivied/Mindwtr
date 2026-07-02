@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import type { Task } from '@mindwtr/core';
 
+import { DEFAULT_TASK_EDITOR_ORDER } from './task-item-helpers';
 import { useTaskItemFieldLayout } from './useTaskItemFieldLayout';
 
 const baseTask: Task = {
@@ -33,6 +34,7 @@ const buildParams = (overrides: Partial<Parameters<typeof useTaskItemFieldLayout
     editReviewAt: '2026-03-21T09:00',
     editStartTime: '2026-03-19T09:00',
     editTags: '#notes',
+    editLocation: 'Office',
     editTimeEstimate: '30min',
     prioritiesEnabled: true,
     timeEstimatesEnabled: true,
@@ -41,14 +43,75 @@ const buildParams = (overrides: Partial<Parameters<typeof useTaskItemFieldLayout
 });
 
 describe('useTaskItemFieldLayout', () => {
-    it('shows priority and time estimate by default when they are enabled and not explicitly hidden', () => {
+    it('keeps the default editor shallow while leaving optional metadata hidden until used', () => {
         const { result } = renderHook(() => useTaskItemFieldLayout(buildParams({
             editPriority: '',
+            editEnergyLevel: '',
+            editAssignedTo: '',
+            editLocation: '',
             editTimeEstimate: '',
         })));
 
-        expect(result.current.organizationFields).toContain('priority');
-        expect(result.current.organizationFields).toContain('timeEstimate');
+        expect(result.current.basicFields).toEqual(expect.arrayContaining(['status', 'contexts', 'dueDate']));
+        expect(result.current.organizationFields).not.toContain('priority');
+        expect(result.current.organizationFields).not.toContain('energyLevel');
+        expect(result.current.organizationFields).not.toContain('assignedTo');
+        expect(result.current.organizationFields).not.toContain('timeEstimate');
+        expect(result.current.detailsFields).not.toContain('location');
+        expect(result.current.sectionOpenDefaults.details).toBe(false);
+    });
+
+    it('hides status when the task editor layout disables it even for non-inbox tasks', () => {
+        const { result } = renderHook(() => useTaskItemFieldLayout(buildParams({
+            settings: {
+                gtd: {
+                    taskEditor: {
+                        hidden: ['status'],
+                    },
+                },
+            },
+            editStatus: 'next',
+        })));
+
+        expect(result.current.basicFields).not.toContain('status');
+    });
+
+    it('hides every configured field when hidden fields have no task content', () => {
+        const { result } = renderHook(() => useTaskItemFieldLayout(buildParams({
+            settings: {
+                gtd: {
+                    taskEditor: {
+                        hidden: [...DEFAULT_TASK_EDITOR_ORDER],
+                    },
+                },
+            },
+            task: baseTask,
+            editStatus: 'next',
+            editProjectId: '',
+            editSectionId: '',
+            editAreaId: '',
+            editPriority: '',
+            editEnergyLevel: '',
+            editAssignedTo: '',
+            editContexts: '',
+            editDescription: '',
+            editDueDate: '',
+            editRecurrence: '',
+            editReviewAt: '',
+            editStartTime: '',
+            editTags: '',
+            editLocation: '',
+            editTimeEstimate: '',
+            visibleEditAttachmentsLength: 0,
+        })));
+
+        expect(result.current.showProjectField).toBe(false);
+        expect(result.current.showAreaField).toBe(false);
+        expect(result.current.showSectionField).toBe(false);
+        expect(result.current.basicFields).toEqual([]);
+        expect(result.current.schedulingFields).toEqual([]);
+        expect(result.current.organizationFields).toEqual([]);
+        expect(result.current.detailsFields).toEqual([]);
     });
 
     it('hides action-only fields while a task is being edited as reference', () => {
@@ -59,7 +122,7 @@ describe('useTaskItemFieldLayout', () => {
         expect(result.current.basicFields).toContain('status');
         expect(result.current.basicFields).not.toContain('dueDate');
         expect(result.current.schedulingFields).toEqual([]);
-        expect(result.current.organizationFields).toContain('contexts');
+        expect(result.current.basicFields).toContain('contexts');
         expect(result.current.organizationFields).toContain('tags');
         expect(result.current.organizationFields).not.toContain('priority');
         expect(result.current.organizationFields).not.toContain('timeEstimate');
@@ -81,6 +144,7 @@ describe('useTaskItemFieldLayout', () => {
         expect(result.current.basicFields).toContain('dueDate');
         expect(result.current.schedulingFields).toHaveLength(3);
         expect(result.current.schedulingFields).toEqual(expect.arrayContaining(['startTime', 'recurrence', 'reviewAt']));
+        expect(result.current.basicFields).toContain('contexts');
         expect(result.current.organizationFields).toContain('priority');
         expect(result.current.organizationFields).toContain('timeEstimate');
         expect(result.current.detailsFields).toContain('checklist');

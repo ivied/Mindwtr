@@ -24,16 +24,16 @@ describe('task-edit token utils', () => {
         expect(replaceTrailingToken(undefined, '@home')).toBe('@home, ');
     });
 
-    it('maps markdown checklist items while reusing existing ids', () => {
+    it('uses markdown task lists as the checklist source while reusing existing ids', () => {
         const existing = [
             { id: 'a', title: 'Buy milk', isCompleted: true },
             { id: 'b', title: 'Legacy item', isCompleted: false },
         ];
         const merged = applyMarkdownChecklistToTask('- [ ] Buy milk\n- [x] Call mom', existing);
-        expect(merged).toHaveLength(3);
+        expect(merged).toHaveLength(2);
         expect(merged?.[0]).toMatchObject({ id: 'a', title: 'Buy milk', isCompleted: false });
         expect(merged?.[1]?.title).toBe('Call mom');
-        expect(merged?.[2]).toEqual(existing[1]);
+        expect(merged?.some((item) => item.title === 'Legacy item')).toBe(false);
     });
 
     it('returns existing checklist when markdown list is absent', () => {

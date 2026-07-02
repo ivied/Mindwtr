@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, type FormEvent, type ReactNode } from 'react';
-import { ChevronDown, ChevronRight, Loader2, Sparkles, Trash2, X } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, HelpCircle, Loader2, Sparkles, Trash2 } from 'lucide-react';
 import {
     filterProjectsBySelectedArea,
     resolveAutoTextDirection,
+    tFallback,
     type Area,
     type ClarifyResponse,
     type Project,
@@ -14,12 +15,18 @@ import {
 import { AreaSelector } from '../ui/AreaSelector';
 import { ProjectSelector } from '../ui/ProjectSelector';
 import { SectionSelector } from '../ui/SectionSelector';
-import { TaskInput } from './TaskInput';
+import { TaskInput, type TaskInputAcceptedSuggestion } from './TaskInput';
+import { cn } from '../../lib/utils';
+import { taskEditorLabelClassName } from './task-editor-label';
 
 interface TaskItemEditorProps {
     t: (key: string) => string;
     editTitle: string;
     setEditTitle: (value: string) => void;
+    editContexts: string;
+    setEditContexts: (value: string) => void;
+    editTags: string;
+    setEditTags: (value: string) => void;
     autoFocusTitle?: boolean;
     resetCopilotDraft: () => void;
     aiEnabled: boolean;
@@ -67,20 +74,44 @@ interface TaskItemEditorProps {
     };
     sectionOpenDefaults: Record<TaskEditorSectionId, boolean>;
     renderField: (fieldId: TaskEditorFieldId) => ReactNode;
-    editLocation: string;
-    setEditLocation: (value: string) => void;
     language: string;
     inputContexts: string[];
+    onAcceptTitleSuggestion?: (suggestion: TaskInputAcceptedSuggestion) => boolean | Promise<boolean>;
+    isDoneActionActive?: boolean;
+    onMarkDone?: () => void;
     onDuplicateTask: () => void;
     onDeleteTask?: () => void;
     onCancel: () => void;
     onSubmit: (e: FormEvent) => void;
 }
 
+function appendCommaToken(value: string, token: string): string {
+    const normalizedToken = token.trim();
+    if (!normalizedToken) return value;
+    const tokens = value
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+    if (tokens.some((item) => item.toLowerCase() === normalizedToken.toLowerCase())) {
+        return tokens.join(', ');
+    }
+    return [...tokens, normalizedToken].join(', ');
+}
+
+function ensureTokenPrefix(value: string, prefix: '@' | '#'): string {
+    const trimmed = value.trim();
+    if (!trimmed) return trimmed;
+    return trimmed.startsWith(prefix) ? trimmed : `${prefix}${trimmed.replace(/^[@#]+/, '')}`;
+}
+
 export function TaskItemEditor({
     t,
     editTitle,
     setEditTitle,
+    editContexts,
+    setEditContexts,
+    editTags,
+    setEditTags,
     autoFocusTitle = false,
     resetCopilotDraft,
     aiEnabled,
@@ -124,10 +155,11 @@ export function TaskItemEditor({
     sectionCounts,
     sectionOpenDefaults,
     renderField,
-    editLocation,
-    setEditLocation,
     language,
     inputContexts,
+    onAcceptTitleSuggestion,
+    isDoneActionActive = false,
+    onMarkDone,
     onDuplicateTask,
     onDeleteTask,
     onCancel,
@@ -138,6 +170,13 @@ export function TaskItemEditor({
     const aiAssistantAriaLabel = aiAssistantLabel === 'taskEdit.aiAssistant' ? 'AI assistant' : aiAssistantLabel;
     const aiWorkingLabel = t('ai.working');
     const aiWorkingText = aiWorkingLabel === 'ai.working' ? 'Working...' : aiWorkingLabel;
+    const taskEditorLayoutHelpLabel = tFallback(t, 'taskEdit.editorLayoutHelpLabel', 'Editor layout help');
+    const taskEditorLayoutHelpText = tFallback(
+        t,
+        'taskEdit.editorLayoutHelpText',
+        'You can customize which fields appear here in Settings -> GTD -> Task Editor Layout.'
+    );
+    const [editorLayoutHelpOpen, setEditorLayoutHelpOpen] = useState(false);
 
     const compareLabels = (left: string, right: string) =>
         left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' });
@@ -150,6 +189,40 @@ export function TaskItemEditor({
     const [detailsOpen, setDetailsOpen] = useState(sectionOpenDefaults.details);
     const [aiMenuOpen, setAiMenuOpen] = useState(false);
     const aiMenuRef = useRef<HTMLDivElement>(null);
+    const handleTitleSuggestionAccept = async (suggestion: TaskInputAcceptedSuggestion) => {
+        resetCopilotDraft();
+        if (await onAcceptTitleSuggestion?.(suggestion)) {
+            return true;
+        }
+        if (suggestion.kind === 'context') {
+            setEditContexts(appendCommaToken(editContexts, ensureTokenPrefix(suggestion.value, '@')));
+            return true;
+        }
+        if (suggestion.kind === 'tag') {
+            setEditTags(appendCommaToken(editTags, ensureTokenPrefix(suggestion.value, '#')));
+            return true;
+        }
+        if (suggestion.kind === 'project') {
+            setEditProjectId(suggestion.projectId);
+            setEditSectionId('');
+            setEditAreaId('');
+            return true;
+        }
+        if (suggestion.kind === 'createProject') {
+            if (!suggestion.projectId) return false;
+            setEditProjectId(suggestion.projectId);
+            setEditSectionId('');
+            setEditAreaId('');
+            return true;
+        }
+        if (suggestion.kind === 'area') {
+            setEditAreaId(suggestion.areaId);
+            setEditProjectId('');
+            setEditSectionId('');
+            return true;
+        }
+        return false;
+    };
 
     useEffect(() => {
         if (!aiMenuOpen) return;
@@ -184,29 +257,27 @@ export function TaskItemEditor({
             }}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => e.stopPropagation()}
-            className="flex flex-col gap-2 max-h-[80vh]"
+            className="flex flex-col gap-3 max-h-[80vh]"
         >
-            {/* Top close button — same behavior as the footer Cancel, but
-                always visible at the top of the editor so the user can
-                dismiss without scrolling past long descriptions or chasing
-                the buttons at the bottom. Lives outside the scrollable area
-                so it stays in view regardless of scroll position. */}
-            <div className="flex justify-end -mb-1">
-                <button
-                    type="button"
-                    onClick={(event) => {
-                        event.stopPropagation();
-                        onCancel();
-                    }}
-                    aria-label={t('common.cancel') || 'Close'}
-                    title={t('common.cancel') || 'Close'}
-                    className="rounded-md p-1 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
-                >
-                    <X className="h-4 w-4" />
-                </button>
-            </div>
             <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3">
-                <div className="flex items-start gap-2">
+                <div className="flex items-start gap-3 pt-0.5">
+                    {onMarkDone && (
+                        <button
+                            type="button"
+                            onClick={onMarkDone}
+                            aria-label={t('status.done')}
+                            aria-pressed={isDoneActionActive}
+                            title={t('status.done')}
+                            className={cn(
+                                'mt-0.5 inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-1 focus-visible:ring-offset-card motion-reduce:transition-none',
+                                isDoneActionActive
+                                    ? 'border-emerald-500 bg-emerald-500 text-white shadow-sm'
+                                    : 'border-border bg-muted/30 text-muted-foreground hover:border-emerald-500/50 hover:bg-emerald-500/10 hover:text-emerald-500'
+                            )}
+                        >
+                            <Check className="h-4 w-4" aria-hidden="true" />
+                        </button>
+                    )}
                     <TaskInput
                         autoFocus={autoFocusTitle}
                         value={editTitle}
@@ -218,8 +289,10 @@ export function TaskItemEditor({
                         contexts={inputContexts}
                         areas={areas}
                         onCreateProject={onCreateProject}
+                        onAcceptSuggestion={handleTitleSuggestionAccept}
                         placeholder={t('taskEdit.titleLabel')}
-                        className="w-full bg-transparent border-b border-primary/50 p-1 text-base font-medium focus:ring-0 focus:border-primary outline-none"
+                        ariaLabel={t('taskEdit.titleLabel')}
+                        className="w-full rounded-sm bg-transparent border-b border-primary/60 px-1 pb-1.5 pt-0 text-lg font-semibold leading-7 text-foreground placeholder:text-muted-foreground transition-colors focus:border-primary focus:ring-0 focus-visible:ring-2 focus-visible:ring-primary/30 focus-visible:ring-offset-1 focus-visible:ring-offset-card outline-none motion-reduce:transition-none"
                         containerClassName="flex-1 min-w-0"
                         dir={titleDirection}
                     />
@@ -364,9 +437,26 @@ export function TaskItemEditor({
                 </div>
             )}
             <div className="flex flex-wrap gap-4">
+                {showAreaField && (
+                    <div className="flex flex-col gap-1 flex-1 min-w-0">
+                        <label className={taskEditorLabelClassName}>{t('taskEdit.areaLabel')}</label>
+                        <AreaSelector
+                            areas={sortedAreas}
+                            value={editAreaId}
+                            onChange={setEditAreaId}
+                            onCreateArea={onCreateArea}
+                            placeholder={t('taskEdit.noAreaOption')}
+                            noAreaLabel={t('taskEdit.noAreaOption')}
+                            searchPlaceholder={t('areas.search')}
+                            noMatchesLabel={t('common.noMatches')}
+                            createAreaLabel={t('areas.create')}
+                            className="w-full"
+                        />
+                    </div>
+                )}
                 {showProjectField && (
                     <div className="flex flex-col gap-1 flex-1 min-w-0">
-                        <label className="text-xs text-muted-foreground font-medium">{t('projects.title')}</label>
+                        <label className={taskEditorLabelClassName}>{t('projects.title')}</label>
                         <ProjectSelector
                             projects={filteredProjects}
                             allProjects={sortedProjects}
@@ -385,7 +475,7 @@ export function TaskItemEditor({
                 )}
                 {showSectionField && (
                     <div className="flex flex-col gap-1 flex-1 min-w-0">
-                        <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.sectionLabel')}</label>
+                        <label className={taskEditorLabelClassName}>{t('taskEdit.sectionLabel')}</label>
                         <SectionSelector
                             sections={sections}
                             value={editSectionId}
@@ -400,23 +490,6 @@ export function TaskItemEditor({
                         />
                     </div>
                 )}
-                {showAreaField && (
-                    <div className="flex flex-col gap-1 flex-1 min-w-0">
-                        <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.areaLabel')}</label>
-                        <AreaSelector
-                            areas={sortedAreas}
-                            value={editAreaId}
-                            onChange={setEditAreaId}
-                            onCreateArea={onCreateArea}
-                            placeholder={t('taskEdit.noAreaOption')}
-                            noAreaLabel={t('taskEdit.noAreaOption')}
-                            searchPlaceholder={t('areas.search')}
-                            noMatchesLabel={t('common.noMatches')}
-                            createAreaLabel={t('areas.create')}
-                            className="w-full"
-                        />
-                    </div>
-                )}
             </div>
             {basicFields.length > 0 && (
                 <div className="space-y-3">
@@ -426,113 +499,110 @@ export function TaskItemEditor({
                 </div>
             )}
             <div className="space-y-3">
-                <div className="border-t border-border pt-3">
-                    <button
-                        type="button"
-                        onClick={() => setSchedulingOpen((prev) => !prev)}
-                        className="w-full flex items-center justify-between text-xs uppercase tracking-wide text-muted-foreground font-semibold"
-                        aria-expanded={schedulingOpen}
-                    >
-                        <span className="flex items-center gap-2">
-                            {t('taskEdit.scheduling')}
-                            {sectionCounts.scheduling > 0 && (
-                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary">
-                                    {sectionCounts.scheduling}
-                                </span>
-                            )}
-                        </span>
-                        {schedulingOpen ? <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" /> : <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
-                    </button>
-                    {schedulingOpen && (
-                        <div className="mt-3 space-y-3">
-                            {schedulingFields.length === 0 ? (
-                                <div className="rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-                                    {t('taskEdit.schedulingEmpty')}
-                                </div>
-                            ) : (
-                                schedulingFields.map((fieldId) => (
+                {schedulingFields.length > 0 && (
+                    <div className="border-t border-border pt-3">
+                        <button
+                            type="button"
+                            onClick={() => setSchedulingOpen((prev) => !prev)}
+                            className="w-full flex items-center justify-between text-xs uppercase tracking-wide text-muted-foreground font-semibold"
+                            aria-expanded={schedulingOpen}
+                        >
+                            <span className="flex items-center gap-2">
+                                {t('taskEdit.scheduling')}
+                                {sectionCounts.scheduling > 0 && (
+                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                                        {sectionCounts.scheduling}
+                                    </span>
+                                )}
+                            </span>
+                            {schedulingOpen ? <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" /> : <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
+                        </button>
+                        {schedulingOpen && (
+                            <div className="mt-3 space-y-3">
+                                {schedulingFields.map((fieldId) => (
                                     <div key={fieldId}>{renderField(fieldId)}</div>
-                                ))
-                            )}
-                        </div>
-                    )}
-                </div>
-                <div className="border-t border-border pt-3">
-                    <button
-                        type="button"
-                        onClick={() => setOrganizationOpen((prev) => !prev)}
-                        className="w-full flex items-center justify-between text-xs uppercase tracking-wide text-muted-foreground font-semibold"
-                        aria-expanded={organizationOpen}
-                    >
-                        <span className="flex items-center gap-2">
-                            {t('taskEdit.organization')}
-                            {sectionCounts.organization > 0 && (
-                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary">
-                                    {sectionCounts.organization}
-                                </span>
-                            )}
-                        </span>
-                        {organizationOpen ? <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" /> : <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
-                    </button>
-                    {organizationOpen && (
-                        <div className="mt-3 space-y-3">
-                            {organizationFields.length === 0 ? (
-                                <div className="rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-                                    {t('taskEdit.organizationEmpty')}
-                                </div>
-                            ) : (
-                                organizationFields.map((fieldId) => (
-                                    <div key={fieldId}>{renderField(fieldId)}</div>
-                                ))
-                            )}
-                        </div>
-                    )}
-                </div>
-                <div className="border-t border-border pt-3">
-                    <button
-                        type="button"
-                        onClick={() => setDetailsOpen((prev) => !prev)}
-                        className="w-full flex items-center justify-between text-xs uppercase tracking-wide text-muted-foreground font-semibold"
-                        aria-expanded={detailsOpen}
-                    >
-                        <span className="flex items-center gap-2">
-                            {t('taskEdit.details')}
-                            {sectionCounts.details > 0 && (
-                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary">
-                                    {sectionCounts.details}
-                                </span>
-                            )}
-                        </span>
-                        {detailsOpen ? <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" /> : <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
-                    </button>
-                    {detailsOpen && (
-                        <div className="mt-3 space-y-3">
-                            {detailsFields.length === 0 ? (
-                                <div className="rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-                                    {t('taskEdit.detailsEmpty')}
-                                </div>
-                            ) : (
-                                detailsFields.map((fieldId) => (
-                                    <div key={fieldId}>{renderField(fieldId)}</div>
-                                ))
-                            )}
-                            <div className="flex flex-col gap-1">
-                                <label className="text-xs text-muted-foreground font-medium">{t('taskEdit.locationLabel')}</label>
-                                <input
-                                    type="text"
-                                    aria-label={t('task.aria.location')}
-                                    value={editLocation}
-                                    onChange={(e) => setEditLocation(e.target.value)}
-                                    placeholder={t('taskEdit.locationPlaceholder')}
-                                    className="text-xs bg-muted/50 border border-border rounded px-2 py-1 text-foreground placeholder:text-muted-foreground"
-                                />
+                                ))}
                             </div>
-                        </div>
-                    )}
-                </div>
+                        )}
+                    </div>
+                )}
+                {organizationFields.length > 0 && (
+                    <div className="border-t border-border pt-3">
+                        <button
+                            type="button"
+                            onClick={() => setOrganizationOpen((prev) => !prev)}
+                            className="w-full flex items-center justify-between text-xs uppercase tracking-wide text-muted-foreground font-semibold"
+                            aria-expanded={organizationOpen}
+                        >
+                            <span className="flex items-center gap-2">
+                                {t('taskEdit.organization')}
+                                {sectionCounts.organization > 0 && (
+                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                                        {sectionCounts.organization}
+                                    </span>
+                                )}
+                            </span>
+                            {organizationOpen ? <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" /> : <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
+                        </button>
+                        {organizationOpen && (
+                            <div className="mt-3 space-y-3">
+                                {organizationFields.map((fieldId) => (
+                                    <div key={fieldId}>{renderField(fieldId)}</div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+                {detailsFields.length > 0 && (
+                    <div className="border-t border-border pt-3">
+                        <button
+                            type="button"
+                            onClick={() => setDetailsOpen((prev) => !prev)}
+                            className="w-full flex items-center justify-between text-xs uppercase tracking-wide text-muted-foreground font-semibold"
+                            aria-expanded={detailsOpen}
+                        >
+                            <span className="flex items-center gap-2">
+                                {t('taskEdit.details')}
+                                {sectionCounts.details > 0 && (
+                                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary">
+                                        {sectionCounts.details}
+                                    </span>
+                                )}
+                            </span>
+                            {detailsOpen ? <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" /> : <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
+                        </button>
+                        {detailsOpen && (
+                            <div className="mt-3 space-y-3">
+                                {detailsFields.map((fieldId) => (
+                                    <div key={fieldId}>{renderField(fieldId)}</div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
             </div>
             </div>
             <div className="flex flex-wrap items-center gap-2 pt-1">
+                <div className="relative">
+                    <button
+                        type="button"
+                        aria-label={taskEditorLayoutHelpLabel}
+                        aria-expanded={editorLayoutHelpOpen}
+                        title={taskEditorLayoutHelpLabel}
+                        onClick={() => setEditorLayoutHelpOpen((open) => !open)}
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                    >
+                        <HelpCircle className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                    {editorLayoutHelpOpen && (
+                        <div
+                            role="note"
+                            className="absolute bottom-9 left-0 z-30 w-72 rounded-md border border-border bg-popover px-3 py-2 text-xs leading-5 text-popover-foreground shadow-lg"
+                        >
+                            {taskEditorLayoutHelpText}
+                        </div>
+                    )}
+                </div>
                 {onDeleteTask && (
                     <button
                         type="button"

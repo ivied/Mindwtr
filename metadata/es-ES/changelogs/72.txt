@@ -1,0 +1,4 @@
+- Se agregan configuracion inicial y una guia de primeros pasos mas completa.
+- Focus se abre de forma mas consistente y editar tareas es mas rapido.
+- Los proyectos borrados permanecen vacios y la automatizacion de contextos es mas silenciosa.
+- Sync, avisos de fechas, recurrencias y bibliotecas grandes son mas estables.

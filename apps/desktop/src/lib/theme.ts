@@ -3,8 +3,16 @@ import type { AppData } from '@mindwtr/core';
 export type DesktopThemeMode = 'system' | 'light' | 'dark' | 'eink' | 'nord' | 'sepia';
 export type SystemThemePreference = 'light' | 'dark' | null;
 type NativeThemePreference = Exclude<SystemThemePreference, null>;
+type NativeThemeSetter = (theme?: NativeThemePreference | null) => Promise<void>;
+type NativeThemeAppModule = {
+    setTheme: NativeThemeSetter;
+};
+type TauriCoreModule = {
+    invoke: (command: string, args?: Record<string, unknown>) => Promise<unknown>;
+};
 type NativeThemeWindow = {
     theme: () => Promise<SystemThemePreference>;
+    setTheme?: NativeThemeSetter;
     onThemeChanged: (
         listener: (event: { payload: NativeThemePreference }) => void
     ) => Promise<() => void>;
@@ -15,6 +23,8 @@ type NativeThemeWindowModule = {
 
 export const THEME_STORAGE_KEY = 'mindwtr-theme';
 const SYSTEM_THEME_MEDIA_QUERY = '(prefers-color-scheme: dark)';
+const COMMAND_THEME_POLL_INTERVAL_MS = 2000;
+let cachedSystemThemePreference: SystemThemePreference = null;
 
 const isDesktopThemeMode = (value: string | null | undefined): value is DesktopThemeMode => (
     value === 'system'
@@ -41,10 +51,41 @@ export const mapSyncedThemeToDesktop = (value: AppData['settings']['theme'] | nu
     return null;
 };
 
+export const resolveDesktopThemeMode = (
+    syncedTheme: AppData['settings']['theme'] | null | undefined,
+    storedTheme: string | null | undefined,
+): DesktopThemeMode => (
+    mapSyncedThemeToDesktop(syncedTheme)
+    ?? coerceDesktopThemeMode(storedTheme)
+    ?? 'system'
+);
+
 export const resolveSystemThemePreference = (override?: SystemThemePreference): SystemThemePreference => {
-    if (override === 'light' || override === 'dark') return override;
+    if (override === 'light' || override === 'dark') {
+        cachedSystemThemePreference = override;
+        return override;
+    }
+    if (cachedSystemThemePreference) return cachedSystemThemePreference;
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return null;
     return window.matchMedia(SYSTEM_THEME_MEDIA_QUERY).matches ? 'dark' : 'light';
+};
+
+export const coerceSystemThemePreference = (value: unknown): SystemThemePreference => {
+    if (value === 'light' || value === 'dark') return value;
+    return null;
+};
+
+export const resolveSystemThemeCommandPreference = async (
+    loadCoreModule: () => Promise<TauriCoreModule>,
+    onError?: (step: 'resolveSystem', error: unknown) => void,
+): Promise<SystemThemePreference> => {
+    try {
+        const coreModule = await loadCoreModule();
+        return coerceSystemThemePreference(await coreModule.invoke('get_system_theme_preference'));
+    } catch (error) {
+        onError?.('resolveSystem', error);
+        return null;
+    }
 };
 
 export const watchSystemThemePreference = (
@@ -123,6 +164,68 @@ export const watchNativeSystemThemePreference = (
     };
 };
 
+export const watchSystemThemeCommandPreference = (
+    loadCoreModule: () => Promise<TauriCoreModule>,
+    onChange: (theme: NativeThemePreference) => void,
+    onError?: (step: 'resolveSystem' | 'watch', error: unknown) => void,
+    pollIntervalMs = COMMAND_THEME_POLL_INTERVAL_MS,
+): (() => void) => {
+    if (typeof window === 'undefined') return () => { };
+
+    let cancelled = false;
+    let coreModule: TauriCoreModule | null = null;
+    let lastTheme: SystemThemePreference = null;
+    let pollTimer: number | null = null;
+    let pollInFlight = false;
+
+    const emitIfChanged = (theme: SystemThemePreference) => {
+        if (!theme || theme === lastTheme) return;
+        lastTheme = theme;
+        onChange(theme);
+    };
+
+    const poll = async () => {
+        if (cancelled || !coreModule || pollInFlight) return;
+        pollInFlight = true;
+        try {
+            const theme = coerceSystemThemePreference(
+                await coreModule.invoke('get_system_theme_preference')
+            );
+            if (!cancelled) {
+                emitIfChanged(theme);
+            }
+        } catch (error) {
+            if (!cancelled) {
+                onError?.('resolveSystem', error);
+            }
+        } finally {
+            pollInFlight = false;
+        }
+    };
+
+    void loadCoreModule()
+        .then((loadedCoreModule) => {
+            if (cancelled) return;
+            coreModule = loadedCoreModule;
+            void poll();
+            pollTimer = window.setInterval(() => {
+                void poll();
+            }, pollIntervalMs);
+        })
+        .catch((error) => {
+            if (!cancelled) {
+                onError?.('watch', error);
+            }
+        });
+
+    return () => {
+        cancelled = true;
+        if (pollTimer !== null) {
+            window.clearInterval(pollTimer);
+        }
+    };
+};
+
 export const applyThemeMode = (mode: DesktopThemeMode | null, systemTheme?: SystemThemePreference) => {
     const root = document.documentElement;
     root.classList.remove('theme-eink', 'theme-nord', 'theme-sepia');
@@ -145,4 +248,24 @@ export const resolveNativeTheme = (mode: DesktopThemeMode | null): 'light' | 'da
     if (!mode || mode === 'system') return null;
     if (mode === 'dark' || mode === 'nord') return 'dark';
     return 'light';
+};
+
+export const applyNativeTheme = async (
+    theme: ReturnType<typeof resolveNativeTheme>,
+    loadAppModule: () => Promise<NativeThemeAppModule>,
+    loadWindowModule: () => Promise<NativeThemeWindowModule>,
+    onError?: (step: 'app' | 'window', error: unknown) => void,
+): Promise<void> => {
+    await Promise.all([
+        loadAppModule()
+            .then(({ setTheme }) => setTheme(theme))
+            .catch((error) => onError?.('app', error)),
+        loadWindowModule()
+            .then(({ getCurrentWindow }) => {
+                const currentWindow = getCurrentWindow();
+                if (typeof currentWindow.setTheme !== 'function') return undefined;
+                return currentWindow.setTheme(theme);
+            })
+            .catch((error) => onError?.('window', error)),
+    ]);
 };

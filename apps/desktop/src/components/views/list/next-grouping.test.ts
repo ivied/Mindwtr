@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Area, Project, Task } from '@mindwtr/core';
-import { groupTasksByArea, groupTasksByContext, groupTasksByProject } from './next-grouping';
+import { groupTasksByArea, groupTasksByContext, groupTasksByProject, groupTasksByTag } from './next-grouping';
 
 const baseTask = (overrides: Partial<Task>): Task => ({
     id: 'task-base',
@@ -67,10 +67,10 @@ describe('groupTasksByArea', () => {
 });
 
 describe('groupTasksByContext', () => {
-    it('groups by each task primary context and keeps context-less tasks in a muted section', () => {
+    it('groups tasks under every context and keeps context-less tasks in a muted section', () => {
         const tasks = [
             baseTask({ id: 't1', title: 'No context' }),
-            baseTask({ id: 't2', title: 'Work', contexts: ['@work', '@deep'] }),
+            baseTask({ id: 't2', title: 'Work', contexts: ['@work', '@deep', '@work'] }),
             baseTask({ id: 't3', title: 'Home', contexts: ['@home'] }),
         ];
 
@@ -79,10 +79,30 @@ describe('groupTasksByContext', () => {
             noContextLabel: 'No context',
         });
 
-        expect(groups.map((group) => group.title)).toEqual(['No context', '@home', '@work']);
+        expect(groups.map((group) => group.title)).toEqual(['No context', '@deep', '@home', '@work']);
         expect(groups[0]?.tasks.map((task) => task.id)).toEqual(['t1']);
-        expect(groups[2]?.tasks.map((task) => task.id)).toEqual(['t2']);
-        expect(groups[2]?.tasks).toHaveLength(1);
+        expect(groups.find((group) => group.id === 'context:@deep')?.tasks.map((task) => task.id)).toEqual(['t2']);
+        expect(groups.find((group) => group.id === 'context:@work')?.tasks.map((task) => task.id)).toEqual(['t2']);
+    });
+});
+
+describe('groupTasksByTag', () => {
+    it('groups tasks under every tag and keeps tag-less tasks in a muted section', () => {
+        const tasks = [
+            baseTask({ id: 't1', title: 'No tags' }),
+            baseTask({ id: 't2', title: 'Multi tag', tags: ['#work', '#deep', '#work'] }),
+            baseTask({ id: 't3', title: 'Home', tags: ['#home'] }),
+        ];
+
+        const groups = groupTasksByTag({
+            tasks,
+            noTagLabel: 'No tags',
+        });
+
+        expect(groups.map((group) => group.title)).toEqual(['No tags', '#deep', '#home', '#work']);
+        expect(groups[0]?.muted).toBe(true);
+        expect(groups.find((group) => group.id === 'tag:#deep')?.tasks.map((task) => task.id)).toEqual(['t2']);
+        expect(groups.find((group) => group.id === 'tag:#work')?.tasks.map((task) => task.id)).toEqual(['t2']);
     });
 });
 

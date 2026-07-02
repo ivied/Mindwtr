@@ -41,9 +41,6 @@ describe('useProjectSectionActions', () => {
             deleteSection: vi.fn(),
             updateSection: vi.fn(),
             setSectionNotesOpen: vi.fn(),
-            setSectionTaskTargetId: vi.fn(),
-            setSectionTaskDraft: vi.fn(),
-            setShowSectionTaskPrompt: vi.fn(),
             requestConfirmation: vi.fn(async () => true),
             ...overrides,
         };

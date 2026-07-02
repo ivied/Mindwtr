@@ -2,13 +2,18 @@ import { unzipSync, strFromU8 } from 'fflate';
 import { DEFAULT_PROJECT_COLOR } from './color-constants';
 import { ensureDeviceId, normalizeTagId } from './store-helpers';
 import type { AppData, Project, Section, Task, TaskPriority } from './types';
-import { generateUUID as uuidv4 } from './uuid';
+import { generateDeterministicUUID, generateUUID as uuidv4 } from './uuid';
 
 const TODOIST_REQUIRED_COLUMNS = ['TYPE', 'CONTENT'];
 const TODOIST_DELIMITER_FALLBACK = ',';
 const TODOIST_ZIP_SIGNATURE = [0x50, 0x4b, 0x03, 0x04];
 const TODOIST_PROJECT_FALLBACK = 'Todoist Import';
 const TODOIST_IMPORT_SUFFIX = ' (Todoist)';
+const TODOIST_IMPORT_ID_NAMESPACE = 'mindwtr:todoist-import:v1';
+
+const createTodoistImportId = (kind: 'project' | 'section' | 'task', sourceKey: string): string => (
+    generateDeterministicUUID(`${TODOIST_IMPORT_ID_NAMESPACE}:${kind}:${sourceKey}`)
+);
 
 type TodoistFileInput = {
     bytes?: ArrayBuffer | Uint8Array | null;
@@ -303,6 +308,10 @@ const parseTodoistDate = (
     if (/\bevery!?(?:\s|$)/iu.test(text)) {
         counters.recurringTasks += 1;
         return { recurringText: text };
+    }
+
+    if (/^\d{4}-\d{2}-\d{2}$/u.test(text)) {
+        return { dueDate: text };
     }
 
     const isoCandidate = text.match(/^\d{4}-\d{2}-\d{2}(?:[T\s].+)?$/u) ? new Date(text) : null;
@@ -740,6 +749,7 @@ export const applyTodoistImport = (
         projects: [...currentData.projects],
         sections: [...currentData.sections],
         areas: [...currentData.areas],
+        people: [...(currentData.people ?? [])],
         settings,
     };
 
@@ -753,8 +763,13 @@ export const applyTodoistImport = (
     let importedSectionCount = 0;
     let importedTaskCount = 0;
     let importedChecklistItemCount = 0;
+    const existingProjectIds = new Set(nextData.projects.map((project) => project.id));
 
-    for (const parsedProject of parsedProjects) {
+    parsedProjects.forEach((parsedProject, projectIndex) => {
+        const projectSourceKey = `${options.areaId ?? 'none'}:${projectIndex}:${parsedProject.name}`;
+        const projectId = createTodoistImportId('project', projectSourceKey);
+        if (existingProjectIds.has(projectId)) return;
+
         const projectTitle = resolveUniqueProjectTitle(parsedProject.name, usedProjectTitles);
         if (projectTitle !== parsedProject.name) {
             warnings.push(`Imported project "${parsedProject.name}" was renamed to "${projectTitle}" to avoid a title conflict.`);
@@ -764,7 +779,7 @@ export const applyTodoistImport = (
             .filter((project) => !project.deletedAt && (project.areaId ?? undefined) === (options.areaId ?? undefined))
             .reduce((max, project) => Math.max(max, Number.isFinite(project.order) ? project.order : -1), -1);
         const project: Project = {
-            id: uuidv4(),
+            id: projectId,
             title: projectTitle,
             color: DEFAULT_PROJECT_COLOR,
             order: siblingMaxOrder + 1,
@@ -777,6 +792,7 @@ export const applyTodoistImport = (
             ...(options.areaId ? { areaId: options.areaId } : {}),
         };
         nextData.projects.push(project);
+        existingProjectIds.add(project.id);
         importedProjectCount += 1;
 
         const sectionIdByName = new Map<string, string>();
@@ -784,7 +800,7 @@ export const applyTodoistImport = (
             const trimmed = sectionName.trim();
             if (!trimmed || sectionIdByName.has(trimmed.toLowerCase())) return;
             const section: Section = {
-                id: uuidv4(),
+                id: createTodoistImportId('section', `${projectSourceKey}:${trimmed.toLowerCase()}`),
                 projectId: project.id,
                 title: trimmed,
                 order: sectionIndex,
@@ -808,9 +824,9 @@ export const applyTodoistImport = (
                 ? sectionIdByName.get(parsedTask.sectionName.trim().toLowerCase())
                 : undefined;
             const task: Task = {
-                id: uuidv4(),
+                id: createTodoistImportId('task', `${projectSourceKey}:${taskIndex}:${parsedTask.title}`),
                 title: parsedTask.title,
-                status: 'inbox',
+                status: 'next',
                 taskMode: checklist.length > 0 ? 'list' : 'task',
                 tags: Array.from(new Set(parsedTask.tags)),
                 contexts: [],
@@ -832,7 +848,7 @@ export const applyTodoistImport = (
             importedTaskCount += 1;
             importedChecklistItemCount += checklist.length;
         });
-    }
+    });
 
     return {
         data: nextData,

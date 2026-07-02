@@ -26,3 +26,7 @@ export function normalizeProjectTag(value: string) {
     if (!trimmed) return '';
     return trimmed.startsWith('#') ? trimmed : `#${trimmed}`;
 }
+
+export function buildProjectQuickCaptureReturnTo(projectId: string) {
+    return `/projects-screen?projectId=${encodeURIComponent(projectId)}`;
+}

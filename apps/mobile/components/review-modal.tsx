@@ -1,15 +1,18 @@
-import React from 'react';
-import { ActivityIndicator, Modal, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, FlatList, Modal, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { safeFormatDate, safeParseDate, type Task } from '@mindwtr/core';
+import { formatI18nTemplate, safeFormatDate, safeParseDate, type Task } from '@mindwtr/core';
 import {
+    Brain,
     Calendar as CalendarIcon,
     CheckCircle2,
     Clock,
     FolderOpen,
+    History,
     Inbox,
     Lightbulb,
     PartyPopper,
+    Play,
     Sparkles,
     Tag,
     X,
@@ -19,6 +22,9 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useLanguage } from '../contexts/language-context';
 import { SwipeableTaskItem } from './swipeable-task-item';
 import { TaskEditModal } from './task-edit-modal';
+import { InboxProcessingModal } from './inbox-processing-modal';
+import { MindSweepModalContent } from './mind-sweep-modal-content';
+import { ErrorBoundary } from './ErrorBoundary';
 import {
     type CalendarTaskReviewEntry,
     type ContextReviewGroup,
@@ -26,6 +32,7 @@ import {
     useReviewModalController,
 } from './review/useReviewModalController';
 import { styles } from './review-modal.styles';
+import { useFilledButtonColors } from '@/hooks/use-filled-button-colors';
 
 interface ReviewModalProps {
     visible: boolean;
@@ -36,6 +43,9 @@ export const checkReviewTime = () => true;
 
 export function ReviewModal({ visible, onClose }: ReviewModalProps) {
     const { t } = useLanguage();
+    const filledButton = useFilledButtonColors();
+    const [showInboxProcessing, setShowInboxProcessing] = useState(false);
+    const [showMindSweep, setShowMindSweep] = useState(false);
     const {
         aiEnabled,
         aiError,
@@ -79,6 +89,8 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
         projectTaskPrompt,
         projectTaskTitle,
         runAiAnalysis,
+        staleProjectItems,
+        staleTasks,
         safeStepIndex,
         setProjectTaskTitle,
         showEditModal,
@@ -96,23 +108,123 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
     const closeLabel = t('common.close');
     const closeText = closeLabel && closeLabel !== 'common.close' ? closeLabel : 'Close';
 
+    useEffect(() => {
+        if (!visible && showInboxProcessing) {
+            setShowInboxProcessing(false);
+        }
+        if (!visible && showMindSweep) {
+            setShowMindSweep(false);
+        }
+    }, [showInboxProcessing, showMindSweep, visible]);
+
+    const renderMindSweepNudge = () => (
+        <View style={[styles.mindSweepNudge, { backgroundColor: tc.cardBg, borderColor: tc.border }]}>
+            <View style={styles.mindSweepNudgeText}>
+                <Text style={[styles.mindSweepNudgeTitle, { color: tc.text }]}>{t('mindSweep.title')}</Text>
+                <Text style={[styles.mindSweepNudgeBody, { color: tc.secondaryText }]}>
+                    {t('mindSweep.intro')}
+                </Text>
+            </View>
+            <TouchableOpacity
+                testID="review-mind-sweep-button"
+                style={[styles.mindSweepNudgeButton, { borderColor: tc.tint }]}
+                onPress={() => setShowMindSweep(true)}
+                accessibilityRole="button"
+                accessibilityLabel={t('mindSweep.launchButton')}
+            >
+                <Brain size={16} color={tc.tint} strokeWidth={2.2} />
+                <Text style={[styles.mindSweepNudgeButtonText, { color: tc.tint }]}>
+                    {t('mindSweep.launchButton')}
+                </Text>
+            </TouchableOpacity>
+        </View>
+    );
+
+    const renderStepRail = () => (
+        <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={[styles.stepRail, { borderBottomColor: tc.border }]}
+            contentContainerStyle={styles.stepRailContent}
+        >
+            {steps.map((step, index) => {
+                const skipped = !step.hasWork && step.id !== 'completed';
+                const complete = skipped || index < safeStepIndex;
+                const current = step.id === currentStep;
+                return (
+                    <View
+                        key={step.id}
+                        style={[
+                            styles.stepRailItem,
+                            {
+                                backgroundColor: current
+                                    ? `${tc.tint}1A`
+                                    : complete
+                                        ? `${tc.success}1A`
+                                        : tc.filterBg,
+                                borderColor: current
+                                    ? tc.tint
+                                    : complete
+                                        ? `${tc.success}66`
+                                        : tc.border,
+                            },
+                        ]}
+                    >
+                        <View
+                            style={[
+                                styles.stepRailBadge,
+                                {
+                                    backgroundColor: current
+                                        ? tc.tint
+                                        : complete
+                                            ? tc.success
+                                            : tc.border,
+                                },
+                            ]}
+                        >
+                            {complete ? (
+                                <CheckCircle2 size={12} color="#FFFFFF" strokeWidth={2.8} />
+                            ) : (
+                                <Text style={styles.stepRailBadgeText}>{index + 1}</Text>
+                            )}
+                        </View>
+                        <Text
+                            style={[
+                                styles.stepRailText,
+                                { color: current ? tc.text : tc.secondaryText },
+                            ]}
+                            numberOfLines={1}
+                        >
+                            {step.title}
+                        </Text>
+                    </View>
+                );
+            })}
+        </ScrollView>
+    );
+
     const renderTaskList = (taskList: Task[]) => (
-        <ScrollView style={styles.taskList}>
-            {taskList.map((task) => (
+        <FlatList
+            data={taskList}
+            renderItem={({ item: task }) => (
                 <SwipeableTaskItem
-                    key={task.id}
                     task={task}
                     isDark={isDark}
                     tc={tc}
                     onPress={() => handleTaskPress(task)}
                     onStatusChange={(status) => handleStatusChange(task.id, status)}
                     onDelete={() => handleDelete(task.id)}
-                    onProjectPress={handleNavigateToProject}
-                    onContextPress={handleNavigateToToken}
-                    onTagPress={handleNavigateToToken}
                 />
-            ))}
-        </ScrollView>
+            )}
+            keyExtractor={(task) => task.id}
+            style={styles.taskList}
+            initialNumToRender={12}
+            maxToRenderPerBatch={12}
+            windowSize={5}
+            updateCellsBatchingPeriod={50}
+            removeClippedSubviews={false}
+            showsVerticalScrollIndicator={false}
+        />
     );
 
     const renderExternalCalendarList = (days: ExternalCalendarDaySummary[]) => {
@@ -204,13 +316,14 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
             );
         }
         return (
-            <ScrollView style={styles.taskList}>
-                {groups.map((group) => {
+            <FlatList
+                data={groups}
+                renderItem={({ item: group }) => {
                     const contextKey = group.context;
                     const isExpanded = expandedContextGroups.has(contextKey);
                     const visibleTasks = isExpanded ? group.tasks : group.tasks.slice(0, 4);
                     return (
-                        <View key={group.context} style={[styles.contextGroupCard, { borderColor: tc.border, backgroundColor: tc.cardBg }]}>
+                        <View style={[styles.contextGroupCard, { borderColor: tc.border, backgroundColor: tc.cardBg }]}>
                             <View style={styles.contextGroupHeader}>
                                 <Text style={[styles.contextGroupTitle, { color: tc.text }]}>{group.context}</Text>
                                 <Text style={[styles.contextGroupCount, { color: tc.secondaryText }]}>{group.tasks.length}</Text>
@@ -235,8 +348,16 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                             )}
                         </View>
                     );
-                })}
-            </ScrollView>
+                }}
+                keyExtractor={(group) => group.context}
+                style={styles.taskList}
+                initialNumToRender={12}
+                maxToRenderPerBatch={12}
+                windowSize={5}
+                updateCellsBatchingPeriod={50}
+                removeClippedSubviews={false}
+                showsVerticalScrollIndicator={false}
+            />
         );
     };
 
@@ -259,6 +380,21 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                                 {labels.inboxGuide}
                             </Text>
                         </View>
+                        {renderMindSweepNudge()}
+                        {inboxTasks.length > 0 && (
+                            <TouchableOpacity
+                                style={[styles.processButton, { backgroundColor: filledButton.backgroundColor }]}
+                                onPress={() => setShowInboxProcessing(true)}
+                                hitSlop={8}
+                                accessibilityRole="button"
+                                accessibilityLabel={t('inbox.processButton')}
+                            >
+                                <Play size={14} color={filledButton.textColor ?? '#FFFFFF'} strokeWidth={2.5} fill={filledButton.textColor ?? '#FFFFFF'} />
+                                <Text style={[styles.processButtonText, filledButton.textColor ? { color: filledButton.textColor } : null]}>
+                                    {t('inbox.processButton')}
+                                </Text>
+                            </TouchableOpacity>
+                        )}
                         {inboxTasks.length === 0 ? (
                             <View style={styles.emptyState}>
                                 <CheckCircle2 size={48} color={tc.secondaryText} strokeWidth={1.5} style={styles.emptyIcon} />
@@ -272,43 +408,71 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                     </View>
                 );
 
-            case 'ai':
+            case 'stale':
                 return (
                     <View style={styles.stepContent}>
                         <View style={styles.stepTitleRow}>
-                            <Sparkles size={22} color={tc.text} strokeWidth={2} />
+                            <History size={22} color={tc.text} strokeWidth={2} />
                             <Text style={[styles.stepTitleInline, { color: tc.text }]}>
-                                {labels.ai}
+                                {labels.stale}
                             </Text>
                         </View>
                         <Text style={[styles.hint, { color: tc.secondaryText }]}>
-                            {labels.aiDesc}
+                            {labels.staleDesc}
                         </Text>
-                        <TouchableOpacity
-                            style={[styles.primaryButton, { backgroundColor: tc.tint, marginTop: 12 }]}
-                            onPress={runAiAnalysis}
-                            disabled={aiLoading}
-                        >
-                            <Text style={styles.primaryButtonText}>
-                                {aiLoading ? labels.aiRunning : labels.aiRun}
-                            </Text>
-                        </TouchableOpacity>
+                        <ScrollView style={styles.taskList}>
+                            {staleTasks.map((task) => (
+                                <SwipeableTaskItem
+                                    key={task.id}
+                                    task={task}
+                                    isDark={isDark}
+                                    tc={tc}
+                                    onPress={() => handleTaskPress(task)}
+                                    onStatusChange={(status) => handleStatusChange(task.id, status)}
+                                    onDelete={() => handleDelete(task.id)}
+                                />
+                            ))}
+                            {staleProjectItems.map((item) => (
+                                <View key={item.id} style={[styles.calendarDayCard, { borderColor: tc.border }]}>
+                                    <Text style={[styles.calendarEventTitle, { color: tc.text }]} numberOfLines={1}>
+                                        {item.title}
+                                    </Text>
+                                    <Text style={[styles.calendarEventMeta, { color: tc.secondaryText }]}>
+                                        {formatI18nTemplate(labels.staleDaysInactive, { days: item.daysStale })}
+                                    </Text>
+                                </View>
+                            ))}
+                            {aiEnabled && (
+                                <>
+                                    <View style={[styles.stepTitleRow, { marginTop: 16 }]}>
+                                        <Sparkles size={18} color={tc.text} strokeWidth={2} />
+                                        <Text style={[styles.hint, { color: tc.secondaryText }]}>
+                                            {labels.aiDesc}
+                                        </Text>
+                                    </View>
+                                    <TouchableOpacity
+                                        style={[styles.primaryButton, { backgroundColor: filledButton.backgroundColor, marginTop: 12 }]}
+                                        onPress={runAiAnalysis}
+                                        disabled={aiLoading}
+                                    >
+                                        <Text style={[styles.primaryButtonText, filledButton.textColor ? { color: filledButton.textColor } : null]}>
+                                            {aiLoading ? labels.aiRunning : labels.aiRun}
+                                        </Text>
+                                    </TouchableOpacity>
 
-                        {aiError && (
-                            <Text style={[styles.hint, { color: '#EF4444', marginTop: 12 }]}>
-                                {aiError}
-                            </Text>
-                        )}
+                                    {aiError && (
+                                        <Text style={[styles.hint, { color: '#EF4444', marginTop: 12 }]}>
+                                            {aiError}
+                                        </Text>
+                                    )}
 
-                        {aiRan && !aiLoading && aiSuggestions.length === 0 && !aiError && (
-                            <Text style={[styles.hint, { color: tc.secondaryText, marginTop: 12 }]}>
-                                {labels.aiEmpty}
-                            </Text>
-                        )}
+                                    {aiRan && !aiLoading && aiSuggestions.length === 0 && !aiError && (
+                                        <Text style={[styles.hint, { color: tc.secondaryText, marginTop: 12 }]}>
+                                            {labels.aiEmpty}
+                                        </Text>
+                                    )}
 
-                        {aiSuggestions.length > 0 && (
-                            <ScrollView style={styles.taskList}>
-                                {aiSuggestions.map((suggestion) => {
+                                    {aiSuggestions.map((suggestion) => {
                                     const actionable = isActionableSuggestion(suggestion);
                                     const label = suggestion.action === 'someday'
                                         ? labels.aiActionSomeday
@@ -346,17 +510,20 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                                         </TouchableOpacity>
                                     );
                                 })}
-                                <TouchableOpacity
-                                    style={[styles.primaryButton, { backgroundColor: tc.tint, marginTop: 12 }]}
-                                    onPress={applyAiSuggestions}
-                                    disabled={aiSelectedIds.size === 0}
-                                >
-                                    <Text style={styles.primaryButtonText}>
-                                        {labels.aiApply} ({aiSelectedIds.size})
-                                    </Text>
-                                </TouchableOpacity>
-                            </ScrollView>
-                        )}
+                                    {aiSuggestions.length > 0 && (
+                                        <TouchableOpacity
+                                            style={[styles.primaryButton, { backgroundColor: filledButton.backgroundColor, marginTop: 12 }]}
+                                            onPress={applyAiSuggestions}
+                                            disabled={aiSelectedIds.size === 0}
+                                        >
+                                            <Text style={[styles.primaryButtonText, filledButton.textColor ? { color: filledButton.textColor } : null]}>
+                                                {labels.aiApply} ({aiSelectedIds.size})
+                                            </Text>
+                                        </TouchableOpacity>
+                                    )}
+                                </>
+                            )}
+                        </ScrollView>
                     </View>
                 );
 
@@ -452,11 +619,12 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                                 </Text>
                             </View>
                         ) : (
-                            <ScrollView style={styles.taskList}>
-                                {projectReviewEntries.map((entry) => {
+                            <FlatList
+                                data={projectReviewEntries}
+                                renderItem={({ item: entry }) => {
                                     const isExpanded = expandedProject === entry.project.id;
                                     return (
-                                        <View key={entry.project.id}>
+                                        <View>
                                             <TouchableOpacity
                                                 style={[styles.projectItem, { backgroundColor: tc.cardBg, borderColor: tc.border }]}
                                                 onPress={() => toggleExpandedProject(entry.project.id)}
@@ -501,17 +669,22 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                                                             onPress={() => handleTaskPress(task)}
                                                             onStatusChange={(status) => handleStatusChange(task.id, status)}
                                                             onDelete={() => handleDelete(task.id)}
-                                                            onProjectPress={handleNavigateToProject}
-                                                            onContextPress={handleNavigateToToken}
-                                                            onTagPress={handleNavigateToToken}
                                                         />
                                                     ))}
                                                 </View>
                                             )}
                                         </View>
                                     );
-                                })}
-                            </ScrollView>
+                                }}
+                                keyExtractor={(entry) => entry.project.id}
+                                style={styles.taskList}
+                                initialNumToRender={12}
+                                maxToRenderPerBatch={12}
+                                windowSize={5}
+                                updateCellsBatchingPeriod={50}
+                                removeClippedSubviews={false}
+                                showsVerticalScrollIndicator={false}
+                            />
                         )}
                     </View>
                 );
@@ -550,8 +723,9 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                         <Text style={[styles.description, { color: tc.secondaryText }]}>
                             {labels.completeDesc}
                         </Text>
-                        <TouchableOpacity style={styles.primaryButton} onPress={handleFinish}>
-                            <Text style={styles.primaryButtonText}>
+                        {renderMindSweepNudge()}
+                        <TouchableOpacity style={[styles.primaryButton, filledButton.textColor ? { backgroundColor: filledButton.backgroundColor } : null]} onPress={handleFinish}>
+                            <Text style={[styles.primaryButtonText, filledButton.textColor ? { color: filledButton.textColor } : null]}>
                                 {labels.finish}
                             </Text>
                         </TouchableOpacity>
@@ -591,6 +765,7 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                     <View style={[styles.progressContainer, { backgroundColor: tc.border }]}>
                         <View style={[styles.progressBar, { width: `${progress}%` }]} />
                     </View>
+                    {renderStepRail()}
 
                     <View style={styles.content}>
                         {renderStepContent()}
@@ -601,8 +776,8 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                             <TouchableOpacity style={styles.backButton} onPress={prevStep}>
                                 <Text style={[styles.backButtonText, { color: tc.secondaryText }]}>← {labels.back}</Text>
                             </TouchableOpacity>
-                            <TouchableOpacity style={styles.primaryButton} onPress={nextStep}>
-                                <Text style={styles.primaryButtonText}>{labels.next} →</Text>
+                            <TouchableOpacity style={[styles.primaryButton, filledButton.textColor ? { backgroundColor: filledButton.backgroundColor } : null]} onPress={nextStep}>
+                                <Text style={[styles.primaryButtonText, filledButton.textColor ? { color: filledButton.textColor } : null]}>{labels.next} →</Text>
                             </TouchableOpacity>
                         </View>
                     )}
@@ -618,6 +793,22 @@ export function ReviewModal({ visible, onClose }: ReviewModalProps) {
                     onContextNavigate={handleNavigateToToken}
                     onTagNavigate={handleNavigateToToken}
                 />
+
+                <ErrorBoundary>
+                    <InboxProcessingModal
+                        visible={visible && showInboxProcessing}
+                        onClose={() => setShowInboxProcessing(false)}
+                    />
+                </ErrorBoundary>
+
+                <Modal
+                    visible={visible && showMindSweep}
+                    animationType="slide"
+                    presentationStyle="pageSheet"
+                    onRequestClose={() => setShowMindSweep(false)}
+                >
+                    <MindSweepModalContent onClose={() => setShowMindSweep(false)} />
+                </Modal>
 
                 <Modal
                     visible={Boolean(projectTaskPrompt)}

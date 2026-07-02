@@ -1,0 +1,3 @@
+Konfigurierbarer Schnellzugriff, optionale Focus-Gruppierung, Projektumwandlung in Inbox-Eintraege und kompakte Sortierung machen die mobile Navigation klarer.
+Android haelt den Widget-Capture-Button sichtbar, passt die Navigationsleiste ans Theme an und oeffnet Erinnerungen zuverlaessiger.
+Sync ist leiser, wenn nichts geaendert wurde, und behaelt Loesch-Wiederholungen fuer Anhaenge zuverlaessiger.

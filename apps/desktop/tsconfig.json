@@ -25,6 +25,12 @@
         "paths": {
             "@/*": [
                 "src/*"
+            ],
+            "@mindwtr/core": [
+                "../../packages/core/src/index.ts"
+            ],
+            "@mindwtr/core/*": [
+                "../../packages/core/src/*"
             ]
         }
     },

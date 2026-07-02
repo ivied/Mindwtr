@@ -1,3 +1,3 @@
-- Added Apple Reminders import for incomplete reminders.
-- Task editing is faster with clearer controls and quick date shortcuts.
-- Archived task details, Focus lists, calendar recurrences, and project unarchive behavior are more reliable.
+- Repeat reminders can now re-notify timed tasks until you complete or snooze them.
+- Bulk Quick Add, TickTick and Obsidian import, Apple Shortcuts, widgets, Focus grouping, and board filters are smoother.
+- Local dictation, sync repair, keyboard-covered popups, long task titles, and task editing are more reliable.

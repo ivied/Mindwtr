@@ -17,6 +17,7 @@ describe('text-size', () => {
     });
 
     it('coerces unknown values to the default preset', () => {
+        expect(coerceDesktopTextSize('small')).toBe('small');
         expect(coerceDesktopTextSize('huge')).toBe(DEFAULT_DESKTOP_TEXT_SIZE_MODE);
         expect(coerceDesktopTextSize(null)).toBe(DEFAULT_DESKTOP_TEXT_SIZE_MODE);
     });
@@ -26,5 +27,12 @@ describe('text-size', () => {
 
         expect(document.documentElement.dataset.textSize).toBe('extra-large');
         expect(document.documentElement.style.getPropertyValue('--mindwtr-text-scale')).toBe('1.25');
+    });
+
+    it('applies the small preset below the default scale', () => {
+        applyDesktopTextSize('small');
+
+        expect(document.documentElement.dataset.textSize).toBe('small');
+        expect(document.documentElement.style.getPropertyValue('--mindwtr-text-scale')).toBe('0.875');
     });
 });

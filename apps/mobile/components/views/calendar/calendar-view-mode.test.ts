@@ -26,15 +26,16 @@ describe('calendar view mode helpers', () => {
   it('requires a selected date for date-specific views', () => {
     expect(needsCalendarSelectedDate('day')).toBe(true);
     expect(needsCalendarSelectedDate('week')).toBe(true);
+    expect(needsCalendarSelectedDate('schedule')).toBe(true);
     expect(needsCalendarSelectedDate('month')).toBe(false);
-    expect(needsCalendarSelectedDate('schedule')).toBe(false);
   });
 
-  it('starts persisted day and week views on today', () => {
+  it('starts persisted date-specific views on today', () => {
     const today = new Date('2026-05-01T12:00:00.000Z');
 
     expect(getInitialCalendarSelectedDate('day', today)?.toISOString()).toBe('2026-05-01T12:00:00.000Z');
     expect(getInitialCalendarSelectedDate('week', today)?.toISOString()).toBe('2026-05-01T12:00:00.000Z');
+    expect(getInitialCalendarSelectedDate('schedule', today)?.toISOString()).toBe('2026-05-01T12:00:00.000Z');
     expect(getInitialCalendarSelectedDate('month', today)).toBeNull();
   });
 

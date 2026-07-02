@@ -12,7 +12,7 @@ import * as Linking from 'expo-linking';
 import * as Sharing from 'expo-sharing';
 
 import { resolveAttachmentValidationMessage } from './projects-screen.utils';
-import { ensureAttachmentAvailable } from '../../lib/attachment-sync';
+import { ensureAttachmentAvailable, persistAttachmentLocally } from '../../lib/attachment-sync';
 import { logWarn } from '../../lib/app-log';
 
 type UseProjectAttachmentsParams = {
@@ -193,7 +193,8 @@ export function useProjectAttachments({
       updatedAt: now,
       localStatus: 'available',
     };
-    const next = [...(selectedProject.attachments || []), attachment];
+    const cached = await persistAttachmentLocally(attachment);
+    const next = [...(selectedProject.attachments || []), cached];
     updateProject(selectedProject.id, { attachments: next });
     setSelectedProject({ ...selectedProject, attachments: next });
   }, [selectedProject, setSelectedProject, t, updateProject]);

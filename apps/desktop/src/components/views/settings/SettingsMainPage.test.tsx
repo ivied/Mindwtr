@@ -20,6 +20,9 @@ const baseProps: SettingsMainPageProps = {
     onWeekStartChange: vi.fn(),
     dateFormat: 'system',
     onDateFormatChange: vi.fn(),
+    calendarSystem: 'gregorian',
+    showCalendarSystem: false,
+    onCalendarSystemChange: vi.fn(),
     timeFormat: 'system',
     onTimeFormatChange: vi.fn(),
     keybindingStyle: 'vim',
@@ -82,5 +85,66 @@ describe('SettingsMainPage', () => {
         expect(getByText('Flatpak custom shortcut command')).toBeInTheDocument();
         expect(getByText('flatpak run tech.dongdongbh.mindwtr --quick-add')).toBeInTheDocument();
         expect(getByRole('combobox', { name: 'Global quick add shortcut' })).toBeDisabled();
+    });
+
+    it('offers Saturday as a week start option', () => {
+        const onWeekStartChange = vi.fn();
+        const { getAllByText, getByRole } = render(
+            <SettingsMainPage
+                {...baseProps}
+                weekStart="saturday"
+                onWeekStartChange={onWeekStartChange}
+            />,
+        );
+
+        expect(getAllByText('Saturday').length).toBeGreaterThan(0);
+        fireEvent.change(getByRole('combobox', { name: 'Week starts on' }), {
+            target: { value: 'monday' },
+        });
+
+        expect(onWeekStartChange).toHaveBeenCalledWith('monday');
+    });
+
+    it('only renders the calendar system selector when enabled', () => {
+        const onCalendarSystemChange = vi.fn();
+        const hidden = render(<SettingsMainPage {...baseProps} />);
+        expect(hidden.queryByText('Calendar system')).toBeNull();
+        hidden.unmount();
+
+        const { getByRole, getByText } = render(
+            <SettingsMainPage
+                {...baseProps}
+                showCalendarSystem
+                calendarSystem="jalali"
+                onCalendarSystemChange={onCalendarSystemChange}
+            />,
+        );
+
+        expect(getByText('Calendar system')).toBeInTheDocument();
+        fireEvent.change(getByRole('combobox', { name: 'Calendar system' }), {
+            target: { value: 'gregorian' },
+        });
+
+        expect(onCalendarSystemChange).toHaveBeenCalledWith('gregorian');
+    });
+
+    it('offers the small text size preset', () => {
+        const onTextSizeChange = vi.fn();
+        const { getByRole } = render(
+            <SettingsMainPage
+                {...baseProps}
+                textSizeMode="small"
+                onTextSizeChange={onTextSizeChange}
+            />,
+        );
+
+        const select = getByRole('combobox', { name: 'Text size' });
+        expect(select).toHaveValue('small');
+
+        fireEvent.change(select, {
+            target: { value: 'large' },
+        });
+
+        expect(onTextSizeChange).toHaveBeenCalledWith('large');
     });
 });

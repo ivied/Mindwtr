@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Modal, Platform, Pressable, ScrollView, Switch, Text, TouchableOpacity, View } from 'react-native';
 import type { StoreActionResult, Task } from '@mindwtr/core';
 
 import type { ThemeColors } from '@/hooks/use-theme-colors';
@@ -41,6 +41,7 @@ export function AppleRemindersImportSection({
 }: Props) {
   const [selectedListId, setSelectedListId] = useState<string | undefined>();
   const [selectedListTitle, setSelectedListTitle] = useState<string | undefined>();
+  const [deleteImportedReminders, setDeleteImportedReminders] = useState(false);
   const [lists, setLists] = useState<AppleReminderList[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [loadingLists, setLoadingLists] = useState(false);
@@ -52,6 +53,7 @@ export function AppleRemindersImportSection({
       .then((settings) => {
         setSelectedListId(settings.selectedListId);
         setSelectedListTitle(settings.selectedListTitle);
+        setDeleteImportedReminders(settings.deleteImportedReminders);
       })
       .catch(logSettingsError);
   }, []);
@@ -117,6 +119,26 @@ export function AppleRemindersImportSection({
     }
   }, [showToast, tr]);
 
+  const handleDeleteImportedRemindersChange = useCallback(async (value: boolean) => {
+    if (disabled || loadingLists || importing) return;
+    try {
+      const current = await loadAppleRemindersImportSettings();
+      await saveAppleRemindersImportSettings({
+        ...current,
+        deleteImportedReminders: value,
+      });
+      setDeleteImportedReminders(value);
+    } catch (error) {
+      logSettingsError(error);
+      showToast({
+        title: tr('settings.syncMobile.error'),
+        message: String(error),
+        tone: 'error',
+        durationMs: 5200,
+      });
+    }
+  }, [disabled, importing, loadingLists, showToast, tr]);
+
   const importReminders = useCallback(async () => {
     if (disabled || importing) return;
     if (!selectedListId) {
@@ -130,12 +152,19 @@ export function AppleRemindersImportSection({
         addTask,
         listId: selectedListId,
         listTitle: selectedListTitle,
+        deleteImportedReminders,
       });
       const skippedCount = result.skippedDuplicateCount + result.skippedCompletedCount + result.skippedEmptyTitleCount;
       const details = [
         tr('settings.appleRemindersImport.importedCount', { taskCount: result.importedCount }),
         skippedCount > 0
           ? tr('settings.appleRemindersImport.skippedCount', { taskCount: skippedCount })
+          : null,
+        result.deletedCount > 0
+          ? tr('settings.appleRemindersImport.deletedCount', { taskCount: result.deletedCount })
+          : null,
+        result.deleteFailedCount > 0
+          ? tr('settings.appleRemindersImport.deleteFailedCount', { taskCount: result.deleteFailedCount })
           : null,
         result.failedCount > 0
           ? tr('settings.appleRemindersImport.failedCount', { taskCount: result.failedCount })
@@ -147,7 +176,7 @@ export function AppleRemindersImportSection({
           ? tr('settings.backupMobile.importComplete')
           : tr('settings.appleRemindersImport.nothingNew'),
         message: details,
-        tone: result.failedCount > 0 ? 'warning' : 'success',
+        tone: result.failedCount > 0 || result.deleteFailedCount > 0 ? 'warning' : 'success',
         durationMs: 5200,
       });
     } catch (error) {
@@ -161,7 +190,7 @@ export function AppleRemindersImportSection({
     } finally {
       setImporting(false);
     }
-  }, [addTask, disabled, importing, openListPicker, selectedListId, selectedListTitle, showToast, tr]);
+  }, [addTask, deleteImportedReminders, disabled, importing, openListPicker, selectedListId, selectedListTitle, showToast, tr]);
 
   if (Platform.OS !== 'ios') return null;
 
@@ -194,6 +223,22 @@ export function AppleRemindersImportSection({
             <Text style={[styles.chevron, { color: tc.secondaryText }]}>›</Text>
           )}
         </TouchableOpacity>
+        <View style={[styles.settingRow, { borderTopWidth: 1, borderTopColor: tc.border }]}>
+          <View style={styles.settingInfo}>
+            <Text style={[styles.settingLabel, { color: tc.text }]}>
+              {tr('settings.appleRemindersImport.deleteAfterImport')}
+            </Text>
+            <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
+              {tr('settings.appleRemindersImport.deleteAfterImportDescription')}
+            </Text>
+          </View>
+          <Switch
+            disabled={busy}
+            onValueChange={(value) => void handleDeleteImportedRemindersChange(value)}
+            trackColor={{ false: '#767577', true: '#3B82F6' }}
+            value={deleteImportedReminders}
+          />
+        </View>
         <TouchableOpacity
           accessibilityRole="button"
           disabled={busy}
@@ -206,7 +251,9 @@ export function AppleRemindersImportSection({
               {tr('settings.appleRemindersImport.importIncomplete')}
             </Text>
             <Text style={[styles.settingDescription, { color: tc.secondaryText }]}>
-              {tr('settings.appleRemindersImport.importIncompleteDescription')}
+              {deleteImportedReminders
+                ? tr('settings.appleRemindersImport.importIncompleteDeleteDescription')
+                : tr('settings.appleRemindersImport.importIncompleteDescription')}
             </Text>
           </View>
           {importing && <ActivityIndicator size="small" color={tc.tint} />}

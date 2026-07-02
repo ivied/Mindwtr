@@ -43,6 +43,7 @@ export const SETTINGS_SCREEN_SET: Record<SettingsScreen, true> = {
 
 export const LANGUAGES: { id: Language; native: string }[] = [
     { id: 'en', native: 'English' },
+    { id: 'vi', native: 'Tiếng Việt' },
     { id: 'zh', native: '中文（简体）' },
     { id: 'zh-Hant', native: '中文（繁體）' },
     { id: 'es', native: 'Español' },
@@ -54,17 +55,19 @@ export const LANGUAGES: { id: Language; native: string }[] = [
     { id: 'fr', native: 'Français' },
     { id: 'pt', native: 'Português' },
     { id: 'pl', native: 'Polski' },
+    { id: 'cs', native: 'Čeština' },
     { id: 'ko', native: '한국어' },
     { id: 'it', native: 'Italiano' },
     { id: 'tr', native: 'Türkçe' },
+    { id: 'nl', native: 'Nederlands' },
 ];
 
 export const WHISPER_MODEL_BASE_URL = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main';
-export const WHISPER_MODELS: { id: string; fileName: string; label: string }[] = [
-    { id: 'whisper-tiny', fileName: 'ggml-tiny.bin', label: 'whisper-tiny' },
-    { id: 'whisper-tiny.en', fileName: 'ggml-tiny.en.bin', label: 'whisper-tiny.en' },
-    { id: 'whisper-base', fileName: 'ggml-base.bin', label: 'whisper-base' },
-    { id: 'whisper-base.en', fileName: 'ggml-base.en.bin', label: 'whisper-base.en' },
+export const WHISPER_MODELS: { id: string; fileName: string; label: string; minBytes: number; sha256: string; sizeBytes: number }[] = [
+    { id: 'whisper-tiny', fileName: 'ggml-tiny.bin', label: 'whisper-tiny', minBytes: 77691713, sizeBytes: 77691713, sha256: 'be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21' },
+    { id: 'whisper-tiny.en', fileName: 'ggml-tiny.en.bin', label: 'whisper-tiny.en', minBytes: 77704715, sizeBytes: 77704715, sha256: '921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f' },
+    { id: 'whisper-base', fileName: 'ggml-base.bin', label: 'whisper-base', minBytes: 147951465, sizeBytes: 147951465, sha256: '60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe' },
+    { id: 'whisper-base.en', fileName: 'ggml-base.en.bin', label: 'whisper-base.en', minBytes: 147964211, sizeBytes: 147964211, sha256: 'a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002' },
 ];
 export const DEFAULT_WHISPER_MODEL = WHISPER_MODELS[0]?.id ?? 'whisper-tiny';
 
@@ -79,8 +82,12 @@ export const FOSS_LOCAL_LLM_COPILOT_OPTIONS = ['llama3.2', 'qwen2.5', 'mistral',
 
 export type MobileExtraConfig = {
     analyticsHeartbeatUrl?: string;
+    analyticsHeartbeatChannel?: string;
+    analyticsReleaseVersion?: string;
+    feedbackEndpointUrl?: string;
     isFossBuild?: boolean | string;
     dropboxAppKey?: string;
+    promptTestControlsEnabled?: boolean | string;
 };
 
 export type CloudProvider = 'selfhosted' | 'dropbox' | 'cloudkit';

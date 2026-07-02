@@ -1,0 +1,281 @@
+import React from 'react';
+import { FlatList, Text } from 'react-native';
+import { act, create } from 'react-test-renderer';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Area, AppSettings, Project, Task } from '@mindwtr/core';
+
+import ProjectsScreen from '../app/(drawer)/projects-screen';
+
+const asyncStorageMock = vi.hoisted(() => ({
+  getItem: vi.fn(),
+  setItem: vi.fn(),
+}));
+
+const createDeferred = <T,>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+};
+
+const now = '2026-06-15T00:00:00.000Z';
+const testArea: Area = {
+  id: 'no-area',
+  name: 'No Area',
+  order: 0,
+  createdAt: now,
+  updatedAt: now,
+};
+const testProject: Project = {
+  id: 'project-1',
+  title: 'Visible Project',
+  status: 'active',
+  color: '#3b82f6',
+  order: 0,
+  tagIds: [],
+  createdAt: now,
+  updatedAt: now,
+};
+
+const storeState: {
+  projects: Project[];
+  tasks: Task[];
+  sections: any[];
+  settings: AppSettings;
+  [key: string]: any;
+} = {
+  projects: [testProject],
+  tasks: [],
+  sections: [],
+  settings: {},
+  addProject: vi.fn(),
+  updateProject: vi.fn(),
+  deleteProject: vi.fn(),
+  restoreProject: vi.fn(),
+  duplicateProject: vi.fn(),
+  addSection: vi.fn(),
+  updateSection: vi.fn(),
+  deleteSection: vi.fn(),
+  reorderSections: vi.fn(),
+  toggleProjectFocus: vi.fn(),
+  addArea: vi.fn(),
+  updateArea: vi.fn(),
+  deleteArea: vi.fn(),
+  reorderAreas: vi.fn(),
+  updateTask: vi.fn(),
+  setHighlightTask: vi.fn(),
+  getDerivedState: () => ({
+    focusedProjectCount: 0,
+    projectTaskSummaryById: new Map(),
+    tasksByProjectId: new Map(),
+  }),
+};
+
+beforeEach(() => {
+  asyncStorageMock.getItem.mockReset();
+  asyncStorageMock.getItem.mockResolvedValue(null);
+  asyncStorageMock.setItem.mockReset();
+  asyncStorageMock.setItem.mockResolvedValue(undefined);
+});
+
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: asyncStorageMock,
+}));
+
+vi.mock('@mindwtr/core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@mindwtr/core')>();
+  const useTaskStore = Object.assign((selector?: (state: typeof storeState) => unknown) => (
+    typeof selector === 'function' ? selector(storeState) : storeState
+  ), {
+    getState: () => storeState,
+  });
+  return {
+    ...actual,
+    useTaskStore,
+    shallow: (value: unknown) => value,
+  };
+});
+
+vi.mock('expo-router', () => ({
+  useLocalSearchParams: () => ({}),
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
+}));
+
+vi.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
+}));
+
+vi.mock('react-native-gesture-handler', () => ({
+  GestureHandlerRootView: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+vi.mock('../contexts/language-context', () => ({
+  useLanguage: () => ({
+    language: 'en',
+    t: (key: string) => ({
+      'projects.activeSection': 'Active Projects',
+      'projects.deferredSection': 'Someday / Waiting',
+      'projects.noArea': 'No Area',
+      'projects.addPlaceholder': 'Add new project...',
+      'projects.tagFilter': 'Tag filter',
+      'projects.show': 'Show',
+      'projects.empty': 'No projects yet',
+      'status.archived': 'Archived',
+      'common.loading': 'Loading...',
+      'common.notice': 'Notice',
+    }[key] ?? key),
+  }),
+}));
+
+vi.mock('../contexts/toast-context', () => ({
+  useToast: () => ({ showToast: vi.fn() }),
+}));
+
+vi.mock('../contexts/quick-capture-context', () => ({
+  useQuickCapture: () => ({ openQuickCapture: vi.fn() }),
+}));
+
+vi.mock('@/hooks/use-theme-tokens', () => ({
+  useThemeTokens: () => ({ isMaterial: false, roles: null, shape: { large: 16 } }),
+}));
+
+vi.mock('@/hooks/use-theme-colors', () => ({
+  useThemeColors: () => ({
+    bg: '#111827',
+    text: '#f9fafb',
+    secondaryText: '#9ca3af',
+    tint: '#60a5fa',
+    onTint: '#ffffff',
+    border: '#374151',
+    filterBg: '#1f2937',
+    cardBg: '#111827',
+    icon: '#9ca3af',
+  }),
+}));
+
+vi.mock('@/hooks/use-mobile-area-filter', () => ({
+  useMobileAreaFilter: () => ({
+    areaById: new Map<string, Area>(),
+    resolvedAreaFilter: '__all__',
+    sortedAreas: [],
+  }),
+}));
+
+vi.mock('@/hooks/use-project-filtering', () => ({
+  useProjectFiltering: () => ({
+    areaUsage: new Map(),
+    focusedCount: 0,
+    groupedActiveProjects: [
+      {
+        title: 'No Area',
+        areaId: testArea.id,
+        data: [{ type: 'project', data: testProject }],
+      },
+    ],
+    groupedDeferredProjects: [],
+    groupedArchivedProjects: [],
+    projectTagOptions: [],
+    tagFilterOptions: [],
+  }),
+}));
+
+vi.mock('@/components/projects-screen/use-project-notes-editor', () => ({
+  useProjectNotesEditor: () => ({
+    notesExpanded: false,
+    setNotesExpanded: vi.fn(),
+    showNotesPreview: false,
+    setShowNotesPreview: vi.fn(),
+    notesFullscreen: false,
+    setNotesFullscreen: vi.fn(),
+    selectedProjectNotes: '',
+    selectedProjectNotesDirection: 'ltr',
+    selectedProjectNotesTextDirectionStyle: {},
+    selectedProjectNotesInputRef: { current: null },
+    selectedProjectNotesUndoDepth: 0,
+    isSelectedProjectNotesFocused: false,
+    setIsSelectedProjectNotesFocused: vi.fn(),
+    selectedProjectNotesSelection: { start: 0, end: 0 },
+    commitSelectedProjectNotes: vi.fn(),
+    handleSelectedProjectNotesApplyAction: vi.fn(),
+    handleSelectedProjectNotesApplyAutocomplete: vi.fn(),
+    handleSelectedProjectNotesChange: vi.fn(),
+    handleSelectedProjectNotesSelectionChange: vi.fn(),
+    handleSelectedProjectNotesUndo: vi.fn(),
+    resetProjectNotesUi: vi.fn(),
+  }),
+}));
+
+vi.mock('@/components/projects-screen/use-project-attachments', () => ({
+  useProjectAttachments: () => ({
+    linkModalVisible: false,
+    setLinkModalVisible: vi.fn(),
+    imagePreviewAttachment: null,
+    setImagePreviewAttachment: vi.fn(),
+    linkInput: '',
+    setLinkInput: vi.fn(),
+    openAttachment: vi.fn(),
+    downloadAttachment: vi.fn(),
+    addProjectFileAttachment: vi.fn(),
+    confirmAddProjectLink: vi.fn(),
+    removeProjectAttachment: vi.fn(),
+    resetProjectAttachmentUi: vi.fn(),
+  }),
+}));
+
+vi.mock('@/components/projects-screen/ProjectAreaModals', () => ({ ProjectAreaModals: () => null }));
+vi.mock('@/components/projects-screen/ProjectDetailModal', () => ({ ProjectDetailModal: () => null }));
+vi.mock('@/components/projects-screen/ProjectOverlayModals', () => ({
+  ProjectImagePreviewModal: () => null,
+  ProjectLinkModal: () => null,
+  ProjectTagPickerModal: () => null,
+}));
+vi.mock('@/components/task-edit-modal', () => ({ TaskEditModal: () => null }));
+vi.mock('@/components/list-layout', () => ({
+  ListSectionHeader: ({ title }: { title: string }) => <Text>{title}</Text>,
+  defaultListContentStyle: {},
+}));
+vi.mock('@/components/projects-screen/ProjectRow', () => ({
+  ProjectRow: ({ project }: { project: Project }) => <Text testID="project-row">{project.title}</Text>,
+}));
+vi.mock('@/lib/task-meta-navigation', () => ({
+  openContextsScreen: vi.fn(),
+  openProjectScreen: vi.fn(),
+}));
+vi.mock('../lib/app-log', () => ({
+  logError: vi.fn(),
+  logWarn: vi.fn(),
+}));
+
+describe('ProjectsScreen view state hydration', () => {
+  it('does not render project rows before persisted collapsed areas are loaded', async () => {
+    const deferred = createDeferred<string | null>();
+    asyncStorageMock.getItem.mockReturnValue(deferred.promise);
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<ProjectsScreen />);
+    });
+
+    const firstList = tree.root.findByType(FlatList);
+    expect(firstList.props.data.some((row: { type: string }) => row.type === 'project')).toBe(false);
+    expect(firstList.props.ListEmptyComponent.props.children.props.children).toBe('Loading...');
+
+    await act(async () => {
+      deferred.resolve(JSON.stringify({
+        collapsedAreas: { 'no-area': true },
+        showArchivedProjects: false,
+        showDeferredProjects: false,
+      }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(asyncStorageMock.getItem).toHaveBeenCalledWith('mindwtr:view:projects:v1');
+    const hydratedList = tree.root.findByType(FlatList);
+    expect(hydratedList.props.data.some((row: { type: string }) => row.type === 'project')).toBe(false);
+  });
+});

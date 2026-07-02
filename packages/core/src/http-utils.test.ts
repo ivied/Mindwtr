@@ -244,4 +244,24 @@ describe('fetchWithTimeout', () => {
             'Request timed out',
         )).rejects.toThrow('Request timed out');
     });
+
+    it('preserves nested transport causes for fetch failures', async () => {
+        const certificateError = new Error('invalid peer certificate: UnknownIssuer');
+        const connectError = new Error('client error (Connect)');
+        (connectError as Error & { cause?: unknown }).cause = certificateError;
+        const requestError = new Error('error sending request for url (https://files.internal/mindwtr/attachments/)');
+        (requestError as Error & { cause?: unknown }).cause = connectError;
+
+        await expect(fetchWithTimeout(
+            'https://files.internal/mindwtr/attachments/',
+            { method: 'MKCOL' },
+            1_000,
+            async () => {
+                throw requestError;
+            },
+            'Request timed out',
+        )).rejects.toThrow(
+            'error sending request for url (https://files.internal/mindwtr/attachments/) (caused by: client error (Connect) -> invalid peer certificate: UnknownIssuer)',
+        );
+    });
 });

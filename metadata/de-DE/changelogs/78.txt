@@ -1,0 +1,3 @@
+- Feedback kann in konfigurierten Builds aus den Einstellungen gesendet werden.
+- Eigene Zeitschaetzungen, Projekt-Sequenzhinweise, Faelligkeitsfarben und schnellere grosse Aufgabenlisten verbessern die Planung.
+- Anhangs-Sync, alte Anhaenge, Filtersuche, Benachrichtigungstaps, Kontextautomation und Wiederholungen sind zuverlaessiger.

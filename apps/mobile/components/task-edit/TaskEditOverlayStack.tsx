@@ -7,9 +7,11 @@ import {
     TaskEditAudioModal,
     TaskEditImagePreviewModal,
     TaskEditLinkModal,
+    TaskEditWaitingAssignmentModal,
 } from './TaskEditOverlayModals';
 import { TaskEditProjectPicker } from './TaskEditProjectPicker';
 import { TaskEditSectionPicker } from './TaskEditSectionPicker';
+import { getAreaIdForClearedProject } from './task-edit-modal.utils';
 
 type TaskEditOverlayStackProps = {
     [key: string]: any;
@@ -42,6 +44,7 @@ export function TaskEditOverlayStack(props: TaskEditOverlayStackProps) {
         linkInput,
         linkInputTouched,
         linkModalVisible,
+        linkModalTitle,
         projects,
         recurrenceWeekdayButtons,
         recurrenceWeekdayLabels,
@@ -62,6 +65,11 @@ export function TaskEditOverlayStack(props: TaskEditOverlayStackProps) {
         tc,
         retryAudioTranscription,
         toggleAudioPlayback,
+        waitingAssignmentInput,
+        waitingAssignmentModalVisible,
+        closeWaitingAssignmentModal,
+        confirmWaitingAssignment,
+        setWaitingAssignmentInput,
     } = props;
 
     return (
@@ -71,6 +79,7 @@ export function TaskEditOverlayStack(props: TaskEditOverlayStackProps) {
                     visible
                     t={t}
                     tc={tc}
+                    title={linkModalTitle}
                     linkInput={linkInput}
                     linkInputTouched={linkInputTouched}
                     onChangeLinkInput={(text: string) => {
@@ -80,6 +89,17 @@ export function TaskEditOverlayStack(props: TaskEditOverlayStackProps) {
                     onBlurLinkInput={() => setLinkInputTouched(true)}
                     onClose={closeLinkModal}
                     onSave={confirmAddLink}
+                />
+            ) : null}
+            {waitingAssignmentModalVisible ? (
+                <TaskEditWaitingAssignmentModal
+                    visible
+                    t={t}
+                    tc={tc}
+                    value={waitingAssignmentInput}
+                    onChangeValue={setWaitingAssignmentInput}
+                    onClose={closeWaitingAssignmentModal}
+                    onSave={confirmWaitingAssignment}
                 />
             ) : null}
             {audioModalVisible ? (
@@ -144,7 +164,7 @@ export function TaskEditOverlayStack(props: TaskEditOverlayStackProps) {
                         setEditedTask((prev: any) => ({
                             ...prev,
                             projectId,
-                            areaId: projectId ? undefined : prev.areaId,
+                            areaId: projectId ? undefined : getAreaIdForClearedProject(prev, props.task, projects),
                             sectionId: projectId && prev.projectId === projectId ? prev.sectionId : undefined,
                         }));
                     }}

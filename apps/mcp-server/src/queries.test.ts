@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { addTask, deleteTask, listTasks, parseQuickAdd, updateTask, type ProjectRef } from './queries.js';
+import { addTask, getPerson, listPeople, listTasks, parseQuickAdd, type ProjectRef } from './queries.js';
 import type { DbClient } from './db.js';
 
 const createMockDb = (
     rows: any[] = [],
-    options: { hasTasksFts?: boolean } = {},
+    options: { hasTasksFts?: boolean; hasPeopleTable?: boolean } = {},
 ): { db: DbClient; calls: { sql: string; params: any[] }[] } => {
     const calls: { sql: string; params: any[] }[] = [];
     const db: DbClient = {
@@ -45,6 +45,20 @@ const createMockDb = (
                         { name: 'purgedAt' },
                     ];
                 }
+                if (sql.startsWith('PRAGMA table_info(people)')) {
+                    if (options.hasPeopleTable === false) return [];
+                    return [
+                        { name: 'id' },
+                        { name: 'name' },
+                        { name: 'note' },
+                        { name: 'referenceLink' },
+                        { name: 'rev' },
+                        { name: 'revBy' },
+                        { name: 'createdAt' },
+                        { name: 'updatedAt' },
+                        { name: 'deletedAt' },
+                    ];
+                }
                 if (sql.includes("FROM sqlite_master")) {
                     return options.hasTasksFts ? [{ name: 'tasks_fts' }] : [];
                 }
@@ -72,6 +86,13 @@ describe('mcp queries', () => {
         expect(parsed.props.projectId).toBe('p1');
         expect(parsed.props.contexts).toEqual(['@errands']);
         expect(parsed.props.tags).toEqual(['#weekly']);
+    });
+
+    test('parseQuickAdd parses focus token as implied next', () => {
+        const parsed = parseQuickAdd('Call plumber /*', []);
+        expect(parsed.title).toBe('Call plumber');
+        expect(parsed.props.status).toBe('next');
+        expect(parsed.props.isFocusedToday).toBe(true);
     });
 
     test('listTasks escapes wildcard characters in search input', () => {
@@ -115,6 +136,10 @@ describe('mcp queries', () => {
         const queryCall = calls.find((call) => call.sql.startsWith('SELECT') && call.sql.includes('FROM tasks '));
         expect(queryCall).toBeTruthy();
         expect(queryCall?.sql.includes('tasks_fts MATCH ?')).toBe(true);
+        // tasks_fts is a contentless FTS5 table (content=''), so its id column is
+        // always NULL; the lookup must join on rowid or it matches nothing.
+        expect(queryCall?.sql.includes('rowid IN (SELECT rowid FROM tasks_fts')).toBe(true);
+        expect(queryCall?.sql.includes('id IN (SELECT id FROM tasks_fts')).toBe(false);
         expect(queryCall?.params[0]).toBe('project* alpha*');
     });
 
@@ -206,6 +231,30 @@ describe('mcp queries', () => {
         expect(projectLookup).toBeTruthy();
     });
 
+    test('addTask quickAdd can focus an implied-next task', () => {
+        const { db } = createMockDb([]);
+
+        const created = addTask(db, { quickAdd: 'Call plumber /* focus' });
+
+        expect(created.title).toBe('Call plumber');
+        expect(created.status).toBe('next');
+        expect(created.isFocusedToday).toBe(true);
+    });
+
+    test('addTask quickAdd respects focus limit', () => {
+        const now = '2026-02-01T00:00:00.000Z';
+        const { db } = createMockDb([
+            { id: 't1', title: 'Focused 1', status: 'next', isFocusedToday: 1, createdAt: now, updatedAt: now },
+            { id: 't2', title: 'Focused 2', status: 'next', isFocusedToday: 1, createdAt: now, updatedAt: now },
+            { id: 't3', title: 'Focused 3', status: 'next', isFocusedToday: 1, createdAt: now, updatedAt: now },
+        ]);
+
+        const created = addTask(db, { quickAdd: 'Over limit /*' });
+
+        expect(created.status).toBe('next');
+        expect(created.isFocusedToday).toBe(false);
+    });
+
     test('wraps addTask in a transaction', () => {
         const now = '2026-02-01T00:00:00.000Z';
         const { db, calls } = createMockDb([{ id: 'p1', title: 'Home', createdAt: now, updatedAt: now }]);
@@ -234,70 +283,6 @@ describe('mcp queries', () => {
         expect(calls.some((call) => call.sql === 'ROLLBACK')).toBe(true);
     });
 
-    test('wraps updateTask and deleteTask in transactions', () => {
-        const now = '2026-02-01T00:00:00.000Z';
-        const { db, calls } = createMockDb([
-            {
-                id: 't1',
-                title: 'Task',
-                status: 'inbox',
-                createdAt: now,
-                updatedAt: now,
-                isFocusedToday: 0,
-            },
-        ]);
-
-        updateTask(db, { id: 't1', title: 'Updated' });
-        deleteTask(db, { id: 't1' });
-
-        const beginCount = calls.filter((call) => call.sql === 'BEGIN IMMEDIATE').length;
-        const commitCount = calls.filter((call) => call.sql === 'COMMIT').length;
-        expect(beginCount).toBe(2);
-        expect(commitCount).toBe(2);
-    });
-
-    test('rejects invalid status when updating tasks', () => {
-        const now = '2026-02-01T00:00:00.000Z';
-        const { db, calls } = createMockDb([
-            {
-                id: 't1',
-                title: 'Task',
-                status: 'inbox',
-                createdAt: now,
-                updatedAt: now,
-                isFocusedToday: 0,
-            },
-        ]);
-
-        expect(() => updateTask(db, { id: 't1', status: 'bad-status' as any })).toThrow('Invalid task status: bad-status');
-
-        const rollbackCount = calls.filter((call) => call.sql === 'ROLLBACK').length;
-        expect(rollbackCount).toBe(1);
-    });
-
-    test('updates energyLevel and assignedTo when provided', () => {
-        const now = '2026-02-01T00:00:00.000Z';
-        const { db, calls } = createMockDb([
-            {
-                id: 't1',
-                title: 'Task',
-                status: 'inbox',
-                createdAt: now,
-                updatedAt: now,
-                isFocusedToday: 0,
-            },
-        ]);
-
-        updateTask(db, { id: 't1', energyLevel: 'high', assignedTo: 'Alex' });
-
-        const updateCall = calls.find((call) => call.sql.includes('UPDATE tasks'));
-        expect(updateCall).toBeTruthy();
-        expect(updateCall?.params[0]).toMatchObject({
-            energyLevel: 'high',
-            assignedTo: 'Alex',
-        });
-    });
-
     test('maps area, section, text direction, and location fields from task rows', () => {
         const now = '2026-02-01T00:00:00.000Z';
         const { db } = createMockDb([
@@ -323,5 +308,46 @@ describe('mcp queries', () => {
         expect(task.projectId).toBe('p1');
         expect(task.sectionId).toBe('s1');
         expect(task.areaId).toBe('a1');
+    });
+
+    test('listPeople maps active managed people from sqlite rows', () => {
+        const now = '2026-02-01T00:00:00.000Z';
+        const { db, calls } = createMockDb([
+            {
+                id: 'person1',
+                name: 'Alex',
+                note: 'Design lead',
+                referenceLink: 'https://example.com/alex',
+                rev: 2,
+                revBy: 'device-a',
+                createdAt: now,
+                updatedAt: now,
+            },
+        ]);
+
+        const people = listPeople(db);
+
+        expect(people).toEqual([
+            {
+                id: 'person1',
+                name: 'Alex',
+                note: 'Design lead',
+                referenceLink: 'https://example.com/alex',
+                rev: 2,
+                revBy: 'device-a',
+                createdAt: now,
+                updatedAt: now,
+                deletedAt: undefined,
+            },
+        ]);
+        const queryCall = calls.find((call) => call.sql.startsWith('SELECT') && call.sql.includes('FROM people'));
+        expect(queryCall?.sql).toContain('WHERE deletedAt IS NULL');
+    });
+
+    test('getPerson reports not found when the people table is absent', () => {
+        const { db } = createMockDb([], { hasPeopleTable: false });
+
+        expect(() => getPerson(db, { id: 'person1' })).toThrow('Person not found: person1');
+        expect(listPeople(db)).toEqual([]);
     });
 });

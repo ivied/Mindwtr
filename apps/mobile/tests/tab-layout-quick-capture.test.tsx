@@ -1,36 +1,51 @@
 import React from 'react';
 import { TouchableOpacity } from 'react-native';
+import { Plus } from 'lucide-react-native';
 import { act, create } from 'react-test-renderer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import Index from '../app/index';
 import TabLayout from '../app/(drawer)/(tabs)/_layout';
 
 const mockRouterPush = vi.hoisted(() => vi.fn());
+const selectedAreaIdForNewTasksMock = vi.hoisted(() => ({ current: null as string | null | undefined }));
 const mockTaskSettings = vi.hoisted(() => ({
   appearance: {} as Record<string, unknown>,
   gtd: {
     defaultCaptureMethod: 'text',
+    defaultAreaMode: undefined as 'none' | 'fixed' | 'active' | undefined,
+    defaultAreaId: undefined as string | undefined,
   },
   savedSearches: [],
 }));
+const mockThemeTokens = vi.hoisted(() => ({
+  value: { isMaterial: false, roles: null, shape: { large: 16 } } as {
+    isMaterial: boolean;
+    roles: Record<string, string> | null;
+    shape: { large: number };
+  },
+}));
 
 vi.mock('expo-router', () => {
+  function RedirectMock(props: { href: string }) {
+    return React.createElement('Redirect', props);
+  }
   function LinkMock({ children }: { children: React.ReactNode }) {
     return <>{children}</>;
   }
   function TabsScreenMock() {
     return null;
   }
-  const Tabs = ({ children, tabBar }: any) => React.createElement(
+  const Tabs = ({ children, tabBar, ...props }: any) => React.createElement(
     'Tabs',
-    null,
+    props,
     tabBar({
       state: {
         index: 0,
         key: 'tabs',
         routes: [
-          { key: 'inbox-key', name: 'inbox' },
           { key: 'focus-key', name: 'focus' },
+          { key: 'inbox-key', name: 'inbox' },
           { key: 'capture-key', name: 'capture' },
           { key: 'projects-key', name: 'projects' },
           { key: 'calendar-key', name: 'calendar-tab' },
@@ -41,7 +56,7 @@ vi.mock('expo-router', () => {
       },
       descriptors: {
         'inbox-key': { options: { title: 'Inbox' } },
-        'focus-key': { options: { title: 'Next' } },
+        'focus-key': { options: { title: 'Focus' } },
         'capture-key': { options: { title: 'Add task' } },
         'projects-key': { options: { title: 'Projects' } },
         'calendar-key': { options: { title: 'Calendar' } },
@@ -59,6 +74,7 @@ vi.mock('expo-router', () => {
   Tabs.Screen = TabsScreenMock;
   return {
     Link: LinkMock,
+    Redirect: RedirectMock,
     Tabs,
     useRouter: () => ({ push: mockRouterPush }),
   };
@@ -71,6 +87,11 @@ vi.mock('@react-navigation/native', () => ({
 }));
 
 vi.mock('@mindwtr/core', () => ({
+  getDefaultTaskAreaMode: (settings: any) => {
+    const mode = settings?.gtd?.defaultAreaMode;
+    if (mode === 'none' || mode === 'fixed' || mode === 'active') return mode;
+    return settings?.gtd?.defaultAreaId ? 'fixed' : 'none';
+  },
   tFallback: (t: (key: string) => string, key: string, fallback: string) => {
     const translated = t(key);
     return translated && translated !== key ? translated : fallback;
@@ -90,16 +111,12 @@ vi.mock('@/components/mobile-area-switcher', () => ({
   MobileAreaSwitcher: () => React.createElement('MobileAreaSwitcher'),
 }));
 
-vi.mock('@/components/mobile-header-sync-bar', () => ({
-  MobileHeaderSyncBar: () => React.createElement('MobileHeaderSyncBar'),
-}));
-
 vi.mock('@/components/quick-capture-sheet', () => ({
   QuickCaptureSheet: (props: any) => React.createElement('QuickCaptureSheet', props),
 }));
 
 vi.mock('@/hooks/use-mobile-area-filter', () => ({
-  useMobileAreaFilter: () => ({ selectedAreaIdForNewTasks: null }),
+  useMobileAreaFilter: () => ({ selectedAreaIdForNewTasks: selectedAreaIdForNewTasksMock.current }),
 }));
 
 vi.mock('@/hooks/use-mobile-sync-badge', () => ({
@@ -119,6 +136,10 @@ vi.mock('@/hooks/use-theme-colors', () => ({
     text: '#f8fafc',
     tint: '#3b82f6',
   }),
+}));
+
+vi.mock('@/hooks/use-theme-tokens', () => ({
+  useThemeTokens: () => mockThemeTokens.value,
 }));
 
 vi.mock('../contexts/language-context', () => ({
@@ -142,7 +163,7 @@ vi.mock('../contexts/language-context', () => ({
       'search.savedSearches': 'Saved searches',
       'tab.inbox': 'Inbox',
       'tab.menu': 'Menu',
-      'tab.next': 'Next',
+      'tab.next': 'Focus',
       'tab.review': 'Review',
       'common.close': 'Close',
     }[key] ?? key),
@@ -165,6 +186,59 @@ const getAddTaskButton = (tree: ReturnType<typeof create>) => {
   return button;
 };
 
+const flattenStyle = (style: unknown): Record<string, unknown> => {
+  if (typeof style === 'function') {
+    return flattenStyle(style({ pressed: false }));
+  }
+  if (Array.isArray(style)) {
+    return style.reduce<Record<string, unknown>>((acc, item) => ({
+      ...acc,
+      ...flattenStyle(item),
+    }), {});
+  }
+  return style && typeof style === 'object' ? style as Record<string, unknown> : {};
+};
+
+const getMoreSheetButtonLabelNode = (tree: ReturnType<typeof create>, label: string) => {
+  const button = getMoreSheetButtons(tree, label)[0];
+  if (!button) throw new Error(`${label} button not found`);
+  const text = button.findAll((node) => (
+    String(node.type) === 'Text'
+    && node.children.includes(label)
+  ))[0];
+  if (!text) throw new Error(`${label} label not found`);
+  return text;
+};
+
+const getMoreSheetButtonLabelStyle = (tree: ReturnType<typeof create>, label: string) => {
+  return flattenStyle(getMoreSheetButtonLabelNode(tree, label).props.style);
+};
+
+const getCaptureButtonInnerStyle = (tree: ReturnType<typeof create>) => {
+  const view = tree.root.findAll((node) => (
+    String(node.type) === 'View'
+    && flattenStyle(node.props.style).backgroundColor === '#3b82f6'
+  ))[0];
+  if (!view) throw new Error('Capture button inner view not found');
+  return flattenStyle(view.props.style);
+};
+
+const getCaptureInnerStyleBySize = (tree: ReturnType<typeof create>) => {
+  const view = tree.root.findAll((node) => {
+    if (String(node.type) !== 'View') return false;
+    const s = flattenStyle(node.props.style);
+    return s.width === 40 && s.height === 34;
+  })[0];
+  if (!view) throw new Error('Capture button inner view not found');
+  return flattenStyle(view.props.style);
+};
+
+const getCaptureIconColor = (tree: ReturnType<typeof create>) => {
+  const icon = tree.root.findAllByType(Plus)[0];
+  if (!icon) throw new Error('Capture plus icon not found');
+  return icon.props.color;
+};
+
 const getMenuButton = (tree: ReturnType<typeof create>) => {
   const button = tree.root.findAllByType(TouchableOpacity).find(
     (node) => node.props.accessibilityLabel === 'Menu'
@@ -179,6 +253,14 @@ const getTabButton = (tree: ReturnType<typeof create>, label: string) => {
   );
   if (!button) throw new Error(`${label} tab button not found`);
   return button;
+};
+
+const getBottomTabLabels = (tree: ReturnType<typeof create>) => {
+  const tabLabels = new Set(['Focus', 'Inbox', 'Add task', 'Projects', 'Calendar', 'Contexts', 'Review', 'Menu']);
+  return tree.root
+    .findAllByType(TouchableOpacity)
+    .map((node) => node.props.accessibilityLabel)
+    .filter((label): label is string => typeof label === 'string' && tabLabels.has(label));
 };
 
 const getQuickCaptureSheets = (tree: ReturnType<typeof create>) => (
@@ -257,7 +339,11 @@ describe('mobile tab quick capture', () => {
     mockRouterPush.mockClear();
     mockTaskSettings.appearance = {};
     mockTaskSettings.gtd.defaultCaptureMethod = 'text';
+    mockTaskSettings.gtd.defaultAreaMode = undefined;
+    mockTaskSettings.gtd.defaultAreaId = undefined;
     mockTaskSettings.savedSearches = [];
+    selectedAreaIdForNewTasksMock.current = null;
+    mockThemeTokens.value = { isMaterial: false, roles: null, shape: { large: 16 } };
   });
 
   it('unmounts the quick capture sheet after close so the next plus tap gets a fresh modal', () => {
@@ -292,6 +378,65 @@ describe('mobile tab quick capture', () => {
     expect(sheets[0]?.props.visible).toBe(true);
   });
 
+  it('passes the selected area filter into quick capture initial props in active area mode', () => {
+    mockTaskSettings.gtd.defaultAreaMode = 'active';
+    selectedAreaIdForNewTasksMock.current = 'area-work';
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<TabLayout />);
+    });
+
+    act(() => {
+      getAddTaskButton(tree).props.onPress();
+    });
+
+    const sheets = getQuickCaptureSheets(tree);
+    expect(sheets).toHaveLength(1);
+    expect(sheets[0]?.props.initialProps).toEqual({ areaId: 'area-work' });
+  });
+
+  it('defaults cold tab startup to Focus', () => {
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<TabLayout />);
+    });
+
+    const tabs = tree.root.find((node) => String(node.type) === 'Tabs');
+    expect(tabs.props.initialRouteName).toBe('focus');
+    expect(getBottomTabLabels(tree).slice(0, 2)).toEqual(['Focus', 'Inbox']);
+  });
+
+  it('shrinks mobile header titles before React Navigation truncates them', () => {
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<TabLayout />);
+    });
+
+    const tabs = tree.root.find((node) => String(node.type) === 'Tabs');
+    const screenOptions = tabs.props.screenOptions({ route: { name: 'projects' } });
+    const headerTitle = screenOptions.headerTitle({ children: 'Projects' });
+
+    expect(headerTitle.props.children).toBe('Projects');
+    expect(headerTitle.props.numberOfLines).toBe(1);
+    expect(headerTitle.props.adjustsFontSizeToFit).toBe(true);
+    expect(headerTitle.props.minimumFontScale).toBe(0.72);
+    expect(headerTitle.props.maxFontSizeMultiplier).toBe(1.15);
+  });
+
+  it('redirects root cold launch to Focus', () => {
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<Index />);
+    });
+
+    const redirect = tree.root.find((node) => String(node.type) === 'Redirect');
+    expect(redirect.props.href).toBe('/focus');
+  });
+
   it('increments the open request id without key-remounting the sheet', () => {
     let tree!: ReturnType<typeof create>;
 
@@ -316,6 +461,48 @@ describe('mobile tab quick capture', () => {
     expect(sheets[0]?.props.openRequestId).toBe(2);
   });
 
+  it('keeps the primary capture button compact in the bottom bar', () => {
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<TabLayout />);
+    });
+
+    expect(getCaptureButtonInnerStyle(tree)).toEqual(expect.objectContaining({
+      width: 40,
+      height: 34,
+      borderRadius: 10,
+      marginTop: -2,
+    }));
+  });
+
+  it('boosts the capture FAB to the high-emphasis M3 primary role under Material', () => {
+    // Capture is Mindwtr's most important action, so under M3 the FAB uses the
+    // high-emphasis FAB role (primary/onPrimary), not the deliberately subdued
+    // primaryContainer. Other primary buttons stay primaryContainer (canonical),
+    // preserving M3's emphasis hierarchy with capture at the top.
+    mockThemeTokens.value = {
+      isMaterial: true,
+      roles: {
+        primary: '#AAC7FF',
+        onPrimary: '#003063',
+        primaryContainer: '#00458B',
+        onPrimaryContainer: '#D7E2FF',
+      },
+      shape: { large: 16 },
+    };
+
+    let tree!: ReturnType<typeof create>;
+    act(() => {
+      tree = create(<TabLayout />);
+    });
+
+    const inner = getCaptureInnerStyleBySize(tree);
+    expect(inner.backgroundColor).toBe('#AAC7FF');
+    expect(inner.borderRadius).toBe(16);
+    expect(getCaptureIconColor(tree)).toBe('#003063');
+  });
+
   it('opens the More sheet from the menu tab and navigates from its original calendar icon', () => {
     let tree!: ReturnType<typeof create>;
 
@@ -332,6 +519,17 @@ describe('mobile tab quick capture', () => {
     expect(getVisibleMoreDestinationLabels(tree)).toEqual(moreDestinationLabels);
     expect(getMoreSheetButtonIconName(tree, 'Board View')).toBe('square.grid.2x2.fill');
     expect(getMoreSheetButtonIconName(tree, 'Someday')).toBe('arrow.up.circle.fill');
+    const trashLabel = getMoreSheetButtonLabelNode(tree, 'Trash');
+    // #632: utility labels can wrap and gently fit, so the longest label
+    // ("Reference") stays readable at large font scales.
+    expect(trashLabel.props.numberOfLines).toBe(2);
+    expect(trashLabel.props.adjustsFontSizeToFit).toBe(true);
+    expect(trashLabel.props.maxFontSizeMultiplier).toBe(1);
+    expect(flattenStyle(getMoreSheetButtons(tree, 'Trash')[0]?.props.style)).toEqual(expect.objectContaining({
+      flex: 1,
+      minWidth: 0,
+    }));
+    expect(flattenStyle(getMoreSheetButtons(tree, 'Trash')[0]?.props.style)).not.toHaveProperty('flexBasis');
 
     const calendarButtons = getMoreSheetButtons(tree, 'Calendar');
     expect(calendarButtons.length).toBeGreaterThan(0);
@@ -375,6 +573,10 @@ describe('mobile tab quick capture', () => {
 
     const reviewButtons = getMoreSheetButtons(tree, 'Review');
     expect(reviewButtons.length).toBeGreaterThan(0);
+    expect(getMoreSheetButtonLabelStyle(tree, 'Review')).toEqual(expect.objectContaining({
+      includeFontPadding: false,
+    }));
+    expect(getMoreSheetButtonLabelStyle(tree, 'Review')).not.toHaveProperty('minHeight');
 
     act(() => {
       reviewButtons[0]?.props.onPress();

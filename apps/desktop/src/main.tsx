@@ -10,9 +10,17 @@ import { isTauriRuntime } from './lib/runtime';
 import { reportError } from './lib/report-error';
 import { webStorage } from './lib/storage-adapter-web';
 import { isDiagnosticsEnabled, logError, logInfo, logWarn, setupGlobalErrorLogging } from './lib/app-log';
-import { THEME_STORAGE_KEY, applyThemeMode, coerceDesktopThemeMode, resolveNativeTheme } from './lib/theme';
+import {
+    THEME_STORAGE_KEY,
+    applyNativeTheme,
+    applyThemeMode,
+    coerceDesktopThemeMode,
+    resolveNativeTheme,
+    resolveSystemThemeCommandPreference,
+} from './lib/theme';
 import { TEXT_SIZE_STORAGE_KEY, applyDesktopTextSize, coerceDesktopTextSize } from './lib/text-size';
 import { loadStoredFullscreen } from './lib/window-state';
+import { restoreStoredWebviewZoom } from './lib/webview-zoom';
 import { isQuickAddWindowLocation } from './lib/quick-add-window';
 import {
     detectDesktopPlatform,
@@ -126,6 +134,14 @@ const logDesktopStartupContext = async (): Promise<void> => {
 // Initialize theme immediately before React renders to prevent flash
 const savedTheme = coerceDesktopThemeMode(localStorage.getItem(THEME_STORAGE_KEY));
 applyThemeMode(savedTheme);
+if ((savedTheme ?? 'system') === 'system' && isTauriRuntime()) {
+    void resolveSystemThemeCommandPreference(
+        () => import('@tauri-apps/api/core'),
+        (step, error) => void logError(error, { scope: 'theme', step: `startup-command:${step}` }),
+    ).then((theme) => {
+        if (theme) applyThemeMode('system', theme);
+    });
+}
 const savedTextSize = coerceDesktopTextSize(localStorage.getItem(TEXT_SIZE_STORAGE_KEY));
 applyDesktopTextSize(savedTextSize);
 
@@ -136,12 +152,17 @@ if (diagnosticsEnabled) {
     setupGlobalErrorLogging();
 }
 const isQuickAddWindow = isQuickAddWindowLocation();
+if (isQuickAddWindow) {
+    document.documentElement.dataset.quickAddWindow = 'true';
+}
 
 const nativeTheme = resolveNativeTheme(savedTheme);
 if (isTauriRuntime()) {
-    import('@tauri-apps/api/app')
-        .then(({ setTheme }) => setTheme(nativeTheme))
-        .catch(() => undefined);
+    void applyNativeTheme(
+        nativeTheme,
+        () => import('@tauri-apps/api/app'),
+        () => import('@tauri-apps/api/window'),
+    );
 }
 
 async function initStorage() {
@@ -173,12 +194,28 @@ async function restoreFullscreenState() {
     }
 }
 
+async function restoreWebviewZoomState() {
+    if (!isTauriRuntime()) return;
+    try {
+        await restoreStoredWebviewZoom({ storage: localStorage });
+    } catch (error) {
+        void logWarn('Failed to restore webview zoom', {
+            scope: 'window',
+            extra: {
+                step: 'restoreWebviewZoom',
+                error: error instanceof Error ? error.message : String(error),
+            },
+        });
+    }
+}
+
 async function bootstrap() {
     await initStorage();
     setupGlobalErrorLogging();
     if (!isQuickAddWindow) {
         await logDesktopStartupContext().catch(() => undefined);
         await restoreFullscreenState();
+        await restoreWebviewZoomState();
     }
 
     if (!isQuickAddWindow && !isTauriRuntime() && 'serviceWorker' in navigator) {

@@ -11,14 +11,17 @@ flathub_dir="$2"
 tools_dir="$3"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
-default_analytics_heartbeat_url="https://mindwtr-analytics.mindwtr.workers.dev/"
+default_analytics_heartbeat_url="https://analytics.mindwtr.app/"
 analytics_heartbeat_url="${ANALYTICS_HEARTBEAT_URL:-${default_analytics_heartbeat_url}}"
+analytics_release_version="${VITE_ANALYTICS_RELEASE_VERSION:-${ref}}"
 dropbox_app_key="${VITE_DROPBOX_APP_KEY:-}"
 
 manifest_path="${flathub_dir}/tech.dongdongbh.mindwtr.yml"
 node_sources_path="${flathub_dir}/tech.dongdongbh.mindwtr.node-sources.json"
 cargo_sources_path="${flathub_dir}/tech.dongdongbh.mindwtr.cargo-sources.json"
 node_generator="${FLATPAK_NODE_GENERATOR:-flatpak-node-generator}"
+shared_modules_dir="${flathub_dir}/shared-modules"
+appindicator_module_path="${shared_modules_dir}/libayatana-appindicator/libayatana-appindicator-gtk3.json"
 
 required_paths=(
   "apps/desktop/package.json"
@@ -47,6 +50,19 @@ if [ ! -f "${tools_dir}/cargo/flatpak-cargo-generator.py" ]; then
   exit 1
 fi
 
+if [ ! -f "${appindicator_module_path}" ]; then
+  if git -C "${flathub_dir}" config --file .gitmodules --get submodule.shared-modules.path >/dev/null 2>&1; then
+    git -C "${flathub_dir}" submodule update --init --recursive shared-modules
+  elif [ ! -e "${shared_modules_dir}" ]; then
+    git -C "${flathub_dir}" submodule add https://github.com/flathub/shared-modules.git shared-modules
+  fi
+fi
+
+if [ ! -f "${appindicator_module_path}" ]; then
+  echo "Missing Flathub shared module: ${appindicator_module_path}" >&2
+  exit 1
+fi
+
 if ! command -v "${node_generator}" >/dev/null 2>&1; then
   echo "Missing node generator command: ${node_generator}" >&2
   exit 1
@@ -54,7 +70,7 @@ fi
 
 upstream_commit="$(git -C "${repo_root}" rev-parse "${ref}^{commit}")"
 
-python3 - "${manifest_path}" "${upstream_commit}" "${analytics_heartbeat_url}" "${dropbox_app_key}" <<'PY'
+python3 - "${manifest_path}" "${upstream_commit}" "${analytics_heartbeat_url}" "${analytics_release_version}" "${dropbox_app_key}" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -62,7 +78,8 @@ import sys
 manifest_path = Path(sys.argv[1])
 commit = sys.argv[2]
 heartbeat_url = sys.argv[3]
-dropbox_app_key = sys.argv[4]
+release_version = sys.argv[4]
+dropbox_app_key = sys.argv[5]
 text = manifest_path.read_text()
 updated, count = re.subn(
     r'(^\s*commit:\s*)([0-9a-f]{7,40})(\s*$)',
@@ -96,6 +113,46 @@ def find_block_end(start_index: int, base_indent: int) -> int:
             break
     return block_end_index
 
+def remove_patch_source(path: str) -> None:
+    index = 0
+    while index < len(lines):
+        if lines[index].strip() != '- type: patch':
+            index += 1
+            continue
+        indent = len(lines[index]) - len(lines[index].lstrip())
+        block_end_index = find_block_end(index, indent)
+        block = [line.strip() for line in lines[index:block_end_index]]
+        if f'path: {path}' in block:
+            del lines[index:block_end_index]
+            continue
+        index += 1
+
+remove_patch_source('appstream-homepage.patch')
+
+appindicator_module = "shared-modules/libayatana-appindicator/libayatana-appindicator-gtk3.json"
+appindicator_module_entry = f"- {appindicator_module}"
+lines = [line for line in lines if line.strip() != appindicator_module_entry]
+
+modules_line_index = next((index for index, line in enumerate(lines) if line.strip() == 'modules:'), None)
+if modules_line_index is None:
+    raise SystemExit(f"Expected modules block in {manifest_path}")
+
+modules_indent = len(lines[modules_line_index]) - len(lines[modules_line_index].lstrip())
+modules_entry_indent = modules_indent + 2
+modules_block_end_index = find_block_end(modules_line_index, modules_indent)
+mindwtr_module_index = next(
+    (
+        index
+        for index in range(modules_line_index + 1, modules_block_end_index)
+        if lines[index].strip() == '- name: mindwtr'
+    ),
+    None,
+)
+if mindwtr_module_index is None:
+    raise SystemExit(f"Expected mindwtr module in {manifest_path}")
+
+lines.insert(mindwtr_module_index, f"{' ' * modules_entry_indent}{appindicator_module_entry}")
+
 finish_args_line_index = next((index for index, line in enumerate(lines) if line.strip() == 'finish-args:'), None)
 if finish_args_line_index is None:
     raise SystemExit(f"Expected finish-args block in {manifest_path}")
@@ -121,6 +178,10 @@ def ensure_finish_arg(value: str, after=None) -> None:
     lines.insert(insert_index, formatted)
 
 ensure_finish_arg('--socket=pulseaudio', after='--socket=wayland')
+ensure_finish_arg('--talk-name=org.freedesktop.Notifications', after='--share=network')
+ensure_finish_arg('--talk-name=org.kde.StatusNotifierWatcher', after='--talk-name=org.freedesktop.Notifications')
+# org.freedesktop.portal.* talk-names are intentionally not added:
+# portals are allowed by Flatpak by default and Flathub lints manual entries.
 
 env_line_index = next((index for index, line in enumerate(lines) if line.strip() == 'env:'), None)
 if env_line_index is None:
@@ -130,28 +191,62 @@ env_indent = len(lines[env_line_index]) - len(lines[env_line_index].lstrip())
 entry_indent = env_indent + 2
 block_end_index = find_block_end(env_line_index, env_indent)
 
+env_values: dict[str, str] = {}
+env_order: list[str] = []
+
+def remember_env_value(name: str, value: str) -> None:
+    if name not in env_values:
+        env_order.append(name)
+    env_values[name] = value
+
+def normalize_env_scalar(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        return value[1:-1]
+    return value
+
+for line in lines[env_line_index + 1:block_end_index]:
+    stripped = line.strip()
+    if not stripped:
+        continue
+    if stripped.startswith('- '):
+        assignment = stripped[2:].strip()
+        if '=' in assignment:
+            name, value = assignment.split('=', 1)
+            if name:
+                remember_env_value(name, value)
+        continue
+    if ':' in stripped:
+        name, value = stripped.split(':', 1)
+        if name:
+            remember_env_value(name, normalize_env_scalar(value))
+
 def set_env_value(name: str, value: str) -> None:
-    env_line = f"{' ' * entry_indent}{name}: {value}"
-    for index in range(env_line_index + 1, block_end_index):
-        if lines[index].lstrip().startswith(f'{name}:'):
-            lines[index] = env_line
-            return
-    lines.insert(env_line_index + 1, env_line)
+    remember_env_value(name, value)
 
 def remove_env_value(name: str) -> None:
-    for index in range(env_line_index + 1, block_end_index):
-        if lines[index].lstrip().startswith(f'{name}:'):
-            del lines[index]
-            return
+    env_values.pop(name, None)
+    while name in env_order:
+        env_order.remove(name)
 
 set_env_value('VITE_ANALYTICS_HEARTBEAT_URL', heartbeat_url)
+set_env_value('VITE_ANALYTICS_RELEASE_VERSION', release_version)
+set_env_value('VITE_DONATION_PROMPT_ENABLED', 'true')
 if dropbox_app_key:
     set_env_value('VITE_DROPBOX_APP_KEY', dropbox_app_key)
 else:
     remove_env_value('VITE_DROPBOX_APP_KEY')
 
+lines[env_line_index + 1:block_end_index] = [
+    f"{' ' * entry_indent}- {name}={env_values[name]}"
+    for name in env_order
+    if name in env_values
+]
+
 manifest_path.write_text("\n".join(lines) + "\n")
 PY
+
+rm -f "${flathub_dir}/appstream-homepage.patch"
 
 worktree_dir="$(mktemp -d)"
 

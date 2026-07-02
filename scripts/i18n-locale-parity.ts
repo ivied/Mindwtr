@@ -2,7 +2,7 @@
 import { readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { en } from '../packages/core/src/i18n/locales/en';
-import { hasTranslatableEnglishText } from '../packages/core/src/i18n/locale-quality';
+import { hasTranslatableEnglishText, isAllowedEnglishMirrorKey } from '../packages/core/src/i18n/locale-quality';
 
 type Dictionary = Record<string, string>;
 
@@ -14,6 +14,7 @@ type LocaleTarget = {
 
 const LOCALES: LocaleTarget[] = [
     { locale: 'ar', path: 'packages/core/src/i18n/locales/ar.ts' },
+    { locale: 'cs', path: 'packages/core/src/i18n/locales/cs.ts' },
     { locale: 'de', path: 'packages/core/src/i18n/locales/de.ts' },
     { locale: 'es', path: 'packages/core/src/i18n/locales/es.ts' },
     { locale: 'fr', path: 'packages/core/src/i18n/locales/fr.ts' },
@@ -26,6 +27,7 @@ const LOCALES: LocaleTarget[] = [
     { locale: 'pt', path: 'packages/core/src/i18n/locales/pt.ts' },
     { locale: 'ru', path: 'packages/core/src/i18n/locales/ru.ts' },
     { locale: 'tr', path: 'packages/core/src/i18n/locales/tr.ts' },
+    { locale: 'vi', path: 'packages/core/src/i18n/locales/vi.ts' },
     { locale: 'zh-Hans', path: 'packages/core/src/i18n/locales/zh-Hans.ts', fullParity: true },
     { locale: 'zh-Hant', path: 'packages/core/src/i18n/locales/zh-Hant.ts', fullParity: true },
 ];
@@ -74,7 +76,9 @@ for (const target of LOCALES) {
 
     const unknownKeys = Object.keys(dictionary).filter((key) => !englishKeySet.has(key));
     const mirroredEnglishKeys = Object.keys(dictionary)
-        .filter((key) => dictionary[key] === en[key] && hasTranslatableEnglishText(en[key]));
+        .filter((key) => dictionary[key] === en[key]
+            && hasTranslatableEnglishText(en[key])
+            && !isAllowedEnglishMirrorKey(target.locale, key));
     const mixedEnglishKeys = !target.fullParity && NON_LATIN_PARTIAL_LOCALES.has(target.locale)
         ? Object.keys(dictionary).filter((key) => hasTranslatableEnglishText(dictionary[key]))
         : [];

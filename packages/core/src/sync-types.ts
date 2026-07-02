@@ -48,6 +48,7 @@ export interface MergeStats {
     projects: EntityMergeStats;
     sections: EntityMergeStats;
     areas: EntityMergeStats;
+    people?: EntityMergeStats;
 }
 
 export type ClockSkewDirection = 'local-ahead' | 'remote-ahead';
@@ -109,9 +110,19 @@ export type SyncCycleIO = {
     yieldToUi?: () => Promise<void>;
 };
 
-export type SyncCycleResult = {
+export type SyncCycleWriteResult = {
     data: AppData;
     stats: MergeStats;
     status: 'success' | 'conflict';
     clockSkewWarning?: ClockSkewWarning;
 };
+
+export type SyncCycleSkippedResult = {
+    data: AppData;
+    status: 'skipped';
+    skipped: 'pendingRemoteWriteBackoff';
+    retryInMs: number;
+    message: string;
+};
+
+export type SyncCycleResult = SyncCycleWriteResult | SyncCycleSkippedResult;

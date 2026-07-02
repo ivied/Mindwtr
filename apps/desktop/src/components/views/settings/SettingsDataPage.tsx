@@ -18,6 +18,7 @@ type SettingsDataPageProps = Pick<
     | 'onExportBackup'
     | 'onRestoreBackup'
     | 'onImportTodoist'
+    | 'onImportTickTick'
     | 'onImportDgt'
     | 'onImportOmniFocus'
     | 'attachmentsLastCleanupDisplay'
@@ -25,7 +26,9 @@ type SettingsDataPageProps = Pick<
     | 'onClearPendingRemoteDeletes'
     | 'onRunAttachmentsCleanup'
     | 'isCleaningAttachments'
->;
+> & {
+    onAddGettingStartedContent: () => Promise<void> | void;
+};
 
 export function SettingsDataPage(props: SettingsDataPageProps) {
     return (
@@ -36,8 +39,10 @@ export function SettingsDataPage(props: SettingsDataPageProps) {
                 onExportBackup={props.onExportBackup}
                 onRestoreBackup={props.onRestoreBackup}
                 onImportTodoist={props.onImportTodoist}
+                onImportTickTick={props.onImportTickTick}
                 onImportDgt={props.onImportDgt}
                 onImportOmniFocus={props.onImportOmniFocus}
+                onAddGettingStartedContent={props.onAddGettingStartedContent}
             />
             <AttachmentsCleanupSection
                 t={props.t}

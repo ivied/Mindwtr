@@ -281,6 +281,10 @@ export const styles = StyleSheet.create({
     fontWeight: '600',
     paddingHorizontal: 2,
   },
+  scheduleResultsSubtitle: {
+    fontSize: 12,
+    paddingHorizontal: 2,
+  },
   taskItem: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -398,6 +402,13 @@ export const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
+    top: 0,
+    bottom: 0,
+  },
+  timelineItemsLayer: {
+    position: 'absolute',
+    left: 56,
+    right: 12,
     top: 0,
     bottom: 0,
   },
@@ -600,6 +611,21 @@ export const styles = StyleSheet.create({
     alignItems: 'center',
     zIndex: 30,
   },
+  weekTimedItemsLayer: {
+    position: 'absolute',
+    left: 4,
+    right: 4,
+    top: 0,
+    bottom: 0,
+  },
+  weekTimedItemsLayerCompact: {
+    left: 2,
+    right: 2,
+  },
+  weekTimedItemsLayerUltraCompact: {
+    left: 1,
+    right: 1,
+  },
   weekBlock: {
     position: 'absolute',
     left: 4,
@@ -799,6 +825,10 @@ export const styles = StyleSheet.create({
     flex: 0,
     width: '100%',
     minHeight: 46,
+  },
+  composerHelp: {
+    fontSize: 12,
+    lineHeight: 16,
   },
   composerResults: {
     maxHeight: 156,

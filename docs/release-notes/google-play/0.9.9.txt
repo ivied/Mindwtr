@@ -1,0 +1,15 @@
+<en-US>
+Mindwtr 0.9.9 adds Settings feedback in configured builds, custom time estimates, project sequencing hints, urgency colors, and faster large task lists. Attachment sync now scans less, upgrades older files more safely, and marks missing cloud files clearly. Filter search, notification task taps, context automation, Markdown links, and recurring follow-ups are steadier.
+</en-US>
+<de-DE>
+Mindwtr 0.9.9 fuegt Feedback in den Einstellungen, eigene Zeitschaetzungen, Projekt-Sequenzhinweise, Faelligkeitsfarben und schnellere grosse Aufgabenlisten hinzu. Anhangs-Sync scannt weniger, uebernimmt alte Dateien sicherer und markiert fehlende Cloud-Dateien klarer. Filtersuche, Benachrichtigungstaps, Kontextautomation, Markdown-Links und Wiederholungen sind stabiler.
+</de-DE>
+<es-ES>
+Mindwtr 0.9.9 agrega comentarios desde Ajustes en versiones configuradas, estimaciones de tiempo, pistas de secuencia de proyectos, colores de urgencia y listas grandes mas rapidas. El sync de adjuntos escanea menos, migra archivos antiguos con mas seguridad y marca archivos en la nube que faltan. Busqueda de filtros, toques en notificaciones, automatizacion de contextos, enlaces Markdown y recurrencias son mas estables.
+</es-ES>
+<fr-FR>
+Mindwtr 0.9.9 ajoute l'envoi de retours depuis les reglages dans les builds configures, des estimations de temps, des indices de sequence de projet, des couleurs d'urgence et des grandes listes plus rapides. La synchro des pieces jointes scanne moins, migre mieux les anciens fichiers et signale les fichiers cloud manquants. Recherche de filtres, notifications, automatisation des contextes, liens Markdown et repetitions sont plus stables.
+</fr-FR>
+<zh-CN>
+Mindwtr 0.9.9 在已配置版本中加入设置反馈、自定义时间估算、项目顺序提示、紧急程度颜色和更快的大型任务列表。附件同步减少扫描，更安全地升级旧文件，并清楚标记缺失的云端文件。筛选搜索、通知打开任务、情境自动化、Markdown 链接和重复任务更稳定。
+</zh-CN>

@@ -1,0 +1,4 @@
+- Sync and backups preserve people/assignee data more reliably, with fixes for duplicate people loops and safer project deletes.
+- Shared attachment files are preserved, and duplicated project attachment metadata is cleaned up.
+- Quick Capture keyboard handling, calendar/project accessibility, Android icon assets, and large task lists are smoother.
+- FOSS release app configuration is more consistent.

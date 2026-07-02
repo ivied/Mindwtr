@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { applyOmniFocusImport, parseOmniFocusImportSource } from './omnifocus-import';
 import { mockAppData } from './sync-test-utils';
-import type { Project } from './types';
+import type { Person, Project } from './types';
 
 const encodeUtf16Le = (value: string): Uint8Array => {
     const buffer = new Uint8Array(2 + (value.length * 2));
@@ -246,9 +246,17 @@ describe('omnifocus import', () => {
             createdAt: '2026-05-01T00:00:00.000Z',
             updatedAt: '2026-05-01T00:00:00.000Z',
         };
+        const existingPerson: Person = {
+            id: 'person-existing',
+            name: 'Jordan',
+            createdAt: '2026-05-01T00:00:00.000Z',
+            updatedAt: '2026-05-01T00:00:00.000Z',
+        };
+        const currentData = mockAppData([], [existingProject], []);
+        currentData.people = [existingPerson];
 
         const result = applyOmniFocusImport(
-            mockAppData([], [existingProject], []),
+            currentData,
             parseResult.parsedData,
             { now: '2026-05-02T12:00:00.000Z' }
         );
@@ -258,6 +266,7 @@ describe('omnifocus import', () => {
         expect(result.importedStandaloneTaskCount).toBe(1);
         expect(result.warnings).toContain('Imported project "House Renovation" was renamed to "House Renovation (OmniFocus)" to avoid a title conflict.');
         expect(result.data.settings.deviceId).toBeTruthy();
+        expect(result.data.people).toEqual([existingPerson]);
 
         const importedProject = result.data.projects.find((project) => project.id !== existingProject.id);
         expect(importedProject).toMatchObject({

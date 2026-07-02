@@ -1,0 +1,4 @@
+- Optionale mobile App-Sperre mit Geraeteauthentifizierung hinzugefuegt.
+- Geteilter Text wird mit klarerer Share-Sheet-Hilfe als Aufgabennotiz importiert.
+- Schnellerfassung, Projektzaehler, Tastaturverhalten, Erinnerungskanaele, geplante Zeiten, Checklisten-Sync und grosse Datenbanken sind stabiler.
+- Suche findet Checklistenpunkte.

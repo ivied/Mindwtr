@@ -5,11 +5,15 @@ export type TaskStatus = 'inbox' | 'next' | 'waiting' | 'someday' | 'reference' 
 export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
 export type TaskEnergyLevel = 'low' | 'medium' | 'high';
 
-export type TimeEstimate = '5min' | '10min' | '15min' | '30min' | '1hr' | '2hr' | '3hr' | '4hr' | '4hr+';
+export type TimeEstimatePreset = '5min' | '10min' | '15min' | '30min' | '1hr' | '2hr' | '3hr' | '4hr' | '4hr+';
+export type CustomTimeEstimate = `custom:${number}`;
+export type TimeEstimate = TimeEstimatePreset | CustomTimeEstimate;
 
 export type TaskSortBy = 'default' | 'due' | 'start' | 'review' | 'title' | 'created' | 'created-desc';
 
 export type TaskMode = 'task' | 'list';
+
+export type FocusGroupBy = 'none' | 'context' | 'project' | 'area' | 'energy' | 'priority' | 'person' | 'tag';
 
 export type RecurrenceRule = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
@@ -33,6 +37,7 @@ export interface Recurrence {
     rule: RecurrenceRule;
     strategy?: RecurrenceStrategy; // Defaults to 'strict'
     byDay?: RecurrenceByDay[]; // Explicit weekdays for weekly/monthly recurrences
+    byMonthDay?: number[]; // Explicit month days for monthly recurrences
     weekStart?: RecurrenceWeekday; // RFC 5545 WKST for weekly interval anchoring
     count?: number; // Total occurrences in the series, including the current task
     until?: string; // ISO date/datetime when the series should stop
@@ -54,6 +59,7 @@ export type TaskEditorFieldId =
     | 'assignedTo'
     | 'contexts'
     | 'tags'
+    | 'location'
     | 'timeEstimate'
     | 'recurrence'
     | 'startTime'
@@ -69,6 +75,10 @@ export type TaskEditorPresentation = 'inline' | 'modal';
 
 export type InboxProcessingMode = 'guided' | 'quick';
 
+export type DefaultProjectFlowMode = 'parallel' | 'sequential';
+
+export type ProjectSequentialScope = 'project' | 'section';
+
 export interface Project {
     id: string;
     title: string;
@@ -77,6 +87,7 @@ export interface Project {
     order: number; // Sort order within an Area
     tagIds: string[]; // Array of Tag IDs
     isSequential?: boolean; // If true, only first incomplete task shows in Next Actions
+    sequentialScope?: ProjectSequentialScope; // 'project' = one stream, 'section' = first incomplete task per section
     isFocused?: boolean; // If true, this project is a priority focus (max 5 allowed)
     supportNotes?: string;
     attachments?: Attachment[];
@@ -89,6 +100,7 @@ export interface Project {
     createdAt: string;
     updatedAt: string;
     deletedAt?: string; // Soft-delete: if set, this item is considered deleted
+    purgedAt?: string; // Permanently removed from Trash, kept for sync tombstone
 }
 
 export interface Section {
@@ -118,6 +130,18 @@ export interface Area {
     createdAt: string;
     updatedAt: string;
     deletedAt?: string; // Soft-delete tombstone for cross-device area deletion
+}
+
+export interface Person {
+    id: string;
+    name: string;
+    note?: string;
+    referenceLink?: string;
+    rev?: number;
+    revBy?: string;
+    createdAt: string;
+    updatedAt: string;
+    deletedAt?: string;
 }
 
 export type AttachmentKind = 'file' | 'link';
@@ -154,6 +178,15 @@ export interface ChecklistItem {
     isCompleted: boolean;
 }
 
+
+export type RelativeStartOffsetUnit = 'minute' | 'hour' | 'day' | 'week';
+
+export interface RelativeStartOffset {
+    /** Negative offset from dueDate; e.g. -3 day means start three days before due. */
+    amount: number;
+    unit: RelativeStartOffsetUnit;
+}
+
 export interface Task {
     id: string;
     title: string;
@@ -163,8 +196,10 @@ export interface Task {
     assignedTo?: string;
     taskMode?: TaskMode; // 'list' for checklist-first tasks
     startTime?: string; // ISO date string
+    relativeStartOffset?: RelativeStartOffset; // Offset from dueDate that recomputes startTime when dueDate changes
     dueDate?: string; // ISO date string
     recurrence?: Recurrence | RecurrenceRule; // Legacy string inputs are normalized to Recurrence on load/store writes
+    showFutureRecurrence?: boolean; // Calendar-only preview of the next recurrence; does not create a real task.
     pushCount?: number; // Tracks how many times dueDate was pushed later
     tags: string[];
     contexts: string[]; // e.g., '@home', '@work'
@@ -178,6 +213,8 @@ export interface Task {
     areaId?: string;
     isFocusedToday?: boolean; // Marked as today's focus list.
     timeEstimate?: TimeEstimate; // Estimated time to complete
+    suppressMindwtrReminders?: boolean; // If true, skip Mindwtr start/due reminders for this task.
+    repeatReminderMinutes?: number; // Repeat the due-time reminder every N minutes (presets 5|10|15|30|60). Absent/0 = off. Due-time only.
     reviewAt?: string; // Tickler/review date (ISO string). If set, task is due for review at/after this time.
     completedAt?: string; // ISO timestamp when task was last completed/archived.
     statusBeforeProjectArchive?: TaskStatus; // Original status when a project archive auto-completed this task.
@@ -192,6 +229,7 @@ export interface Task {
     purgedAt?: string; // Permanently removed from trash, kept for sync tombstone
     order?: number; // Manual ordering within a project (for sequential projects)
     orderNum?: number; // Legacy alias kept for backward compatibility with older payloads
+    boardOrder?: number; // Manual ordering within a Board status column; cleared on status change
     metadata?: Record<string, unknown>; // AI metadata: confidence_score, trust_level, source_channel, etc.
 }
 
@@ -215,12 +253,15 @@ export type SortField =
 
 export type FilterPriority = 'none' | TaskPriority;
 
+export type MultiValueFilterMatchMode = 'any' | 'all';
+
 export type DateRange =
     | { preset: 'today' | 'this_week' | 'this_month' | 'overdue' | 'no_date' }
     | { from?: string; to?: string };
 
 export interface FilterCriteria {
     contexts?: string[];
+    contextMatchMode?: MultiValueFilterMatchMode;
     areas?: string[];
     projects?: string[];
     tags?: string[];
@@ -230,6 +271,7 @@ export interface FilterCriteria {
     startDateRange?: DateRange;
     statuses?: TaskStatus[];
     assignedTo?: string[];
+    locations?: string[];
     timeEstimateRange?: { min?: number; max?: number };
     timeEstimates?: TimeEstimate[];
     hasDescription?: boolean;
@@ -244,6 +286,7 @@ export interface SavedFilter {
     criteria: FilterCriteria;
     sortBy?: SortField;
     sortOrder?: 'asc' | 'desc';
+    groupBy?: FocusGroupBy;
     createdAt: string;
     updatedAt: string;
     deletedAt?: string;
@@ -259,15 +302,21 @@ export interface PendingRemoteAttachmentDelete {
 import type { MergeStats, SyncHistoryEntry } from './sync';
 
 export type AppTheme = 'light' | 'dark' | 'system' | 'eink' | 'nord' | 'sepia' | 'material3-light' | 'material3-dark' | 'oled';
-export type AppLanguage = 'en' | 'zh' | 'zh-Hant' | 'es' | 'hi' | 'ar' | 'de' | 'ru' | 'ja' | 'fr' | 'pt' | 'pl' | 'ko' | 'it' | 'tr' | 'nl' | 'system';
+export type AppLanguage = 'en' | 'vi' | 'zh' | 'zh-Hant' | 'es' | 'hi' | 'ar' | 'de' | 'ru' | 'ja' | 'fr' | 'pt' | 'pl' | 'ko' | 'cs' | 'it' | 'tr' | 'nl' | 'system';
 export type MobileQuickAccessView = 'review' | 'projects' | 'calendar' | 'contexts';
+export type DefaultTaskAreaMode = 'none' | 'fixed' | 'active';
 
 export interface GtdSettings {
     timeEstimatePresets?: TimeEstimate[];
     taskEditor?: TaskEditorSettings;
     autoArchiveDays?: number;
     defaultCaptureMethod?: 'text' | 'audio';
+    defaultAreaMode?: DefaultTaskAreaMode;
+    defaultAreaId?: string | null;
     focusTaskLimit?: number;
+    focusGroupBy?: FocusGroupBy;
+    focusGroupByDefaultsVersion?: number;
+    defaultProjectFlowMode?: DefaultProjectFlowMode;
     defaultScheduleTime?: string; // HH:mm, used to prefill manual scheduling fields.
     saveAudioAttachments?: boolean;
     inboxProcessing?: {
@@ -318,7 +367,7 @@ export interface FeatureSettings {
 
 export interface AppearanceSettings {
     density?: 'comfortable' | 'compact';
-    textSize?: 'default' | 'large' | 'extra-large';
+    textSize?: 'small' | 'default' | 'large' | 'extra-large';
     showTaskAge?: boolean;
     showFutureStarts?: boolean;
     unassignedAreaColor?: string;
@@ -358,7 +407,11 @@ export interface AiSettings {
     apiKey?: string;
     baseUrl?: string;
     model?: string;
-    reasoningEffort?: 'low' | 'medium' | 'high';
+    openAIExtraBodyParams?: Record<string, unknown>;
+    // Mirrors AIReasoningEffort (kept inline to avoid a types <-> ai/types import cycle).
+    // 'minimal' is used internally for the low-latency copilot path; the main-model
+    // settings UI exposes low/medium/high.
+    reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
     thinkingBudget?: number;
     copilotModel?: string;
     speechToText?: SpeechToTextSettings;
@@ -366,7 +419,7 @@ export interface AiSettings {
 
 export interface SpeechToTextSettings {
     enabled?: boolean;
-    provider?: 'openai' | 'gemini' | 'whisper';
+    provider?: 'openai' | 'gemini' | 'whisper' | 'parakeet';
     model?: string;
     language?: string;
     mode?: 'smart_parse' | 'transcribe_only';
@@ -380,6 +433,14 @@ export interface DiagnosticsSettings {
 
 export interface AnalyticsSettings {
     heartbeatEnabled?: boolean;
+}
+
+export interface SecuritySettings {
+    mobileAppLockEnabled?: boolean;
+}
+
+export interface NetworkSettings {
+    proxyUrl?: string;
 }
 
 export interface FilterSettings {
@@ -399,8 +460,9 @@ export interface AppSettings extends NotificationSettings {
     appearance?: AppearanceSettings;
     theme?: AppTheme;
     language?: AppLanguage;
-    weekStart?: 'monday' | 'sunday';
+    weekStart?: 'monday' | 'sunday' | 'saturday';
     dateFormat?: string;
+    calendarSystem?: string;
     timeFormat?: string;
     syncPreferences?: SettingsSyncPreferences;
     syncPreferencesUpdatedAt?: SettingsSyncUpdatedAt;
@@ -408,6 +470,14 @@ export interface AppSettings extends NotificationSettings {
     calendar?: CalendarSettings;
     keybindingStyle?: 'vim' | 'emacs';
     globalQuickAddShortcut?: string;
+    // Quick-add: when true, recognized tokens (dates, tags, contexts) are removed
+    // from the title after being applied. Default (unset) preserves text as typed
+    // and only copies metadata out, so pasted URLs/notes are never mangled (#742).
+    quickAddAutoClean?: boolean;
+    // Markdown editor typing helpers (bracket/backtick auto-pairing, list
+    // continuation, reference autocomplete). Default on; false types plain text
+    // without the editor injecting characters (#742).
+    markdownEditorAssist?: boolean;
     window?: WindowSettings;
     ai?: AiSettings;
     savedSearches?: SavedSearch[];
@@ -424,6 +494,8 @@ export interface AppSettings extends NotificationSettings {
     lastSyncHistory?: SyncHistoryEntry[];
     diagnostics?: DiagnosticsSettings;
     analytics?: AnalyticsSettings;
+    security?: SecuritySettings;
+    network?: NetworkSettings;
     filters?: FilterSettings;
     deviceId?: string;
     migrations?: MigrationSettings;
@@ -434,5 +506,6 @@ export interface AppData {
     projects: Project[];
     sections: Section[];
     areas: Area[];
+    people?: Person[];
     settings: AppSettings;
 }

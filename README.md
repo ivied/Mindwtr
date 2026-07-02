@@ -10,7 +10,7 @@ The free, open-source, cross-platform GTD app. Local-first, no account required.
 
 _New to GTD? Read [GTD in 15 minutes](https://hamberg.no/gtd) for a quick introduction._
 
-[Install](#installation) · [Getting Started](https://github.com/dongdongbh/Mindwtr/wiki/Getting-Started) · [Data & Sync](https://github.com/dongdongbh/Mindwtr/wiki/Data-and-Sync) · [Cloud Deployment](https://github.com/dongdongbh/Mindwtr/wiki/Cloud-Deployment) · [MCP Server](https://github.com/dongdongbh/Mindwtr/wiki/MCP-Server)
+[Getting Started](https://docs.mindwtr.app/start/getting-started) · [FAQ](https://docs.mindwtr.app/start/faq) · [Docs](https://docs.mindwtr.app/) · [Data & Sync](https://docs.mindwtr.app/data-sync/) · [Cloud Deployment](https://docs.mindwtr.app/data-sync/cloud-deployment) · [MCP Server](https://docs.mindwtr.app/power-users/mcp)
 
 [![CI](https://github.com/dongdongbh/Mindwtr/actions/workflows/ci.yml/badge.svg)](https://github.com/dongdongbh/Mindwtr/actions/workflows/ci.yml)
 [![GitHub license](https://img.shields.io/github/license/dongdongbh/Mindwtr?color=brightgreen)](LICENSE)
@@ -32,8 +32,8 @@ _New to GTD? Read [GTD in 15 minutes](https://hamberg.no/gtd) for a quick introd
     <img src="https://play.google.com/intl/en_us/badges/static/images/badges/en_badge_web_generic.png"
          align="center"
          alt="Google Play"
-         style="height: 56px"
-         height="56" />
+         style="height: 74px"
+         height="74" />
   </a>
   <a href="https://apps.apple.com/app/mindwtr/id6758597144" target="_blank">
     <img src="https://tools.applemediaservices.com/api/badges/download-on-the-app-store/black/en-us?size=250x83"
@@ -42,16 +42,30 @@ _New to GTD? Read [GTD in 15 minutes](https://hamberg.no/gtd) for a quick introd
          style="height: 50px"
          height="50" />
   </a>
-  <a href="https://apt.izzysoft.de/fdroid/index/apk/tech.dongdongbh.mindwtr" target="_blank">
-    <img src="https://gitlab.com/IzzyOnDroid/repo/-/raw/master/assets/IzzyOnDroidButtonGreyBorder_nofont.png"
-         align="center"
-         alt="Get it on IzzyOnDroid"
-         style="height: 50px"
-         height="50" />
-  </a>
   <a href="https://flathub.org/apps/tech.dongdongbh.mindwtr" target="_blank">
     <img alt="Get it on Flathub"
          src="https://flathub.org/api/badge?locale=en"
+         align="center"
+         style="height: 50px"
+         height="50" />
+  </a>
+  <a href="https://apt.izzysoft.de/packages/tech.dongdongbh.mindwtr" target="_blank">
+    <img src="https://gitlab.com/IzzyOnDroid/repo/-/raw/master/assets/IzzyOnDroid.png"
+         align="center"
+         alt="Get it at IzzyOnDroid"
+         style="height: 74px"
+         height="74" />
+  </a>
+  <a href="https://f-droid.org/en/packages/tech.dongdongbh.mindwtr/" target="_blank">
+    <img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png"
+         align="center"
+         alt="Get it on F-Droid"
+         style="height: 74px"
+         height="74" />
+  </a>
+  <a href="https://snapcraft.io/mindwtr" target="_blank">
+    <img alt="Get it from the Snap Store"
+         src="https://snapcraft.io/en/dark/install.svg"
          align="center"
          style="height: 50px"
          height="50" />
@@ -107,7 +121,7 @@ _Don't show me a cockpit when I just want to ride a bike._
 - Obsidian vault import with note deep links on desktop.
 - Optional AI copilot (BYOK + local/self-hosted compatible models).
 - Cross-platform apps for desktop and mobile, plus PWA.
-- Built-in automation with CLI, REST API, and MCP server.
+- Optional automation helpers with desktop local REST API, CLI, and the published [`mindwtr-mcp`](https://www.npmjs.com/package/mindwtr-mcp) server.
 
 <details>
 <summary>See all features</summary>
@@ -136,7 +150,7 @@ _Don't show me a cockpit when I just want to ride a bike._
 
 ### Productivity Features
 
-- 🔍 **Global Search** - Search all areas globally with operators (status:, context:, assigned:, due:<=7d)
+- 🔍 **Global Search** - Search all areas globally with operators (`status:`, `context:`, `assigned:`, `location:`, `where:`, `id:`, `-id:`, `due:<=7d`)
 - 📦 **Bulk Actions** - Multi-select, batch move/tag/delete
 - 📎 **Attachments** - Files and links on tasks
 - ✏️ **Markdown Notes** - Rich text descriptions with preview
@@ -153,21 +167,23 @@ _Don't show me a cockpit when I just want to ride a bike._
 
 ### Data & Sync
 
-- 🔄 **Sync Options** - See the [Data & Sync wiki](https://github.com/dongdongbh/Mindwtr/wiki/Data-and-Sync) for supported backends and setup
+- 🔄 **Sync Options** - See the [Data & Sync docs](https://docs.mindwtr.app/data-sync/) for supported backends and setup
 - 🍎 **Native iCloud / CloudKit Sync** - Apple-only structured sync on supported iPhone, iPad, and macOS builds
 - ☁️ **Dropbox OAuth Sync (Optional)** - Native Dropbox App Folder sync in supported non-FOSS builds
 - 📤 **Export/Backup** - Export data to JSON
 - ♻️ **Restore from Backup** - Replace local data from a validated Mindwtr backup with a recovery snapshot first
-- 📥 **Todoist + DGT GTD + OmniFocus Import** - Import Todoist CSV/ZIP, DGT GTD JSON/ZIP, or OmniFocus CSV exports into Mindwtr
+- 📥 **TickTick + Todoist + DGT GTD + OmniFocus + Apple Reminders Import** - Import TickTick CSV/ZIP, Todoist CSV/ZIP, DGT GTD JSON/ZIP, OmniFocus exports, or incomplete Apple Reminders into Mindwtr
 - 🔗 **Obsidian Integration** - Desktop vault task import with deep links back to source notes
-- 🗓️ **External Calendars (System + ICS)** - Mobile reads system calendars and can push due-dated tasks to a dedicated device calendar; desktop supports ICS subscriptions
+- 🗓️ **External Calendars (System + ICS)** - Mobile reads system calendars and pushes dated tasks; macOS desktop reads Apple Calendar and can push dated tasks; desktop/web also support ICS subscriptions and task creation from events
 
 ### Automation
 
-- 🔌 **CLI** - Add, list, complete, search from terminal
-- 🌐 **REST API** - Local API server for scripting
+- 🔌 **CLI** - Add, list, complete, search from terminal by running the repo helper
+- 🌐 **REST API** - Optional desktop localhost API server for token-authenticated scripting
 - 🌍 **Web App (PWA)** - Browser access with offline support
-- 🧠 **MCP Server** - Local Model Context Protocol server for LLM automation
+- 🧠 **MCP Server** - Optional local stdio Model Context Protocol server for LLM automation, available as [`mindwtr-mcp`](https://www.npmjs.com/package/mindwtr-mcp) and in the [MCP Registry](https://registry.modelcontextprotocol.io/)
+
+Desktop builds can start the local REST API from **Settings -> Advanced** on `127.0.0.1` with default port `3456` and a generated bearer token. The CLI remains a repo helper; the stdio MCP server can be installed from npm with `npm install -g mindwtr-mcp` or launched by MCP clients with `npx -y mindwtr-mcp`.
 
 ### Cross-Platform
 
@@ -176,167 +192,40 @@ _Don't show me a cockpit when I just want to ride a bike._
 - 📲 **Android Widget** - Home screen focus/next widget
 - ⌨️ **Keyboard Shortcuts** - Vim and Emacs presets
 - 🎨 **Themes** - Light/Dark
-- 🌍 **i18n** - English, Chinese (Simplified), Chinese (Traditional), Spanish, Hindi, Arabic, German, Russian, Japanese, French, Portuguese, Polish, Korean, Italian, Turkish, Dutch
+- 🌍 **i18n** - English, Vietnamese, Chinese (Simplified), Chinese (Traditional), Spanish, Hindi, Arabic, German, Russian, Japanese, French, Portuguese, Polish, Korean, Czech, Italian, Turkish, Dutch
 - 🐳 **Docker** - Run the PWA + self-hosted sync server with Docker
 
 </details>
 
 ## Installation
 
-### Desktop (Linux)
+For the complete and current install guides, see [Desktop Installation](https://docs.mindwtr.app/start/desktop-installation) and [Mobile Installation](https://docs.mindwtr.app/start/mobile-installation).
 
-**Arch Linux (AUR, prebuilt recommended):**
-<a href="https://aur.archlinux.org/packages/mindwtr-bin">
-<img src="https://img.shields.io/aur/version/mindwtr-bin?logo=arch-linux&logoColor=white&color=1793d1&label=mindwtr-bin" alt="AUR mindwtr-bin Version">
-</a>
+Quick options:
 
-```bash
-# Using yay
-yay -S mindwtr-bin
+- Windows: Microsoft Store, Winget, Chocolatey, Scoop, or GitHub Releases.
+- macOS: Mac App Store, Homebrew, TestFlight beta, or GitHub Releases.
+- Linux: Flathub, Snap, AUR, APT/RPM repos, or GitHub Releases.
+- Android: Google Play, F-Droid, IzzyOnDroid, or GitHub Releases APK.
+- iOS: App Store or TestFlight beta.
+- Web / self-hosted: [Cloud Deployment](https://docs.mindwtr.app/data-sync/cloud-deployment) or the [Docker guide](docker/README.md).
 
-# Using paru
-paru -S mindwtr-bin
-```
-
-**Arch Linux (AUR, build from source):**
-<a href="https://aur.archlinux.org/packages/mindwtr">
-<img src="https://img.shields.io/aur/version/mindwtr?logo=arch-linux&logoColor=white&color=1793d1&label=mindwtr" alt="AUR mindwtr Version">
-</a>
-
-```bash
-# Using yay
-yay -S mindwtr
-
-# Using paru
-paru -S mindwtr
-```
-
-**Debian / Ubuntu (APT repo, recommended):**
-
-```bash
-curl -fsSL https://dongdongbh.github.io/Mindwtr/mindwtr.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/mindwtr-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/mindwtr-archive-keyring.gpg] https://dongdongbh.github.io/Mindwtr/deb ./" | sudo tee /etc/apt/sources.list.d/mindwtr.list
-sudo apt update
-sudo apt install mindwtr
-```
-
-**Fedora / RHEL / openSUSE (DNF/YUM repo, recommended):**
-
-```bash
-cat <<'EOF' | sudo tee /etc/yum.repos.d/mindwtr.repo
-[mindwtr]
-name=Mindwtr Repository
-baseurl=https://dongdongbh.github.io/Mindwtr/rpm
-enabled=1
-gpgcheck=0
-EOF
-
-sudo dnf install mindwtr
-```
-
-**Flatpak (Flathub):**
-<a href="https://flathub.org/apps/tech.dongdongbh.mindwtr">
-<img src="https://img.shields.io/badge/Flathub-Install-000000?logo=flathub&logoColor=white" alt="Get it on Flathub">
-</a>
+<details>
+<summary>Package manager quick commands</summary>
 
 ```bash
 flatpak install flathub tech.dongdongbh.mindwtr
+yay -S mindwtr-bin
+brew install --cask mindwtr
 ```
-
-**Other methods:** AppImage or `.deb`/`.rpm` from [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases).
-
-### Desktop (Windows)
-
-**Microsoft Store (recommended):**
-<a href="https://apps.microsoft.com/detail/9n0v5b0b6frx?ocid=webpdpshare">
-<img src="https://img.shields.io/badge/Microsoft_Store-Install-0078D6?logo=microsoft&logoColor=white" alt="Microsoft Store">
-</a>
-
-**Winget:**
-<a href="https://winstall.app/apps/dongdongbh.Mindwtr">
-<img src="https://img.shields.io/winget/v/dongdongbh.Mindwtr?label=Winget&logo=windows&logoColor=white&color=00D2FF" alt="Winget Version">
-</a>
 
 ```powershell
 winget install dongdongbh.Mindwtr
 ```
 
-**Scoop:**
-<a href="https://github.com/dongdongbh/homebrew-mindwtr">
-<img src="https://img.shields.io/scoop/v/mindwtr?bucket=https://github.com/dongdongbh/homebrew-mindwtr&label=Scoop&logo=scoop&logoColor=white&color=E6E6E6" alt="Scoop Version">
-</a>
+For APT/RPM repo setup, source builds, portable ZIPs, mobile store variants, and Docker setup, use the full install guides above.
 
-```powershell
-scoop bucket add mindwtr https://github.com/dongdongbh/homebrew-mindwtr
-scoop install mindwtr
-```
-
-**Portable ZIP (no admin required):**
-
-- Download `mindwtr_<version>_windows_x64_portable.zip` from [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases).
-- Extract it to a writable folder and keep `portable.txt` next to `mindwtr.exe`.
-- Mindwtr stores data under `profile/` in the extracted folder.
-
-**Other methods:** installer `.exe` from [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases).
-
-### Desktop (macOS)
-
-**Mac App Store (recommended):**
-<a href="https://apps.apple.com/app/mindwtr/id6758597144">
-<img src="https://img.shields.io/badge/Mac_App_Store-Install-0A84FF?logo=apple&logoColor=white" alt="Mac App Store">
-</a>
-
-Install from the Mac App Store: [Mindwtr on Mac App Store](https://apps.apple.com/app/mindwtr/id6758597144).
-TestFlight beta (macOS): [Join the beta](https://testflight.apple.com/join/7SMJCTSR).
-
-**Homebrew:**
-<a href="https://formulae.brew.sh/cask/mindwtr">
-<img src="https://img.shields.io/homebrew/cask/v/mindwtr?label=Homebrew&logo=homebrew&logoColor=white" alt="Homebrew Cask Version">
-</a>
-
-```bash
-brew install --cask mindwtr
-```
-
-**Other methods:** `.dmg` from [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases).
-
-### Mobile
-
-**Android:**
-<a href="https://play.google.com/store/apps/details?id=tech.dongdongbh.mindwtr">
-<img src="https://img.shields.io/badge/Google_Play-Install-414141?logo=googleplay&logoColor=white" alt="Get it on Google Play">
-</a>
-<a href="https://apt.izzysoft.de/fdroid/index/apk/tech.dongdongbh.mindwtr">
-<img src="https://img.shields.io/endpoint?url=https://apt.izzysoft.de/fdroid/api/v1/shield/tech.dongdongbh.mindwtr&label=IzzyOnDroid" alt="IzzyOnDroid">
-</a>
-
-Install with IzzyOnDroid:
-
-1. Install an F-Droid-compatible client (Droid-ify, Neo Store, or F-Droid).
-2. Add the IzzyOnDroid repository: `https://apt.izzysoft.de/fdroid/repo`.
-3. Open [Mindwtr on IzzyOnDroid](https://apt.izzysoft.de/fdroid/index/apk/tech.dongdongbh.mindwtr) and install.
-
-Other methods: APK from [GitHub Releases](https://github.com/dongdongbh/Mindwtr/releases).
-
-**iOS:**
-<a href="https://apps.apple.com/app/mindwtr/id6758597144">
-<img src="https://img.shields.io/badge/App_Store-iOS-0A84FF?logo=apple&logoColor=white" alt="App Store">
-</a>
-
-Available on the App Store: [Mindwtr for iOS](https://apps.apple.com/app/mindwtr/id6758597144).
-TestFlight beta: [Join the beta](https://testflight.apple.com/join/7SMJCTSR).
-
-However, maintaining the iOS version on the App Store requires a substantial annual fee (see the [Apple Developer Program](https://developer.apple.com/support/enrollment/)), which I currently cover out of pocket.
-
-To ensure Mindwtr's continued existence and future development, your support is greatly appreciated! If you find value in the app, please consider supporting the project via [GitHub Sponsors](https://github.com/sponsors/dongdongbh) or [Ko-fi](https://ko-fi.com/D1D01T20WK).
-
-### Docker (PWA + Cloud Sync)
-
-Run the web app (PWA) and the self-hosted sync server with Docker:
-
-- Guide: [`docker/README.md`](docker/README.md)
-
-Install guides: 🚀 [Getting Started](https://github.com/dongdongbh/Mindwtr/wiki/Getting-Started)
+</details>
 
 ## Community
 
@@ -355,27 +244,19 @@ You can help in several ways:
 5. **Join the community chat:** Come to [Discord](https://discord.gg/ahhFxuDBb4).
 6. **Help with translations:** Contribute locale updates in [`packages/core/src/i18n/locales/`](packages/core/src/i18n/locales/).
 7. **Contribute code/docs:** Open a pull request and follow the [contribution guide](docs/CONTRIBUTING.md) and commit conventions.
-8. **Pick and build:** Community members are welcome to pick any item in the [Roadmap](#roadmap) or any open issue and submit a PR.
+8. **Pick and build:** Community members are welcome to pick any open issue and submit a PR.
 9. **Sponsor the project:** Support ongoing development via [GitHub Sponsors](https://github.com/sponsors/dongdongbh) or [Ko-fi](https://ko-fi.com/D1D01T20WK).
-
-## Roadmap
-
-- 🤖 Add to F-Droid ([#219](https://github.com/dongdongbh/Mindwtr/issues/219))
-- 🗣️ Direct Siri capture -> Mindwtr Inbox ([#388](https://github.com/dongdongbh/Mindwtr/issues/388))
-- 📥 Apple Reminders -> Mindwtr Inbox import ([#387](https://github.com/dongdongbh/Mindwtr/issues/387))
-- ✉️ Email to Inbox ([#35](https://github.com/dongdongbh/Mindwtr/issues/35))
-- 🗓️ Expand one-way Mindwtr -> local system calendar sync beyond the shipped mobile implementation ([#361](https://github.com/dongdongbh/Mindwtr/issues/361))
 
 ## Documentation
 
-- 📚 [Wiki](https://github.com/dongdongbh/Mindwtr/wiki) - Complete user guide
-- 🚀 [Getting Started](https://github.com/dongdongbh/Mindwtr/wiki/Getting-Started)
-- ❓ [FAQ](https://github.com/dongdongbh/Mindwtr/wiki/FAQ)
-- 🔄 [Data & Sync](https://github.com/dongdongbh/Mindwtr/wiki/Data-and-Sync)
-- 🔗 [Markdown Links](https://github.com/dongdongbh/Mindwtr/wiki/Markdown-Links)
-- 🛠️ [Cloud Deployment](https://github.com/dongdongbh/Mindwtr/wiki/Cloud-Deployment)
-- ☁️ [Cloud API](https://github.com/dongdongbh/Mindwtr/wiki/Cloud-API)
-- 🧠 [MCP Server](https://github.com/dongdongbh/Mindwtr/wiki/MCP-Server)
+- 📚 [Official Docs](https://docs.mindwtr.app/) - Searchable documentation with better navigation
+- 🚀 [Getting Started](https://docs.mindwtr.app/start/getting-started)
+- ❓ [FAQ](https://docs.mindwtr.app/start/faq)
+- 🔄 [Data & Sync](https://docs.mindwtr.app/data-sync/)
+- 🔗 [Markdown Links](https://docs.mindwtr.app/use/markdown-links)
+- 🛠️ [Cloud Deployment](https://docs.mindwtr.app/data-sync/cloud-deployment)
+- ☁️ [Cloud API](https://docs.mindwtr.app/developers/cloud-api)
+- 🧠 [MCP Server](https://docs.mindwtr.app/power-users/mcp)
 - 📝 [Release Notes Index](docs/release-notes/README.md)
 
 ## Star History
@@ -399,14 +280,20 @@ Thanks to these monthly sponsors for supporting Mindwtr.
   <a href="https://github.com/ronmolenda" title="@ronmolenda">
     <img src="docs/assets/sponsors/ronmolenda.png" width="60" height="60" alt="@ronmolenda" />
   </a>
-  <a href="https://github.com/laripernu" title="@laripernu">
-    <img src="docs/assets/sponsors/laripernu.png" width="60" height="60" alt="@laripernu" />
+  <a href="https://github.com/bepolymathe" title="@bepolymathe">
+    <img src="docs/assets/sponsors/bepolymathe.png" width="60" height="60" alt="@bepolymathe" />
   </a>
   <a href="https://github.com/karl1990" title="@karl1990">
     <img src="docs/assets/sponsors/karl1990.png" width="60" height="60" alt="@karl1990" />
   </a>
+  <a href="https://github.com/srijan" title="@srijan">
+    <img src="docs/assets/sponsors/srijan.png" width="60" height="60" alt="@srijan" />
+  </a>
+  <a href="https://github.com/davibicudo" title="@davibicudo">
+    <img src="docs/assets/sponsors/davibicudo.png" width="60" height="60" alt="@davibicudo" />
+  </a>
 </p>
 
 <p align="center">
-  <sub><a href="https://github.com/jarrydstan">@jarrydstan</a> · <a href="https://github.com/ronmolenda">@ronmolenda</a> · <a href="https://github.com/laripernu">@laripernu</a> · <a href="https://github.com/karl1990">@karl1990</a></sub>
+  <sub><a href="https://github.com/jarrydstan">@jarrydstan</a> · <a href="https://github.com/ronmolenda">@ronmolenda</a> · <a href="https://github.com/bepolymathe">@bepolymathe</a> · <a href="https://github.com/karl1990">@karl1990</a> · <a href="https://github.com/srijan">@srijan</a> · <a href="https://github.com/davibicudo">@davibicudo</a></sub>
 </p>

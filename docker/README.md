@@ -20,6 +20,12 @@ Then open:
 
 This HTTP compose file is best for local testing. Mindwtr desktop and mobile clients accept HTTP for localhost, private IPs, and local hostnames. Public URLs should use HTTPS.
 
+## Dropbox sync and the Docker PWA
+
+The `mindwtr-app` Docker image serves the browser/PWA build. Native Dropbox OAuth sync is not available in this runtime because Dropbox connection is implemented by the native desktop and mobile apps. Supplying `VITE_DROPBOX_APP_KEY` or `DROPBOX_APP_KEY` through `.env`, `env_file`, or compose runtime environment will not enable Dropbox in Docker.
+
+For Docker-hosted sync, use the bundled self-hosted cloud server or WebDAV. If the self-hosted endpoint is behind Authelia or another interactive SSO proxy, configure the proxy to let the Mindwtr sync/API path use Mindwtr's bearer token directly; the mobile app cannot complete an Authelia browser login in front of `/v1/data`.
+
 ## HTTPS quick start (Cloud + Caddy)
 
 Use the HTTPS compose file when syncing real desktop or mobile clients to a self-hosted cloud server:

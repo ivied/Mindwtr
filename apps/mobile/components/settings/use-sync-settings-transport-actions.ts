@@ -23,7 +23,7 @@ import {
     getValidDropboxAccessToken,
     isDropboxConnected,
 } from '@/lib/dropbox-auth';
-import { performMobileSync } from '@/lib/sync-service';
+import { clearMobileSyncConfigCache, performMobileSync } from '@/lib/sync-service';
 import { syncMobileBackgroundSyncRegistration } from '@/lib/background-sync-task';
 import { getMobileCloudRequestOptions, getMobileWebDavRequestOptions } from '@/lib/webdav-request-options';
 import {
@@ -68,6 +68,24 @@ const serializeBool = (value: boolean): string => (value ? 'true' : 'false');
 
 const reconcileBackgroundSyncRegistration = () => {
     void syncMobileBackgroundSyncRegistration().catch(logSettingsError);
+};
+
+const persistSyncConfigItem = (key: string, value: string, afterSave?: () => void) => {
+    AsyncStorage.setItem(key, value)
+        .then(() => {
+            clearMobileSyncConfigCache();
+            afterSave?.();
+        })
+        .catch(logSettingsError);
+};
+
+const persistSyncConfigItems = (entries: [string, string][], afterSave?: () => void) => {
+    AsyncStorage.multiSet(entries)
+        .then(() => {
+            clearMobileSyncConfigCache();
+            afterSave?.();
+        })
+        .catch(logSettingsError);
 };
 
 const isManualInsecureOverride = (url: string, allowInsecureHttp: boolean): boolean => {
@@ -247,13 +265,13 @@ export function useSyncSettingsTransportActions({
             setCloudProvider(resolvedCloudProvider);
 
             if (resolvedBackend !== supportedBackend) {
-                AsyncStorage.setItem(SYNC_BACKEND_KEY, supportedBackend).catch(logSettingsError);
+                persistSyncConfigItem(SYNC_BACKEND_KEY, supportedBackend);
             }
             if (!dropboxConfigured && storedCloudProvider === 'dropbox') {
-                AsyncStorage.setItem(CLOUD_PROVIDER_KEY, 'selfhosted').catch(logSettingsError);
+                persistSyncConfigItem(CLOUD_PROVIDER_KEY, 'selfhosted');
             }
             if (!supportsNativeICloudSync && storedCloudProvider === 'cloudkit') {
-                AsyncStorage.setItem(CLOUD_PROVIDER_KEY, 'selfhosted').catch(logSettingsError);
+                persistSyncConfigItem(CLOUD_PROVIDER_KEY, 'selfhosted');
             }
             reconcileBackgroundSyncRegistration();
         }).catch(logSettingsError);
@@ -306,9 +324,7 @@ export function useSyncSettingsTransportActions({
         const nextBackend = backend === 'cloud'
             ? (cloudProvider === 'cloudkit' ? 'cloudkit' : 'cloud')
             : backend;
-        AsyncStorage.setItem(SYNC_BACKEND_KEY, nextBackend)
-            .then(reconcileBackgroundSyncRegistration)
-            .catch(logSettingsError);
+        persistSyncConfigItem(SYNC_BACKEND_KEY, nextBackend, reconcileBackgroundSyncRegistration);
         addBreadcrumb(`settings:syncBackend:${nextBackend}`);
         setSyncBackend(nextBackend);
         resetSyncStatusForBackendSwitch();
@@ -321,10 +337,10 @@ export function useSyncSettingsTransportActions({
         const nextBackend: SyncBackend = provider === 'cloudkit' ? 'cloudkit' : 'cloud';
         setCloudProvider(provider);
         setSyncBackend(nextBackend);
-        AsyncStorage.multiSet([
+        persistSyncConfigItems([
             [CLOUD_PROVIDER_KEY, provider],
             [SYNC_BACKEND_KEY, nextBackend],
-        ]).then(reconcileBackgroundSyncRegistration).catch(logSettingsError);
+        ], reconcileBackgroundSyncRegistration);
         resetSyncStatusForBackendSwitch();
     }, [dropboxConfigured, resetSyncStatusForBackendSwitch, supportsNativeICloudSync]);
 
@@ -345,6 +361,7 @@ export function useSyncSettingsTransportActions({
 
             setSyncPath(fileUri);
             await AsyncStorage.setItem(SYNC_BACKEND_KEY, 'file');
+            clearMobileSyncConfigCache();
             addBreadcrumb('settings:syncBackend:file');
             setSyncBackend('file');
             resetSyncStatusForBackendSwitch();
@@ -416,6 +433,7 @@ export function useSyncSettingsTransportActions({
                 [SYNC_BACKEND_KEY, 'cloud'],
                 [CLOUD_PROVIDER_KEY, 'dropbox'],
             ]);
+            clearMobileSyncConfigCache();
             setCloudProvider('dropbox');
             addBreadcrumb('settings:syncBackend:cloud');
             setSyncBackend('cloud');
@@ -539,6 +557,7 @@ export function useSyncSettingsTransportActions({
                 [WEBDAV_PASSWORD_KEY, nextSettings.password],
                 [WEBDAV_ALLOW_INSECURE_HTTP_KEY, serializeBool(nextSettings.allowInsecureHttp)],
             ]);
+            clearMobileSyncConfigCache();
             setWebdavUrl(trimmedUrl);
             setWebdavUsername(trimmedUsername);
             setWebdavPassword(nextSettings.password);
@@ -579,6 +598,7 @@ export function useSyncSettingsTransportActions({
                 [CLOUD_TOKEN_KEY, nextSettings.token],
                 [CLOUD_ALLOW_INSECURE_HTTP_KEY, serializeBool(nextSettings.allowInsecureHttp)],
             ]);
+            clearMobileSyncConfigCache();
             setCloudUrl(trimmedUrl);
             setCloudToken(nextSettings.token);
             setCloudAllowInsecureHttp(nextSettings.allowInsecureHttp);
@@ -613,6 +633,7 @@ export function useSyncSettingsTransportActions({
             const previousLastSyncStatus = lastSyncStatus;
             const previousLastSyncStats = lastSyncStats ?? null;
             const effectiveBackend = options?.backend ?? syncBackend;
+            let wroteSyncConfig = false;
             const effectiveCloud = options?.cloud ?? {
                 allowInsecureHttp: cloudAllowInsecureHttp,
                 token: cloudToken,
@@ -644,6 +665,7 @@ export function useSyncSettingsTransportActions({
                     [WEBDAV_PASSWORD_KEY, effectiveWebdav.password],
                     [WEBDAV_ALLOW_INSECURE_HTTP_KEY, serializeBool(effectiveWebdav.allowInsecureHttp)],
                 ]);
+                wroteSyncConfig = true;
                 setWebdavUrl(trimmedWebDavUrl);
                 setWebdavUsername(trimmedWebDavUsername);
                 setWebdavPassword(effectiveWebdav.password);
@@ -661,6 +683,7 @@ export function useSyncSettingsTransportActions({
                     [SYNC_BACKEND_KEY, 'cloudkit'],
                     [CLOUD_PROVIDER_KEY, 'cloudkit'],
                 ]);
+                wroteSyncConfig = true;
                 setCloudProvider('cloudkit');
                 setSyncBackend('cloudkit');
             } else if (effectiveBackend === 'cloud') {
@@ -682,6 +705,7 @@ export function useSyncSettingsTransportActions({
                         [SYNC_BACKEND_KEY, 'cloud'],
                         [CLOUD_PROVIDER_KEY, 'dropbox'],
                     ]);
+                    wroteSyncConfig = true;
                     setCloudProvider('dropbox');
                     setSyncBackend('cloud');
                 } else {
@@ -700,6 +724,7 @@ export function useSyncSettingsTransportActions({
                         [CLOUD_TOKEN_KEY, effectiveCloud.token],
                         [CLOUD_ALLOW_INSECURE_HTTP_KEY, serializeBool(effectiveCloud.allowInsecureHttp)],
                     ]);
+                    wroteSyncConfig = true;
                     setCloudUrl(trimmedCloudUrl);
                     setCloudToken(effectiveCloud.token);
                     setCloudAllowInsecureHttp(effectiveCloud.allowInsecureHttp);
@@ -712,9 +737,13 @@ export function useSyncSettingsTransportActions({
                     return;
                 }
                 await AsyncStorage.setItem(SYNC_BACKEND_KEY, 'file');
+                wroteSyncConfig = true;
                 setSyncBackend('file');
             }
 
+            if (wroteSyncConfig) {
+                clearMobileSyncConfigCache();
+            }
             resetSyncStatusForBackendSwitch();
             reconcileBackgroundSyncRegistration();
             const result = await performMobileSync(effectiveBackend === 'file' ? syncPath || undefined : undefined);

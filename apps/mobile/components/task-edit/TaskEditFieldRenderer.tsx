@@ -33,6 +33,7 @@ export function TaskEditFieldRenderer(props: TaskEditFieldRendererProps) {
         case 'reviewAt':
             return <TaskEditScheduleField {...props} fieldId={props.fieldId} />;
         case 'description':
+        case 'location':
         case 'attachments':
         case 'checklist':
             return <TaskEditContentField {...props} fieldId={props.fieldId} />;

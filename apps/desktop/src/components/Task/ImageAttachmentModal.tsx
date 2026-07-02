@@ -1,4 +1,5 @@
 import type { Attachment } from '@mindwtr/core';
+import { ModalPortal } from '../ModalPortal';
 import { AttachmentImage } from './AttachmentImage';
 
 type ImageAttachmentModalProps = {
@@ -18,6 +19,7 @@ export function ImageAttachmentModal({
 }: ImageAttachmentModalProps) {
     if (!attachment) return null;
     return (
+        <ModalPortal>
         <div
             className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
             role="button"
@@ -65,5 +67,6 @@ export function ImageAttachmentModal({
                 </div>
             </div>
         </div>
+        </ModalPortal>
     );
 }

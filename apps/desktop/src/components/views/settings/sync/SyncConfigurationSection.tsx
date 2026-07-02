@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, RefreshCw } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ExternalLink, RefreshCw } from 'lucide-react';
 import { cn } from '../../../../lib/utils';
 import type { SettingsSyncPageProps } from './types';
 
@@ -28,6 +28,7 @@ type SyncConfigurationSectionProps = Pick<
     | 'onTestWebDavConnection'
     | 'cloudUrl'
     | 'cloudToken'
+    | 'cloudRememberToken'
     | 'cloudAllowInsecureHttp'
     | 'cloudProvider'
     | 'dropboxConfigured'
@@ -38,6 +39,7 @@ type SyncConfigurationSectionProps = Pick<
     | 'dropboxTestState'
     | 'onCloudUrlChange'
     | 'onCloudTokenChange'
+    | 'onCloudRememberTokenChange'
     | 'onCloudAllowInsecureHttpChange'
     | 'onCloudProviderChange'
     | 'onSaveCloud'
@@ -50,6 +52,13 @@ type SyncConfigurationSectionProps = Pick<
     cloudUrlError: boolean;
 };
 
+type BackendButtonOption = 'off' | 'file' | 'dropbox' | 'webdav' | 'selfhosted' | 'cloudkit';
+type BackendButtonGroup = {
+    description: string;
+    options: BackendButtonOption[];
+    title: string;
+};
+
 const BackendButton = ({
     active,
     children,
@@ -60,6 +69,7 @@ const BackendButton = ({
     onClick: () => void;
 }) => (
     <button
+        aria-pressed={active}
         onClick={onClick}
         className={cn(
             'px-3 py-1.5 rounded-md text-sm font-medium transition-colors border',
@@ -70,6 +80,43 @@ const BackendButton = ({
     >
         {children}
     </button>
+);
+
+const SwitchRow = ({
+    checked,
+    hint,
+    label,
+    onCheckedChange,
+}: {
+    checked: boolean;
+    hint: string;
+    label: string;
+    onCheckedChange: (checked: boolean) => void;
+}) => (
+    <div className="flex items-start justify-between gap-4 rounded-md border border-border bg-muted/30 p-3">
+        <div>
+            <p className="text-sm font-medium">{label}</p>
+            <p className="text-xs text-muted-foreground">{hint}</p>
+        </div>
+        <button
+            type="button"
+            role="switch"
+            aria-label={label}
+            aria-checked={checked}
+            onClick={() => onCheckedChange(!checked)}
+            className={cn(
+                'relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors',
+                checked ? 'bg-primary border-primary' : 'bg-muted/50 border-border',
+            )}
+        >
+            <span
+                className={cn(
+                    'inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform',
+                    checked ? 'translate-x-4' : 'translate-x-1',
+                )}
+            />
+        </button>
+    </div>
 );
 
 const ConnectionBadge = ({
@@ -168,10 +215,13 @@ const renderDropboxPanel = ({
 
 const renderSelfHostedCloudPanel = ({
     cloudAllowInsecureHttp,
+    cloudRememberToken,
     cloudToken,
     cloudUrl,
     cloudUrlError,
+    isTauri,
     onCloudAllowInsecureHttpChange,
+    onCloudRememberTokenChange,
     onCloudTokenChange,
     onCloudUrlChange,
     onSaveCloud,
@@ -179,9 +229,12 @@ const renderSelfHostedCloudPanel = ({
 }: Pick<
     SyncConfigurationSectionProps,
     | 'cloudAllowInsecureHttp'
+    | 'cloudRememberToken'
     | 'cloudToken'
     | 'cloudUrl'
+    | 'isTauri'
     | 'onCloudAllowInsecureHttpChange'
+    | 'onCloudRememberTokenChange'
     | 'onCloudTokenChange'
     | 'onCloudUrlChange'
     | 'onSaveCloud'
@@ -206,18 +259,12 @@ const renderSelfHostedCloudPanel = ({
             )}
         </div>
 
-        <label className="flex items-start gap-3 rounded-md border border-border bg-muted/30 p-3">
-            <input
-                type="checkbox"
-                checked={cloudAllowInsecureHttp}
-                onChange={(e) => onCloudAllowInsecureHttpChange(e.target.checked)}
-                className="mt-1 h-4 w-4 accent-primary"
-            />
-            <span>
-                <span className="block text-sm font-medium">{t.allowInsecureHttp}</span>
-                <span className="block text-xs text-muted-foreground">{t.allowInsecureHttpHint}</span>
-            </span>
-        </label>
+        <SwitchRow
+            checked={cloudAllowInsecureHttp}
+            label={t.allowInsecureHttp}
+            hint={t.allowInsecureHttpHint}
+            onCheckedChange={onCloudAllowInsecureHttpChange}
+        />
 
         <div className="flex flex-col gap-2">
             <label className="text-sm font-medium">{t.cloudToken}</label>
@@ -228,6 +275,15 @@ const renderSelfHostedCloudPanel = ({
                 className="bg-muted p-2 rounded text-sm border border-border focus:outline-none focus:ring-2 focus:ring-primary"
             />
         </div>
+
+        {!isTauri && (
+            <SwitchRow
+                checked={cloudRememberToken}
+                label={t.cloudRememberToken}
+                hint={t.cloudRememberTokenHint}
+                onCheckedChange={onCloudRememberTokenChange}
+            />
+        )}
 
         <div className="flex justify-end">
             <button
@@ -297,18 +353,12 @@ const renderWebDavPanel = ({
             )}
         </div>
 
-        <label className="flex items-start gap-3 rounded-md border border-border bg-muted/30 p-3">
-            <input
-                type="checkbox"
-                checked={webdavAllowInsecureHttp}
-                onChange={(e) => onWebdavAllowInsecureHttpChange(e.target.checked)}
-                className="mt-1 h-4 w-4 accent-primary"
-            />
-            <span>
-                <span className="block text-sm font-medium">{t.allowInsecureHttp}</span>
-                <span className="block text-xs text-muted-foreground">{t.allowInsecureHttpHint}</span>
-            </span>
-        </label>
+        <SwitchRow
+            checked={webdavAllowInsecureHttp}
+            label={t.allowInsecureHttp}
+            hint={t.allowInsecureHttpHint}
+            onCheckedChange={onWebdavAllowInsecureHttpChange}
+        />
 
         <div className="grid sm:grid-cols-2 gap-2">
             <div className="flex flex-col gap-2">
@@ -366,6 +416,7 @@ const renderWebDavPanel = ({
 
 export function SyncConfigurationSection({
     cloudAllowInsecureHttp,
+    cloudRememberToken,
     cloudProvider,
     cloudToken,
     cloudUrl,
@@ -382,6 +433,7 @@ export function SyncConfigurationSection({
     isTestingWebDav,
     onBrowseSyncPath,
     onCloudAllowInsecureHttpChange,
+    onCloudRememberTokenChange,
     onCloudProviderChange,
     onCloudTokenChange,
     onCloudUrlChange,
@@ -409,6 +461,80 @@ export function SyncConfigurationSection({
     webdavUrlError,
     webdavUsername,
 }: SyncConfigurationSectionProps) {
+    const isSelfHostedSelected = syncBackend === 'cloud' && cloudProvider === 'selfhosted';
+    const isDropboxSelected = syncBackend === 'cloud' && cloudProvider === 'dropbox';
+    const backendGroups: BackendButtonGroup[] = [
+        {
+            title: t.syncBackendGroupCloud,
+            description: t.syncBackendGroupCloudDesc,
+            options: ['dropbox', ...(isMacOS ? (['cloudkit'] as const) : [])],
+        },
+        {
+            title: t.syncBackendGroupFile,
+            description: t.syncBackendGroupFileDesc,
+            options: ['file'],
+        },
+        {
+            title: t.syncBackendGroupAdvanced,
+            description: t.syncBackendGroupAdvancedDesc,
+            options: ['webdav', 'selfhosted'],
+        },
+    ];
+    const backendControlOptions: BackendButtonOption[] = [
+        'off',
+        ...backendGroups.flatMap((group) => group.options),
+    ];
+    const getBackendOptionLabel = (option: BackendButtonOption): string => {
+        switch (option) {
+            case 'off':
+                return t.syncBackendOff;
+            case 'file':
+                return t.syncBackendFile;
+            case 'dropbox':
+                return t.cloudProviderDropbox;
+            case 'webdav':
+                return t.syncBackendWebdav;
+            case 'selfhosted':
+                return t.cloudProviderSelfHosted;
+            case 'cloudkit':
+                return t.syncBackendCloudkit;
+        }
+    };
+    const isBackendOptionActive = (option: BackendButtonOption): boolean => {
+        switch (option) {
+            case 'off':
+            case 'file':
+            case 'webdav':
+                return syncBackend === option;
+            case 'dropbox':
+                return isDropboxSelected;
+            case 'selfhosted':
+                return isSelfHostedSelected;
+            case 'cloudkit':
+                return syncBackend === 'cloudkit';
+        }
+    };
+    const selectedBackendGroup = backendGroups.find((group) =>
+        group.options.some((option) => isBackendOptionActive(option))
+    );
+    const selectBackendOption = (option: BackendButtonOption) => {
+        switch (option) {
+            case 'dropbox':
+                onCloudProviderChange('dropbox');
+                if (syncBackend !== 'cloud') onSetSyncBackend('cloud');
+                return;
+            case 'selfhosted':
+                onCloudProviderChange('selfhosted');
+                if (syncBackend !== 'cloud') onSetSyncBackend('cloud');
+                return;
+            case 'cloudkit':
+                onSetSyncBackend('cloudkit');
+                return;
+            default:
+                onSetSyncBackend(option);
+        }
+    };
+
     return (
         <section className="space-y-3">
             <h2 className="text-lg font-semibold flex items-center gap-2">
@@ -417,32 +543,45 @@ export function SyncConfigurationSection({
             </h2>
 
             <div className="bg-card border border-border rounded-lg p-6 space-y-4">
-                <p className="text-sm text-muted-foreground">{t.syncDescription}</p>
+                <a
+                    href="https://docs.mindwtr.app/data-sync/"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+                >
+                    Data and Sync guide
+                    <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                </a>
 
-                <div className="flex items-center justify-between gap-4">
+                <div className="space-y-1">
                     <span className="text-sm font-medium">{t.syncBackend}</span>
-                    <div className="flex gap-2">
-                        <BackendButton active={syncBackend === 'off'} onClick={() => onSetSyncBackend('off')}>
-                            {t.syncBackendOff}
-                        </BackendButton>
-                        <BackendButton active={syncBackend === 'file'} onClick={() => onSetSyncBackend('file')}>
-                            {t.syncBackendFile}
-                        </BackendButton>
-                        <BackendButton active={syncBackend === 'webdav'} onClick={() => onSetSyncBackend('webdav')}>
-                            {t.syncBackendWebdav}
-                        </BackendButton>
-                        <BackendButton
-                            active={syncBackend === 'cloud' || syncBackend === 'cloudkit'}
-                            onClick={() => {
-                                if (syncBackend !== 'cloud' && syncBackend !== 'cloudkit') {
-                                    onSetSyncBackend('cloud');
-                                }
-                            }}
-                        >
-                            {t.syncBackendCloud}
-                        </BackendButton>
-                    </div>
+                    <p className="text-xs text-muted-foreground">{t.syncBackendChoiceHint}</p>
                 </div>
+
+                <div
+                    aria-label={t.syncBackend}
+                    className="flex flex-wrap items-center gap-2 rounded-md bg-muted/30 p-2"
+                    role="group"
+                >
+                    {backendControlOptions.map((option) => (
+                        <BackendButton
+                            key={option}
+                            active={isBackendOptionActive(option)}
+                            onClick={() => selectBackendOption(option)}
+                        >
+                            {getBackendOptionLabel(option)}
+                        </BackendButton>
+                    ))}
+                </div>
+
+                {selectedBackendGroup && (
+                    <div className="space-y-1">
+                        <div className="text-sm font-semibold text-foreground">{selectedBackendGroup.title}</div>
+                        <p className="text-xs text-muted-foreground leading-relaxed">
+                            {selectedBackendGroup.description}
+                        </p>
+                    </div>
+                )}
 
                 {syncBackend === 'file' && (
                     <div className="flex flex-col gap-2">
@@ -494,70 +633,37 @@ export function SyncConfigurationSection({
                     webdavUsername,
                 })}
 
-                {(syncBackend === 'cloud' || syncBackend === 'cloudkit') && (
-                    <div className="space-y-4">
-                        <div className="flex items-center justify-between gap-4">
-                            <span className="text-sm font-medium">{t.cloudProvider}</span>
-                            <div className="flex gap-2">
-                                <BackendButton
-                                    active={syncBackend === 'cloud' && cloudProvider === 'selfhosted'}
-                                    onClick={() => {
-                                        onCloudProviderChange('selfhosted');
-                                        if (syncBackend !== 'cloud') onSetSyncBackend('cloud');
-                                    }}
-                                >
-                                    {t.cloudProviderSelfHosted}
-                                </BackendButton>
-                                <BackendButton
-                                    active={syncBackend === 'cloud' && cloudProvider === 'dropbox'}
-                                    onClick={() => {
-                                        onCloudProviderChange('dropbox');
-                                        if (syncBackend !== 'cloud') onSetSyncBackend('cloud');
-                                    }}
-                                >
-                                    {t.cloudProviderDropbox}
-                                </BackendButton>
-                                {isMacOS && (
-                                    <BackendButton
-                                        active={syncBackend === 'cloudkit'}
-                                        onClick={() => onSetSyncBackend('cloudkit')}
-                                    >
-                                        {t.cloudProviderCloudkit}
-                                    </BackendButton>
-                                )}
-                            </div>
-                        </div>
+                {isSelfHostedSelected && renderSelfHostedCloudPanel({
+                    cloudAllowInsecureHttp,
+                    cloudRememberToken,
+                    cloudToken,
+                    cloudUrl,
+                    cloudUrlError,
+                    isTauri,
+                    onCloudAllowInsecureHttpChange,
+                    onCloudRememberTokenChange,
+                    onCloudTokenChange,
+                    onCloudUrlChange,
+                    onSaveCloud,
+                    t,
+                })}
 
-                        {syncBackend === 'cloud' && cloudProvider === 'selfhosted' && renderSelfHostedCloudPanel({
-                            cloudAllowInsecureHttp,
-                            cloudToken,
-                            cloudUrl,
-                            cloudUrlError,
-                            onCloudAllowInsecureHttpChange,
-                            onCloudTokenChange,
-                            onCloudUrlChange,
-                            onSaveCloud,
-                            t,
-                        })}
-
-                        {syncBackend === 'cloudkit' && (
-                            <p className="text-sm text-muted-foreground">{t.cloudkitDesc}</p>
-                        )}
-
-                        {syncBackend === 'cloud' && cloudProvider === 'dropbox' && renderDropboxPanel({
-                            dropboxBusy,
-                            dropboxAuthInProgress,
-                            dropboxConfigured,
-                            dropboxConnected,
-                            dropboxRedirectUri,
-                            dropboxTestState,
-                            onConnectDropbox,
-                            onDisconnectDropbox,
-                            onTestDropboxConnection,
-                            t,
-                        })}
-                    </div>
+                {syncBackend === 'cloudkit' && (
+                    <p className="text-sm text-muted-foreground">{t.cloudkitDesc}</p>
                 )}
+
+                {isDropboxSelected && renderDropboxPanel({
+                    dropboxBusy,
+                    dropboxAuthInProgress,
+                    dropboxConfigured,
+                    dropboxConnected,
+                    dropboxRedirectUri,
+                    dropboxTestState,
+                    onConnectDropbox,
+                    onDisconnectDropbox,
+                    onTestDropboxConnection,
+                    t,
+                })}
             </div>
         </section>
     );

@@ -3,6 +3,10 @@ name: Release macOS App Store
 on:
   workflow_call:
     inputs:
+      tag:
+        description: Release tag (e.g., v1.0.5 or v1.0.5-rc.1)
+        required: false
+        type: string
       upload:
         description: Upload to App Store Connect
         required: false
@@ -13,6 +17,11 @@ on:
         required: false
         type: boolean
         default: true
+      distribute_testflight:
+        description: Distribute the uploaded build to the configured TestFlight external group without App Store review submission
+        required: false
+        type: boolean
+        default: false
       testflight_group:
         description: TestFlight external group for review-blocked uploads
         required: false
@@ -25,6 +34,10 @@ on:
         default: false
   workflow_dispatch:
     inputs:
+      tag:
+        description: Release tag (e.g., v1.0.5 or v1.0.5-rc.1)
+        required: false
+        type: string
       upload:
         description: Upload to App Store Connect
         required: false
@@ -35,6 +48,11 @@ on:
         required: false
         type: boolean
         default: true
+      distribute_testflight:
+        description: Distribute the uploaded build to the configured TestFlight external group without App Store review submission
+        required: false
+        type: boolean
+        default: false
       testflight_group:
         description: TestFlight external group for review-blocked uploads
         required: false
@@ -63,9 +81,13 @@ jobs:
     env:
       EXPECTED_BUNDLE_ID: tech.dongdongbh.mindwtr
       VITE_DROPBOX_APP_KEY: ${{ vars.VITE_DROPBOX_APP_KEY || secrets.VITE_DROPBOX_APP_KEY }}
+      VITE_FEEDBACK_ENDPOINT_URL: ${{ vars.VITE_FEEDBACK_ENDPOINT_URL || 'https://feedback.mindwtr.app' }}
+      VITE_DONATION_PROMPT_ENABLED: "true"
     steps:
       - name: Checkout code
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ inputs.tag || github.event.inputs.tag || github.ref }}
 
       - name: Setup Ruby
         run: bash scripts/ci/setup-ruby.sh 3.3
@@ -97,7 +119,7 @@ jobs:
           bun-version-file: ".bun-version"
 
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2.0"
@@ -407,6 +429,7 @@ jobs:
         env:
           APPLE_SIGNING_IDENTITY: ${{ secrets.MAS_SIGNING_IDENTITY }}
           VITE_ANALYTICS_HEARTBEAT_URL: ${{ secrets.ANALYTICS_HEARTBEAT_URL }}
+          VITE_ANALYTICS_RELEASE_VERSION: ${{ inputs.tag || github.ref_name }}
           TAURI_LOG_LEVEL: debug
           SOURCE_DATE_EPOCH: "1"
           # Bundled whisper bindings are only needed on this macOS build path.
@@ -558,6 +581,7 @@ jobs:
           IOS_ASC_ISSUER_ID: ${{ secrets.IOS_ASC_ISSUER_ID }}
           IOS_ASC_PRIVATE_KEY: ${{ secrets.IOS_ASC_PRIVATE_KEY }}
           REQUESTED_SUBMIT_FOR_REVIEW: ${{ inputs.submit_for_review && 'true' || 'false' }}
+          REQUESTED_DISTRIBUTE_TESTFLIGHT: ${{ inputs.distribute_testflight && 'true' || 'false' }}
         run: |
           set -euo pipefail
 
@@ -569,7 +593,16 @@ jobs:
             EFFECTIVE_SUBMIT_FOR_REVIEW="false"
             echo "Review submission disabled by input; checking App Store review state for TestFlight external routing."
           fi
-          echo "ENABLE_TESTFLIGHT_EXTERNAL_RELEASE=false" >> "$GITHUB_ENV"
+          if [ "${REQUESTED_DISTRIBUTE_TESTFLIGHT:-false}" = "true" ]; then
+            echo "ENABLE_TESTFLIGHT_EXTERNAL_RELEASE=true" >> "$GITHUB_ENV"
+            if [ "$REQUESTED_SUBMIT_FOR_REVIEW" != "true" ]; then
+              echo "SKIP_METADATA_FOR_UPLOAD=true" >> "$GITHUB_ENV"
+              echo "FASTLANE_SCREENSHOTS_PATH=" >> "$GITHUB_ENV"
+              echo "SKIP_SCREENSHOTS_FOR_UPLOAD=true" >> "$GITHUB_ENV"
+            fi
+          else
+            echo "ENABLE_TESTFLIGHT_EXTERNAL_RELEASE=false" >> "$GITHUB_ENV"
+          fi
           echo "SKIP_APP_VERSION_UPDATE_FOR_UPLOAD=false" >> "$GITHUB_ENV"
           echo "SKIP_APPSTORE_UPLOAD=false" >> "$GITHUB_ENV"
 

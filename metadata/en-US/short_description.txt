@@ -1,1 +1,1 @@
-Local-first GTD task manager
+Free GTD task manager. Offline, private, local-first to-do list.

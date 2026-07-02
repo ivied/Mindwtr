@@ -12,14 +12,15 @@ bun run --filter mindwtr-cloud dev -- --port 8787
 
 ## Documentation
 
-Detailed API, deployment, and operations docs are maintained in the project wiki:
+Detailed API, deployment, and operations docs are maintained in the public docs site. Source edits belong in the Mindwtr web docs source:
 
-- https://github.com/dongdongbh/Mindwtr/wiki
+- https://docs.mindwtr.app/
+- https://github.com/dongdongbh/mindwtr-web/tree/main/docs
 
 Recommended pages:
 
-- https://github.com/dongdongbh/Mindwtr/wiki/Cloud-Sync
-- https://github.com/dongdongbh/Mindwtr/wiki/Cloud-API
-- https://github.com/dongdongbh/Mindwtr/wiki/Cloud-Deployment
-- https://github.com/dongdongbh/Mindwtr/wiki/Developer-Guide
-- https://github.com/dongdongbh/Mindwtr/wiki/Data-and-Sync
+- https://docs.mindwtr.app/data-sync/
+- https://docs.mindwtr.app/data-sync/cloud-deployment
+- https://docs.mindwtr.app/developers/cloud-api
+- https://docs.mindwtr.app/power-users/docker-deployment
+- https://docs.mindwtr.app/developers/developer-guide

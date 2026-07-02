@@ -117,8 +117,10 @@ export const CLOUD_TASK_CREATION_ALLOWED_PROP_KEYS = new Set<keyof Task>([
     'priority',
     'taskMode',
     'startTime',
+    'relativeStartOffset',
     'dueDate',
     'recurrence',
+    'showFutureRecurrence',
     'pushCount',
     'tags',
     'contexts',
@@ -131,9 +133,12 @@ export const CLOUD_TASK_CREATION_ALLOWED_PROP_KEYS = new Set<keyof Task>([
     'sectionId',
     'areaId',
     'isFocusedToday',
+    'energyLevel',
+    'assignedTo',
     'timeEstimate',
     'reviewAt',
-    'assignedTo',
+    'suppressMindwtrReminders',
+    'repeatReminderMinutes',
     'metadata',
 ]);
 export const CLOUD_TASK_PATCH_ALLOWED_PROP_KEYS = new Set<keyof Task>([
@@ -158,6 +163,8 @@ export const CLOUD_PROJECT_CREATION_ALLOWED_PROP_KEYS = new Set<keyof Project>([
 ]);
 export const CLOUD_PROJECT_PATCH_ALLOWED_PROP_KEYS = new Set<keyof Project>([
     'title',
+    'deletedAt',
+    'purgedAt',
     ...CLOUD_PROJECT_CREATION_ALLOWED_PROP_KEYS,
 ]);
 export const CLOUD_SECTION_CREATION_ALLOWED_PROP_KEYS = new Set<keyof Section>([
@@ -220,6 +227,7 @@ const applyCorsHeaders = (headers: Headers): Headers => {
     headers.set('Vary', 'Origin');
     headers.set('Access-Control-Allow-Headers', 'Authorization, Content-Type, Content-Encoding');
     headers.set('Access-Control-Allow-Methods', 'GET,HEAD,PUT,POST,PATCH,DELETE,OPTIONS');
+    headers.set('Access-Control-Expose-Headers', 'ETag, Last-Modified, Content-Length');
     return headers;
 };
 

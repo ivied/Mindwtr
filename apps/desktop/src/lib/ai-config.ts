@@ -1,9 +1,38 @@
-import type { AIProviderId, AppData } from '@mindwtr/core';
-import { buildAIConfig, buildCopilotConfig, getAIKeyStorageKey } from '@mindwtr/core';
+import type { AIProviderConfig, AIProviderId, AppData } from '@mindwtr/core';
+import {
+    buildAIConfig as buildCoreAIConfig,
+    buildCopilotConfig as buildCoreCopilotConfig,
+    getAIKeyStorageKey,
+} from '@mindwtr/core';
 import { isTauriRuntime } from './runtime';
 import { logError } from './app-log';
 
 const AI_SECRET_KEY = 'mindwtr-ai-key-secret';
+
+type Fetcher = typeof fetch;
+
+let cachedTauriFetch: Fetcher | null | undefined;
+
+const loadTauriFetch = async (): Promise<Fetcher | null> => {
+    if (cachedTauriFetch !== undefined) return cachedTauriFetch;
+    if (!isTauriRuntime()) {
+        cachedTauriFetch = null;
+        return cachedTauriFetch;
+    }
+    try {
+        const mod: { fetch?: unknown } = await import('@tauri-apps/plugin-http');
+        cachedTauriFetch = typeof mod.fetch === 'function' ? mod.fetch as Fetcher : null;
+    } catch (error) {
+        void logError(error, { scope: 'ai', step: 'loadHttpFetch' });
+        cachedTauriFetch = null;
+    }
+    return cachedTauriFetch;
+};
+
+const withDesktopFetch = async (config: AIProviderConfig): Promise<AIProviderConfig> => {
+    const fetcher = await loadTauriFetch();
+    return fetcher ? { ...config, fetcher } : config;
+};
 
 const getSessionSecretBytes = (): Uint8Array | null => {
     if (typeof sessionStorage === 'undefined') return null;
@@ -130,8 +159,14 @@ export async function saveAIKey(provider: AIProviderId, value: string): Promise<
 }
 
 export function isAIKeyRequired(settings: AppData['settings'] | undefined): boolean {
-    const config = buildAIConfig(settings ?? {}, '');
+    const config = buildCoreAIConfig(settings ?? {}, '');
     return !(config.provider === 'openai' && Boolean(config.endpoint));
 }
 
-export { buildAIConfig, buildCopilotConfig };
+export async function buildAIConfig(settings: AppData['settings'] | undefined, apiKey: string): Promise<AIProviderConfig> {
+    return withDesktopFetch(buildCoreAIConfig(settings ?? {}, apiKey));
+}
+
+export async function buildCopilotConfig(settings: AppData['settings'] | undefined, apiKey: string): Promise<AIProviderConfig> {
+    return withDesktopFetch(buildCoreCopilotConfig(settings ?? {}, apiKey));
+}

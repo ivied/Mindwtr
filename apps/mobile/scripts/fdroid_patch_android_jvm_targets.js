@@ -41,6 +41,11 @@ const EXPLICIT_ANDROID_OVERRIDES = [
   'node_modules/react-native-gesture-handler/android/build.gradle',
 ];
 
+const LOCAL_ANDROID_OVERRIDES = [
+  'modules/notification-open-intents/android/build.gradle',
+  'modules/system-bars/android/build.gradle',
+];
+
 const GENERATED_ANDROID_OVERRIDES = ['android/app/build.gradle'];
 
 const FDROID_JAVA17_MARKER = '// F-Droid: force Java/Kotlin Android modules to target JVM 17.';
@@ -175,7 +180,7 @@ for (const relativePath of [...EXPLICIT_ANDROID_OVERRIDES, ...listExpoAndroidMod
   }
 }
 
-for (const relativePath of GENERATED_ANDROID_OVERRIDES) {
+for (const relativePath of [...LOCAL_ANDROID_OVERRIDES, ...GENERATED_ANDROID_OVERRIDES]) {
   if (appendJava17OverrideIfExists(relativePath)) {
     changed.push(relativePath);
   }

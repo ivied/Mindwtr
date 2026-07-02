@@ -10,6 +10,7 @@ import {
     getInMemoryAppDataSnapshot,
     isConnectionAllowed,
     SYNC_LOCAL_INSECURE_URL_OPTIONS,
+    summarizeMergeStats,
     translateWithFallback,
     type SyncBackend,
 } from '@mindwtr/core';
@@ -17,10 +18,12 @@ import {
     importDesktopDgtData,
     exportDesktopBackup,
     importDesktopOmniFocusData,
+    importDesktopTickTickData,
     importDesktopTodoistData,
     inspectDesktopDgtImport,
     inspectDesktopBackup,
     inspectDesktopOmniFocusImport,
+    inspectDesktopTickTickImport,
     inspectDesktopTodoistImport,
     restoreDesktopBackup,
 } from '../../../lib/data-transfer';
@@ -68,6 +71,7 @@ export const useSyncSettings = ({
     const [webdavTestState, setWebdavTestState] = useState<WebDavTestState>('idle');
     const [cloudUrl, setCloudUrl] = useState('');
     const [cloudToken, setCloudToken] = useState('');
+    const [cloudRememberToken, setCloudRememberToken] = useState(false);
     const [cloudAllowInsecureHttp, setCloudAllowInsecureHttp] = useState(false);
     const [cloudProvider, setCloudProvider] = useState<CloudProvider>('selfhosted');
     const [dropboxAppKey, setDropboxAppKey] = useState('');
@@ -189,6 +193,7 @@ export const useSyncSettings = ({
             .then((cfg) => {
                 setCloudUrl(cfg.url);
                 setCloudToken(cfg.token);
+                setCloudRememberToken(cfg.rememberToken === true);
                 setCloudAllowInsecureHttp(cfg.allowInsecureHttp === true);
             })
             .catch((error) => {
@@ -376,10 +381,11 @@ export const useSyncSettings = ({
         await SyncService.setCloudConfig({
             url: trimmedUrl,
             token: cloudToken.trim(),
+            rememberToken: !isTauri && cloudRememberToken,
             allowInsecureHttp: cloudAllowInsecureHttp,
         });
         showSaved();
-    }, [cloudAllowInsecureHttp, cloudUrl, cloudToken, showSaved, validateSyncHttpUrl]);
+    }, [cloudAllowInsecureHttp, cloudRememberToken, cloudUrl, cloudToken, isTauri, showSaved, validateSyncHttpUrl]);
 
     const handleSetCloudProvider = useCallback(async (provider: CloudProvider) => {
         setCloudProvider(provider);
@@ -530,16 +536,9 @@ export const useSyncSettings = ({
                     await SyncService.setSyncBackend('cloudkit');
                     showSaved();
                 }
-                const maxClockSkewMs = Math.max(
-                    result.stats?.tasks.maxClockSkewMs ?? 0,
-                    result.stats?.projects.maxClockSkewMs ?? 0,
-                    result.stats?.sections.maxClockSkewMs ?? 0,
-                    result.stats?.areas.maxClockSkewMs ?? 0
-                );
-                const timestampAdjustments = (result.stats?.tasks.timestampAdjustments ?? 0)
-                    + (result.stats?.projects.timestampAdjustments ?? 0)
-                    + (result.stats?.sections.timestampAdjustments ?? 0)
-                    + (result.stats?.areas.timestampAdjustments ?? 0);
+                const mergeSummary = summarizeMergeStats(result.stats);
+                const maxClockSkewMs = mergeSummary.maxClockSkewMs;
+                const timestampAdjustments = mergeSummary.timestampAdjustments;
                 showToast('Sync completed', 'success');
                 if (maxClockSkewMs > CLOCK_SKEW_THRESHOLD_MS) {
                     showToast(
@@ -708,6 +707,67 @@ export const useSyncSettings = ({
         }
     }, [formatText, isTauri, requestConfirmation, showToast, toErrorMessage]);
 
+
+    const handleImportTickTick = useCallback(async () => {
+        addBreadcrumb('transfer:restore');
+        setTransferAction('import');
+        try {
+            const parseResult = await inspectDesktopTickTickImport();
+            if (!parseResult) return;
+            if (!parseResult.valid || !parseResult.preview || !parseResult.parsedData) {
+                showToast(parseResult.errors[0] || 'The selected file is not a supported TickTick backup.', 'error');
+                return;
+            }
+
+            const preview = parseResult.preview;
+            const projectLines = preview.projects
+                .slice(0, 4)
+                .map((project: { areaName?: string; name: string; taskCount: number }) => `- ${project.areaName ? `${project.areaName} / ` : ''}${project.name}: ${project.taskCount}`);
+            if (preview.projects.length > 4) {
+                projectLines.push(`- ${preview.projects.length - 4} more project(s)...`);
+            }
+
+            const confirmed = await requestConfirmation({
+                title: 'Import TickTick data?',
+                message: [
+                    `Import ${preview.taskCount} task(s) from ${preview.fileName}?`,
+                    preview.areaCount > 0 ? `${preview.areaCount} area(s) will be created from TickTick folders.` : null,
+                    preview.projectCount > 0 ? `${preview.projectCount} project(s) will be created from TickTick lists.` : null,
+                    preview.checklistItemCount > 0 ? `${preview.checklistItemCount} checklist item(s) will be preserved.` : null,
+                    preview.recurringCount > 0 ? `${preview.recurringCount} recurring task(s) will keep supported repeat rules.` : null,
+                    'Imported active tasks stay in Inbox so you can process them in Mindwtr.',
+                    ...(projectLines.length > 0 ? ['', ...projectLines] : []),
+                    ...(preview.warnings.length > 0 ? ['', ...preview.warnings] : []),
+                ].filter(Boolean).join('\n'),
+            });
+            if (!confirmed) return;
+
+            const { snapshotName, result } = await importDesktopTickTickData(parseResult.parsedData);
+            if (isTauri) {
+                setSnapshots(await SyncService.listDataSnapshots());
+            }
+            const details = [
+                formatText(
+                    'settings.importTickTickSummary',
+                    'Imported {{taskCount}} task(s), {{projectCount}} project(s), and {{areaCount}} area(s).',
+                    {
+                        taskCount: result.importedTaskCount,
+                        projectCount: result.importedProjectCount,
+                        areaCount: result.importedAreaCount,
+                    },
+                ),
+                result.importedChecklistItemCount > 0 ? `${result.importedChecklistItemCount} checklist item(s) were preserved.` : null,
+                snapshotName ? `Snapshot saved as ${snapshotName}.` : null,
+                ...(result.warnings.length > 0 ? ['', ...result.warnings] : []),
+            ].filter(Boolean).join('\n');
+            showToast(details, 'success', 8000);
+        } catch (error) {
+            showToast(toErrorMessage(error, 'Failed to import TickTick data.'), 'error');
+        } finally {
+            setTransferAction(null);
+        }
+    }, [formatText, isTauri, requestConfirmation, showToast, toErrorMessage]);
+
     const handleImportDgt = useCallback(async () => {
         addBreadcrumb('transfer:restore');
         setTransferAction('import');
@@ -858,6 +918,8 @@ export const useSyncSettings = ({
         setCloudUrl,
         cloudToken,
         setCloudToken,
+        cloudRememberToken,
+        setCloudRememberToken,
         cloudAllowInsecureHttp,
         setCloudAllowInsecureHttp,
         cloudProvider,
@@ -888,6 +950,7 @@ export const useSyncSettings = ({
         handleExportBackup,
         handleRestoreBackup,
         handleImportTodoist,
+        handleImportTickTick,
         handleImportDgt,
         handleImportOmniFocus,
     };

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { gzipSync, strToU8 } from 'fflate';
 
 const getCalendarsMock = vi.hoisted(() => vi.fn());
 const fetchSystemCalendarEventsMock = vi.hoisted(() => vi.fn());
@@ -110,6 +111,31 @@ describe('external calendar events', () => {
             { id: 'holiday', name: 'US Holidays', url: 'https://calendar.example/holidays.ics', enabled: true },
         ]);
         vi.mocked(fetch).mockResolvedValue(new Response(yearlyHolidayIcs, { status: 200 }));
+
+        const result = await fetchExternalCalendarEvents(
+            new Date('2026-01-01T00:00:00.000Z'),
+            new Date('2026-01-02T00:00:00.000Z'),
+        );
+
+        expect(result.warnings).toEqual([]);
+        expect(result.events.map((event) => event.title)).toEqual(['New Years Day']);
+        expect(result.events[0].start.slice(0, 10)).toBe('2026-01-01');
+    });
+
+    it('loads gzip-encoded subscribed ICS responses', async () => {
+        const { fetchExternalCalendarEvents } = await import('./external-calendar-events');
+        getCalendarsMock.mockResolvedValue([
+            { id: 'holiday', name: 'US Holidays', url: 'https://calendar.example/holidays.ics', enabled: true },
+        ]);
+        const compressed = gzipSync(strToU8(yearlyHolidayIcs));
+        const body = compressed.buffer.slice(
+            compressed.byteOffset,
+            compressed.byteOffset + compressed.byteLength,
+        ) as ArrayBuffer;
+        vi.mocked(fetch).mockResolvedValue(new Response(body, {
+            status: 200,
+            headers: { 'content-encoding': 'gzip', 'content-type': 'text/calendar; charset=UTF-8' },
+        }));
 
         const result = await fetchExternalCalendarEvents(
             new Date('2026-01-01T00:00:00.000Z'),

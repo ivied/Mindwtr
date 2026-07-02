@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
@@ -14,9 +15,15 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   createAIProvider,
   DEFAULT_PROJECT_COLOR,
+  getQuickAddProjectInitialProps,
   getUsedTaskTokens,
   isSelectableProjectForTaskAssignment,
   parseQuickAdd,
+  normalizeClockTimeInput,
+  resolveDefaultNewTaskAreaId,
+  shallow,
+  splitQuickAddBulkLines,
+  tFallback,
   type AIProviderId,
   type Project,
   type Task,
@@ -28,14 +35,19 @@ import { useToast } from '@/contexts/toast-context';
 import { useLanguage } from '../contexts/language-context';
 import { buildCopilotConfig, isAIKeyRequired, loadAIKey } from '../lib/ai-config';
 import { logError } from '../lib/app-log';
+import { openTaskScreen } from '@/lib/task-meta-navigation';
 
 type CaptureSearchParams = {
   initialProps?: string;
   initialValue?: string;
   project?: string;
+  returnTo?: string;
   text?: string;
   title?: string;
 };
+
+const URL_INITIAL_TASK_STATUSES = new Set<Task['status']>(['inbox', 'next', 'waiting', 'someday', 'reference']);
+const BULK_PREVIEW_LINE_LIMIT = 5;
 
 const firstSearchParam = (value: string | string[] | undefined): string => {
   if (Array.isArray(value)) return value[0] ?? '';
@@ -50,6 +62,20 @@ const decodeSearchParam = (value: string | string[] | undefined): string => {
   } catch {
     return raw;
   }
+};
+
+export const sanitizeCaptureReturnToParam = (value: string | string[] | undefined): string | null => {
+  const decoded = decodeSearchParam(value).trim();
+  if (!decoded || !decoded.startsWith('/') || decoded.startsWith('//')) return null;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(decoded)) return null;
+  if (/[\u0000-\u001F\u007F]/.test(decoded)) return null;
+  return decoded;
+};
+
+const getCreatedTaskId = (result: unknown): string | null => {
+  if (!result || typeof result !== 'object') return null;
+  const maybeId = (result as { id?: unknown }).id;
+  return typeof maybeId === 'string' && maybeId.trim() ? maybeId : null;
 };
 
 const parseInitialPropsJson = (value: string | string[] | undefined): Record<string, unknown> => {
@@ -99,6 +125,11 @@ const sanitizeInitialPropsParam = (
   const contexts = normalizeInitialTokenList(parsed.contexts, '@');
   if (contexts) next.contexts = contexts;
 
+  const status = typeof parsed.status === 'string' ? parsed.status.trim().toLowerCase() : '';
+  if (URL_INITIAL_TASK_STATUSES.has(status as Task['status'])) {
+    next.status = status as Task['status'];
+  }
+
   const projectId = typeof parsed.projectId === 'string' ? parsed.projectId.trim() : '';
   if (projectId && projects.some((project) => project.id === projectId && isSelectableProjectForTaskAssignment(project))) {
     next.projectId = projectId;
@@ -115,7 +146,15 @@ const sanitizeInitialPropsParam = (
 export default function CaptureScreen() {
   const params = useLocalSearchParams<CaptureSearchParams>();
   const router = useRouter();
-  const { addProject, addTask, projects, tasks, settings, areas } = useTaskStore();
+  const { addProject, addTask, addTasks, projects, tasks, settings, areas } = useTaskStore((state) => ({
+    addProject: state.addProject,
+    addTask: state.addTask,
+    addTasks: state.addTasks,
+    projects: state.projects,
+    tasks: state.tasks,
+    settings: state.settings,
+    areas: state.areas,
+  }), shallow);
   const tc = useThemeColors();
   const { showToast } = useToast();
   const { t } = useLanguage();
@@ -127,6 +166,11 @@ export default function CaptureScreen() {
   const initialProps = React.useMemo(
     () => sanitizeInitialPropsParam(params.initialProps, projects, areas),
     [areas, params.initialProps, projects]
+  );
+  const defaultNewTaskAreaId = resolveDefaultNewTaskAreaId(settings, areas);
+  const returnTo = React.useMemo(
+    () => sanitizeCaptureReturnToParam(params.returnTo),
+    [params.returnTo]
   );
   const initialDescription = String(initialProps.description ?? '');
   const initialProjectTitle = decodeSearchParam(params.project).trim();
@@ -185,6 +229,15 @@ export default function CaptureScreen() {
   const tagOptions = React.useMemo(() => {
     return getUsedTaskTokens(tasks, (task) => task.tags, { prefix: '#' });
   }, [tasks]);
+  const quickAddParseOptions = React.useMemo(
+    () => ({
+      knownContexts: contextOptions,
+      knownTags: tagOptions,
+      defaultScheduleTime: normalizeClockTimeInput(settings.gtd?.defaultScheduleTime) || undefined,
+      preserveText: settings.quickAddAutoClean !== true,
+    }),
+    [contextOptions, tagOptions, settings.gtd?.defaultScheduleTime, settings.quickAddAutoClean]
+  );
 
   useEffect(() => {
     if (!aiEnabled || (keyRequired && !aiKey)) {
@@ -208,7 +261,7 @@ export default function CaptureScreen() {
           abortController ? { signal: abortController.signal } : undefined
         );
         if (cancelled || !copilotMountedRef.current) return;
-        if (!suggestion.context && (!timeEstimatesEnabled || !suggestion.timeEstimate)) {
+        if (!suggestion.context && (!timeEstimatesEnabled || !suggestion.timeEstimate) && !suggestion.tags?.length) {
           setCopilotSuggestion(null);
         } else {
           setCopilotSuggestion(suggestion);
@@ -264,17 +317,45 @@ export default function CaptureScreen() {
 
   const placeholderColor = tc.secondaryText;
 
-  const handleCancel = () => {
+  const closeCapture = React.useCallback(() => {
+    if (returnTo) {
+      router.replace(returnTo as never);
+      return;
+    }
     if (router.canGoBack()) {
       router.back();
     } else {
       router.replace('/inbox');
     }
+  }, [returnTo, router]);
+
+  const handleCancel = () => {
+    closeCapture();
   };
 
-  const handleSave = async () => {
-    if (!value.trim()) return;
-    const { title, props, projectTitle, invalidDateCommands, detectedDate } = parseQuickAdd(value, projects, new Date(), areas);
+  const formatBulkConfirmTitle = (count: number) => (
+    tFallback(t, 'quickAdd.bulkConfirmTitle', 'Create {{count}} tasks?')
+      .replace('{{count}}', String(count))
+  );
+
+  const formatBulkConfirmMessage = (lines: string[]) => {
+    const preview = lines.slice(0, BULK_PREVIEW_LINE_LIMIT).join('\n');
+    const remaining = Math.max(0, lines.length - BULK_PREVIEW_LINE_LIMIT);
+    const suffix = remaining > 0
+      ? `\n${tFallback(t, 'quickAdd.bulkMoreLines', '+{{count}} more').replace('{{count}}', String(remaining))}`
+      : '';
+    return `${preview}${suffix}`;
+  };
+
+  const buildTaskInputFromInput = async (inputValue: string): Promise<{ title: string; initialProps: Partial<Task> } | null> => {
+    if (!inputValue.trim()) return null;
+    const { title, props, projectTitle, invalidDateCommands, detectedDate } = parseQuickAdd(
+      inputValue,
+      projects,
+      new Date(),
+      areas,
+      quickAddParseOptions
+    );
     if (
       props.projectId
       && !projects.some((project) => project.id === props.projectId && isSelectableProjectForTaskAssignment(project))
@@ -288,11 +369,11 @@ export default function CaptureScreen() {
         tone: 'warning',
         durationMs: 4200,
       });
-      return;
+      return null;
     }
     const shouldApplyDetectedDate = Boolean(detectedDate?.date && !props.dueDate);
-    const finalTitle = shouldApplyDetectedDate && detectedDate ? detectedDate.titleWithoutDate : (title || value);
-    if (!finalTitle.trim()) return;
+    const finalTitle = shouldApplyDetectedDate && detectedDate ? detectedDate.titleWithoutDate : (title || inputValue);
+    if (!finalTitle.trim()) return null;
     const taskProps: Partial<Task> = { status: 'inbox', ...initialProps, ...props };
     if (!taskProps.status) taskProps.status = 'inbox';
     if (shouldApplyDetectedDate && detectedDate) {
@@ -320,8 +401,12 @@ export default function CaptureScreen() {
         if (matchedProject) {
           taskProps.projectId = matchedProject.id;
         } else {
-          const created = await addProject(requestedProjectTitle, DEFAULT_PROJECT_COLOR);
-          if (!created) return;
+          const created = await addProject(
+            requestedProjectTitle,
+            DEFAULT_PROJECT_COLOR,
+            getQuickAddProjectInitialProps(taskProps, defaultNewTaskAreaId),
+          );
+          if (!created) return null;
           taskProps.projectId = created.id;
         }
       }
@@ -347,8 +432,58 @@ export default function CaptureScreen() {
       const nextTags = Array.from(new Set([...(taskProps.tags ?? []), ...copilotTags]));
       taskProps.tags = nextTags;
     }
-    await addTask(finalTitle, taskProps);
-    router.replace('/inbox');
+    return { title: finalTitle, initialProps: taskProps };
+  };
+
+  const createTaskFromInput = async (
+    inputValue: string,
+    { openAfterSave = false }: { openAfterSave?: boolean } = {},
+  ): Promise<boolean> => {
+    const taskInput = await buildTaskInputFromInput(inputValue);
+    if (!taskInput) return false;
+    const addTaskResult = await addTask(taskInput.title, taskInput.initialProps);
+    if (addTaskResult && typeof addTaskResult === 'object' && addTaskResult.success === false) return false;
+    const createdTaskId = getCreatedTaskId(addTaskResult);
+    if (openAfterSave && createdTaskId) {
+      openTaskScreen(createdTaskId, taskInput.initialProps.projectId, 'task');
+      return false;
+    }
+    return true;
+  };
+
+  const createBulkTasks = async (lines: string[]) => {
+    const taskInputs: Array<{ title: string; initialProps: Partial<Task> }> = [];
+    for (const line of lines) {
+      const taskInput = await buildTaskInputFromInput(line);
+      if (!taskInput) return;
+      taskInputs.push(taskInput);
+    }
+    const result = await addTasks(taskInputs);
+    if (result && typeof result === 'object' && result.success === false) return;
+    closeCapture();
+  };
+
+  const handleSave = async ({ openAfterSave = false }: { openAfterSave?: boolean } = {}) => {
+    if (!value.trim()) return;
+    const bulkLines = splitQuickAddBulkLines(value);
+    if (bulkLines.length > 1) {
+      Alert.alert(
+        formatBulkConfirmTitle(bulkLines.length),
+        formatBulkConfirmMessage(bulkLines),
+        [
+          { text: t('common.cancel'), style: 'cancel' },
+          {
+            text: tFallback(t, 'quickAdd.bulkConfirmCreate', 'Create tasks'),
+            onPress: () => {
+              void createBulkTasks(bulkLines);
+            },
+          },
+        ],
+      );
+      return;
+    }
+    const shouldClose = await createTaskFromInput(value, { openAfterSave });
+    if (shouldClose) closeCapture();
   };
 
   return (
@@ -390,7 +525,9 @@ export default function CaptureScreen() {
             placeholderTextColor={placeholderColor}
             value={value}
             onChangeText={handleInputChange}
-            onSubmitEditing={handleSave}
+            onSubmitEditing={() => {
+              void handleSave();
+            }}
             returnKeyType="done"
             multiline
           />
@@ -445,7 +582,20 @@ export default function CaptureScreen() {
             <TouchableOpacity onPress={handleCancel} style={[styles.button, styles.cancel, { backgroundColor: tc.inputBg }]}>
               <Text style={{ color: tc.text }}>{t('common.cancel')}</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={handleSave} style={[styles.button, styles.save]}>
+            <TouchableOpacity
+              onPress={() => {
+                void handleSave({ openAfterSave: true });
+              }}
+              style={[styles.button, styles.editAfterSave, { borderColor: tc.border }]}
+            >
+                                <Text style={{ color: tc.text }}>{t('quickAdd.saveAndEdit')}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => {
+                void handleSave();
+              }}
+              style={[styles.button, styles.save]}
+            >
               <Text style={styles.saveText}>{t('common.save')}</Text>
             </TouchableOpacity>
           </View>
@@ -560,6 +710,9 @@ const styles = StyleSheet.create({
   cancel: {},
   save: {
     backgroundColor: '#3B82F6',
+  },
+  editAfterSave: {
+    borderWidth: 1,
   },
   saveText: {
     color: '#fff',

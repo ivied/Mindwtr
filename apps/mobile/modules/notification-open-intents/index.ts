@@ -6,11 +6,13 @@ type NotificationOpenPayload = {
   actionIdentifier?: string;
   taskId?: string;
   projectId?: string;
+  context?: string;
   kind?: string;
 };
 
 type NotificationOpenIntentsModule = {
   consumePendingOpenPayload(): Record<string, string> | null;
+  ensureReminderChannel?: (channelId: string, channelName: string) => void;
 };
 
 type AlarmNotificationModule = {
@@ -63,6 +65,7 @@ function normalizePayload(payload: Record<string, unknown>): NotificationOpenPay
     actionIdentifier: stringifyPayloadValue(payload.actionIdentifier) || nestedData.actionIdentifier || 'open',
     taskId: stringifyPayloadValue(payload.taskId) || nestedData.taskId,
     projectId: stringifyPayloadValue(payload.projectId) || nestedData.projectId,
+    context: stringifyPayloadValue(payload.context) || nestedData.context,
     kind: stringifyPayloadValue(payload.kind) || nestedData.kind,
   };
 }
@@ -75,4 +78,9 @@ export async function consumePendingNotificationOpenPayload(): Promise<Notificat
 
   const payload = await alarmNotificationModule?.consumePendingNotificationOpenPayload?.();
   return payload ? normalizePayload(payload) : null;
+}
+
+export async function ensureReminderNotificationChannel(channelId: string, channelName: string): Promise<void> {
+  if (Platform.OS !== 'android') return;
+  nativeModule?.ensureReminderChannel?.(channelId, channelName);
 }

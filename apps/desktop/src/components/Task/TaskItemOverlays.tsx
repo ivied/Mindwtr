@@ -37,12 +37,14 @@ type TaskItemOverlaysProps = {
     openDeleteConfirm: boolean;
     openDiscardConfirm: boolean;
     openLinkPrompt: boolean;
+    linkPromptDefaultValue: string;
+    linkPromptTitle: string;
+    linkPromptDescription: string;
+    linkPromptPlaceholder: string;
     openWaitingAssignmentPrompt: boolean;
-    openWaitingDuePrompt: boolean;
     onCancelWaitingAssignmentPrompt: () => void;
     onConfirmWaitingAssignmentPrompt: (value: string) => void;
     waitingAssignmentDefaultValue: string;
-    openWaitingDuePromptSetter: (open: boolean) => void;
     restoreTask: (taskId: string) => Promise<unknown>;
     retryAudioTranscription: () => void;
     setCustomInterval: (value: number) => void;
@@ -61,7 +63,6 @@ type TaskItemOverlaysProps = {
     textLoading: boolean;
     undoNotificationsEnabled: boolean;
     undoLabel: string;
-    updateTask: (taskId: string, patch: Record<string, any>) => Promise<unknown>;
     weekdayLabels: Record<RecurrenceWeekday, string>;
 };
 
@@ -96,12 +97,14 @@ export function TaskItemOverlays({
     openDeleteConfirm,
     openDiscardConfirm,
     openLinkPrompt,
+    linkPromptDefaultValue,
+    linkPromptTitle,
+    linkPromptDescription,
+    linkPromptPlaceholder,
     openWaitingAssignmentPrompt,
-    openWaitingDuePrompt,
     onCancelWaitingAssignmentPrompt,
     onConfirmWaitingAssignmentPrompt,
     waitingAssignmentDefaultValue,
-    openWaitingDuePromptSetter,
     restoreTask,
     retryAudioTranscription,
     setCustomInterval,
@@ -120,17 +123,11 @@ export function TaskItemOverlays({
     textLoading,
     undoLabel,
     undoNotificationsEnabled,
-    updateTask,
     weekdayLabels,
 }: TaskItemOverlaysProps) {
     const resolveText = (key: string, fallback: string) => {
         return translateWithFallback(t, key, fallback);
     };
-    const waitingDuePromptTitle = resolveText('task.waitingDuePromptTitle', 'Set follow-up / review date');
-    const waitingDuePromptDescription = resolveText(
-        'task.waitingDuePromptDescription',
-        'This sets the task review date. When should this waiting task resurface?',
-    );
     const waitingAssignmentPromptTitle = resolveText('process.waitingFor', 'Who/what are you waiting for?');
     const waitingAssignmentPromptDescription = resolveText(
         'process.waitingForDesc',
@@ -140,7 +137,6 @@ export function TaskItemOverlays({
         'taskEdit.assignedToPlaceholder',
         'Who is this waiting for?',
     );
-    const skipLabel = resolveText('common.skip', 'Skip');
 
     return (
         <>
@@ -169,10 +165,10 @@ export function TaskItemOverlays({
             {openLinkPrompt && (
                 <PromptModal
                     isOpen={openLinkPrompt}
-                    title={t('attachments.addLink')}
-                    description={t('attachments.linkInputHint')}
-                    placeholder={t('attachments.linkPlaceholder')}
-                    defaultValue=""
+                    title={linkPromptTitle}
+                    description={linkPromptDescription}
+                    placeholder={linkPromptPlaceholder}
+                    defaultValue={linkPromptDefaultValue}
                     confirmLabel={t('common.save')}
                     cancelLabel={t('common.cancel')}
                     onCancel={clearLinkPrompt}
@@ -195,26 +191,6 @@ export function TaskItemOverlays({
                     cancelLabel={t('common.cancel')}
                     onCancel={onCancelWaitingAssignmentPrompt}
                     onConfirm={onConfirmWaitingAssignmentPrompt}
-                />
-            )}
-            {openWaitingDuePrompt && (
-                <PromptModal
-                    isOpen={openWaitingDuePrompt}
-                    title={waitingDuePromptTitle}
-                    description={waitingDuePromptDescription}
-                    inputType="date"
-                    defaultValue=""
-                    secondaryLabel={skipLabel}
-                    onSecondary={() => openWaitingDuePromptSetter(false)}
-                    confirmLabel={t('common.save')}
-                    cancelLabel={t('common.cancel')}
-                    onCancel={() => openWaitingDuePromptSetter(false)}
-                    onConfirm={(value) => {
-                        const input = value.trim();
-                        if (!input) return;
-                        openWaitingDuePromptSetter(false);
-                        void updateTask(taskId, { reviewAt: input });
-                    }}
                 />
             )}
             {openDeleteConfirm && (

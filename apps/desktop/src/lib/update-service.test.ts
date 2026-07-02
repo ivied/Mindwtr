@@ -3,8 +3,10 @@ import {
   checkForUpdates,
   findPortableZipAsset,
   getFlatpakInstallChannel,
+  MS_STORE_UPDATES_URL,
   normalizeInstallSource,
 } from "./update-service";
+import tauriConfig from "../../src-tauri/tauri.conf.json";
 
 const jsonResponse = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), {
@@ -238,6 +240,44 @@ describe("update-service channel selection", () => {
       "https://example.com/mindwtr_1.2.0_windows_x64_portable.zip",
     );
     expect(normalizeInstallSource("portable")).toBe("portable");
+  });
+
+  it("uses Microsoft Store availability instead of GitHub for Microsoft Store installs", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (
+        url.includes("api.github.com/repos/dongdongbh/Mindwtr/releases/latest")
+      ) {
+        return jsonResponse({
+          tag_name: "v9.9.9",
+          html_url: "https://github.com/dongdongbh/Mindwtr/releases/tag/v9.9.9",
+          body: "github notes",
+          assets: [],
+        });
+      }
+      return jsonResponse({}, 404);
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await checkForUpdates("1.0.0", {
+      installSource: "microsoft-store",
+      microsoftStoreUpdateProvider: vi.fn().mockResolvedValue({
+        hasUpdate: false,
+        latestVersion: null,
+      }),
+    });
+
+    expect(result.hasUpdate).toBe(false);
+    expect(result.source).toBe("microsoft-store");
+    expect(result.latestVersion).toBe("1.0.0");
+    expect(result.releaseUrl).toBe(MS_STORE_UPDATES_URL);
+    expect(result.downloadUrl).toBeNull();
+  });
+
+  it("allows the Microsoft Store updates page through the Tauri shell scope", () => {
+    const openScope = tauriConfig.plugins.shell.open;
+
+    expect(new RegExp(openScope).test(MS_STORE_UPDATES_URL)).toBe(true);
   });
 
   it("prefers explicitly windows-named portable assets when multiple portable zips exist", () => {

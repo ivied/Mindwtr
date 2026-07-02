@@ -1,7 +1,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import * as Calendar from 'expo-calendar';
-import { generateUUID, parseIcs, type ExternalCalendarEvent, type ExternalCalendarSubscription } from '@mindwtr/core';
+import {
+    generateUUID,
+    normalizeExternalCalendarColor,
+    parseIcs,
+    type ExternalCalendarEvent,
+    type ExternalCalendarSubscription,
+} from '@mindwtr/core';
+import * as FileSystem from './file-system';
 
 export const EXTERNAL_CALENDARS_KEY = 'mindwtr-external-calendars';
 export const SYSTEM_CALENDAR_SETTINGS_KEY = 'mindwtr-system-calendar-settings';
@@ -29,6 +36,11 @@ type ExternalCalendarFetchOptions = {
     signal?: AbortSignal;
     timeoutMs?: number;
 };
+
+function isLocalCalendarSourceUrl(url: string): boolean {
+    const normalized = url.trim().toLowerCase();
+    return normalized.startsWith('file://') || normalized.startsWith('content://');
+}
 
 function safeJsonParse<T>(raw: string | null, fallback: T): T {
     if (!raw) return fallback;
@@ -142,6 +154,7 @@ export async function getExternalCalendars(): Promise<ExternalCalendarSubscripti
             name: (c.name || 'Calendar').trim() || 'Calendar',
             url: c.url.trim(),
             enabled: c.enabled !== false,
+            color: normalizeExternalCalendarColor(c.color),
         }))
         .filter((c) => c.url.length > 0);
 }
@@ -153,6 +166,7 @@ export async function saveExternalCalendars(calendars: ExternalCalendarSubscript
             name: (c.name || 'Calendar').trim() || 'Calendar',
             url: (c.url || '').trim(),
             enabled: c.enabled !== false,
+            color: normalizeExternalCalendarColor(c.color),
         }))
         .filter((c) => c.url.length > 0);
     await AsyncStorage.setItem(EXTERNAL_CALENDARS_KEY, JSON.stringify(sanitized));
@@ -211,6 +225,15 @@ export async function getSystemCalendars(): Promise<SystemCalendarInfo[]> {
 }
 
 async function fetchTextWithTimeout(url: string, timeoutMs: number, signal?: AbortSignal): Promise<string> {
+    if (isLocalCalendarSourceUrl(url)) {
+        throwIfAborted(signal);
+        const text = url.trim().toLowerCase().startsWith('content://')
+            ? await FileSystem.StorageAccessFramework.readAsStringAsync(url)
+            : await FileSystem.readAsStringAsync(url);
+        throwIfAborted(signal);
+        return text;
+    }
+
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     const timeout = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
     const onAbort = controller && signal

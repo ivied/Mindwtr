@@ -1,0 +1,3 @@
+- En versiones configuradas puedes enviar comentarios desde Ajustes.
+- Estimaciones de tiempo, pistas de secuencia, colores de urgencia y listas grandes mas rapidas mejoran la planificacion.
+- Sync de adjuntos, adjuntos antiguos, busqueda de filtros, notificaciones, automatizacion de contextos y recurrencias son mas fiables.

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Text, TextInput } from 'react-native';
+import { Platform, Text, TextInput, TouchableOpacity } from 'react-native';
 import renderer, { act } from 'react-test-renderer';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { configureDateFormatting } from '@mindwtr/core';
@@ -16,6 +16,19 @@ const styles = {
     statusContainer: {},
     statusChip: {},
     statusText: {},
+    dateRow: {},
+    dateBtn: {},
+    dateIssueText: {},
+    flex1: {},
+    clearDateBtn: {},
+    clearDateText: {},
+    compactFieldRow: {},
+    compactFieldLabel: {},
+    compactFieldValue: {},
+    pickerToolbar: {},
+    pickerSpacer: {},
+    pickerDone: {},
+    pickerDoneText: {},
     customRow: {},
     modalLabel: {},
     customInput: {},
@@ -32,28 +45,166 @@ const tc = {
     secondaryText: '#aaa',
     text: '#fff',
     tint: '#3b82f6',
+    onTint: '#fff',
+    warning: '#f59e0b',
 };
 
 const t = (key: string) => ({
     'common.notSet': 'Not set',
+    'common.done': 'Done',
+    'taskEdit.dueDateLabel': 'Due Date',
+    'taskEdit.startDateLabel': 'Start Date',
+    'taskEdit.suppressMindwtrReminders': 'Use calendar reminder',
+    'taskEdit.suppressMindwtrRemindersHint': 'Skip Mindwtr start/due reminders for this task when your device calendar already reminds you.',
+    'taskEdit.repeatReminderLabel': 'Repeat reminder',
+    'taskEdit.repeatReminderOff': 'Off',
+    'taskEdit.repeatReminderEveryMinutes': 'Every {count} min',
+    'taskEdit.repeatReminderMinutesShort': '{count} min',
+    'task.dateIssue.startAfterDue': 'Starts after due date',
     'taskEdit.recurrenceLabel': 'Recurrence',
     'recurrence.none': 'None',
     'recurrence.weekly': 'Weekly',
     'recurrence.monthly': 'Monthly',
+    'recurrence.yearly': 'Yearly',
     'recurrence.repeatEvery': 'Repeat every',
     'recurrence.weekUnit': 'week(s)',
     'recurrence.monthUnit': 'month(s)',
+    'recurrence.yearUnit': 'year(s)',
     'recurrence.endsLabel': 'Ends',
     'recurrence.endsNever': 'Never',
     'recurrence.endsOnDate': 'On date',
     'recurrence.endsAfterCount': 'After',
 }[key] ?? key);
 
+const originalPlatformOS = Platform.OS;
+
 afterEach(() => {
+    Object.defineProperty(Platform, 'OS', { value: originalPlatformOS, configurable: true });
     configureDateFormatting({ language: 'en', dateFormat: 'system', timeFormat: 'system', systemLocale: 'en-US' });
 });
 
 describe('TaskEditScheduleField', () => {
+    it('renders an unset due date as a compact action row', () => {
+        const setShowDatePicker = vi.fn();
+
+        let tree!: renderer.ReactTestRenderer;
+        act(() => {
+            tree = renderer.create(
+                <TaskEditScheduleField {...({
+                    customWeekdays: [],
+                    dailyInterval: 1,
+                    editedTask: {},
+                    fieldId: 'dueDate',
+                    formatDate: (value?: string) => value ?? '',
+                    formatDueDate: (value?: string) => value ?? 'Not set',
+                    getSafePickerDateValue: () => new Date('2026-04-28T09:20:00'),
+                    monthlyPattern: 'date',
+                    onDateChange: vi.fn(),
+                    openCustomRecurrence: vi.fn(),
+                    pendingDueDate: null,
+                    pendingStartDate: null,
+                    recurrenceOptions: [],
+                    recurrenceRRuleValue: '',
+                    recurrenceRuleValue: '',
+                    recurrenceStrategyValue: 'strict',
+                    recurrenceWeekdayButtons: [],
+                    setCustomWeekdays: vi.fn(),
+                    setEditedTask: vi.fn(),
+                    setShowDatePicker,
+                    showDatePicker: null,
+                    styles,
+                    t,
+                    task: null,
+                    tc,
+                } as any)}
+                />
+            );
+        });
+
+        const compactButton = tree.root.findByProps({ accessibilityLabel: 'Due Date: Not set' });
+        expect(compactButton.props.accessibilityRole).toBe('button');
+
+        act(() => {
+            compactButton.props.onPress();
+        });
+
+        expect(setShowDatePicker).toHaveBeenCalledWith('due');
+    });
+
+    it('shows due-date suggestions only while the due picker is active', () => {
+        let hiddenTree!: renderer.ReactTestRenderer;
+        act(() => {
+            hiddenTree = renderer.create(
+                <TaskEditScheduleField {...({
+                    customWeekdays: [],
+                    dailyInterval: 1,
+                    editedTask: {},
+                    fieldId: 'dueDate',
+                    formatDate: (value?: string) => value ?? '',
+                    formatDueDate: (value?: string) => value ?? 'Not set',
+                    getSafePickerDateValue: () => new Date('2026-04-28T09:20:00'),
+                    monthlyPattern: 'date',
+                    onDateChange: vi.fn(),
+                    openCustomRecurrence: vi.fn(),
+                    pendingDueDate: null,
+                    pendingStartDate: null,
+                    recurrenceOptions: [],
+                    recurrenceRRuleValue: '',
+                    recurrenceRuleValue: '',
+                    recurrenceStrategyValue: 'strict',
+                    recurrenceWeekdayButtons: [],
+                    setCustomWeekdays: vi.fn(),
+                    setEditedTask: vi.fn(),
+                    setShowDatePicker: vi.fn(),
+                    showDatePicker: null,
+                    styles,
+                    t,
+                    task: null,
+                    tc,
+                } as any)}
+                />
+            );
+        });
+
+        expect(hiddenTree.root.findAllByProps({ testID: 'quick-date-chips-row' })).toHaveLength(0);
+
+        let activeTree!: renderer.ReactTestRenderer;
+        act(() => {
+            activeTree = renderer.create(
+                <TaskEditScheduleField {...({
+                    customWeekdays: [],
+                    dailyInterval: 1,
+                    editedTask: {},
+                    fieldId: 'dueDate',
+                    formatDate: (value?: string) => value ?? '',
+                    formatDueDate: (value?: string) => value ?? 'Not set',
+                    getSafePickerDateValue: () => new Date('2026-04-28T09:20:00'),
+                    monthlyPattern: 'date',
+                    onDateChange: vi.fn(),
+                    openCustomRecurrence: vi.fn(),
+                    pendingDueDate: null,
+                    pendingStartDate: null,
+                    recurrenceOptions: [],
+                    recurrenceRRuleValue: '',
+                    recurrenceRuleValue: '',
+                    recurrenceStrategyValue: 'strict',
+                    recurrenceWeekdayButtons: [],
+                    setCustomWeekdays: vi.fn(),
+                    setEditedTask: vi.fn(),
+                    setShowDatePicker: vi.fn(),
+                    showDatePicker: 'due',
+                    styles,
+                    t,
+                    task: null,
+                    tc,
+                } as any)}
+                />
+            );
+        });
+
+        expect(activeTree.root.findAllByProps({ testID: 'quick-date-chips-row' }).length).toBeGreaterThan(0);
+    });
+
     it('formats start dates with the configured app date and time format', () => {
         configureDateFormatting({ language: 'en', dateFormat: 'ymd', timeFormat: '24h', systemLocale: 'en-US' });
 
@@ -93,6 +244,268 @@ describe('TaskEditScheduleField', () => {
 
         const textValues = tree.root.findAllByType(Text).map((node) => node.props.children);
         expect(textValues).toContain('2026-04-28 09:20');
+    });
+
+    it('shows a date-coherence note for start dates after due dates', () => {
+        let tree!: renderer.ReactTestRenderer;
+        act(() => {
+            tree = renderer.create(
+                <TaskEditScheduleField {...({
+                    customWeekdays: [],
+                    dailyInterval: 1,
+                    editedTask: { startTime: '2026-04-25', dueDate: '2026-04-24' },
+                    fieldId: 'startTime',
+                    formatDate: (value?: string) => value ?? '',
+                    formatDueDate: (value?: string) => value ?? '',
+                    getSafePickerDateValue: () => new Date('2026-04-25T09:20:00'),
+                    monthlyPattern: 'date',
+                    onDateChange: vi.fn(),
+                    openCustomRecurrence: vi.fn(),
+                    pendingDueDate: null,
+                    pendingStartDate: null,
+                    recurrenceOptions: [],
+                    recurrenceRRuleValue: '',
+                    recurrenceRuleValue: '',
+                    recurrenceStrategyValue: 'strict',
+                    recurrenceWeekdayButtons: [],
+                    setCustomWeekdays: vi.fn(),
+                    setEditedTask: vi.fn(),
+                    setShowDatePicker: vi.fn(),
+                    showDatePicker: null,
+                    styles,
+                    t,
+                    task: null,
+                    tc,
+                } as any)}
+                />
+            );
+        });
+
+        const textValues = tree.root.findAllByType(Text).map((node) => node.props.children);
+        expect(textValues).toContain('Starts after due date');
+    });
+
+    it('shows the calendar reminder handoff once on the due-date field for explicit reminder times', () => {
+        const setEditedTask = vi.fn();
+
+        let dateOnlyTree!: renderer.ReactTestRenderer;
+        act(() => {
+            dateOnlyTree = renderer.create(
+                <TaskEditScheduleField {...({
+                    customWeekdays: [],
+                    dailyInterval: 1,
+                    editedTask: { dueDate: '2026-04-28' },
+                    fieldId: 'dueDate',
+                    formatDate: (value?: string) => value ?? '',
+                    formatDueDate: (value?: string) => value ?? '',
+                    getSafePickerDateValue: () => new Date('2026-04-28T09:20:00'),
+                    monthlyPattern: 'date',
+                    onDateChange: vi.fn(),
+                    openCustomRecurrence: vi.fn(),
+                    pendingDueDate: null,
+                    pendingStartDate: null,
+                    recurrenceOptions: [],
+                    recurrenceRRuleValue: '',
+                    recurrenceRuleValue: '',
+                    recurrenceStrategyValue: 'strict',
+                    recurrenceWeekdayButtons: [],
+                    setCustomWeekdays: vi.fn(),
+                    setEditedTask,
+                    setShowDatePicker: vi.fn(),
+                    showDatePicker: null,
+                    styles,
+                    t,
+                    task: null,
+                    tc,
+                } as any)}
+                />
+            );
+        });
+
+        expect(dateOnlyTree.root.findAllByProps({ accessibilityRole: 'switch' })).toHaveLength(0);
+
+        let startFieldTree!: renderer.ReactTestRenderer;
+        act(() => {
+            startFieldTree = renderer.create(
+                <TaskEditScheduleField {...({
+                    customWeekdays: [],
+                    dailyInterval: 1,
+                    editedTask: { startTime: '2026-04-28T09:20:00' },
+                    fieldId: 'startTime',
+                    formatDate: (value?: string) => value ?? '',
+                    formatDueDate: (value?: string) => value ?? '',
+                    getSafePickerDateValue: () => new Date('2026-04-28T09:20:00'),
+                    monthlyPattern: 'date',
+                    onDateChange: vi.fn(),
+                    openCustomRecurrence: vi.fn(),
+                    pendingDueDate: null,
+                    pendingStartDate: null,
+                    recurrenceOptions: [],
+                    recurrenceRRuleValue: '',
+                    recurrenceRuleValue: '',
+                    recurrenceStrategyValue: 'strict',
+                    recurrenceWeekdayButtons: [],
+                    setCustomWeekdays: vi.fn(),
+                    setEditedTask,
+                    setShowDatePicker: vi.fn(),
+                    showDatePicker: null,
+                    styles,
+                    t,
+                    task: null,
+                    tc,
+                } as any)}
+                />
+            );
+        });
+
+        expect(startFieldTree.root.findAllByProps({ accessibilityRole: 'switch' })).toHaveLength(0);
+
+        let timedTree!: renderer.ReactTestRenderer;
+        act(() => {
+            timedTree = renderer.create(
+                <TaskEditScheduleField {...({
+                    customWeekdays: [],
+                    dailyInterval: 1,
+                    editedTask: { dueDate: '2026-04-28T09:20:00' },
+                    fieldId: 'dueDate',
+                    formatDate: (value?: string) => value ?? '',
+                    formatDueDate: (value?: string) => value ?? '',
+                    getSafePickerDateValue: () => new Date('2026-04-28T09:20:00'),
+                    monthlyPattern: 'date',
+                    onDateChange: vi.fn(),
+                    openCustomRecurrence: vi.fn(),
+                    pendingDueDate: null,
+                    pendingStartDate: null,
+                    recurrenceOptions: [],
+                    recurrenceRRuleValue: '',
+                    recurrenceRuleValue: '',
+                    recurrenceStrategyValue: 'strict',
+                    recurrenceWeekdayButtons: [],
+                    setCustomWeekdays: vi.fn(),
+                    setEditedTask,
+                    setShowDatePicker: vi.fn(),
+                    showDatePicker: null,
+                    styles,
+                    t,
+                    task: null,
+                    tc,
+                } as any)}
+                />
+            );
+        });
+
+        const handoffSwitch = timedTree.root.findByProps({ accessibilityRole: 'switch' });
+        expect(handoffSwitch.props.accessibilityState).toEqual({ checked: false });
+
+        act(() => {
+            handoffSwitch.props.onPress();
+        });
+
+        const update = setEditedTask.mock.calls[0][0] as (previous: any) => any;
+        expect(update({ dueDate: '2026-04-28T09:20:00' })).toMatchObject({
+            dueDate: '2026-04-28T09:20:00',
+            suppressMindwtrReminders: true,
+        });
+    });
+
+    it('collapses repeat reminder options until the compact row is pressed', () => {
+        const setEditedTask = vi.fn();
+
+        let tree!: renderer.ReactTestRenderer;
+        act(() => {
+            tree = renderer.create(
+                <TaskEditScheduleField {...({
+                    customWeekdays: [],
+                    dailyInterval: 1,
+                    editedTask: { dueDate: '2026-04-28T09:20:00' },
+                    fieldId: 'dueDate',
+                    formatDate: (value?: string) => value ?? '',
+                    formatDueDate: (value?: string) => value ?? '',
+                    getSafePickerDateValue: () => new Date('2026-04-28T09:20:00'),
+                    monthlyPattern: 'date',
+                    onDateChange: vi.fn(),
+                    openCustomRecurrence: vi.fn(),
+                    pendingDueDate: null,
+                    pendingStartDate: null,
+                    recurrenceOptions: [],
+                    recurrenceRRuleValue: '',
+                    recurrenceRuleValue: '',
+                    recurrenceStrategyValue: 'strict',
+                    recurrenceWeekdayButtons: [],
+                    setCustomWeekdays: vi.fn(),
+                    setEditedTask,
+                    setShowDatePicker: vi.fn(),
+                    showDatePicker: null,
+                    styles,
+                    t,
+                    task: null,
+                    tc,
+                } as any)}
+                />
+            );
+        });
+
+        const collapsedRow = tree.root.findByProps({ accessibilityLabel: 'Repeat reminder: Off' });
+        expect(collapsedRow.props.accessibilityRole).toBe('button');
+        expect(tree.root.findAllByProps({ accessibilityLabel: '5 min' })).toHaveLength(0);
+
+        act(() => {
+            collapsedRow.props.onPress();
+        });
+
+        const fiveMinuteOption = tree.root.findByProps({ accessibilityLabel: '5 min' });
+        act(() => {
+            fiveMinuteOption.props.onPress();
+        });
+
+        const update = setEditedTask.mock.calls[0][0] as (previous: any) => any;
+        expect(update({ dueDate: '2026-04-28T09:20:00' })).toMatchObject({
+            dueDate: '2026-04-28T09:20:00',
+            repeatReminderMinutes: 5,
+        });
+    });
+
+    it('renders the iOS due-time picker with time mode and theme text color', () => {
+        Object.defineProperty(Platform, 'OS', { value: 'ios', configurable: true });
+
+        let tree!: renderer.ReactTestRenderer;
+        act(() => {
+            tree = renderer.create(
+                <TaskEditScheduleField {...({
+                    customWeekdays: [],
+                    dailyInterval: 1,
+                    editedTask: { dueDate: '2026-04-28T09:20:00' },
+                    fieldId: 'dueDate',
+                    formatDate: (value?: string) => value ?? '',
+                    formatDueDate: (value?: string) => value ?? '',
+                    getSafePickerDateValue: () => new Date('2026-04-28T09:20:00'),
+                    monthlyPattern: 'date',
+                    onDateChange: vi.fn(),
+                    openCustomRecurrence: vi.fn(),
+                    pendingDueDate: null,
+                    pendingStartDate: null,
+                    recurrenceOptions: [],
+                    recurrenceRRuleValue: '',
+                    recurrenceRuleValue: '',
+                    recurrenceStrategyValue: 'strict',
+                    recurrenceWeekdayButtons: [],
+                    setCustomWeekdays: vi.fn(),
+                    setEditedTask: vi.fn(),
+                    setShowDatePicker: vi.fn(),
+                    showDatePicker: 'due-time',
+                    styles,
+                    t,
+                    task: null,
+                    tc,
+                } as any)}
+                />
+            );
+        });
+
+        const picker = tree.root.findByType('DateTimePicker' as any);
+        expect(picker.props.mode).toBe('time');
+        expect(picker.props.display).toBe('spinner');
+        expect(picker.props.textColor).toBe(tc.text);
     });
 
     it('updates monthly recurrence intervals without changing the monthly pattern', () => {
@@ -155,6 +568,7 @@ describe('TaskEditScheduleField', () => {
         expect(next.recurrence).toMatchObject({
             rule: 'monthly',
             strategy: 'strict',
+            byMonthDay: [15],
             rrule: 'FREQ=MONTHLY;INTERVAL=3;BYMONTHDAY=15',
         });
     });
@@ -213,7 +627,7 @@ describe('TaskEditScheduleField', () => {
         expect(intervalInput?.props.value).toBe('2');
 
         act(() => {
-            intervalInput?.props.onChangeText('4');
+            intervalInput?.props.onChangeText('78');
         });
 
         const update = setEditedTask.mock.calls[0][0] as (previous: any) => any;
@@ -230,7 +644,139 @@ describe('TaskEditScheduleField', () => {
             rule: 'weekly',
             strategy: 'strict',
             byDay: ['TU'],
-            rrule: 'FREQ=WEEKLY;INTERVAL=4;BYDAY=TU',
+            rrule: 'FREQ=WEEKLY;INTERVAL=78;BYDAY=TU',
+        });
+    });
+
+    it('uses the primary selection color for selected weekly recurrence weekdays', () => {
+        let tree!: renderer.ReactTestRenderer;
+        act(() => {
+            tree = renderer.create(
+                <TaskEditScheduleField {...({
+                    customWeekdays: ['TU'],
+                    dailyInterval: 1,
+                    editedTask: {
+                        recurrence: {
+                            rule: 'weekly',
+                            strategy: 'strict',
+                            byDay: ['TU'],
+                            rrule: 'FREQ=WEEKLY;BYDAY=TU',
+                        },
+                    },
+                    fieldId: 'recurrence',
+                    formatDate: (value?: string) => value ?? '',
+                    formatDueDate: (value?: string) => value ?? '',
+                    getSafePickerDateValue: () => new Date('2026-04-01T00:00:00.000Z'),
+                    monthlyPattern: 'date',
+                    onDateChange: vi.fn(),
+                    openCustomRecurrence: vi.fn(),
+                    pendingDueDate: null,
+                    pendingStartDate: null,
+                    recurrenceOptions: [
+                        { value: '', label: 'None' },
+                        { value: 'weekly', label: 'Weekly' },
+                    ],
+                    recurrenceRRuleValue: 'FREQ=WEEKLY;BYDAY=TU',
+                    recurrenceRuleValue: 'weekly',
+                    recurrenceStrategyValue: 'strict',
+                    recurrenceWeekdayButtons: [
+                        { key: 'TU', label: 'T' },
+                        { key: 'WE', label: 'W' },
+                    ],
+                    setCustomWeekdays: vi.fn(),
+                    setEditedTask: vi.fn(),
+                    setShowDatePicker: vi.fn(),
+                    showDatePicker: null,
+                    styles,
+                    t,
+                    task: null,
+                    tc,
+                } as any)}
+                />
+            );
+        });
+
+        const selectedButton = tree.root
+            .findAllByType(TouchableOpacity)
+            .find((node) => node.findAllByType(Text).some((textNode) => textNode.props.children === 'T'));
+
+        expect(selectedButton?.props.style).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                backgroundColor: tc.tint,
+                borderColor: tc.tint,
+            }),
+        ]));
+    });
+
+    it('updates yearly recurrence intervals', () => {
+        const setEditedTask = vi.fn();
+
+        let tree!: renderer.ReactTestRenderer;
+        act(() => {
+            tree = renderer.create(
+                <TaskEditScheduleField {...({
+                    customWeekdays: [],
+                    dailyInterval: 1,
+                    editedTask: {
+                        recurrence: {
+                            rule: 'yearly',
+                            strategy: 'strict',
+                            rrule: 'FREQ=YEARLY',
+                        },
+                    },
+                    fieldId: 'recurrence',
+                    formatDate: (value?: string) => value ?? '',
+                    formatDueDate: (value?: string) => value ?? '',
+                    getSafePickerDateValue: () => new Date('2026-04-01T00:00:00.000Z'),
+                    monthlyPattern: 'date',
+                    onDateChange: vi.fn(),
+                    openCustomRecurrence: vi.fn(),
+                    pendingDueDate: null,
+                    pendingStartDate: null,
+                    recurrenceOptions: [
+                        { value: '', label: 'None' },
+                        { value: 'yearly', label: 'Yearly' },
+                    ],
+                    recurrenceRRuleValue: 'FREQ=YEARLY',
+                    recurrenceRuleValue: 'yearly',
+                    recurrenceStrategyValue: 'strict',
+                    recurrenceWeekdayButtons: [],
+                    setCustomWeekdays: vi.fn(),
+                    setEditedTask,
+                    setShowDatePicker: vi.fn(),
+                    showDatePicker: null,
+                    styles,
+                    t,
+                    task: null,
+                    tc,
+                } as any)}
+                />
+            );
+        });
+
+        const intervalInput = tree.root
+            .findAllByType(TextInput)
+            .find((node) => node.props.accessibilityHint === 'year(s)');
+
+        expect(intervalInput?.props.value).toBe('1');
+
+        act(() => {
+            intervalInput?.props.onChangeText('2');
+        });
+
+        const update = setEditedTask.mock.calls[0][0] as (previous: any) => any;
+        const next = update({
+            recurrence: {
+                rule: 'yearly',
+                strategy: 'strict',
+                rrule: 'FREQ=YEARLY',
+            },
+        });
+
+        expect(next.recurrence).toMatchObject({
+            rule: 'yearly',
+            strategy: 'strict',
+            rrule: 'FREQ=YEARLY;INTERVAL=2',
         });
     });
 });

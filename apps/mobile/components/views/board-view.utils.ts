@@ -1,5 +1,57 @@
+import type { FilterCriteria } from '@mindwtr/core';
+
 export const STATUS_DRAG_STEP_PX = 72;
 export const STATUS_DRAG_TRIGGER_PX = 28;
+
+export type BoardDuePreset = 'today' | 'this_week' | 'this_month' | 'overdue' | 'no_date';
+
+export const BOARD_DUE_DATE_PRESETS: BoardDuePreset[] = ['today', 'this_week', 'this_month', 'overdue', 'no_date'];
+
+const withTokenList = (
+    criteria: FilterCriteria,
+    key: 'contexts' | 'tags',
+    values: string[],
+): FilterCriteria => {
+    const next = { ...criteria };
+    if (values.length > 0) {
+        next[key] = values;
+    } else {
+        delete next[key];
+    }
+    return next;
+};
+
+/** Toggle a context (`@`) or tag (`#`) token in a board filter criteria, routed by prefix. */
+export const toggleCriteriaToken = (criteria: FilterCriteria, token: string): FilterCriteria => {
+    const key: 'contexts' | 'tags' = token.trim().startsWith('#') ? 'tags' : 'contexts';
+    const current = criteria[key] ?? [];
+    const next = current.includes(token)
+        ? current.filter((item) => item !== token)
+        : [...current, token];
+    return withTokenList(criteria, key, next);
+};
+
+/** Toggle a due-date preset; selecting the active preset again clears it. */
+export const toggleCriteriaDuePreset = (criteria: FilterCriteria, preset: BoardDuePreset): FilterCriteria => {
+    const isActive = criteria.dueDateRange
+        && 'preset' in criteria.dueDateRange
+        && criteria.dueDateRange.preset === preset;
+    const next = { ...criteria };
+    if (isActive) {
+        delete next.dueDateRange;
+    } else {
+        next.dueDateRange = { preset };
+    }
+    return next;
+};
+
+/** Number of active board filter chips (contexts + tags + projects + due-date range). */
+export const countActiveBoardFilters = (criteria: FilterCriteria): number => (
+    (criteria.contexts?.length ?? 0)
+    + (criteria.tags?.length ?? 0)
+    + (criteria.projects?.length ?? 0)
+    + (criteria.dueDateRange ? 1 : 0)
+);
 
 type ResolveBoardDropColumnIndexArgs = {
     translationX: number;
@@ -83,4 +135,48 @@ export const resolveBoardDropColumnIndexFromY = ({
     }
 
     return nearest.index;
+};
+
+type ColumnTaskLayout = {
+    id: string;
+    top: number;
+    height: number;
+};
+
+type ResolveBoardColumnReorderArgs = {
+    taskId: string;
+    dragCenterY: number;
+    columnTasks: ColumnTaskLayout[];
+};
+
+/**
+ * Resolve a same-column drop into the new top-to-bottom id order.
+ * Returns null when the dragged task keeps its position or inputs are invalid.
+ */
+export const resolveBoardColumnReorder = ({
+    taskId,
+    dragCenterY,
+    columnTasks,
+}: ResolveBoardColumnReorderArgs): string[] | null => {
+    if (!Number.isFinite(dragCenterY)) return null;
+
+    const sortedTasks = [...columnTasks]
+        .filter((item) => Number.isFinite(item.top) && Number.isFinite(item.height) && item.height >= 0)
+        .sort((a, b) => a.top - b.top);
+    if (!sortedTasks.some((item) => item.id === taskId)) return null;
+
+    const others = sortedTasks.filter((item) => item.id !== taskId);
+    let insertIndex = 0;
+    for (const item of others) {
+        if (dragCenterY > item.top + (item.height / 2)) {
+            insertIndex += 1;
+        }
+    }
+
+    const orderedIds = others.map((item) => item.id);
+    orderedIds.splice(insertIndex, 0, taskId);
+
+    const currentIds = sortedTasks.map((item) => item.id);
+    const unchanged = orderedIds.every((id, index) => id === currentIds[index]);
+    return unchanged ? null : orderedIds;
 };

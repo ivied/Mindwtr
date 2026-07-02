@@ -2,7 +2,10 @@ import type { AiSettings, AppData, SavedFilter, SettingsSyncGroup, SettingsSyncP
 import {
     AI_PROVIDER_VALUE_SET,
     AI_REASONING_EFFORT_VALUE_SET,
+    SETTINGS_DEFAULT_PROJECT_FLOW_MODE_VALUE_SET,
+    SETTINGS_DEFAULT_TASK_AREA_MODE_VALUE_SET,
     SETTINGS_DENSITY_VALUE_SET,
+    SETTINGS_FOCUS_GROUP_BY_VALUE_SET,
     SETTINGS_KEYBINDING_STYLE_VALUE_SET,
     SETTINGS_LANGUAGE_VALUE_SET,
     SETTINGS_MOBILE_QUICK_ACCESS_VIEW_VALUE_SET,
@@ -18,7 +21,8 @@ import { isNonEmptyString, isObjectRecord, isValidTimestamp } from './sync-norma
 import { MAX_FOCUS_TASK_LIMIT, MIN_FOCUS_TASK_LIMIT, normalizeFocusTaskLimit } from './focus-utils';
 import { normalizeSavedFilters } from './saved-filters';
 import { chooseDeterministicWinner } from './sync-signatures';
-import { CLOCK_SKEW_THRESHOLD_MS, DELETE_VS_LIVE_AMBIGUOUS_WINDOW_MS } from './sync-types';
+import { DELETE_VS_LIVE_AMBIGUOUS_WINDOW_MS } from './sync-types';
+import { normalizeExternalCalendarColor } from './external-calendar-colors';
 
 const parseSyncTimestamp = (value?: string): number => {
     if (!value) return NaN;
@@ -70,9 +74,8 @@ const chooseSavedFilter = (localFilter: SavedFilter, incomingFilter: SavedFilter
     if (!Number.isFinite(incomingUpdatedAt) && Number.isFinite(localUpdatedAt)) return localFilter;
     if (Number.isFinite(incomingUpdatedAt) && Number.isFinite(localUpdatedAt)) {
         const updatedAtDiff = incomingUpdatedAt - localUpdatedAt;
-        if (Math.abs(updatedAtDiff) > CLOCK_SKEW_THRESHOLD_MS) {
-            return updatedAtDiff > 0 ? incomingFilter : localFilter;
-        }
+        if (updatedAtDiff > 0) return incomingFilter;
+        if (updatedAtDiff < 0) return localFilter;
         return chooseDeterministicWinner(localFilter, incomingFilter);
     }
     return incomingWins ? incomingFilter : localFilter;
@@ -114,9 +117,13 @@ const sanitizeAiForSync = (
         apiKey: undefined,
     };
     if (sanitized.speechToText) {
+        const localSpeechToText = localAi?.speechToText;
+        const keepLocalOfflineModelPath = Boolean(localSpeechToText?.offlineModelPath)
+            && sanitized.speechToText.provider === localSpeechToText?.provider
+            && sanitized.speechToText.model === localSpeechToText?.model;
         sanitized.speechToText = {
             ...sanitized.speechToText,
-            offlineModelPath: localAi?.speechToText?.offlineModelPath,
+            offlineModelPath: keepLocalOfflineModelPath ? localSpeechToText?.offlineModelPath : undefined,
         };
     }
     return sanitized;
@@ -188,34 +195,37 @@ const sanitizeExternalCalendars = (
 ): AppData['settings']['externalCalendars'] | undefined => {
     if (value === undefined) return fallback ? cloneSettingValue(fallback) : undefined;
     if (!Array.isArray(value)) return fallback ? cloneSettingValue(fallback) : undefined;
-    const isValidCalendar = (item: unknown): item is { id: string; name: string; url: string; enabled: boolean } =>
+    const isValidCalendar = (item: unknown): item is { color?: unknown; id: string; name: string; url: string; enabled: boolean } =>
         isObjectRecord(item)
         && isNonEmptyString(item.id)
         && isNonEmptyString(item.name)
         && isNonEmptyString(item.url)
         && typeof item.enabled === 'boolean';
-    const isLocalCalendarSource = (item: { url: string }): boolean => item.url.trim().toLowerCase().startsWith('file://');
-    const next = value
-        .filter(isValidCalendar)
-        .filter((item) => !isLocalCalendarSource(item))
-        .map((item) => ({
+    const isLocalCalendarSource = (item: { url: string }): boolean => {
+        const url = item.url.trim().toLowerCase();
+        return url.startsWith('file://') || url.startsWith('content://');
+    };
+    const sanitizeCalendar = (item: { color?: unknown; id: string; name: string; url: string; enabled: boolean }) => {
+        const color = normalizeExternalCalendarColor(item.color);
+        return {
             id: item.id.trim(),
             name: item.name.trim(),
             url: item.url.trim(),
             enabled: item.enabled,
-        }));
+            ...(color ? { color } : {}),
+        };
+    };
+    const next = value
+        .filter(isValidCalendar)
+        .filter((item) => !isLocalCalendarSource(item))
+        .map(sanitizeCalendar);
     const deduped = new Map<string, (typeof next)[number]>();
     for (const item of next) {
         deduped.set(item.id, item);
     }
     for (const item of fallback ?? []) {
         if (!isValidCalendar(item) || !isLocalCalendarSource(item)) continue;
-        const localSource = {
-            id: item.id.trim(),
-            name: item.name.trim(),
-            url: item.url.trim(),
-            enabled: item.enabled,
-        };
+        const localSource = sanitizeCalendar(item);
         if (!deduped.has(localSource.id)) {
             deduped.set(localSource.id, localSource);
         }
@@ -244,6 +254,9 @@ const sanitizeAiSettings = (
     }
     if (next.model !== undefined && !isNonEmptyString(next.model)) {
         next.model = fallback?.model;
+    }
+    if (next.openAIExtraBodyParams !== undefined && !isObjectRecord(next.openAIExtraBodyParams)) {
+        next.openAIExtraBodyParams = fallback?.openAIExtraBodyParams;
     }
     if (next.reasoningEffort !== undefined && !AI_REASONING_EFFORT_VALUE_SET.has(next.reasoningEffort)) {
         next.reasoningEffort = fallback?.reasoningEffort;
@@ -379,21 +392,73 @@ export const sanitizeMergedSettingsForSync = (
 
     if (next.gtd !== undefined && !isObjectRecord(next.gtd)) {
         next.gtd = localSettings.gtd ? cloneSettingValue(localSettings.gtd) : undefined;
-    } else if (next.gtd?.focusTaskLimit !== undefined) {
-        const rawLimit = next.gtd.focusTaskLimit;
-        if (typeof rawLimit !== 'number' || !Number.isFinite(rawLimit) || rawLimit < MIN_FOCUS_TASK_LIMIT || rawLimit > MAX_FOCUS_TASK_LIMIT) {
-            next.gtd = {
-                ...next.gtd,
-                focusTaskLimit: localSettings.gtd?.focusTaskLimit,
-            };
-            if (next.gtd.focusTaskLimit === undefined) {
-                delete next.gtd.focusTaskLimit;
+    } else if (next.gtd) {
+        if (next.gtd.focusTaskLimit !== undefined) {
+            const rawLimit = next.gtd.focusTaskLimit;
+            if (typeof rawLimit !== 'number' || !Number.isFinite(rawLimit) || rawLimit < MIN_FOCUS_TASK_LIMIT || rawLimit > MAX_FOCUS_TASK_LIMIT) {
+                next.gtd = {
+                    ...next.gtd,
+                    focusTaskLimit: localSettings.gtd?.focusTaskLimit,
+                };
+                if (next.gtd.focusTaskLimit === undefined) {
+                    delete next.gtd.focusTaskLimit;
+                }
+            } else {
+                next.gtd = {
+                    ...next.gtd,
+                    focusTaskLimit: normalizeFocusTaskLimit(rawLimit),
+                };
             }
-        } else {
+        }
+
+        if (next.gtd.focusGroupBy !== undefined && !setContainsValue(SETTINGS_FOCUS_GROUP_BY_VALUE_SET, next.gtd.focusGroupBy)) {
             next.gtd = {
                 ...next.gtd,
-                focusTaskLimit: normalizeFocusTaskLimit(rawLimit),
+                focusGroupBy: localSettings.gtd?.focusGroupBy,
             };
+            if (next.gtd.focusGroupBy === undefined) {
+                delete next.gtd.focusGroupBy;
+            }
+        }
+
+        if (
+            next.gtd.defaultAreaMode !== undefined
+            && !setContainsValue(SETTINGS_DEFAULT_TASK_AREA_MODE_VALUE_SET, next.gtd.defaultAreaMode)
+        ) {
+            next.gtd = {
+                ...next.gtd,
+                defaultAreaMode: localSettings.gtd?.defaultAreaMode,
+            };
+            if (next.gtd.defaultAreaMode === undefined) {
+                delete next.gtd.defaultAreaMode;
+            }
+        }
+
+        if (
+            next.gtd.defaultAreaId !== undefined
+            && next.gtd.defaultAreaId !== null
+            && !isNonEmptyString(next.gtd.defaultAreaId)
+        ) {
+            next.gtd = {
+                ...next.gtd,
+                defaultAreaId: localSettings.gtd?.defaultAreaId,
+            };
+            if (next.gtd.defaultAreaId === undefined) {
+                delete next.gtd.defaultAreaId;
+            }
+        }
+
+        if (
+            next.gtd.defaultProjectFlowMode !== undefined
+            && !setContainsValue(SETTINGS_DEFAULT_PROJECT_FLOW_MODE_VALUE_SET, next.gtd.defaultProjectFlowMode)
+        ) {
+            next.gtd = {
+                ...next.gtd,
+                defaultProjectFlowMode: localSettings.gtd?.defaultProjectFlowMode,
+            };
+            if (next.gtd.defaultProjectFlowMode === undefined) {
+                delete next.gtd.defaultProjectFlowMode;
+            }
         }
     }
 
@@ -452,6 +517,27 @@ export const mergeSettingsForSync = (
         }
         return mergedValue as T;
     };
+    type AppearanceSyncValue = {
+        theme: AppData['settings']['theme'];
+        appearance: AppData['settings']['appearance'];
+        keybindingStyle: AppData['settings']['keybindingStyle'];
+    };
+    const mergeAppearanceGroupValue = (
+        localValue: AppearanceSyncValue,
+        incomingValue: AppearanceSyncValue,
+        incomingWins: boolean
+    ): AppearanceSyncValue => {
+        const mergedValue = mergeRecordFields(localValue, incomingValue, incomingWins);
+        const mergedAppearance = mergeRecordFields(
+            (localValue.appearance ?? {}) as Record<string, unknown>,
+            (incomingValue.appearance ?? {}) as Record<string, unknown>,
+            incomingWins
+        ) as AppData['settings']['appearance'];
+        mergedValue.appearance = mergedAppearance && Object.keys(mergedAppearance).length > 0
+            ? mergedAppearance
+            : undefined;
+        return mergedValue;
+    };
     const mergeGroup = <T>(
         key: SettingsSyncGroup,
         localValue: T,
@@ -489,7 +575,7 @@ export const mergeSettingsForSync = (
             merged.appearance = value.appearance;
             merged.keybindingStyle = value.keybindingStyle;
         },
-        (localValue, incomingValue, incomingWins) => mergeRecordFields(localValue, incomingValue, incomingWins)
+        (localValue, incomingValue, incomingWins) => mergeAppearanceGroupValue(localValue, incomingValue, incomingWins)
     );
 
     mergeGroup(
@@ -519,11 +605,19 @@ export const mergeSettingsForSync = (
         'gtd',
         {
             defaultScheduleTime: localSettings.gtd?.defaultScheduleTime,
+            defaultAreaMode: localSettings.gtd?.defaultAreaMode,
+            defaultAreaId: localSettings.gtd?.defaultAreaId,
             focusTaskLimit: localSettings.gtd?.focusTaskLimit,
+            focusGroupBy: localSettings.gtd?.focusGroupBy,
+            defaultProjectFlowMode: localSettings.gtd?.defaultProjectFlowMode,
         },
         {
             defaultScheduleTime: incomingSettings.gtd?.defaultScheduleTime,
+            defaultAreaMode: incomingSettings.gtd?.defaultAreaMode,
+            defaultAreaId: incomingSettings.gtd?.defaultAreaId,
             focusTaskLimit: incomingSettings.gtd?.focusTaskLimit,
+            focusGroupBy: incomingSettings.gtd?.focusGroupBy,
+            defaultProjectFlowMode: incomingSettings.gtd?.defaultProjectFlowMode,
         },
         (value) => {
             const nextGtd = { ...(merged.gtd ?? {}) };
@@ -532,10 +626,30 @@ export const mergeSettingsForSync = (
             } else {
                 nextGtd.defaultScheduleTime = value.defaultScheduleTime;
             }
+            if (value.defaultAreaMode === undefined) {
+                delete nextGtd.defaultAreaMode;
+            } else {
+                nextGtd.defaultAreaMode = value.defaultAreaMode;
+            }
+            if (value.defaultAreaId === undefined) {
+                delete nextGtd.defaultAreaId;
+            } else {
+                nextGtd.defaultAreaId = value.defaultAreaId;
+            }
             if (value.focusTaskLimit === undefined) {
                 delete nextGtd.focusTaskLimit;
             } else {
                 nextGtd.focusTaskLimit = value.focusTaskLimit;
+            }
+            if (value.focusGroupBy === undefined) {
+                delete nextGtd.focusGroupBy;
+            } else {
+                nextGtd.focusGroupBy = value.focusGroupBy;
+            }
+            if (value.defaultProjectFlowMode === undefined) {
+                delete nextGtd.defaultProjectFlowMode;
+            } else {
+                nextGtd.defaultProjectFlowMode = value.defaultProjectFlowMode;
             }
             if (Object.keys(nextGtd).length === 0) {
                 if (merged.gtd) {

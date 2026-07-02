@@ -152,6 +152,16 @@ Optional e2e:
 bun run test:e2e
 ```
 
+## Release maintenance
+
+Before publishing a stable or RC build, validate the platform channels affected by dependency changes, not just the build job that produced the artifact.
+
+Linux desktop releases need an extra smoke pass when Tauri, TLS, WebDAV, AppImage, or packaging dependencies change:
+
+- Launch the AppImage and native packages on an older supported Linux runtime, including a distro with older OpenSSL/libssl packages, before tagging stable.
+- Check Flathub beta/stable output, AppImage, `.deb`/`.rpm`, and AUR binary/source packages for runtime dependency drift.
+- When desktop networking uses `native-tls` or another system library path, confirm the AUR `depends`/`.SRCINFO` entries and package smoke still cover the required runtime libraries.
+
 ## Coding conventions
 
 - TypeScript first.
@@ -162,6 +172,8 @@ bun run test:e2e
   - mobile usually 2 spaces
 - Keep code comments concise and only where logic is non-obvious.
 - Favor accessibility-oriented test queries (`getByRole`, `getByLabelText`).
+- Mobile popups: any transparent-modal popup that contains a `TextInput` must use the shared `useAndroidKeyboardInset` hook so it stays above the Android soft keyboard.
+- Markdown editor changes need regression tests for the historical failure modes (cursor jump on tap, scroll-into-view, keyboard-height padding, toolbar timing) — these have each shipped as production bugs before.
 
 Naming:
 
@@ -243,9 +255,9 @@ OSI-approved open-source license.
 
 ## Documentation contributions
 
-Documentation updates are welcome in `wiki/`, `docs/`, `README.md`, and `README_zh.md`.
+Documentation updates are welcome in the docs site repo, `README.md`, `README_zh.md`, and repository-local docs.
 
-Most user-facing documentation should go in `wiki/`. That directory is the source for the GitHub wiki and is synced to the live wiki page by GitHub Actions. Use `docs/` for repository-local documentation such as contribution guides, architecture summaries, ADRs, and release notes.
+Most user-facing documentation should go in the Mindwtr web docs source, which builds the public docs site at https://docs.mindwtr.app/. Use this repository's `docs/` directory for repository-local documentation such as contribution guides, architecture summaries, ADRs, and release notes. The `wiki/` directory is legacy GitHub Wiki source while the docs migration continues; update it only when a page still needs to stay mirrored there.
 
 When changing docs:
 
@@ -253,13 +265,15 @@ When changing docs:
 - Prefer concrete examples over vague guidance
 - Validate links
 - Update both English and Chinese docs when the content is mirrored
-- Prefer updating `wiki/` when the content is part of the public user/developer wiki
+- Keep `README.md` and `README_zh.md` heading structure aligned; CI runs `bun run docs:check-readme`
+- Prefer updating the [Mindwtr web docs source](https://github.com/dongdongbh/mindwtr-web/tree/main/docs) when the content is public user/developer documentation
 
 Useful references:
 
-- [Developer Guide](https://github.com/dongdongbh/Mindwtr/wiki/Developer-Guide)
-- [Architecture](https://github.com/dongdongbh/Mindwtr/wiki/Architecture)
-- [Wiki index](https://github.com/dongdongbh/Mindwtr/wiki)
+- [Official docs](https://docs.mindwtr.app/)
+- [Docs source](https://github.com/dongdongbh/mindwtr-web/tree/main/docs)
+- [Developer Guide](https://docs.mindwtr.app/developers/developer-guide)
+- [Architecture](https://docs.mindwtr.app/developers/architecture)
 
 ## Translation contributions
 
@@ -271,6 +285,8 @@ When updating translations:
 
 - Keep placeholders and interpolation keys unchanged
 - Keep command tokens intact where parser behavior depends on English commands
+- For a new language, register the locale in the shared i18n registries, date locale mapping, desktop/mobile language pickers, and locale parity checks
+- Run `bun run i18n:check` and relevant core i18n tests
 - Confirm UI still fits in small mobile layouts
 
 ## Need help?

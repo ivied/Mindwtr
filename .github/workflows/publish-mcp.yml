@@ -1,0 +1,214 @@
+name: Publish MCP Registry
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+      - '!v*-rc.*'
+      - '!v*-beta.*'
+      - '!v*-alpha.*'
+  workflow_dispatch:
+    inputs:
+      npm_tag:
+        description: 'npm dist-tag to publish'
+        required: true
+        default: 'latest'
+        type: choice
+        options:
+          - latest
+          - next
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  PAGER: cat
+  NPM_CONFIG_AUDIT: "false"
+  NPM_CONFIG_FUND: "false"
+
+jobs:
+  publish:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') || !contains(github.ref_name, '-') }}
+    name: Publish MCP package and registry metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: "22.14.0"
+          registry-url: https://registry.npmjs.org/
+
+      - name: Ensure npm supports trusted publishing
+        run: npm install -g npm@^11.5.1
+
+      - name: Remove obsolete npm auth config
+        run: |
+          set -euo pipefail
+          if [ -n "${NPM_CONFIG_USERCONFIG:-}" ] && [ -f "$NPM_CONFIG_USERCONFIG" ]; then
+            sed -i '/^always-auth[[:space:]]*=/d' "$NPM_CONFIG_USERCONFIG"
+          fi
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb # v5.0.1
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile || (echo "bun install failed, clearing cache and retrying..." && (bun pm cache rm || bun pm cache clean || true) && bun install --frozen-lockfile)
+
+      - name: MCP typecheck
+        run: bun run --filter mindwtr-mcp typecheck
+
+      - name: MCP tests
+        run: bun run --filter mindwtr-mcp test
+
+      - name: Build MCP package
+        run: bun run --filter mindwtr-mcp build
+
+      - name: Verify bundle is self-contained
+        run: |
+          set -euo pipefail
+          if grep -R "@mindwtr/core" apps/mcp-server/dist; then
+            echo "Built MCP package still references @mindwtr/core. Refusing to publish."
+            exit 1
+          fi
+
+      - name: Clean-room package smoke test
+        id: package
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/mindwtr-mcp-pack /tmp/mindwtr-mcp-clean
+          mkdir -p /tmp/mindwtr-mcp-pack /tmp/mindwtr-mcp-clean
+          cd apps/mcp-server
+          npm pack --json --pack-destination /tmp/mindwtr-mcp-pack > /tmp/mindwtr-mcp-pack/pack.json
+
+          PACKAGE_NAME=$(node -e "const data = require('/tmp/mindwtr-mcp-pack/pack.json'); process.stdout.write(data[0].name)")
+          PACKAGE_VERSION=$(node -e "const data = require('/tmp/mindwtr-mcp-pack/pack.json'); process.stdout.write(data[0].version)")
+          LOCAL_INTEGRITY=$(node -e "const data = require('/tmp/mindwtr-mcp-pack/pack.json'); process.stdout.write(data[0].integrity)")
+          TARBALL=$(node -e "const data = require('/tmp/mindwtr-mcp-pack/pack.json'); process.stdout.write(data[0].filename)")
+
+          cd /tmp/mindwtr-mcp-clean
+          npm init -y
+          npm install "/tmp/mindwtr-mcp-pack/$TARBALL"
+          node "$GITHUB_WORKSPACE/scripts/ci/smoke-mcp-stdio.mjs" "$PWD/node_modules/.bin/mindwtr-mcp" "$PWD/data/mindwtr.db"
+
+          echo "package_name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
+          echo "package_version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "local_integrity=$LOCAL_INTEGRITY" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether npm version already exists
+        id: npm_version
+        run: |
+          set -euo pipefail
+          PACKAGE="${{ steps.package.outputs.package_name }}@${{ steps.package.outputs.package_version }}"
+          if PUBLISHED_JSON=$(npm view "$PACKAGE" dist.integrity --json 2>/dev/null); then
+            PUBLISHED_INTEGRITY=$(node -e "const value = JSON.parse(process.argv[1]); process.stdout.write(value || '')" "$PUBLISHED_JSON")
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "published_integrity=$PUBLISHED_INTEGRITY" >> "$GITHUB_OUTPUT"
+            if [ "$PUBLISHED_INTEGRITY" != "${{ steps.package.outputs.local_integrity }}" ]; then
+              echo "npm package $PACKAGE already exists, but its tarball integrity differs from this checkout."
+              echo "Bump apps/mcp-server/package.json and apps/mcp-server/server.json before publishing a changed MCP package."
+              exit 1
+            fi
+            echo "$PACKAGE already exists on npm with matching integrity; skipping npm publish."
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+            echo "$PACKAGE has not been published yet."
+          fi
+
+      - name: Publish npm package with trusted publishing
+        if: steps.npm_version.outputs.published != 'true'
+        env:
+          NPM_DIST_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.npm_tag || 'latest' }}
+        run: |
+          set -euo pipefail
+          cd apps/mcp-server
+          npm publish --access public --provenance --tag "$NPM_DIST_TAG"
+
+      - name: Wait for public npm package
+        run: |
+          set -euo pipefail
+          PACKAGE="${{ steps.package.outputs.package_name }}@${{ steps.package.outputs.package_version }}"
+          for attempt in $(seq 1 30); do
+            if npm view "$PACKAGE" version --json >/dev/null 2>&1; then
+              echo "$PACKAGE is visible on npm."
+              exit 0
+            fi
+            echo "$PACKAGE is not visible on npm yet (attempt $attempt/30); waiting..."
+            sleep 10
+          done
+          echo "Timed out waiting for $PACKAGE to become visible on npm." >&2
+          npm view "$PACKAGE" version --json
+
+      - name: Verify public npm package
+        run: |
+          set -euo pipefail
+          PACKAGE="${{ steps.package.outputs.package_name }}@${{ steps.package.outputs.package_version }}"
+          rm -rf /tmp/mindwtr-mcp-public-clean
+          mkdir -p /tmp/mindwtr-mcp-public-clean
+          cd /tmp/mindwtr-mcp-public-clean
+          npm init -y
+          for attempt in $(seq 1 12); do
+            if npm install "$PACKAGE"; then
+              break
+            fi
+            if [ "$attempt" -eq 12 ]; then
+              echo "Timed out installing $PACKAGE from npm." >&2
+              exit 1
+            fi
+            echo "$PACKAGE is not installable from npm yet (attempt $attempt/12); waiting..."
+            rm -rf node_modules package-lock.json
+            sleep 10
+          done
+          node "$GITHUB_WORKSPACE/scripts/ci/smoke-mcp-stdio.mjs" "$PWD/node_modules/.bin/mindwtr-mcp" "$PWD/data/mindwtr.db"
+
+      - name: Install mcp-publisher
+        run: |
+          set -euo pipefail
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Validate MCP Registry metadata
+        run: |
+          set -euo pipefail
+          cd apps/mcp-server
+          ../../mcp-publisher validate
+
+      - name: Check whether MCP Registry version already exists
+        id: registry_version
+        run: |
+          set -euo pipefail
+          SERVER_NAME=$(node -p "require('./apps/mcp-server/server.json').name")
+          SERVER_VERSION=$(node -p "require('./apps/mcp-server/server.json').version")
+          RESPONSE=$(curl -fsSL --get --data-urlencode "search=$SERVER_NAME" "https://registry.modelcontextprotocol.io/v0.1/servers")
+          EXISTS=$(printf '%s' "$RESPONSE" | node -e "const fs = require('fs'); const data = JSON.parse(fs.readFileSync(0, 'utf8')); const name = process.argv[1]; const version = process.argv[2]; const found = Array.isArray(data.servers) && data.servers.some((entry) => entry.server?.name === name && entry.server?.version === version); process.stdout.write(found ? 'true' : 'false');" "$SERVER_NAME" "$SERVER_VERSION")
+          echo "exists=$EXISTS" >> "$GITHUB_OUTPUT"
+          if [ "$EXISTS" = "true" ]; then
+            echo "$SERVER_NAME version $SERVER_VERSION already exists in the MCP Registry; skipping registry publish."
+          fi
+
+      - name: Publish MCP Registry metadata
+        if: steps.registry_version.outputs.exists != 'true'
+        run: |
+          set -euo pipefail
+          ./mcp-publisher login github-oidc
+          cd apps/mcp-server
+          ../../mcp-publisher publish

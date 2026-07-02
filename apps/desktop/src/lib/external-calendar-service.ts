@@ -1,4 +1,8 @@
-import { generateUUID, type ExternalCalendarSubscription } from '@mindwtr/core';
+import {
+    generateUUID,
+    normalizeExternalCalendarColor,
+    type ExternalCalendarSubscription,
+} from '@mindwtr/core';
 import { isTauriRuntime } from './runtime';
 import { reportError } from './report-error';
 
@@ -26,6 +30,7 @@ function sanitizeCalendars(calendars: ExternalCalendarSubscription[]): ExternalC
             name: (c.name || 'Calendar').trim() || 'Calendar',
             url: (c.url || '').trim(),
             enabled: c.enabled !== false,
+            color: normalizeExternalCalendarColor(c.color),
         }))
         .filter((c) => c.url.length > 0);
 }

@@ -30,7 +30,7 @@
           "完全离线可用，无需互联网连接",
           "完全开源，安全透明"
         ],
-        "ReleaseNotes": "• 桌面任务编辑更快，支持属性胶囊控件、常用日期快捷选项和更清晰的快捷操作。\n• 日程视图、归档任务详情、年度日历重复规则和项目取消归档更加可靠。\n• 同步诊断会更清楚地显示时间戳校正情况。",
+        "ReleaseNotes": "• 重复提醒、相对开始时间、看板筛选、仅日期计划和长标题编辑让计划更顺畅。\n• TickTick/Obsidian 导入、WebDAV 读取、本地听写下载和循环任务更可靠。\n• 桌面侧边栏、项目编辑、同步修复和本地自动化路径提升了稳定性和可访问性。",
         "Images": [
           {
             "FileName": "2026-01-27_22-59-40.png",
@@ -82,7 +82,7 @@
           "No internet connection required to function",
           "Open source and transparent"
         ],
-        "ReleaseNotes": "• Desktop task editing is faster with attribute pills, quick date shortcuts, and clearer quick actions.\n• Agenda, archived task details, yearly calendar recurrences, and project unarchive behavior are more reliable.\n• Sync diagnostics now surface timestamp clamps more clearly.",
+        "ReleaseNotes": "• Repeat reminders, relative start offsets, board filters, date-only scheduling, and long task title editing make planning smoother.\n• TickTick and Obsidian imports, WebDAV reads, local dictation downloads, and recurrence handling are more reliable.\n• Desktop sidebar, project editing, sync repair, and local automation paths received stability and accessibility polish.",
         "Images": [
           {
             "FileName": "2026-01-27_22-59-40.png",
@@ -115,6 +115,66 @@
       },
       "PlatformOverrides": {}
     },
+    "de": {
+      "BaseListing": {
+        "Keywords": [
+          "GTD Aufgabenverwaltung",
+          "lokaler Aufgabenmanager",
+          "Produktivitaet",
+          "Datenschutz Aufgaben App"
+        ],
+        "Description": "Mindwtr ist ein datenschutzorientierter, lokaler GTD (Getting Things Done) Aufgabenmanager, der dir hilft, dein Leben zu organisieren, ohne deine Daten zu gefaehrden.\n\nIm Unterschied zu Aufgabenmanagern, die dein Leben auf einem Cloud-Server speichern, behaelt Mindwtr alles auf deinem Geraet. Deine Aufgaben, Projekte und Notizen gehoeren dir.\n\nHauptfunktionen:\n- Lokal zuerst: Deine Daten verlassen dein Geraet nur, wenn du sie ausdruecklich exportierst oder synchronisierst.\n- GTD-Workflow: Entwickelt fuer Getting Things Done mit Inbox, Projekten und Kontexten.\n- Schnell und leicht: Gebaut mit Rust und Tauri fuer starke Leistung.\n- Ablenkungsarm: Eine klare, minimalistische Oberflaeche hilft dir, dich auf Wichtiges zu konzentrieren.\n- Open Source: Transparenter Code, der geprueft werden kann.\n\nBehalte die Kontrolle ueber deine Aufgaben und deine Daten.",
+        "Features": [
+          "Lokale Datenspeicherung fuer mehr Privatsphaere",
+          "Klare GTD (Getting Things Done) Oberflaeche",
+          "Schnelle Leistung mit Rust und Tauri",
+          "Offline nutzbar ohne staendige Internetverbindung",
+          "Open Source und transparent"
+        ],
+        "ReleaseNotes": "• Wiederhol-Erinnerungen, relative Startzeiten, Board-Filter, Datum-only-Planung und lange Aufgabentitel machen Planung runder.\n• TickTick-/Obsidian-Importe, WebDAV-Lesezugriffe, lokale Diktat-Downloads und Wiederholungen sind zuverlaessiger.\n• Desktop-Seitenleiste, Projektbearbeitung, Sync-Reparatur und lokale Automation wurden stabiler und zugaenglicher.",
+        "Images": [],
+        "RecommendedHardware": [],
+        "MinimumHardware": [],
+        "Title": "Mindwtr",
+        "LicenseTerms": "AGPL-3.0 license",
+        "CopyrightAndTrademarkInfo": "AGPL-3.0 license",
+        "ShortDescription": null,
+        "ShortTitle": null,
+        "VoiceTitle": null,
+        "DevStudio": "Dongda Li"
+      },
+      "PlatformOverrides": {}
+    },
+    "fr": {
+      "BaseListing": {
+        "Keywords": [
+          "gestionnaire de tâches GTD",
+          "liste de tâches hors ligne",
+          "productivité",
+          "application tâches privée"
+        ],
+        "Description": "Mindwtr est un gestionnaire de tâches gratuit et open source conçu pour Getting Things Done (GTD). Il vous aide à capturer, clarifier, organiser et revoir vos engagements sans confier vos données personnelles à un service cloud.\n\nContrairement à de nombreuses applications de productivité, Mindwtr conserve vos tâches, projets et notes sur votre appareil. Vous décidez vous-même si et où les données sont synchronisées, exportées ou sauvegardées.\n\nFonctionnalités principales :\n- Local-first : vos données restent sur votre appareil sauf si vous choisissez de les synchroniser, les exporter ou les sauvegarder.\n- Flux GTD : Inbox, Next, Waiting, Someday, Projects, Areas et Contexts suivent la méthode Getting Things Done.\n- Rapide et léger : construit avec Rust et Tauri pour de bonnes performances.\n- Sans distraction : une interface claire vous aide à vous concentrer sur ce qui compte.\n- Open source : code transparent et vérifiable.\n\nGardez le contrôle de vos tâches et de vos données.",
+        "Features": [
+          "Stockage local-first pour protéger la vie privée",
+          "Interface GTD claire pour capturer et organiser les tâches",
+          "Fonctionne hors ligne sans compte obligatoire",
+          "Projets, contextes, revue et tableau Kanban",
+          "Open source et transparent"
+        ],
+        "ReleaseNotes": "• Rappels repetes, debuts relatifs, filtres tableau, dates sans heure et longs titres rendent la planification plus fluide.\n• Imports TickTick/Obsidian, lectures WebDAV, telechargements de dictee locale et recurrence sont plus fiables.\n• Barre laterale, edition de projets, reparation sync et automation locale gagnent en stabilite et accessibilite.",
+        "Images": [],
+        "RecommendedHardware": [],
+        "MinimumHardware": [],
+        "Title": "Mindwtr",
+        "LicenseTerms": "AGPL-3.0 license",
+        "CopyrightAndTrademarkInfo": "AGPL-3.0 license",
+        "ShortDescription": null,
+        "ShortTitle": null,
+        "VoiceTitle": null,
+        "DevStudio": "Dongda Li"
+      },
+      "PlatformOverrides": {}
+    },
     "es": {
       "BaseListing": {
         "Keywords": [
@@ -130,7 +190,7 @@
           "No requiere conexión a internet para funcionar",
           "Código abierto y transparente"
         ],
-        "ReleaseNotes": "• La edicion de tareas de escritorio es mas rapida con controles tipo pildora, atajos de fecha y acciones mas claras.\n• Agenda, detalles archivados, recurrencias anuales y desarchivado de proyectos son mas fiables.\n• Los diagnosticos de sync muestran mejor los ajustes de marca temporal.",
+        "ReleaseNotes": "• Recordatorios repetidos, inicios relativos, filtros de tablero, fechas sin hora y titulos largos hacen la planificacion mas fluida.\n• Importaciones TickTick/Obsidian, lecturas WebDAV, descargas de dictado local y recurrencia son mas fiables.\n• Barra lateral, edicion de proyectos, reparacion de sync y automatizacion local recibieron mas estabilidad y accesibilidad.",
         "Images": [
           {
             "FileName": "2026-01-27_22-59-40.png",

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import type { Area } from '@mindwtr/core';
 import { ChevronDown, Plus } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { ModalPortal } from '../ModalPortal';
 import { useDropdownPosition } from './use-dropdown-position';
 
 interface AreaSelectorProps {
@@ -34,7 +35,7 @@ export function AreaSelector({
     const containerRef = useRef<HTMLDivElement>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
     const selected = areas.find((area) => area.id === value);
-    const { dropdownClassName, listMaxHeight } = useDropdownPosition({
+    const { fixedDropdownStyle, listMaxHeight } = useDropdownPosition({
         open,
         containerRef,
         dropdownRef,
@@ -54,7 +55,8 @@ export function AreaSelector({
     useEffect(() => {
         if (!open) return;
         const handleClick = (event: MouseEvent) => {
-            if (!containerRef.current?.contains(event.target as Node)) {
+            const target = event.target as Node;
+            if (!containerRef.current?.contains(target) && !dropdownRef.current?.contains(target)) {
                 setOpen(false);
             }
         };
@@ -74,6 +76,12 @@ export function AreaSelector({
         const active = document.activeElement as HTMLElement | null;
         let index = list.findIndex((option) => option === active);
         if (index < 0) {
+            if (normalizedQuery && filtered.length > 0) {
+                const areaOptions = list.filter((option) => option.dataset.selectorOptionKind === 'item');
+                const nextOption = direction > 0 ? areaOptions[0] : areaOptions[areaOptions.length - 1];
+                nextOption?.focus();
+                return;
+            }
             index = direction > 0 ? -1 : 0;
         }
         const nextIndex = (index + direction + list.length) % list.length;
@@ -108,6 +116,25 @@ export function AreaSelector({
         closeDropdown();
     };
 
+    const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+        if (event.key !== 'Enter') return;
+        const name = query.trim();
+        if (!name) return;
+
+        const firstMatch = filtered[0];
+        if (firstMatch) {
+            event.preventDefault();
+            onChange(firstMatch.id);
+            closeDropdown();
+            return;
+        }
+
+        if (!hasExactMatch && onCreateArea) {
+            event.preventDefault();
+            void handleCreate();
+        }
+    };
+
     return (
         <div ref={containerRef} className={cn('relative', className)}>
             <button
@@ -127,75 +154,83 @@ export function AreaSelector({
                 <ChevronDown className="h-3.5 w-3.5 opacity-70" />
             </button>
             {open && (
-                <div
-                    ref={dropdownRef}
-                    className={cn('absolute z-20 w-full rounded-md border border-border bg-popover shadow-lg p-1 text-xs', dropdownClassName)}
-                    onKeyDown={handleDropdownKeyDown}
-                >
-                    <input
-                        autoFocus
-                        value={query}
-                        onChange={(event) => setQuery(event.target.value)}
-                        placeholder={searchPlaceholder}
-                        aria-label={searchPlaceholder}
-                        className="w-full mb-1 rounded border border-border bg-muted/40 px-2 py-1 text-xs"
-                    />
-                    <div role="listbox" aria-label={placeholder}>
-                        <button
-                            type="button"
-                            data-selector-option="true"
-                            role="option"
-                            aria-selected={value === ''}
-                            onClick={() => {
-                                onChange('');
-                                closeDropdown();
-                            }}
-                            className={cn(
-                                'w-full text-left px-2 py-1 rounded hover:bg-muted/50',
-                                value === '' && 'bg-muted/70'
-                            )}
-                        >
-                            {noAreaLabel}
-                        </button>
-                        {!hasExactMatch && query.trim() && onCreateArea && (
+                <ModalPortal>
+                    <div
+                        ref={dropdownRef}
+                        data-selector-dropdown="true"
+                        style={fixedDropdownStyle}
+                        className="z-[70] rounded-md border border-border bg-popover text-popover-foreground shadow-lg p-1 text-xs"
+                        onKeyDown={handleDropdownKeyDown}
+                    >
+                        <input
+                            autoFocus
+                            value={query}
+                            onChange={(event) => setQuery(event.target.value)}
+                            onKeyDown={handleSearchKeyDown}
+                            placeholder={searchPlaceholder}
+                            aria-label={searchPlaceholder}
+                            className="w-full mb-1 rounded border border-border bg-muted/40 px-2 py-1 text-xs"
+                        />
+                        <div role="listbox" aria-label={placeholder}>
                             <button
                                 type="button"
                                 data-selector-option="true"
+                                data-selector-option-kind="none"
                                 role="option"
-                                aria-selected={false}
-                                onClick={handleCreate}
-                                className="w-full text-left px-2 py-1 rounded hover:bg-muted/50 text-primary flex items-center gap-2"
+                                aria-selected={value === ''}
+                                onClick={() => {
+                                    onChange('');
+                                    closeDropdown();
+                                }}
+                                className={cn(
+                                    'w-full text-left px-2 py-1 rounded hover:bg-muted/50 focus:bg-muted/50 focus:outline-none',
+                                    value === '' && 'bg-muted/70'
+                                )}
                             >
-                                <Plus className="h-3.5 w-3.5" />
-                                {createAreaLabel} &quot;{query.trim()}&quot;
+                                {noAreaLabel}
                             </button>
-                        )}
-                        <div className="overflow-y-auto" style={{ maxHeight: listMaxHeight }}>
-                            {filtered.map((area) => (
+                            {!hasExactMatch && query.trim() && onCreateArea && (
                                 <button
-                                    key={area.id}
                                     type="button"
                                     data-selector-option="true"
+                                    data-selector-option-kind="create"
                                     role="option"
-                                    aria-selected={area.id === value}
-                                    onClick={() => {
-                                        onChange(area.id);
-                                        closeDropdown();
-                                    }}
-                                    className={cn(
-                                        'w-full text-left px-2 py-1 rounded hover:bg-muted/50',
-                                        area.id === value && 'bg-muted/70'
-                                    )}
+                                    aria-selected={false}
+                                    onClick={handleCreate}
+                                    className="w-full text-left px-2 py-1 rounded hover:bg-muted/50 focus:bg-muted/50 focus:outline-none text-primary flex items-center gap-2"
                                 >
-                                    {area.name}
+                                    <Plus className="h-3.5 w-3.5" />
+                                    {createAreaLabel} &quot;{query.trim()}&quot;
                                 </button>
-                            ))}
-                            {filtered.length === 0 && (
-                                <div className="px-2 py-1 text-muted-foreground">{noMatchesLabel}</div>
                             )}
+                            <div className="overflow-y-auto" style={{ maxHeight: listMaxHeight }}>
+                                {filtered.map((area) => (
+                                    <button
+                                        key={area.id}
+                                        type="button"
+                                        data-selector-option="true"
+                                        data-selector-option-kind="item"
+                                        role="option"
+                                        aria-selected={area.id === value}
+                                        onClick={() => {
+                                            onChange(area.id);
+                                            closeDropdown();
+                                        }}
+                                        className={cn(
+                                            'w-full text-left px-2 py-1 rounded hover:bg-muted/50 focus:bg-muted/50 focus:outline-none',
+                                            area.id === value && 'bg-muted/70'
+                                        )}
+                                    >
+                                        {area.name}
+                                    </button>
+                                ))}
+                                {filtered.length === 0 && (
+                                    <div className="px-2 py-1 text-muted-foreground">{noMatchesLabel}</div>
+                                )}
+                            </div>
                         </div>
                     </div>
-                </div>
+                </ModalPortal>
             )}
         </div>
     );

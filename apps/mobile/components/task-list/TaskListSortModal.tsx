@@ -1,3 +1,4 @@
+import React from 'react';
 import { Modal, Pressable, Text, View } from 'react-native';
 import type { TaskSortBy } from '@mindwtr/core';
 
@@ -44,6 +45,7 @@ export function TaskListSortModal({
               <Pressable
                 key={option}
                 onPress={() => onSelect(option)}
+                testID={`sort-option-${option}`}
                 style={[
                   styles.sortItem,
                   option === sortBy && { backgroundColor: themeColors.filterBg },

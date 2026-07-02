@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { Area } from '@mindwtr/core';
 
-import { AREA_FILTER_ALL, AREA_FILTER_NONE } from '../../lib/area-filter';
+import { AREA_FILTER_ALL, AREA_FILTER_NONE } from '@mindwtr/core';
 import { SidebarAreaFilter } from './SidebarAreaFilter';
 
 const areas: Area[] = [
@@ -54,5 +54,25 @@ describe('SidebarAreaFilter', () => {
         fireEvent.click(within(getByRole('listbox', { name: 'Area filter' })).getByText('No area'));
 
         expect(onChange).toHaveBeenCalledWith(AREA_FILTER_NONE);
+    });
+
+    it('opens from the collapsed sidebar trigger', () => {
+        const onChange = vi.fn();
+        const { getByRole } = render(
+            <SidebarAreaFilter
+                areas={areas}
+                value="a1"
+                onChange={onChange}
+                ariaLabel="Area filter"
+                allAreasLabel="All areas"
+                noAreaLabel="No area"
+                collapsed
+            />,
+        );
+
+        fireEvent.click(getByRole('button', { name: 'Area filter: Work' }));
+        fireEvent.click(within(getByRole('listbox', { name: 'Area filter' })).getByText('Home'));
+
+        expect(onChange).toHaveBeenCalledWith('a2');
     });
 });

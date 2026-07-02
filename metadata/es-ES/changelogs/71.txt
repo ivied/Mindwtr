@@ -1,0 +1,5 @@
+- Se agregan filtros de listas y etiquetas activas mas claras.
+- Se agregan intents de automatizacion de contextos en Android.
+- Mejoran los fragmentos Markdown, la posicion de la barra y los botones adaptativos.
+- La edicion de listas y tareas queda visible sobre el teclado con mas fiabilidad.
+- Los avisos de proyecto y reintentos de calendario muestran fallos con mas claridad.

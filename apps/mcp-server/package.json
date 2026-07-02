@@ -1,26 +1,54 @@
 {
-  "name": "mindwtr-mcp-server",
+  "name": "mindwtr-mcp",
+  "description": "Stdio MCP server for Mindwtr local and self-hosted Cloud task access.",
+  "version": "1.0.5",
   "license": "AGPL-3.0-only",
-  "private": true,
-  "version": "0.9.3",
   "type": "module",
+  "mcpName": "io.github.dongdongbh/mindwtr",
   "main": "dist/index.js",
   "bin": {
     "mindwtr-mcp": "dist/index.js"
   },
+  "files": [
+    "dist/index.js",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dongdongbh/Mindwtr.git",
+    "directory": "apps/mcp-server"
+  },
+  "bugs": {
+    "url": "https://github.com/dongdongbh/Mindwtr/issues"
+  },
+  "homepage": "https://docs.mindwtr.app/power-users/mcp",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mindwtr",
+    "gtd",
+    "tasks"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "dev": "bun src/index.ts",
-    "build": "bun build src/index.ts --target node --format esm --outfile dist/index.js --external:better-sqlite3 --external:bun:sqlite",
-    "lint": "eslint -c ../../eslint.node.config.mjs . --max-warnings 0",
+    "build": "bun build src/index.ts --target node --format esm --outfile dist/index.js --external=better-sqlite3 --external=bun:sqlite",
+    "lint": "eslint -c eslint.config.mjs . --max-warnings 0",
     "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
     "test": "bun test",
     "test:coverage": "bun test --coverage --coverage-reporter=lcov"
   },
   "dependencies": {
+    "better-sqlite3": "9.6.0"
+  },
+  "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@mindwtr/core": "workspace:*",
-    "better-sqlite3": "^9.6.0",
     "zod": "^3.24.1"
   }
 }

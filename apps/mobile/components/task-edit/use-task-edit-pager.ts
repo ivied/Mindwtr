@@ -92,6 +92,10 @@ export function useTaskEditPager({
 
         const handleKeyboardShow = () => {
             alignPagerToActiveTab();
+            if (pendingScrollTaskFormTimerRef.current) {
+                clearTimeout(pendingScrollTaskFormTimerRef.current);
+                pendingScrollTaskFormTimerRef.current = null;
+            }
             if (lastFocusedInputRef.current !== undefined) {
                 scrollTaskFormToEnd?.(lastFocusedInputRef.current);
             }

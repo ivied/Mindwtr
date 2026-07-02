@@ -49,11 +49,19 @@ Data is stored in a local SQLite database, with a JSON sync/backup file:
 
 Mindwtr directly supports five sync backends:
 
-- **Native iCloud / CloudKit Sync**: Apple-only native sync where available
+- **Native iCloud / CloudKit Sync**: Apple-only native sync for core data and attachment assets where available
 - **File Sync**: a user-selected folder/file (`data.json` + `attachments/`)
+- **Dropbox OAuth Sync**: direct Dropbox App Folder sync in supported builds
 - **WebDAV**: any compatible WebDAV endpoint
 - **Mindwtr Cloud (Self-Hosted)**: your own `apps/cloud` endpoint
-- **Dropbox OAuth Sync**: direct Dropbox App Folder sync in supported builds
+
+In **Settings → Sync**, supported builds show these as one backend selector, then explain the selected setup path:
+
+- **Cloud Sync**: **Dropbox** and **iCloud** on Apple platforms
+- **Folder / File Sync**: **File**
+- **Advanced / Custom Server**: **WebDAV** and **Self-Hosted**
+
+Existing Dropbox setups continue to work; they are simply shown as the top-level **Dropbox** backend under the **Cloud Sync** explanation instead of being nested under a self-hosted/cloud-provider picker.
 
 ### Direct vs indirect provider support
 
@@ -62,17 +70,27 @@ Mindwtr directly supports five sync backends:
 - **Important**: native iCloud sync is **Apple-only**. Android, Windows, and Linux should use File Sync, WebDAV, Mindwtr Cloud, or Dropbox instead.
 
 **Quick guidance:**
+- **Dropbox**: easiest cross-platform cloud option in supported builds; connect with OAuth and Mindwtr uses its Dropbox App Folder.
 - **Syncthing**: device-to-device file sync. Best on the same LAN/subnet. For remote sync, use a Syncthing relay or a mesh VPN (Nebula/Tailscale).
 - **WebDAV**: use a provider that supports WebDAV (e.g., Nextcloud, ownCloud, Fastmail, self-hosted).
-- **Dropbox**: use native Dropbox sync (supported builds) or File Sync.
-- **iCloud**: use native iCloud sync on supported Apple builds, or iCloud Drive via File Sync.
+- **iCloud**: use native iCloud sync on supported Apple builds, including attachment assets, or iCloud Drive via File Sync.
 - **Google Drive/OneDrive**: use File Sync (and Android bridge apps when needed).
 
 ## Sync Recommendations
 
-- **Best for multi-device:** WebDAV or Mindwtr Cloud (self-hosted). The app controls the sync cycle and merges per item.
+- **Easiest plug-and-play cloud sync:** Dropbox OAuth in supported builds.
+- **Best Apple-only setup:** native iCloud / CloudKit on supported Apple builds.
+- **Best BYOS remote sync:** WebDAV or Mindwtr Cloud (Self-Hosted). The app controls the sync cycle and merges per item.
 - **File Sync (Syncthing/Dropbox/etc.):** works, but **conflicts are file-level** because `data.json` is a single file.
 - **Best practices for File Sync:** avoid editing on two devices at the same time, and wait for sync to finish before opening the app on another device. If conflicts appear, keep the newest `data.json` and delete the `data.json.sync-conflict-*` copies.
+
+### Desktop Proxy
+
+On desktop, Mindwtr can use an optional HTTP(S) proxy for network requests such as WebDAV, Dropbox, self-hosted Cloud sync, and external calendar subscriptions.
+
+Set it in **Settings → Advanced → Network → Proxy URL**. Use a full URL such as `http://proxy-host:port` or `https://proxy-host:port`. Leave it blank to use the default network behavior, including any supported `HTTP_PROXY` / `HTTPS_PROXY` environment variables.
+
+The in-app field is intentionally minimal: it is a single proxy URL, not a full proxy manager. SOCKS, PAC files, and per-backend proxy rules are not configured there. The setting is not synced across devices.
 
 ## Conflict Recovery
 
@@ -121,6 +139,12 @@ Important:
 - Sync both `data.json` **and** `attachments/`. Attachments are part of sync data.
 - Do not move only `data.json` without `attachments/`, or attachment metadata/files can drift.
 - If iCloud Optimize Storage offloads files, let Files re-download before running a manual sync.
+
+#### iOS file bookmarks for Google Drive, OneDrive, and other Files providers
+
+On iOS, Google Drive, OneDrive, and similar providers can be used through **File Sync** when they expose a file in the Files picker. If folder selection is unavailable, pick an existing JSON file in the target folder; Mindwtr stores a security-scoped bookmark and uses it for later reads and writes.
+
+This file-scoped provider mode syncs `data.json`. Attachment folders are not available through every Files provider bookmark, so use native iCloud/CloudKit, Dropbox, WebDAV, or self-hosted Cloud when attachments need to sync reliably. If iOS reports that bookmark access expired, re-select the sync file in **Settings → Sync**.
 
 #### Syncthing Notes (Recommended Setup)
 
@@ -207,6 +231,7 @@ Mindwtr also supports direct Dropbox sync in supported desktop/mobile builds.
 - **Scope**: Dropbox App Folder (`/Apps/Mindwtr/`)
 - **Synced data**: `data.json` and `attachments/*`
 - **Auth**: OAuth 2.0 + PKCE
+- **Setup**: choose **Dropbox** in **Settings → Sync**, connect your account, then run **Test connection**
 - **Guide**: [[Dropbox Sync]]
 
 ---
@@ -217,10 +242,13 @@ Mindwtr also supports direct Dropbox sync in supported desktop/mobile builds.
 
 Mindwtr automatically syncs in the following situations:
 
-- **On data changes** — 5 seconds after any task/project modification (debounced)
-- **On app focus** — When the app regains focus (throttled to every 30 seconds)
-- **On app blur/background** — When you switch away from the app
-- **On startup** — Shortly after the app launches
+- **On startup** — shortly after the app launches.
+- **On data changes** — shortly after task/project changes, with a short debounce so rapid edits sync together.
+- **On app focus** — when the desktop app regains focus, throttled to every 30 seconds; this still runs without local edits so remote changes can be pulled promptly.
+- **On app blur/background** — when you switch away from the desktop app, but only if there are pending local changes to push.
+- **Periodic desktop heartbeat** — every 15 minutes while Mindwtr is running.
+
+If an automatic sync fails, Mindwtr pauses automatic retry attempts for about 60 seconds. Manual sync remains available during that cooldown.
 
 ### Settings Sync Options
 
@@ -248,8 +276,9 @@ Delete-vs-live conflicts use the **last operation time**, not just the raw `upda
 - For deleted items, Mindwtr compares `deletedAt` against the live item's latest update.
 - If the delete and live edit are more than 30 seconds apart, the newer operation wins.
 - Inside that 30-second ambiguity window, a higher revision number still wins when available. Otherwise, Mindwtr preserves the live item instead of eagerly letting the tombstone win.
+- Practical effect: if you delete a task on one device within about 30 seconds of editing it on another device, the edited live task may reappear after sync. Delete it again after the devices have synced if you meant to remove it.
 
-Clock-skewed future timestamps are clamped during merge safety checks so a bad device clock does not dominate forever. If both sides are clamped into the future, Mindwtr still preserves their relative ordering instead of treating them as a false tie.
+Clock-skewed future timestamps more than 5 minutes ahead of the merge clock are clamped during merge safety checks so a bad device clock does not dominate forever. If both sides are clamped into the future, Mindwtr still preserves their relative ordering instead of treating them as a false tie.
 
 Detailed merge tie-breaks, retry behavior, and conflict examples live in [[Sync Algorithm]]. This page keeps the storage and operational overview only.
 
@@ -269,6 +298,7 @@ On mobile, sync history entries are collapsed by default; tap to expand.
 - Attachments are synced **after** metadata merges.
 - Missing attachments remain as placeholders until downloaded.
 - Orphaned attachments are cleaned up automatically (and can be triggered manually on desktop in **Settings → Data**).
+- Remote attachment cleanup is local-reference aware, not global-reference counted. If two devices create or retain references to the same remote attachment before they have synced with each other, one device may not know about the other reference yet. Let devices sync before deleting shared attachments, and reattach the file if cleanup removes a remote copy another device still needs.
 
 ---
 
@@ -409,6 +439,22 @@ Before restore, Mindwtr validates the file and creates a recovery snapshot when 
 
 See [[Backup and Restore]] for the detailed flow.
 
+## Imports and Migrations
+
+Use these guides when bringing task data from another app into Mindwtr. Imports add data to Mindwtr; they do not configure sync.
+
+### TickTick CSV / ZIP Import
+
+Mindwtr can import TickTick backups from **Settings → Data → Import from TickTick**.
+
+- Supports TickTick **CSV** backups and **ZIP** backups containing the CSV export
+- Creates Mindwtr areas from TickTick folders
+- Creates Mindwtr projects from TickTick lists
+- Preserves supported task status, dates, priorities, tags, notes, and recurrence
+- Converts supported checklist/subtask data into Mindwtr checklist items
+
+See [[TickTick Import]] for details and supported mappings.
+
 ### Todoist CSV / ZIP Import
 
 Mindwtr can import Todoist exports from **Settings → Data → Import from Todoist**.
@@ -453,6 +499,18 @@ Mindwtr can import OmniFocus exports from **Settings → Data → Import from Om
 If recurrence or hierarchy fidelity matters, prefer the Omni Automation JSON / ZIP path over CSV. Planned dates and duration text are preserved in the imported description when Mindwtr does not have a direct field for them.
 
 See [[OmniFocus Import]] for details and supported mappings.
+
+### Apple Reminders Import (iOS)
+
+On iPhone and iPad, Mindwtr can import incomplete Apple Reminders from **Settings → Data → Import from Apple Reminders**.
+
+- Choose the Apple Reminders list to use as the capture source
+- Adds new incomplete reminders to Mindwtr **Inbox**
+- Preserves reminder titles and notes as task titles and descriptions
+- Skips completed, titleless, and already imported reminders
+- Can optionally delete imported reminders from Apple Reminders after Mindwtr adds them to Inbox
+
+Apple Reminders import is a one-way import path, not a sync backend.
 
 ### Backup Strategy
 
@@ -519,6 +577,11 @@ The `data.json` file structure:
       "contexts": ["@home"],
       "tags": ["#focused"],
       "dueDate": "2025-01-15T09:00:00Z",
+      "recurrence": {
+        "rule": "weekly",
+        "strategy": "strict",
+        "byDay": ["MO", "WE"]
+      },
       "createdAt": "2025-01-01T10:00:00Z",
       "updatedAt": "2025-01-10T15:30:00Z",
       "deletedAt": null
@@ -536,6 +599,16 @@ The `data.json` file structure:
       "updatedAt": "2025-01-10T15:30:00Z"
     }
   ],
+  "sections": [
+    {
+      "id": "uuid",
+      "projectId": "project-uuid",
+      "title": "Section title",
+      "order": 1,
+      "createdAt": "2025-01-01T10:00:00Z",
+      "updatedAt": "2025-01-10T15:30:00Z"
+    }
+  ],
   "areas": [
     {
       "id": "uuid",
@@ -543,6 +616,16 @@ The `data.json` file structure:
       "color": "#3B82F6",
       "icon": "🔬",
       "order": 0,
+      "createdAt": "2025-01-01T10:00:00Z",
+      "updatedAt": "2025-01-10T15:30:00Z"
+    }
+  ],
+  "people": [
+    {
+      "id": "uuid",
+      "name": "Alex",
+      "note": "Design lead",
+      "referenceLink": "https://example.com/alex",
       "createdAt": "2025-01-01T10:00:00Z",
       "updatedAt": "2025-01-10T15:30:00Z"
     }
@@ -560,7 +643,8 @@ The `data.json` file structure:
 
 - All data is stored locally on your device
 - Sync happens through your own cloud service
-- No data is sent to Mindwtr servers
+- Task data, project data, notes, attachments, and sync content are not sent to Mindwtr servers
+- Builds configured with heartbeat analytics may send a small app-health event; it does not include task, project, note, file, AI prompt, or account content. See https://mindwtr.app/privacy.
 - You control your data completely
 
 ---

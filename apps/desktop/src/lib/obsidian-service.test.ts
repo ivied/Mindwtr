@@ -4,6 +4,10 @@ import type { ObsidianSourceRef } from '@mindwtr/core';
 const invokeMock = vi.hoisted(() => vi.fn());
 const listenMock = vi.hoisted(() => vi.fn());
 const logWarnMock = vi.hoisted(() => vi.fn());
+const fsExistsMock = vi.hoisted(() => vi.fn());
+const fsReadDirMock = vi.hoisted(() => vi.fn());
+const fsReadTextFileMock = vi.hoisted(() => vi.fn());
+const fsStatMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@tauri-apps/api/core', async () => {
     return {
@@ -34,6 +38,15 @@ vi.mock('@tauri-apps/api/event', async () => {
         emitTo: async () => undefined,
         once: async () => () => undefined,
         TauriEvent: {},
+    };
+});
+
+vi.mock('@tauri-apps/plugin-fs', async () => {
+    return {
+        exists: fsExistsMock,
+        readDir: fsReadDirMock,
+        readTextFile: fsReadTextFileMock,
+        stat: fsStatMock,
     };
 });
 
@@ -75,6 +88,10 @@ afterEach(() => {
     invokeMock.mockReset();
     listenMock.mockReset();
     logWarnMock.mockReset();
+    fsExistsMock.mockReset();
+    fsReadDirMock.mockReset();
+    fsReadTextFileMock.mockReset();
+    fsStatMock.mockReset();
     vi.restoreAllMocks();
 });
 
@@ -132,6 +149,41 @@ describe('obsidian-service helpers', () => {
         expect(logWarnMock).toHaveBeenCalledTimes(2);
     });
 
+    it('re-expands the vault scope and retries transient forbidden path scan errors', async () => {
+        setTauriRuntime(true);
+        invokeMock.mockResolvedValue(true);
+        fsExistsMock
+            .mockRejectedValueOnce(new Error('Forbidden path: /Vault'))
+            .mockResolvedValue(true);
+        fsStatMock.mockResolvedValue({
+            mtime: new Date('2026-03-14T12:00:00.000Z'),
+            size: 0,
+            isFile: false,
+            isDirectory: true,
+        });
+        fsReadDirMock.mockResolvedValue([]);
+
+        const result = await ObsidianService.scanVault({
+            vaultPath: '/Vault',
+            vaultName: 'Vault',
+            scanFolders: ['/'],
+            inboxFile: 'Mindwtr/Inbox.md',
+            taskNotesIncludeArchived: false,
+            dataviewMetadataEnabled: false,
+            newTaskFormat: 'auto',
+            lastScannedAt: null,
+            enabled: true,
+        });
+
+        expect(invokeMock).toHaveBeenCalledWith('expand_obsidian_vault_scope', {
+            vaultPath: '/Vault',
+        });
+        expect(fsExistsMock).toHaveBeenCalledTimes(2);
+        expect(result.scannedFileCount).toBe(0);
+        expect(result.tasks).toEqual([]);
+        expect(result.warnings).toEqual([]);
+    });
+
     it('starts and stops the native Obsidian watcher in Tauri', async () => {
         setTauriRuntime(true);
         const unlistenChanged = vi.fn();
@@ -147,6 +199,7 @@ describe('obsidian-service helpers', () => {
             scanFolders: ['/'],
             inboxFile: 'Mindwtr/Inbox.md',
             taskNotesIncludeArchived: false,
+            dataviewMetadataEnabled: false,
             newTaskFormat: 'auto',
             lastScannedAt: null,
             enabled: true,

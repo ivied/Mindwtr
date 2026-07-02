@@ -10,6 +10,7 @@ type PendingNotificationOpenPayload = {
   notificationId?: string;
   taskId?: string;
   projectId?: string;
+  context?: string;
 } | null;
 
 const {
@@ -173,11 +174,31 @@ describe('useRootLayoutNotificationOpenHandler', () => {
     });
   });
 
-  it('waits for startup navigation to leave the root path before replaying a pending open', async () => {
+  it('routes context automation notification taps to the matching Contexts screen', () => {
+    const router = { push: vi.fn() };
+
+    act(() => {
+      create(<TestHarness router={router} />);
+    });
+
+    const handler = setNotificationOpenHandler.mock.calls[0]?.[0];
+
+    act(() => {
+      handler({ kind: 'context-automation', context: '@parents', notificationId: 'context-parents' });
+    });
+
+    expect(router.push).toHaveBeenCalledWith({
+      pathname: '/contexts',
+      params: { token: '@parents' },
+    });
+  });
+
+  it('waits for app readiness before replaying a pending open from the root path', async () => {
     const router = { push: vi.fn() };
     consumePendingNotificationOpenPayload.mockResolvedValue({
-      kind: 'weekly-review',
-      notificationId: 'pending-weekly',
+      kind: 'task-reminder',
+      notificationId: 'pending-task',
+      taskId: 'task-1',
     });
 
     let tree!: ReturnType<typeof create>;
@@ -188,33 +209,47 @@ describe('useRootLayoutNotificationOpenHandler', () => {
     expect(router.push).not.toHaveBeenCalled();
 
     await act(async () => {
-      tree.update(<TestHarnessWithState appReady pathname="/inbox" router={router} />);
-    });
-
-    expect(router.push).toHaveBeenCalledWith({
-      pathname: '/weekly-review',
-      params: { openToken: 'pending-weekly' },
-    });
-  });
-
-  it('still routes task notifications to the focus screen', () => {
-    const router = { push: vi.fn() };
-
-    act(() => {
-      create(<TestHarness router={router} />);
-    });
-
-    const handler = setNotificationOpenHandler.mock.calls[0]?.[0];
-
-    act(() => {
-      handler({ taskId: 'task-1', notificationId: 'notif-1' });
+      tree.update(<TestHarnessWithState appReady pathname="/" router={router} />);
     });
 
     expect(setHighlightTask).toHaveBeenCalledWith('task-1');
     expect(router.push).toHaveBeenCalledWith({
       pathname: '/focus',
-      params: { taskId: 'task-1', openToken: 'notif-1' },
+      params: expect.objectContaining({
+        taskId: 'task-1',
+        taskTab: 'view',
+      }),
     });
+  });
+
+  it('routes task notification taps with a fresh open token so the editor can reopen', () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(12345);
+    const router = { push: vi.fn() };
+
+    try {
+      act(() => {
+        create(<TestHarness router={router} />);
+      });
+
+      const handler = setNotificationOpenHandler.mock.calls[0]?.[0];
+
+      act(() => {
+        handler({ taskId: 'task-1', notificationId: 'notif-1' });
+        handler({ taskId: 'task-1', notificationId: 'notif-1' });
+      });
+
+      expect(setHighlightTask).toHaveBeenCalledWith('task-1');
+      expect(router.push).toHaveBeenNthCalledWith(1, {
+        pathname: '/focus',
+        params: { taskId: 'task-1', openToken: 'notif-1:12345:1', taskTab: 'view' },
+      });
+      expect(router.push).toHaveBeenNthCalledWith(2, {
+        pathname: '/focus',
+        params: { taskId: 'task-1', openToken: 'notif-1:12345:2', taskTab: 'view' },
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('marks a task done from a complete notification action without navigating', () => {

@@ -8,6 +8,7 @@ import {
     type Project,
     type SearchProjectResult,
     type SearchResults,
+    type Section,
     type Task,
     type TaskStatus,
 } from '@mindwtr/core';
@@ -77,6 +78,20 @@ const sanitizeTaskPatch = (patch: Partial<Task>): Partial<Task> => {
         sanitized.status = parsedStatus;
     }
     return sanitized as Partial<Task>;
+};
+
+const sanitizeSectionPatch = (patch: Partial<Section>): Partial<Section> => {
+    const sanitized: Partial<Section> = { ...patch };
+    delete sanitized.id;
+    delete sanitized.projectId;
+    delete sanitized.createdAt;
+    delete sanitized.updatedAt;
+    delete sanitized.deletedAt;
+    delete sanitized.rev;
+    delete sanitized.revBy;
+    delete sanitized.deletedAtBeforeProjectArchive;
+    delete sanitized.projectArchivedAt;
+    return sanitized;
 };
 
 const filterProjectsForSearch = (projects: Project[], includeDeleted = false) => (
@@ -196,6 +211,48 @@ export async function createMindwtrAutomationService(options: AutomationServiceO
         listAreas: async (): Promise<Area[]> => {
             const state = await refreshState();
             return state._allAreas.filter((area) => !area.deletedAt);
+        },
+        listSections: async (projectId?: string): Promise<Section[]> => {
+            const state = await refreshState();
+            return state._allSections.filter(
+                (section) => !section.deletedAt && (!projectId || section.projectId === projectId)
+            );
+        },
+        getSection: async (sectionId: string): Promise<Section> => {
+            const state = await refreshState();
+            const section = state._allSections.find((item) => item.id === sectionId && !item.deletedAt);
+            if (!section) throw new Error(`Section not found: ${sectionId}`);
+            return section;
+        },
+        createSection: async ({
+            projectId,
+            title,
+            props,
+        }: {
+            projectId: string;
+            title: string;
+            props?: Partial<Section>;
+        }): Promise<Section> => {
+            const state = await refreshState();
+            const section = await state.addSection(projectId, title, props);
+            if (!section) throw new Error('Failed to create section');
+            await flushPendingSave();
+            return section;
+        },
+        updateSection: async (sectionId: string, patch: Partial<Section>): Promise<Section> => {
+            const state = await refreshState();
+            const result = await state.updateSection(sectionId, sanitizeSectionPatch(patch));
+            if (!result.success) throw new Error(result.error || `Failed to update section: ${sectionId}`);
+            await flushPendingSave();
+            const updated = useTaskStore.getState()._allSections.find((item) => item.id === sectionId);
+            if (!updated) throw new Error(`Section not found after update: ${sectionId}`);
+            return updated;
+        },
+        deleteSection: async (sectionId: string): Promise<void> => {
+            const state = await refreshState();
+            const result = await state.deleteSection(sectionId);
+            if (!result.success) throw new Error(result.error || `Failed to delete section: ${sectionId}`);
+            await flushPendingSave();
         },
     };
 }

@@ -31,10 +31,14 @@ jobs:
     timeout-minutes: 90
     env:
       VITE_DROPBOX_APP_KEY: ${{ vars.VITE_DROPBOX_APP_KEY || secrets.VITE_DROPBOX_APP_KEY }}
+      VITE_FEEDBACK_ENDPOINT_URL: ${{ vars.VITE_FEEDBACK_ENDPOINT_URL || 'https://feedback.mindwtr.app' }}
+      VITE_DONATION_PROMPT_ENABLED: "true"
 
     steps:
       - name: Checkout code
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ inputs.tag || github.event.inputs.tag || github.ref }}
 
       - name: Install system dependencies
         run: |
@@ -49,7 +53,8 @@ jobs:
             libappindicator3-dev \
             librsvg2-dev \
             patchelf \
-            libasound2-dev
+            libasound2-dev \
+            libssl-dev
         shell: bash
 
       - name: Setup Rust
@@ -69,7 +74,7 @@ jobs:
           bun-version-file: ".bun-version"
 
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Build Tauri app
         timeout-minutes: 35
@@ -80,6 +85,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VITE_ANALYTICS_HEARTBEAT_URL: ${{ secrets.ANALYTICS_HEARTBEAT_URL }}
+          VITE_ANALYTICS_RELEASE_VERSION: ${{ inputs.tag || github.event.inputs.tag || github.ref_name }}
 
       - name: Repair AppImage metadata
         run: |
@@ -160,6 +166,14 @@ jobs:
                 done
               fi
 
+              # libwayland-client must come from the host Mesa/EGL stack. If the
+              # AppImage bundles the build host copy, newer distros can fail on
+              # startup with EGL_BAD_PARAMETER before the webview is created.
+              while IFS= read -r WAYLAND_CLIENT_LIB; do
+                rm -f "$WAYLAND_CLIENT_LIB"
+                echo "Removed bundled Wayland client library: $WAYLAND_CLIENT_LIB"
+              done < <(find appdir \( -type f -o -type l \) -name 'libwayland-client.so*' | sort)
+
               # Some Tauri/linuxdeploy builds can leave AppRun.wrapped as 770.
               # AppImageHub runs the app as an unprivileged user and fails with:
               # "AppRun.wrapped: Permission denied". Normalize to world-executable.
@@ -199,20 +213,25 @@ jobs:
           set -euo pipefail
           mkdir -p release-artifacts
 
+          TAG_INPUT="${{ inputs.tag || github.event.inputs.tag }}"
+          TAG="${TAG_INPUT:-${GITHUB_REF#refs/tags/}}"
+          VERSION="${TAG#v}"
+          BASE_VERSION="$(python3 -c 'import json; print(json.load(open("apps/desktop/src-tauri/tauri.conf.json", encoding="utf-8"))["version"])')"
+          if ! [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            VERSION="${BASE_VERSION}"
+          fi
+
+          release_asset_name() {
+            local raw="$1"
+            local name
+            name="$(echo "$raw" | tr 'A-Z' 'a-z')"
+            name="${name//_${BASE_VERSION}_/_${VERSION}_}"
+            name="${name//-${BASE_VERSION}-/-${VERSION}-}"
+            printf '%s\n' "$name"
+          }
+
           APPIMAGE_PATH="$(find apps/desktop/src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage' | head -n 1 || true)"
           if [ -n "${APPIMAGE_PATH:-}" ]; then
-            TAG_INPUT="${{ inputs.tag || github.event.inputs.tag }}"
-            TAG="${TAG_INPUT:-${GITHUB_REF#refs/tags/}}"
-            VERSION="${TAG#v}"
-
-            if [ -z "${VERSION}" ] || [ "${VERSION}" = "${TAG}" ]; then
-              APPIMAGE_BASE="$(basename "$APPIMAGE_PATH")"
-              VERSION_FROM_FILE="$(echo "$APPIMAGE_BASE" | sed -E 's/^[^_]+_([0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?)_.+\.AppImage$/\1/')"
-              if [ -n "${VERSION_FROM_FILE}" ] && [ "${VERSION_FROM_FILE}" != "${APPIMAGE_BASE}" ]; then
-                VERSION="${VERSION_FROM_FILE}"
-              fi
-            fi
-
             if [ -z "${VERSION:-}" ]; then
               echo "Failed to resolve AppImage version for naming." >&2
               exit 1
@@ -229,8 +248,8 @@ jobs:
 
           find apps/desktop/src-tauri/target -type f \( -name "*.deb" -o -name "*.rpm" \) -print0 | while IFS= read -r -d '' f; do
             base="$(basename "$f")"
-            lower="$(echo "$base" | tr 'A-Z' 'a-z')"
-            cp "$f" "release-artifacts/$lower"
+            target="$(release_asset_name "$base")"
+            cp "$f" "release-artifacts/$target"
           done
 
           ls -la release-artifacts/ || true
@@ -249,13 +268,24 @@ jobs:
       - name: Add Snap to artifacts
         if: steps.snap_build.outcome == 'success' && steps.snap_build.outputs.snap != ''
         run: |
+          set -euo pipefail
           mkdir -p release-artifacts
-          cp "${{ steps.snap_build.outputs.snap }}" release-artifacts/ || true
+          TAG_INPUT="${{ inputs.tag || github.event.inputs.tag }}"
+          TAG="${TAG_INPUT:-${GITHUB_REF#refs/tags/}}"
+          VERSION="${TAG#v}"
+          BASE_VERSION="$(python3 -c 'import json; print(json.load(open("apps/desktop/src-tauri/tauri.conf.json", encoding="utf-8"))["version"])')"
+          if ! [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            VERSION="${BASE_VERSION}"
+          fi
+          target="$(basename "${{ steps.snap_build.outputs.snap }}" | tr 'A-Z' 'a-z')"
+          target="${target//_${BASE_VERSION}_/_${VERSION}_}"
+          target="${target//-${BASE_VERSION}-/-${VERSION}-}"
+          cp "${{ steps.snap_build.outputs.snap }}" "release-artifacts/${target}"
           ls -la release-artifacts/ || true
         shell: bash
 
       - name: Publish Snap (stable)
-        if: startsWith(github.ref, 'refs/tags/') && github.event_name != 'workflow_dispatch' && steps.snap_build.outcome == 'success' && steps.snap_build.outputs.snap != ''
+        if: startsWith(github.ref, 'refs/tags/') && github.event_name != 'workflow_dispatch' && !contains(github.ref_name, '-') && steps.snap_build.outcome == 'success' && steps.snap_build.outputs.snap != ''
         timeout-minutes: 10
         env:
           SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAPCRAFT_TOKEN }}

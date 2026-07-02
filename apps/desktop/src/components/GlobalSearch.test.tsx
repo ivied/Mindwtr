@@ -1,11 +1,12 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Area, Task } from '@mindwtr/core';
-import { useTaskStore } from '@mindwtr/core';
+import { AREA_FILTER_ALL, useTaskStore, type Area, type Task } from '@mindwtr/core';
 import { LanguageProvider } from '../contexts/language-context';
+import { useUiStore } from '../store/ui-store';
 import { GlobalSearch } from './GlobalSearch';
 
 const initialTaskState = useTaskStore.getState();
+const initialUiState = useUiStore.getState();
 const originalScrollIntoView = Element.prototype.scrollIntoView;
 const now = '2026-05-03T00:00:00.000Z';
 
@@ -56,11 +57,11 @@ describe('GlobalSearch', () => {
         vi.useFakeTimers();
         Element.prototype.scrollIntoView = vi.fn();
         useTaskStore.setState(initialTaskState, true);
+        useUiStore.setState(initialUiState, true);
         useTaskStore.setState({
-            tasks,
             _allTasks: tasks,
-            projects: [],
-            areas,
+            _allProjects: [],
+            _allAreas: areas,
             settings: {
                 filters: {
                     areaId: 'area-work',
@@ -76,6 +77,7 @@ describe('GlobalSearch', () => {
             delete (Element.prototype as { scrollIntoView?: Element['scrollIntoView'] }).scrollIntoView;
         }
         vi.useRealTimers();
+        useUiStore.setState(initialUiState, true);
     });
 
     it('searches all areas when opened from an active area filter', async () => {
@@ -92,10 +94,55 @@ describe('GlobalSearch', () => {
 
         expect(screen.queryByText('Area: Work')).not.toBeInTheDocument();
 
-        fireEvent.change(screen.getByRole('textbox'), {
-            target: { value: 'needle' },
+        await act(async () => {
+            fireEvent.change(screen.getByRole('textbox'), {
+                target: { value: 'needle' },
+            });
+            await vi.advanceTimersByTimeAsync(200);
+            await Promise.resolve();
         });
 
         expect(screen.getByText((_, element) => element?.textContent === 'Home needle task')).toBeInTheDocument();
+    });
+
+    it('switches the sidebar area filter to all areas when opening a task hidden by the active area', async () => {
+        const onNavigate = vi.fn();
+        const showToast = vi.fn();
+        const updateSettings = vi.fn().mockResolvedValue(undefined);
+        useTaskStore.setState((state) => ({ ...state, updateSettings }));
+        useUiStore.setState((state) => ({ ...state, showToast }));
+        render(
+            <LanguageProvider>
+                <GlobalSearch onNavigate={onNavigate} />
+            </LanguageProvider>
+        );
+
+        await act(async () => {
+            window.dispatchEvent(new Event('mindwtr:open-search'));
+            await vi.advanceTimersByTimeAsync(50);
+        });
+
+        await act(async () => {
+            fireEvent.change(screen.getByRole('textbox'), {
+                target: { value: 'needle' },
+            });
+            await vi.advanceTimersByTimeAsync(200);
+            await Promise.resolve();
+        });
+
+        const resultButton = screen.getByText((_, element) => element?.textContent === 'Home needle task')
+            .closest('button');
+        expect(resultButton).toBeTruthy();
+        await act(async () => {
+            resultButton!.click();
+            await Promise.resolve();
+        });
+
+        expect(updateSettings).toHaveBeenCalledWith({ filters: { areaId: AREA_FILTER_ALL } });
+        expect(showToast).toHaveBeenCalledWith(
+            'Switched to All Areas so the selected item is visible.',
+            'info',
+        );
+        expect(onNavigate).toHaveBeenCalledWith('next', 'task-home');
     });
 });

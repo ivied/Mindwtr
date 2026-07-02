@@ -1,11 +1,18 @@
 import React from 'react';
-import { Alert, SectionList, TextInput } from 'react-native';
+import { Alert, SectionList, Text, TextInput, View } from 'react-native';
 import { act, create } from 'react-test-renderer';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Task } from '@mindwtr/core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AppSettings, Project, Task } from '@mindwtr/core';
 
 import FocusScreen from '../app/(drawer)/(tabs)/focus';
 import { SwipeableTaskItem } from '@/components/swipeable-task-item';
+
+const showToastMock = vi.hoisted(() => vi.fn());
+const openProjectScreenMock = vi.hoisted(() => vi.fn());
+const asyncStorageMock = vi.hoisted(() => ({
+  getItem: vi.fn(),
+  setItem: vi.fn(),
+}));
 
 const makeTask = (id: string, overrides: Partial<Task> = {}): Task => ({
   id,
@@ -18,7 +25,7 @@ const makeTask = (id: string, overrides: Partial<Task> = {}): Task => ({
   ...overrides,
 });
 
-const makeProject = (id: string, overrides: Record<string, unknown> = {}) => ({
+const makeProject = (id: string, overrides: Partial<Project> = {}): Project => ({
   id,
   title: `Project ${id}`,
   status: 'active',
@@ -32,8 +39,8 @@ const makeProject = (id: string, overrides: Record<string, unknown> = {}) => ({
 
 const storeState: {
   tasks: Task[];
-  projects: unknown[];
-  settings: { appearance: Record<string, unknown>; features: Record<string, unknown> };
+  projects: Project[];
+  settings: AppSettings;
   updateTask: ReturnType<typeof vi.fn>;
   deleteTask: ReturnType<typeof vi.fn>;
   updateSettings: ReturnType<typeof vi.fn>;
@@ -53,6 +60,23 @@ const storeState: {
   setHighlightTask: vi.fn(),
 };
 
+const createDeferred = <T,>() => {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+};
+
+const createImmediatePromise = <T,>(value: T): Promise<T> => ({
+  then: (onFulfilled) => Promise.resolve(onFulfilled ? onFulfilled(value) : value),
+  catch: () => Promise.resolve(value),
+  finally: () => Promise.resolve(value),
+  [Symbol.toStringTag]: 'Promise',
+}) as Promise<T>;
+
 beforeEach(() => {
   storeState.tasks = [
     makeTask('focus-task', { isFocusedToday: true, dueDate: '2000-01-01' }),
@@ -60,8 +84,21 @@ beforeEach(() => {
   ];
   storeState.projects = [];
   storeState.settings = { appearance: {}, features: {} };
+  storeState.updateTask.mockReset();
+  storeState.updateTask.mockResolvedValue({ success: true });
+  storeState.deleteTask.mockClear();
   storeState.updateSettings.mockClear();
   storeState.highlightTaskId = null;
+  showToastMock.mockClear();
+  openProjectScreenMock.mockClear();
+  asyncStorageMock.getItem.mockReset();
+  asyncStorageMock.getItem.mockReturnValue(createImmediatePromise<string | null>(null));
+  asyncStorageMock.setItem.mockReset();
+  asyncStorageMock.setItem.mockResolvedValue(undefined);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 vi.mock('@mindwtr/core', async (importOriginal) => {
@@ -91,6 +128,10 @@ vi.mock('expo-router', () => ({
   useLocalSearchParams: () => ({}),
 }));
 
+vi.mock('@react-native-async-storage/async-storage', () => ({
+  default: asyncStorageMock,
+}));
+
 vi.mock('../contexts/theme-context', () => ({
   useTheme: () => ({ isDark: false }),
 }));
@@ -104,13 +145,38 @@ vi.mock('../contexts/language-context', () => ({
         'focus.schedule': 'Today',
         'focus.nextActions': 'Next Actions',
         'agenda.reviewDue': 'Review Due',
+        'agenda.reviewDueProjects': 'Projects to review',
         'agenda.allClear': 'All clear',
         'agenda.noTasks': 'No tasks',
+        'review.markReviewed': 'Mark reviewed',
+        'status.active': 'Active',
         'energyLevel.high': 'High energy',
         'filters.label': 'Filters',
         'savedFilters.save': 'Save',
+        'taskEdit.locationLabel': 'Location',
+        'taskEdit.locationPlaceholder': 'e.g. Office',
       }[key] ?? key),
   }),
+}));
+
+vi.mock('../contexts/toast-context', () => ({
+  useToast: () => ({
+    showToast: showToastMock,
+    dismissToast: vi.fn(),
+  }),
+}));
+
+vi.mock('@/lib/sync-service', () => ({
+  getMobileSyncConfigurationStatus: vi.fn().mockResolvedValue({ backend: 'off', configured: false }),
+  performMobileSync: vi.fn().mockResolvedValue({ success: true }),
+}));
+
+vi.mock('@react-native-community/datetimepicker', () => ({
+  default: (props: any) => React.createElement('DateTimePicker', props),
+}));
+
+vi.mock('@/hooks/use-theme-tokens', () => ({
+  useThemeTokens: () => ({ isMaterial: false, roles: null, shape: { large: 16 } }),
 }));
 
 vi.mock('@/hooks/use-theme-colors', () => ({
@@ -146,18 +212,17 @@ vi.mock('@/components/pomodoro-panel', () => ({
   PomodoroPanel: (props: any) => React.createElement('PomodoroPanel', props),
 }));
 
+vi.mock('react-native-safe-area-context', () => ({
+  useSafeAreaInsets: () => ({ top: 0, right: 0, bottom: 24, left: 0 }),
+}));
+
 vi.mock('@/hooks/use-mobile-area-filter', () => ({
   useMobileAreaFilter: () => ({ areaById: new Map(), resolvedAreaFilter: '__all__' }),
 }));
 
-vi.mock('@/lib/area-filter', () => ({
-  projectMatchesAreaFilter: () => true,
-  taskMatchesAreaFilter: () => true,
-}));
-
 vi.mock('@/lib/task-meta-navigation', () => ({
   openContextsScreen: vi.fn(),
-  openProjectScreen: vi.fn(),
+  openProjectScreen: openProjectScreenMock,
 }));
 
 function textContent(node: any): string {
@@ -190,6 +255,16 @@ function findButtonByLabel(tree: ReturnType<typeof create>, label: string, optio
   return options.last ? matches[matches.length - 1] : matches[0];
 }
 
+function flattenStyle(style: unknown): Record<string, unknown> {
+  if (Array.isArray(style)) {
+    return style.reduce<Record<string, unknown>>((result, item) => ({
+      ...result,
+      ...flattenStyle(item),
+    }), {});
+  }
+  return style && typeof style === 'object' ? style as Record<string, unknown> : {};
+}
+
 describe('FocusScreen', () => {
   it('renders starred tasks in a dedicated Today\'s Focus section', () => {
     storeState.tasks = [
@@ -215,6 +290,211 @@ describe('FocusScreen', () => {
     ).not.toThrow();
   });
 
+  it('invalidates the Focus list and removes a row after marking it done', async () => {
+    storeState.tasks = [
+      makeTask('focus-task', { title: 'Focused task', isFocusedToday: true }),
+      makeTask('stale-next', { title: 'Stale next action' }),
+      makeTask('plain-next', { title: 'Plain next' }),
+    ];
+    storeState.updateTask.mockImplementation(async (taskId: string, updates: Partial<Task>) => {
+      storeState.tasks = storeState.tasks.map((task) => (
+        task.id === taskId
+          ? {
+            ...task,
+            ...updates,
+            ...(updates.status === 'done' ? { isFocusedToday: false } : {}),
+          }
+          : task
+      ));
+      return { success: true };
+    });
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    const initialListVersion = tree.root.findByType(SectionList).props.extraData;
+    const row = tree.root.findAllByType(SwipeableTaskItem).find((node) => node.props.task.id === 'stale-next');
+    expect(row).toBeTruthy();
+
+    await act(async () => {
+      await row?.props.onStatusChange('done');
+    });
+    act(() => {
+      tree.update(<FocusScreen />);
+    });
+
+    expect(storeState.updateTask).toHaveBeenCalledWith('stale-next', { status: 'done' });
+    expect(tree.root.findByType(SectionList).props.extraData).not.toEqual(initialListVersion);
+    expect(
+      tree.root.findAllByType(SwipeableTaskItem).map((node) => node.props.task.id),
+    ).toEqual(['focus-task', 'plain-next']);
+  });
+
+  it('uses a transparent refresh control for manual pull sync', () => {
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    const list = tree.root.findByType(SectionList);
+    const refreshControl = list.props.refreshControl;
+
+    expect(refreshControl.props.refreshing).toBe(false);
+    expect(refreshControl.props.tintColor).toBe('transparent');
+    expect(refreshControl.props.colors).toEqual(['transparent']);
+    expect(refreshControl.props.progressBackgroundColor).toBe('transparent');
+    expect(typeof refreshControl.props.onRefresh).toBe('function');
+  });
+
+  it('renders projects due for review and opens the project screen', () => {
+    storeState.tasks = [];
+    storeState.projects = [
+      makeProject('review-project', {
+        title: 'Quarterly planning',
+        reviewAt: '2026-03-30T09:00:00.000Z',
+      }),
+    ];
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    expect(textContent(tree.root)).toContain('Projects to review');
+
+    const projectButton = findButtonByText(tree, 'Quarterly planning');
+    act(() => {
+      projectButton.props.onPress();
+    });
+
+    expect(openProjectScreenMock).toHaveBeenCalledWith('review-project');
+  });
+
+  it('defers a focused task from the row action and offers undo', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 4, 2, 10, 0, 0, 0));
+    const alertSpy = vi.spyOn(Alert, 'alert');
+    storeState.tasks = [
+      makeTask('focused-next', {
+        title: 'Focused next',
+        isFocusedToday: true,
+      }),
+      makeTask('plain-next', { title: 'Plain next' }),
+    ];
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    const focusedRow = tree.root.findAllByType(SwipeableTaskItem).find((node) => node.props.task.id === 'focused-next');
+    expect(focusedRow?.props.onLongPressAction).toBeTypeOf('function');
+
+    act(() => {
+      focusedRow?.props.onLongPressAction();
+    });
+
+    const buttons = alertSpy.mock.calls[0]?.[2] as Array<{ text?: string; onPress?: () => void }>;
+    const tomorrow = buttons.find((button) => button.text === 'Tomorrow');
+    expect(tomorrow?.onPress).toBeTypeOf('function');
+
+    await act(async () => {
+      tomorrow?.onPress?.();
+      await Promise.resolve();
+    });
+
+    expect(storeState.updateTask).toHaveBeenCalledWith('focused-next', {
+      startTime: '2026-05-03',
+      isFocusedToday: false,
+    });
+    expect(showToastMock).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Focused next',
+      actionLabel: 'Undo',
+      onAction: expect.any(Function),
+    }));
+
+    const toast = showToastMock.mock.calls[0]?.[0] as { onAction?: () => Promise<void> | void };
+    await act(async () => {
+      await toast.onAction?.();
+    });
+
+    expect(storeState.updateTask).toHaveBeenLastCalledWith('focused-next', {
+      startTime: undefined,
+      isFocusedToday: true,
+    });
+    vi.useRealTimers();
+  });
+
+  it('defers an unstarred next action without writing a focus flag', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 4, 2, 10, 0, 0, 0));
+    const alertSpy = vi.spyOn(Alert, 'alert');
+    storeState.tasks = [
+      makeTask('plain-next', { title: 'Plain next' }),
+    ];
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    const row = tree.root.findAllByType(SwipeableTaskItem).find((node) => node.props.task.id === 'plain-next');
+    expect(row?.props.onLongPressAction).toBeTypeOf('function');
+
+    act(() => {
+      row?.props.onLongPressAction();
+    });
+
+    const buttons = alertSpy.mock.calls[0]?.[2] as Array<{ text?: string; onPress?: () => void }>;
+    const nextWeek = buttons.find((button) => button.text === 'Next week');
+    expect(nextWeek?.onPress).toBeTypeOf('function');
+
+    await act(async () => {
+      nextWeek?.onPress?.();
+      await Promise.resolve();
+    });
+
+    expect(storeState.updateTask).toHaveBeenCalledWith('plain-next', {
+      startTime: '2026-05-09',
+    });
+
+    const toast = showToastMock.mock.calls[0]?.[0] as { onAction?: () => Promise<void> | void };
+    await act(async () => {
+      await toast.onAction?.();
+    });
+
+    expect(storeState.updateTask).toHaveBeenLastCalledWith('plain-next', {
+      startTime: undefined,
+    });
+    vi.useRealTimers();
+  });
+
+  it('does not offer defer on due-dated Focus rows', () => {
+    storeState.tasks = [
+      makeTask('due-next', {
+        title: 'Due next',
+        dueDate: '2000-01-01',
+      }),
+    ];
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    const row = tree.root.findAllByType(SwipeableTaskItem).find((node) => node.props.task.id === 'due-next');
+    expect(row?.props.onLongPressAction).toBeUndefined();
+    expect(row?.props.onLongPressActionLabel).toBeUndefined();
+  });
+
   it('bounds SectionList rendering for larger Focus lists', () => {
     let tree!: ReturnType<typeof create>;
 
@@ -226,6 +506,69 @@ describe('FocusScreen', () => {
     expect(list.props.initialNumToRender).toBe(12);
     expect(list.props.maxToRenderPerBatch).toBe(12);
     expect(list.props.windowSize).toBe(5);
+    expect(list.props.removeClippedSubviews).toBe(false);
+  });
+
+  it('keeps Focus content clear of the custom bottom tab bar', () => {
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    const list = tree.root.findByType(SectionList);
+    expect(list.props.contentContainerStyle).toEqual(
+      expect.arrayContaining([expect.objectContaining({ paddingBottom: 174 })])
+    );
+    expect(list.props.scrollIndicatorInsets).toEqual(expect.objectContaining({ bottom: 174 }));
+  });
+
+  it('uses a compact lead-in before the first visible Focus section', () => {
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    const todayHeader = findButtonByLabel(tree, "Today's Focus");
+    const nextHeader = findButtonByLabel(tree, 'Next Actions');
+
+    expect(flattenStyle(todayHeader.props.style).marginTop).toBe(8);
+    expect(flattenStyle(nextHeader.props.style).marginTop).toBe(18);
+  });
+
+  it('lets Focus section titles shrink before the divider line truncates them', () => {
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    const todayText = tree.root.findAllByType(Text).find((node) => textContent(node) === "Today's Focus");
+    expect(todayText).toBeDefined();
+    expect(flattenStyle(todayText!.props.style)).toMatchObject({
+      flexShrink: 1,
+      minWidth: 0,
+    });
+  });
+
+  it('keeps the Focus filter affordance compact without visible circle chrome', () => {
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    const filterButton = findButtonByLabel(tree, 'Filters');
+    const rawStyle = typeof filterButton.props.style === 'function'
+      ? filterButton.props.style({ pressed: false })
+      : filterButton.props.style;
+    const style = flattenStyle(rawStyle);
+
+    expect(style.width).toBe(44);
+    expect(style.height).toBe(44);
+    expect(style.borderWidth).toBeUndefined();
+    expect(style.backgroundColor).toBeUndefined();
   });
 
   it('keeps Today\'s Focus visible when collapsing Next Actions', () => {
@@ -296,6 +639,252 @@ describe('FocusScreen', () => {
     expect(() => tree.root.findByProps({ children: 'All clear' })).toThrow();
   });
 
+  it('restores the persisted Next Actions collapsed state', async () => {
+    const deferred = createDeferred<string | null>();
+    asyncStorageMock.getItem.mockReturnValue(deferred.promise);
+    storeState.tasks = [
+      makeTask('focused-next', { title: 'Focused next', isFocusedToday: true }),
+      makeTask('plain-next', { title: 'Plain next' }),
+    ];
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    expect(tree.root.findAllByType(SwipeableTaskItem)).toHaveLength(0);
+
+    await act(async () => {
+      deferred.resolve(JSON.stringify({
+        expandedSections: { nextActions: false },
+      }));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const nextSectionButton = tree.root.find((node) =>
+      node.props.accessibilityLabel === 'Next Actions' && typeof node.props.onPress === 'function'
+    );
+
+    expect(asyncStorageMock.getItem).toHaveBeenCalledWith('mindwtr:view:focus:v1');
+    expect(nextSectionButton.props.accessibilityState).toEqual({ expanded: false });
+    expect(
+      tree.root.findAllByType(SwipeableTaskItem).map((node) => node.props.task.id),
+    ).toEqual(['focused-next']);
+  });
+
+  it('persists the Next Actions expanded state when toggled', () => {
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    const nextSectionButton = tree.root.find((node) =>
+      node.props.accessibilityLabel === 'Next Actions' && typeof node.props.onPress === 'function'
+    );
+
+    act(() => {
+      nextSectionButton.props.onPress();
+    });
+
+    expect(asyncStorageMock.setItem).toHaveBeenCalledWith(
+      'mindwtr:view:focus:v1',
+      JSON.stringify({
+        expandedSections: {
+          focus: true,
+          schedule: true,
+          next: false,
+          nextActions: false,
+          reviewDue: true,
+          reviewProjects: true,
+        },
+      })
+    );
+  });
+
+  it('renders mobile Next Actions flat by default', () => {
+    storeState.tasks = [
+      makeTask('work-next', { title: 'Work next', contexts: ['@work'] }),
+      makeTask('no-context-next', { title: 'No context next' }),
+      makeTask('home-next', { title: 'Home next', contexts: ['@home'] }),
+    ];
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    expect(
+      tree.root.findAllByType(View)
+        .filter((node) => node.props.accessibilityRole === 'header')
+        .map((node) => node.props.accessibilityLabel),
+    ).toEqual([]);
+    expect(
+      tree.root.findAllByType(SwipeableTaskItem).map((node) => node.props.task.id),
+    ).toEqual(['home-next', 'no-context-next', 'work-next']);
+  });
+
+  it('surfaces one next action from a project due today before unrelated undated tasks', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-10T12:00:00.000Z'));
+    storeState.projects = [
+      makeProject('due-project', {
+        title: 'Due project',
+        dueDate: '2026-04-10T17:00:00.000Z',
+      }),
+    ];
+    storeState.tasks = [
+      makeTask('unrelated-next', {
+        title: 'Unrelated next',
+        createdAt: '2026-04-01T00:00:00.000Z',
+      }),
+      makeTask('project-second', {
+        title: 'Project second',
+        projectId: 'due-project',
+        order: 1,
+        orderNum: 1,
+        createdAt: '2026-04-02T00:00:00.000Z',
+      }),
+      makeTask('project-first', {
+        title: 'Project first',
+        projectId: 'due-project',
+        order: 0,
+        orderNum: 0,
+        createdAt: '2026-04-03T00:00:00.000Z',
+      }),
+    ];
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    const rows = tree.root.findAllByType(SwipeableTaskItem);
+    expect(rows.map((node) => node.props.task.id)).toEqual([
+      'project-first',
+      'unrelated-next',
+      'project-second',
+    ]);
+    expect(rows[0]?.props.projectDeadlineLabel).toBe('Project due today');
+    expect(rows[1]?.props.projectDeadlineLabel).toBeUndefined();
+    expect(rows[2]?.props.projectDeadlineLabel).toBeUndefined();
+    expect(rows[0]?.props.task.dueDate).toBeUndefined();
+  });
+
+  it('groups mobile Next Actions under context headers when selected', () => {
+    storeState.settings = {
+      appearance: {},
+      features: {},
+      gtd: { focusGroupBy: 'context' },
+    } as any;
+    storeState.tasks = [
+      makeTask('work-next', { title: 'Work next', contexts: ['@work'] }),
+      makeTask('no-context-next', { title: 'No context next' }),
+      makeTask('home-next', { title: 'Home next', contexts: ['@home'] }),
+    ];
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    expect(
+      tree.root.findAllByType(View)
+        .filter((node) => node.props.accessibilityRole === 'header')
+        .map((node) => node.props.accessibilityLabel),
+    ).toEqual(['No context 1', '@home 1', '@work 1']);
+    expect(
+      tree.root.findAllByType(SwipeableTaskItem).map((node) => node.props.task.id),
+    ).toEqual(['no-context-next', 'home-next', 'work-next']);
+  });
+
+  it('updates the mobile Focus list identity when grouping changes to a single context group', () => {
+    storeState.tasks = [
+      makeTask('work-first', { title: 'Work first', contexts: ['@work'] }),
+      makeTask('work-second', { title: 'Work second', contexts: ['@work'] }),
+    ];
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    const initialListVersion = tree.root.findByType(SectionList).props.extraData;
+
+    act(() => {
+      storeState.settings = {
+        appearance: {},
+        features: {},
+        gtd: { focusGroupBy: 'context' },
+      } as any;
+      tree.update(<FocusScreen />);
+    });
+
+    expect(tree.root.findByType(SectionList).props.extraData).not.toEqual(initialListVersion);
+    expect(
+      tree.root.findAllByType(View)
+        .filter((node) => node.props.accessibilityRole === 'header')
+        .map((node) => node.props.accessibilityLabel),
+    ).toEqual(['@work 2']);
+    expect(
+      tree.root.findAllByType(SwipeableTaskItem).map((node) => node.props.task.id),
+    ).toEqual(['work-first', 'work-second']);
+  });
+
+  it('saves the Focus group-by preference from the filter sheet', async () => {
+    storeState.updateSettings.mockResolvedValue(undefined);
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    act(() => {
+      findButtonByLabel(tree, 'Filters').props.onPress();
+    });
+    await act(async () => {
+      findButtonByText(tree, 'Project').props.onPress();
+    });
+
+    expect(storeState.updateSettings).toHaveBeenCalledWith({
+      gtd: { focusGroupBy: 'project' },
+    });
+  });
+
+  it('persists clearing the Focus group-by preference from the filter sheet', async () => {
+    storeState.settings = {
+      appearance: {},
+      features: {},
+      gtd: { focusGroupBy: 'priority' as any },
+    };
+    storeState.updateSettings.mockResolvedValue(undefined);
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    act(() => {
+      findButtonByLabel(tree, 'Filters').props.onPress();
+    });
+
+    await act(async () => {
+      findButtonByText(tree, 'None').props.onPress();
+    });
+
+    expect(storeState.updateSettings).toHaveBeenCalledWith({
+      gtd: { focusGroupBy: 'none' },
+    });
+  });
+
   it('renders review-due tasks in a dedicated Review Due section and allows collapsing it', () => {
     storeState.tasks = [
       makeTask('waiting-review', {
@@ -330,6 +919,144 @@ describe('FocusScreen', () => {
     expect(() => tree.root.findByProps({ children: 'All clear' })).toThrow();
   });
 
+  it('shows the status badge on review-due rows but keeps it hidden on next actions', () => {
+    storeState.tasks = [
+      makeTask('plain-next', { title: 'Plain next' }),
+      makeTask('waiting-review', {
+        status: 'waiting',
+        title: 'Waiting review',
+        reviewAt: '2000-01-01T00:00:00.000Z',
+      }),
+    ];
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    const rows = tree.root.findAllByType(SwipeableTaskItem);
+    const reviewRow = rows.find((node) => node.props.task.id === 'waiting-review');
+    const nextRow = rows.find((node) => node.props.task.id === 'plain-next');
+
+    expect(reviewRow?.props.hideStatusBadge).toBe(false);
+    expect(nextRow?.props.hideStatusBadge).toBe(true);
+  });
+
+  it('marks a review-due Focus task reviewed from the row action and offers undo', async () => {
+    const alertSpy = vi.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons) => {
+      buttons?.find((button) => button.text === 'Mark reviewed')?.onPress?.();
+    });
+    const reviewAt = '2000-01-01T00:00:00.000Z';
+    storeState.tasks = [
+      makeTask('waiting-review', {
+        status: 'waiting',
+        title: 'Waiting review',
+        reviewAt,
+      }),
+    ];
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    const row = tree.root.findAllByType(SwipeableTaskItem).find((node) => node.props.task.id === 'waiting-review');
+    expect(row?.props.onLongPressAction).toBeTypeOf('function');
+    expect(row?.props.onLongPressActionLabel).toBe('Mark reviewed');
+
+    await act(async () => {
+      row?.props.onLongPressAction();
+      await Promise.resolve();
+    });
+
+    expect(alertSpy).toHaveBeenCalled();
+    expect(storeState.updateTask).toHaveBeenCalledWith('waiting-review', { reviewAt: undefined });
+    expect(showToastMock).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Waiting review',
+      message: 'Marked reviewed',
+      actionLabel: 'Undo',
+      onAction: expect.any(Function),
+    }));
+
+    const toast = showToastMock.mock.calls[0]?.[0] as { onAction?: () => Promise<void> | void };
+    await act(async () => {
+      await toast.onAction?.();
+    });
+
+    expect(storeState.updateTask).toHaveBeenLastCalledWith('waiting-review', { reviewAt });
+    alertSpy.mockRestore();
+  });
+
+  it('advances a review-due Focus task by one week from the row action', async () => {
+    const alertSpy = vi.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons) => {
+      buttons?.find((button) => button.text === 'Review in 1 week')?.onPress?.();
+    });
+    const reviewAt = '2000-01-01T00:00:00.000Z';
+    storeState.tasks = [
+      makeTask('waiting-review', {
+        status: 'waiting',
+        title: 'Waiting review',
+        reviewAt,
+      }),
+    ];
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    const row = tree.root.findAllByType(SwipeableTaskItem).find((node) => node.props.task.id === 'waiting-review');
+
+    await act(async () => {
+      row?.props.onLongPressAction();
+      await Promise.resolve();
+    });
+
+    expect(storeState.updateTask).toHaveBeenCalledWith(
+      'waiting-review',
+      { reviewAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/) },
+    );
+    const nextReviewAt = (storeState.updateTask.mock.calls[0]?.[1] as { reviewAt?: string }).reviewAt;
+    const expected = new Date();
+    expected.setDate(expected.getDate() + 7);
+    expect(nextReviewAt?.slice(0, 10)).toBe(
+      `${expected.getFullYear()}-${String(expected.getMonth() + 1).padStart(2, '0')}-${String(expected.getDate()).padStart(2, '0')}`,
+    );
+    alertSpy.mockRestore();
+  });
+
+  it('does not duplicate review-due next actions in earlier Focus sections', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-02T12:00:00.000Z'));
+    storeState.tasks = [
+      makeTask('plain-next', { title: 'Plain next' }),
+      makeTask('review-due-next', {
+        title: 'Review due next',
+        reviewAt: '2026-04-02T09:00:00.000Z',
+      }),
+      makeTask('review-due-scheduled', {
+        title: 'Review due scheduled',
+        dueDate: '2026-04-02',
+        reviewAt: '2026-04-02T09:30:00.000Z',
+      }),
+    ];
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    const rowIds = tree.root.findAllByType(SwipeableTaskItem).map((node) => node.props.task.id);
+    expect(rowIds).toHaveLength(3);
+    expect(rowIds.filter((id) => id === 'review-due-next')).toHaveLength(1);
+    expect(rowIds.filter((id) => id === 'review-due-scheduled')).toHaveLength(1);
+    expect(textContent(tree.root)).toContain('Review Due');
+  });
+
   it('does not let earlier non-Focus tasks hide the next task in a sequential project', () => {
     storeState.projects = [makeProject('project-1', { isSequential: true })];
     storeState.tasks = [
@@ -356,6 +1083,70 @@ describe('FocusScreen', () => {
     expect(
       tree.root.findAllByType(SwipeableTaskItem).map((node) => node.props.task.id),
     ).toEqual(['available-next']);
+  });
+
+  it('shows the first next action from each section for section-scoped sequential projects', () => {
+    storeState.projects = [makeProject('project-1', { isSequential: true, sequentialScope: 'section' })];
+    storeState.tasks = [
+      makeTask('section-a-first', {
+        status: 'next',
+        projectId: 'project-1',
+        sectionId: 'section-a',
+        order: 0,
+        orderNum: 0,
+      }),
+      makeTask('section-a-second', {
+        status: 'next',
+        projectId: 'project-1',
+        sectionId: 'section-a',
+        order: 1,
+        orderNum: 1,
+      }),
+      makeTask('section-b-first', {
+        status: 'next',
+        projectId: 'project-1',
+        sectionId: 'section-b',
+        order: 2,
+        orderNum: 2,
+      }),
+    ];
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    expect(
+      tree.root.findAllByType(SwipeableTaskItem).map((node) => node.props.task.id),
+    ).toEqual(['section-a-first', 'section-b-first']);
+  });
+
+  it('hides tasks that belong to deferred projects', () => {
+    storeState.projects = [
+      makeProject('active-project'),
+      makeProject('someday-project', { status: 'someday' }),
+    ];
+    storeState.tasks = [
+      makeTask('active-next', {
+        title: 'Active next',
+        projectId: 'active-project',
+      }),
+      makeTask('someday-next', {
+        title: 'Someday next',
+        projectId: 'someday-project',
+      }),
+    ];
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    expect(
+      tree.root.findAllByType(SwipeableTaskItem).map((node) => node.props.task.id),
+    ).toEqual(['active-next']);
   });
 
   it('does not show later sequential actions when the first action has a hidden future start', () => {
@@ -389,6 +1180,31 @@ describe('FocusScreen', () => {
     expect(
       tree.root.findAllByType(SwipeableTaskItem).map((node) => node.props.task.id),
     ).toEqual([]);
+  });
+
+  it('names shown future-start tasks in the helper notice', () => {
+    storeState.settings = {
+      appearance: { showFutureStarts: true },
+      features: {},
+    };
+    storeState.tasks = [
+      makeTask('future-first', {
+        title: 'Wait for vendor',
+        startTime: '2099-05-03T09:00:00.000Z',
+      }),
+      makeTask('next-now', {
+        title: 'Current next',
+      }),
+    ];
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    expect(textContent(tree.root)).toContain('1 future-start task shown');
+    expect(textContent(tree.root)).toContain('Wait for vendor');
   });
 
   it('applies and clears saved Focus filters from the chip row', () => {
@@ -430,6 +1246,42 @@ describe('FocusScreen', () => {
     expect(
       tree.root.findAllByType(SwipeableTaskItem).map((node) => node.props.task.id),
     ).toEqual(['desk-task', 'phone-task']);
+  });
+
+  it('can switch multiple context filters from all to any matching', () => {
+    storeState.tasks = [
+      makeTask('desk-task', { title: 'Desk task', contexts: ['@desk'] }),
+      makeTask('phone-task', { title: 'Phone task', contexts: ['@phone'] }),
+      makeTask('desk-phone-task', { title: 'Desk and phone task', contexts: ['@desk', '@phone'] }),
+    ];
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    act(() => {
+      findButtonByLabel(tree, 'Filters').props.onPress();
+    });
+    act(() => {
+      findButtonByText(tree, '@desk').props.onPress();
+    });
+    act(() => {
+      findButtonByText(tree, '@phone').props.onPress();
+    });
+
+    expect(
+      tree.root.findAllByType(SwipeableTaskItem).map((node) => node.props.task.id),
+    ).toEqual(['desk-phone-task']);
+
+    act(() => {
+      findButtonByText(tree, 'Any').props.onPress();
+    });
+
+    expect(
+      tree.root.findAllByType(SwipeableTaskItem).map((node) => node.props.task.id).sort(),
+    ).toEqual(['desk-phone-task', 'desk-task', 'phone-task']);
   });
 
   it('deletes the active saved Focus filter from the chip row', async () => {
@@ -559,7 +1411,8 @@ describe('FocusScreen', () => {
       findButtonByText(tree, 'Save', { last: true }).props.onPress();
     });
 
-    const input = tree.root.findByType(TextInput);
+    const inputs = tree.root.findAllByType(TextInput);
+    const input = inputs[inputs.length - 1];
     await act(async () => {
       input.props.onChangeText('High energy preset');
     });
@@ -574,6 +1427,102 @@ describe('FocusScreen', () => {
         criteria: { energy: ['high'] },
       })],
     });
+  });
+
+  it('saves context any matching in Focus filters', async () => {
+    storeState.updateSettings.mockResolvedValue(undefined);
+    storeState.tasks = [
+      makeTask('desk-task', { contexts: ['@desk'] }),
+      makeTask('phone-task', { contexts: ['@phone'] }),
+    ];
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    act(() => {
+      findButtonByLabel(tree, 'Filters').props.onPress();
+    });
+    act(() => {
+      findButtonByText(tree, '@desk').props.onPress();
+    });
+    act(() => {
+      findButtonByText(tree, '@phone').props.onPress();
+    });
+    act(() => {
+      findButtonByText(tree, 'Any').props.onPress();
+    });
+    act(() => {
+      findButtonByText(tree, 'Save', { last: true }).props.onPress();
+    });
+
+    const inputs = tree.root.findAllByType(TextInput);
+    const input = inputs[inputs.length - 1];
+    await act(async () => {
+      input.props.onChangeText('Desk or phone');
+    });
+    await act(async () => {
+      findButtonByText(tree, 'Save', { last: true }).props.onPress();
+    });
+
+    expect(storeState.updateSettings).toHaveBeenCalledWith({
+      savedFilters: [expect.objectContaining({
+        name: 'Desk or phone',
+        view: 'focus',
+        criteria: {
+          contexts: ['@desk', '@phone'],
+          contextMatchMode: 'any',
+        },
+      })],
+    });
+  });
+
+  it('hides the Focus location filter when active tasks do not use locations', () => {
+    storeState.tasks = [
+      makeTask('plain-next', { title: 'Plain next' }),
+      makeTask('another-next', { title: 'Another next' }),
+    ];
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    act(() => {
+      findButtonByLabel(tree, 'Filters').props.onPress();
+    });
+
+    expect(tree.root.findAllByProps({ accessibilityLabel: 'Location' })).toHaveLength(0);
+  });
+
+  it('filters Focus tasks by location from the filter sheet', async () => {
+    storeState.tasks = [
+      makeTask('office-task', { title: 'Office task', location: 'Main Office' }),
+      makeTask('home-task', { title: 'Home task', location: 'Home' }),
+    ];
+
+    let tree!: ReturnType<typeof create>;
+
+    act(() => {
+      tree = create(<FocusScreen />);
+    });
+
+    act(() => {
+      findButtonByLabel(tree, 'Filters').props.onPress();
+    });
+
+    const locationInput = tree.root.findByProps({ accessibilityLabel: 'Location' });
+    await act(async () => {
+      locationInput.props.onChangeText('office');
+    });
+
+    expect(
+      tree.root.findAllByType(SwipeableTaskItem).map((node) => node.props.task.id),
+    ).toEqual(['office-task']);
+    expect(textContent(findButtonByText(tree, 'Location: office'))).toContain('Location: office');
   });
 
 });

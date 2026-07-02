@@ -14,6 +14,31 @@ export class LocalSyncAbort extends Error {
     }
 }
 
+
+export type LocalSyncSnapshotFreshnessOptions = {
+    localSnapshotChangeAt: number;
+    getCurrentChangeAt: () => number;
+    requestFollowUp: () => void;
+    acceptCoveredSnapshot?: (currentChangeAt: number) => boolean;
+    onStale?: (details: { localSnapshotChangeAt: number; currentChangeAt: number }) => void;
+};
+
+export const ensureFreshLocalSyncSnapshot = ({
+    localSnapshotChangeAt,
+    getCurrentChangeAt,
+    requestFollowUp,
+    acceptCoveredSnapshot,
+    onStale,
+}: LocalSyncSnapshotFreshnessOptions): number => {
+    const currentChangeAt = getCurrentChangeAt();
+    if (currentChangeAt <= localSnapshotChangeAt) return currentChangeAt;
+    if (acceptCoveredSnapshot?.(currentChangeAt)) return currentChangeAt;
+
+    onStale?.({ localSnapshotChangeAt, currentChangeAt });
+    requestFollowUp();
+    throw new LocalSyncAbort();
+};
+
 export const getInMemoryAppDataSnapshot = (): AppData => {
     const state = useTaskStore.getState();
     return cloneAppData({
@@ -21,6 +46,7 @@ export const getInMemoryAppDataSnapshot = (): AppData => {
         projects: state._allProjects ?? state.projects ?? [],
         sections: state._allSections ?? state.sections ?? [],
         areas: state._allAreas ?? state.areas ?? [],
+        people: state._allPeople ?? state.people ?? [],
         settings: state.settings ?? {},
     });
 };

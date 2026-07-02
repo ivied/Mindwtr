@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Project, Section, Task, Area } from '@mindwtr/core';
-import { getFrequentTaskTokens, getUsedTaskTokens, useTaskStore } from '@mindwtr/core';
+import { getFrequentTaskTokens, getPersonOptionNames, getUsedTaskTokens, useTaskStore } from '@mindwtr/core';
 
 type UseTaskItemProjectContextParams = {
     task: Task;
@@ -9,9 +9,31 @@ type UseTaskItemProjectContextParams = {
     taskArea?: Area;
     sections: Section[];
     isEditing: boolean;
+    loadTokenOptions?: boolean;
     editProjectId: string;
     setEditAreaId: (value: string) => void;
 };
+
+const normalizeTokenOption = (token: string, prefix: '@' | '#'): string => {
+    const bareToken = token.trim().replace(/^[@#]/, '');
+    return bareToken ? `${prefix}${bareToken}` : '';
+};
+
+const uniquePrefixedTokenOptions = (tokens: string[], prefix: '@' | '#'): string[] => {
+    const seen = new Set<string>();
+    const result: string[] = [];
+    tokens.forEach((token) => {
+        const normalized = normalizeTokenOption(token, prefix);
+        const key = normalized.toLowerCase();
+        if (!normalized || seen.has(key)) return;
+        seen.add(key);
+        result.push(normalized);
+    });
+    return result;
+};
+
+const sortTokenOptions = (tokens: string[]): string[] =>
+    [...tokens].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
 
 export function useTaskItemProjectContext({
     task,
@@ -20,6 +42,7 @@ export function useTaskItemProjectContext({
     taskArea,
     sections,
     isEditing,
+    loadTokenOptions = isEditing,
     editProjectId,
     setEditAreaId,
 }: UseTaskItemProjectContextParams) {
@@ -48,34 +71,55 @@ export function useTaskItemProjectContext({
     const [popularTagOptions, setPopularTagOptions] = useState<string[]>([]);
     const [allContexts, setAllContexts] = useState<string[]>([]);
     const [popularContextOptions, setPopularContextOptions] = useState<string[]>([]);
+    const [assignedToOptions, setAssignedToOptions] = useState<string[]>([]);
 
     useEffect(() => {
-        if (!isEditing) return;
-        if (editProjectId) {
-            setEditAreaId('');
+        if (!isEditing && !loadTokenOptions) return;
+        const { tasks: storeTasks, projects: storeProjects, people: storePeople } = useTaskStore.getState();
+        if (isEditing) {
+            if (editProjectId) {
+                setEditAreaId('');
+            }
+            const projectId = editProjectId || task.projectId;
+            const activeProject = project || (projectId ? storeProjects.find((item) => item.id === projectId) : undefined);
+            if (projectId) {
+                const projectTasks = storeTasks
+                    .filter((candidate) => candidate.projectId === projectId && candidate.id !== task.id && !candidate.deletedAt)
+                    .map((candidate) => `${candidate.title}${candidate.status ? ` (${candidate.status})` : ''}`)
+                    .filter(Boolean)
+                    .slice(0, 20);
+                setProjectContext({
+                    projectTitle: activeProject?.title || '',
+                    projectTasks,
+                });
+            } else {
+                setProjectContext(null);
+            }
         }
-        const { tasks: storeTasks, projects: storeProjects } = useTaskStore.getState();
-        const projectId = editProjectId || task.projectId;
-        const activeProject = project || (projectId ? storeProjects.find((item) => item.id === projectId) : undefined);
-        if (projectId) {
-            const projectTasks = storeTasks
-                .filter((candidate) => candidate.projectId === projectId && candidate.id !== task.id && !candidate.deletedAt)
-                .map((candidate) => `${candidate.title}${candidate.status ? ` (${candidate.status})` : ''}`)
-                .filter(Boolean)
-                .slice(0, 20);
-            setProjectContext({
-                projectTitle: activeProject?.title || '',
-                projectTasks,
-            });
-        } else {
-            setProjectContext(null);
-        }
+        if (!loadTokenOptions) return;
 
-        setTagOptions(getUsedTaskTokens(storeTasks, (candidate) => candidate.tags, { prefix: '#' }));
-        setPopularTagOptions(getFrequentTaskTokens(storeTasks, (candidate) => candidate.tags, 8, { prefix: '#' }));
-        setAllContexts(getUsedTaskTokens(storeTasks, (candidate) => candidate.contexts, { prefix: '@' }));
-        setPopularContextOptions(getFrequentTaskTokens(storeTasks, (candidate) => candidate.contexts, 5, { prefix: '@' }));
-    }, [editProjectId, isEditing, project, setEditAreaId, task.id, task.projectId]);
+        const allTagOptions = uniquePrefixedTokenOptions(
+            getUsedTaskTokens(storeTasks, (candidate) => candidate.tags),
+            '#'
+        );
+        const frequentTagOptions = uniquePrefixedTokenOptions(
+            getFrequentTaskTokens(storeTasks, (candidate) => candidate.tags, 8),
+            '#'
+        );
+        const allContextOptions = uniquePrefixedTokenOptions(
+            getUsedTaskTokens(storeTasks, (candidate) => candidate.contexts),
+            '@'
+        );
+        const frequentContextOptions = uniquePrefixedTokenOptions(
+            getFrequentTaskTokens(storeTasks, (candidate) => candidate.contexts, 5),
+            '@'
+        );
+        setTagOptions(sortTokenOptions(allTagOptions));
+        setPopularTagOptions(frequentTagOptions);
+        setAllContexts(sortTokenOptions(allContextOptions));
+        setPopularContextOptions(frequentContextOptions);
+        setAssignedToOptions(getPersonOptionNames(storePeople, storeTasks));
+    }, [editProjectId, isEditing, loadTokenOptions, project, setEditAreaId, task.id, task.projectId]);
 
     return {
         sectionsByProject,
@@ -87,5 +131,6 @@ export function useTaskItemProjectContext({
         popularTagOptions,
         allContexts,
         popularContextOptions,
+        assignedToOptions,
     };
 }

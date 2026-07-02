@@ -18,4 +18,20 @@ describe('AreaColorPicker', () => {
 
         expect(onChange).toHaveBeenCalledWith('#10b981');
     });
+
+    it('raises the open menu above manage panels', () => {
+        const onChange = vi.fn();
+        const { getByLabelText, getByTestId } = render(
+            <AreaColorPicker
+                value="#3b82f6"
+                onChange={onChange}
+                title="Area color"
+            />,
+        );
+
+        fireEvent.click(getByLabelText('Area color'));
+
+        expect(getByTestId('area-color-picker-root').className).toContain('z-50');
+        expect(getByTestId('area-color-picker-menu').className).toContain('z-50');
+    });
 });

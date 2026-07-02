@@ -1,11 +1,27 @@
-import { useEffect, useRef } from 'react';
-import { format, getMonth, isSameDay, isSameMonth, isToday } from 'date-fns';
-import { CalendarDays, ChevronLeft, ChevronRight, Search } from 'lucide-react';
-import { safeFormatDate } from '@mindwtr/core';
+import { useCallback, useEffect, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
+import { isSameDay, isToday } from 'date-fns';
+import { CalendarDays, ChevronLeft, ChevronRight, Plus, Search } from 'lucide-react';
+import {
+    getCalendarDayOfMonth,
+    getCalendarMonthIndex,
+    getTaskCalendarOccurrenceDate,
+    hasTimeComponent,
+    isProjectedRecurringTask,
+    isSameCalendarMonth,
+    safeFormatDate,
+    type Task,
+} from '@mindwtr/core';
 
 import { ErrorBoundary } from '../ErrorBoundary';
 import { cn } from '../../lib/utils';
+import {
+    getCalendarTaskDragItemKind,
+    getCalendarTaskDragTaskId,
+    hasCalendarTaskDragData,
+    setCalendarTaskDragData,
+} from '../../lib/calendar-task-drag';
 import { CalendarOpenTaskModal, CalendarTaskComposerModal } from './calendar/CalendarModals';
+import { CalendarPlanningPanel } from './calendar/CalendarPlanningPanel';
 import { CalendarSelectedDayPanel } from './calendar/CalendarSelectedDayPanel';
 import {
     DESKTOP_DAY_END_HOUR,
@@ -13,15 +29,39 @@ import {
     DESKTOP_GRID_SNAP_MINUTES,
     DESKTOP_HOUR_HEIGHT,
     type CalendarViewMode,
+    type CalendarCellItem,
     dayKey,
     useDesktopCalendarController,
 } from './calendar/useDesktopCalendarController';
 
+const PROJECTED_RECURRENCE_LABEL_DATE_FORMAT = 'MMM d';
+const CALENDAR_PLANNING_PANEL_COLLAPSED_KEY = 'mindwtr.calendar.planningPanelCollapsed';
+
+const readPlanningPanelCollapsedPreference = (): boolean => {
+    if (typeof window === 'undefined') return false;
+    try {
+        return window.localStorage.getItem(CALENDAR_PLANNING_PANEL_COLLAPSED_KEY) === 'true';
+    } catch {
+        return false;
+    }
+};
+
+function getProjectedRecurrenceDisplayLabel(task: Task, projectedLabel: string): string {
+    const occurrenceDateLabel = safeFormatDate(
+        getTaskCalendarOccurrenceDate(task),
+        PROJECTED_RECURRENCE_LABEL_DATE_FORMAT
+    );
+    return occurrenceDateLabel ? `${projectedLabel} · ${occurrenceDateLabel}` : projectedLabel;
+}
+
 export function CalendarView() {
     const timelineScrollRef = useRef<HTMLDivElement | null>(null);
+    const [isPlanningPanelCollapsed, setIsPlanningPanelCollapsed] = useState(readPlanningPanelCollapsedPreference);
     const controller = useDesktopCalendarController();
     const {
         calendarBodyRef,
+        calendarSystem,
+        createTaskFromExternalEvent,
         currentMonth,
         currentMonthLabel,
         currentYear,
@@ -40,7 +80,9 @@ export function CalendarView() {
         hiddenExternalCalendarIds,
         isMonthPickerOpen,
         layoutTimedItems,
+        locale,
         monthNames,
+        openDayViewForDate,
         openQuickAddForStart,
         openTaskFromCalendar,
         resolveText,
@@ -52,15 +94,68 @@ export function CalendarView() {
         timelineDays,
         t,
         toggleExternalCalendar,
+        updateTaskDateFromDrop,
+        updateTaskStartTimeFromDrop,
         viewFilterQuery,
         viewMode,
         visibleSearchMatchCount,
         weekdayHeaders,
         yearOptions,
     } = controller;
+    const handleCalendarTaskDragStart = useCallback((event: DragEvent<HTMLElement>, task: Task, itemKind: CalendarCellItem['kind']) => {
+        if (itemKind === 'event') return;
+        if (isProjectedRecurringTask(task)) return;
+        event.stopPropagation();
+        setCalendarTaskDragData(event.dataTransfer, task.id, {
+            itemKind,
+            variant: 'calendar-block',
+        });
+    }, []);
+    const handleCalendarTaskDragOver = useCallback((event: DragEvent<HTMLElement>) => {
+        if (!hasCalendarTaskDragData(event.dataTransfer)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+    }, []);
+    const handleDropOnDueDate = useCallback((event: DragEvent<HTMLElement>, date: Date) => {
+        const taskId = getCalendarTaskDragTaskId(event.dataTransfer);
+        if (!taskId) return;
+        const itemKind = getCalendarTaskDragItemKind(event.dataTransfer);
+        event.preventDefault();
+        event.stopPropagation();
+        void updateTaskDateFromDrop(taskId, date, itemKind);
+    }, [updateTaskDateFromDrop]);
+    const handleOpenDayKeyDown = useCallback((event: KeyboardEvent<HTMLElement>, date: Date) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        openDayViewForDate(date);
+    }, [openDayViewForDate]);
+    const handleDropOnTimelineSlot = useCallback((event: DragEvent<HTMLElement>, date: Date) => {
+        const taskId = getCalendarTaskDragTaskId(event.dataTransfer);
+        if (!taskId) return;
+
+        const rect = event.currentTarget.getBoundingClientRect();
+        const rawMinutes = ((event.clientY - rect.top) / DESKTOP_HOUR_HEIGHT) * 60;
+        const snapped = Math.round(rawMinutes / DESKTOP_GRID_SNAP_MINUTES) * DESKTOP_GRID_SNAP_MINUTES;
+        const maxMinutes = (DESKTOP_DAY_END_HOUR - DESKTOP_DAY_START_HOUR) * 60 - DESKTOP_GRID_SNAP_MINUTES;
+        const clamped = Math.max(0, Math.min(maxMinutes, snapped));
+        const start = new Date(date);
+        start.setHours(DESKTOP_DAY_START_HOUR, clamped, 0, 0);
+
+        event.preventDefault();
+        event.stopPropagation();
+        void updateTaskStartTimeFromDrop(taskId, start);
+    }, [updateTaskStartTimeFromDrop]);
     const timelineScrollKey = viewMode === 'day' || viewMode === 'week'
         ? `${viewMode}:${timelineDays.map(dayKey).join('|')}`
         : '';
+    const handlePlanningPanelCollapsedChange = useCallback((collapsed: boolean) => {
+        setIsPlanningPanelCollapsed(collapsed);
+        try {
+            window.localStorage.setItem(CALENDAR_PLANNING_PANEL_COLLAPSED_KEY, collapsed ? 'true' : 'false');
+        } catch {
+            // Ignore storage failures; the in-memory state still updates.
+        }
+    }, []);
 
     useEffect(() => {
         if (!timelineScrollKey) return;
@@ -142,7 +237,7 @@ export function CalendarView() {
                                             {resolveText('calendar.month', 'Month')}
                                             <select
                                                 className="w-full rounded border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
-                                                value={getMonth(currentMonth)}
+                                                value={getCalendarMonthIndex(currentMonth, calendarSystem)}
                                                 onChange={(event) => handleMonthChange(Number(event.target.value))}
                                                 aria-label={resolveText('calendar.month', 'Month')}
                                             >
@@ -240,7 +335,16 @@ export function CalendarView() {
                 </div>
             )}
 
-            <div ref={calendarBodyRef} className="space-y-6">
+            <div
+                ref={calendarBodyRef}
+                className={cn(
+                    "grid gap-6",
+                    isPlanningPanelCollapsed
+                        ? "xl:grid-cols-[minmax(0,1fr)_3.5rem]"
+                        : "xl:grid-cols-[minmax(0,1fr)_20rem]"
+                )}
+            >
+                <div className="min-w-0 space-y-6">
                 {viewMode === 'month' && (
                 <div className="grid grid-cols-7 gap-px bg-border rounded-lg overflow-hidden shadow-sm">
                     {weekdayHeaders.map((day) => (
@@ -265,17 +369,25 @@ export function CalendarView() {
                             <div
                                 key={day.toString()}
                                 className={cn(
-                                    "group bg-card min-h-[128px] p-2 transition-colors hover:bg-accent/50 relative",
-                                    !isSameMonth(day, currentMonth) && "bg-muted/50 text-muted-foreground",
+                                    "group bg-card min-h-[128px] cursor-pointer p-2 transition-colors hover:bg-accent/50 relative",
+                                    !isSameCalendarMonth(day, currentMonth, calendarSystem) && "bg-muted/50 text-muted-foreground",
                                     isSelected && "ring-2 ring-primary"
                                 )}
-                                onClick={() => selectCalendarDate(day)}
+                                data-calendar-drop-date={dayKey(day)}
+                                role="button"
+                                tabIndex={0}
+                                aria-label={`${day.toLocaleDateString(locale, { month: 'short', day: 'numeric', year: 'numeric' })}, ${resolveText('calendar.openDayView', 'Open day view')}`}
+                                onClick={() => openDayViewForDate(day)}
+                                onKeyDown={(event) => handleOpenDayKeyDown(event, day)}
+                                onDragOver={handleCalendarTaskDragOver}
+                                onDrop={(event) => handleDropOnDueDate(event, day)}
+                                title={resolveText('calendar.openDayView', 'Open day view')}
                             >
                                 <div className="mb-2 flex items-center justify-between gap-2">
                                     <div className="flex min-w-0 items-center gap-1.5">
                                         <div className="flex h-6 w-6 items-center justify-center rounded-full text-sm font-medium" style={todayMarkerStyle}>
                                             <span className="tabular-nums leading-none">
-                                                {format(day, 'd')}
+                                                {getCalendarDayOfMonth(day, calendarSystem)}
                                             </span>
                                         </div>
                                         {isToday(day) && (
@@ -294,14 +406,14 @@ export function CalendarView() {
                                             : item.kind === 'event' && item.event.allDay
                                                 ? t('calendar.allDay')
                                                 : '';
-                                        const content = (
-                                            <>
-                                                {timeLabel && <span className="mr-1 text-[10px] opacity-75">{timeLabel}</span>}
-                                                <span>{item.title}</span>
-                                            </>
-                                        );
 
                                         if (item.kind === 'event') {
+                                            const content = (
+                                                <>
+                                                    {timeLabel && <span className="mr-1 text-[10px] opacity-75">{timeLabel}</span>}
+                                                    <span>{item.title}</span>
+                                                </>
+                                            );
                                             return (
                                                 <div
                                                     key={item.id}
@@ -315,21 +427,38 @@ export function CalendarView() {
                                         }
 
                                         const task = item.task;
+                                        const projected = isProjectedRecurringTask(task);
+                                        const projectedLabel = projected
+                                            ? getProjectedRecurrenceDisplayLabel(task, resolveText('calendar.projectedRecurrence', 'Projected'))
+                                            : '';
+                                        const content = (
+                                            <>
+                                                {timeLabel && <span className="mr-1 text-[10px] opacity-75">{timeLabel}</span>}
+                                                <span>{item.title}</span>
+                                                {projected && <span className="ml-1 text-[10px] opacity-75">{projectedLabel}</span>}
+                                            </>
+                                        );
                                         return (
                                             <button
                                                 key={item.id}
                                                 type="button"
                                                 data-task-id={task.id}
-                                                data-task-edit-trigger
+                                                {...(!projected ? { 'data-task-edit-trigger': true } : {})}
+                                                draggable={!projected}
+                                                disabled={projected}
                                                 className={cn(
                                                     "block w-full truncate rounded px-1.5 py-1 text-left text-xs focus:outline-none focus:ring-2 focus:ring-primary/40",
-                                                    item.kind === 'scheduled'
+                                                    projected
+                                                        ? "border border-dashed border-primary/50 bg-primary/5 text-primary/80"
+                                                        : item.kind === 'scheduled'
                                                         ? "bg-primary/10 text-primary"
                                                         : "border-l-[3px] border-destructive/70 bg-background/60 text-foreground"
                                                 )}
-                                                title={task.title}
+                                                title={projected ? `${task.title} (${projectedLabel})` : task.title}
+                                                onDragStart={(event) => handleCalendarTaskDragStart(event, task, item.kind)}
                                                 onClick={(e) => {
                                                     e.stopPropagation();
+                                                    if (projected) return;
                                                     openTaskFromCalendar(task);
                                                 }}
                                             >
@@ -338,9 +467,17 @@ export function CalendarView() {
                                         );
                                     })}
                                     {overflowCount > 0 && (
-                                        <div className="px-1.5 pt-0.5 text-[11px] font-medium text-muted-foreground">
+                                        <button
+                                            type="button"
+                                            className="w-full rounded px-1.5 pt-0.5 text-left text-[11px] font-medium text-muted-foreground hover:bg-muted/70 hover:text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+                                            onClick={(event) => {
+                                                event.stopPropagation();
+                                                openDayViewForDate(day);
+                                            }}
+                                            aria-label={`${resolveText('calendar.openDayView', 'Open day view')}: ${day.toLocaleDateString(locale, { month: 'short', day: 'numeric', year: 'numeric' })}`}
+                                        >
                                             +{overflowCount} {resolveText('calendar.more', 'more')}
-                                        </div>
+                                        </button>
                                     )}
                                 </div>
                             </div>
@@ -368,9 +505,11 @@ export function CalendarView() {
                                         isToday(day) && "bg-primary/5"
                                     )}
                                 >
-                                    <div className="text-xs font-medium text-muted-foreground">{format(day, 'EEE')}</div>
+                                    <div className="text-xs font-medium text-muted-foreground">
+                                        {day.toLocaleDateString(locale, { weekday: 'short' })}
+                                    </div>
                                     <div className={cn("mt-0.5 inline-flex h-7 min-w-7 items-center justify-center rounded-full px-2 text-sm font-semibold", isToday(day) && "bg-primary text-primary-foreground")}>
-                                        {format(day, 'd')}
+                                        {getCalendarDayOfMonth(day, calendarSystem)}
                                     </div>
                                 </button>
                             ))}
@@ -386,7 +525,13 @@ export function CalendarView() {
                             {timelineDays.map((day) => {
                                 const allDayItems = getAllDayItemsForDay(day).slice(0, 4);
                                 return (
-                                    <div key={dayKey(day)} className="min-h-12 space-y-1 border-r border-border p-2 last:border-r-0">
+                                    <div
+                                        key={dayKey(day)}
+                                        data-calendar-all-day-drop-date={dayKey(day)}
+                                        className="min-h-12 space-y-1 border-r border-border p-2 last:border-r-0"
+                                        onDragOver={handleCalendarTaskDragOver}
+                                        onDrop={(event) => handleDropOnDueDate(event, day)}
+                                    >
                                         {allDayItems.map((item) => {
                                             if (item.kind === 'event') {
                                                 return (
@@ -400,17 +545,33 @@ export function CalendarView() {
                                                     </div>
                                                 );
                                             }
+                                            const projected = isProjectedRecurringTask(item.task);
+                                            const projectedLabel = projected
+                                                ? getProjectedRecurrenceDisplayLabel(item.task, resolveText('calendar.projectedRecurrence', 'Projected'))
+                                                : '';
                                             return (
                                                 <button
                                                     key={item.id}
                                                     type="button"
                                                     data-task-id={item.task.id}
-                                                    data-task-edit-trigger
-                                                    onClick={() => openTaskFromCalendar(item.task)}
-                                                    className="block w-full truncate rounded border-l-[3px] border-destructive/70 bg-background/70 px-2 py-1 text-left text-xs hover:bg-muted"
-                                                    title={item.title}
+                                                    {...(!projected ? { 'data-task-edit-trigger': true } : {})}
+                                                    draggable={!projected}
+                                                    disabled={projected}
+                                                    onDragStart={(event) => handleCalendarTaskDragStart(event, item.task, item.kind)}
+                                                    onClick={() => {
+                                                        if (!projected) openTaskFromCalendar(item.task);
+                                                    }}
+                                                    className={cn(
+                                                        "block w-full truncate rounded border-l-[3px] px-2 py-1 text-left text-xs hover:bg-muted",
+                                                        projected
+                                                            ? "border-primary/50 border-dashed bg-primary/5 text-primary/80"
+                                                            : item.kind === 'scheduled'
+                                                            ? "border-primary/70 bg-primary/5"
+                                                            : "border-destructive/70 bg-background/70"
+                                                    )}
+                                                    title={projected ? `${item.title} (${projectedLabel})` : item.title}
                                                 >
-                                                    {item.title}
+                                                    {projected ? `${item.title} · ${projectedLabel}` : item.title}
                                                 </button>
                                             );
                                         })}
@@ -443,8 +604,11 @@ export function CalendarView() {
                                     return (
                                         <div
                                             key={dayKey(day)}
+                                            data-calendar-timed-drop-date={dayKey(day)}
                                             className={cn("relative border-r border-border last:border-r-0", isToday(day) && "bg-primary/5")}
                                             style={{ height: (DESKTOP_DAY_END_HOUR - DESKTOP_DAY_START_HOUR) * DESKTOP_HOUR_HEIGHT }}
+                                            onDragOver={handleCalendarTaskDragOver}
+                                            onDrop={(event) => handleDropOnTimelineSlot(event, day)}
                                             onClick={(event) => {
                                                 const rect = event.currentTarget.getBoundingClientRect();
                                                 const rawMinutes = ((event.clientY - rect.top) / DESKTOP_HOUR_HEIGHT) * 60;
@@ -492,23 +656,38 @@ export function CalendarView() {
                                                         </div>
                                                     );
                                                 }
+                                                const projected = isProjectedRecurringTask(item.task);
+                                                const projectedLabel = projected
+                                                    ? getProjectedRecurrenceDisplayLabel(item.task, resolveText('calendar.projectedRecurrence', 'Projected'))
+                                                    : '';
                                                 return (
                                                     <button
                                                         key={item.id}
                                                         type="button"
                                                         data-calendar-block
                                                         data-task-id={item.task.id}
-                                                        data-task-edit-trigger
-                                                        className="absolute z-10 overflow-hidden rounded bg-primary px-2 py-1 text-left text-xs text-primary-foreground shadow-sm hover:bg-primary/90 focus:outline-none focus:ring-2 focus:ring-primary/40"
+                                                        {...(!projected ? { 'data-task-edit-trigger': true } : {})}
+                                                        draggable={!projected}
+                                                        disabled={projected}
+                                                        className={cn(
+                                                            "absolute z-10 overflow-hidden rounded px-2 py-1 text-left text-xs shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/40",
+                                                            projected
+                                                                ? "border border-dashed border-primary/50 bg-primary/10 text-primary"
+                                                                : "bg-primary text-primary-foreground hover:bg-primary/90"
+                                                        )}
                                                         style={commonStyle}
-                                                        title={`${item.title} ${timeLabel}`}
+                                                        title={projected ? `${item.title} ${timeLabel} (${projectedLabel})` : `${item.title} ${timeLabel}`}
+                                                        onDragStart={(event) => handleCalendarTaskDragStart(event, item.task, 'scheduled')}
                                                         onClick={(event) => {
                                                             event.stopPropagation();
+                                                            if (projected) return;
                                                             openTaskFromCalendar(item.task);
                                                         }}
                                                     >
                                                         <div className="truncate font-semibold">{item.title}</div>
-                                                        <div className="truncate opacity-90">{timeLabel}</div>
+                                                        <div className="truncate opacity-90">
+                                                            {projected ? `${timeLabel} · ${projectedLabel}` : timeLabel}
+                                                        </div>
                                                     </button>
                                                 );
                                             })}
@@ -531,14 +710,25 @@ export function CalendarView() {
                                 const items = getCalendarItemsForDate(day);
                                 if (items.length === 0) return null;
                                 return (
-                                    <section key={dayKey(day)} className="grid gap-3 px-4 py-3 md:grid-cols-[9rem_minmax(0,1fr)]">
+                                    <section
+                                        key={dayKey(day)}
+                                        data-calendar-schedule-drop-date={dayKey(day)}
+                                        className="grid gap-3 px-4 py-3 md:grid-cols-[9rem_minmax(0,1fr)]"
+                                        onDragOver={handleCalendarTaskDragOver}
+                                        onDrop={(event) => handleDropOnDueDate(event, day)}
+                                    >
                                         <div>
-                                            <div className={cn("text-sm font-semibold", isToday(day) && "text-primary")}>{format(day, 'EEE, MMM d')}</div>
+                                            <div className={cn("text-sm font-semibold", isToday(day) && "text-primary")}>
+                                                {day.toLocaleDateString(locale, { weekday: 'short', month: 'short', day: 'numeric' })}
+                                            </div>
                                             {isToday(day) && <div className="mt-1 text-xs font-medium text-primary">{resolveText('calendar.today', 'Today')}</div>}
                                         </div>
                                         <div className="space-y-1">
                                             {items.map((item) => {
-                                                const timeLabel = item.start && (item.kind === 'scheduled' || (item.kind === 'event' && !item.event.allDay))
+                                                const isAllDayScheduled = item.kind === 'scheduled' && !hasTimeComponent(item.task.startTime);
+                                                const timeLabel = isAllDayScheduled
+                                                    ? t('calendar.allDay')
+                                                    : item.start && (item.kind === 'scheduled' || (item.kind === 'event' && !item.event.allDay))
                                                     ? safeFormatDate(item.start, 'p')
                                                     : item.kind === 'event' && item.event.allDay
                                                         ? t('calendar.allDay')
@@ -552,23 +742,49 @@ export function CalendarView() {
                                                         >
                                                             <span className="w-20 shrink-0 text-xs font-medium text-muted-foreground">{timeLabel}</span>
                                                             <span className="min-w-0 flex-1 truncate">{item.title}</span>
+                                                            <button
+                                                                type="button"
+                                                                className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md bg-primary/10 px-2 text-xs font-medium text-primary hover:bg-primary/15 focus:outline-none focus:ring-2 focus:ring-primary/40"
+                                                                onClick={() => void createTaskFromExternalEvent(item.event)}
+                                                                aria-label={`${resolveText('calendar.createTaskFromEvent', 'Create task')}: ${item.title}`}
+                                                                title={resolveText('calendar.createTaskFromEvent', 'Create task')}
+                                                            >
+                                                                <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                                                                {resolveText('calendar.createTaskFromEvent', 'Create task')}
+                                                            </button>
                                                         </div>
                                                     );
                                                 }
+                                                const projected = isProjectedRecurringTask(item.task);
+                                                const projectedLabel = projected
+                                                    ? getProjectedRecurrenceDisplayLabel(item.task, resolveText('calendar.projectedRecurrence', 'Projected'))
+                                                    : '';
                                                 return (
                                                     <button
                                                         key={item.id}
                                                         type="button"
                                                         data-task-id={item.task.id}
-                                                        data-task-edit-trigger
-                                                        onClick={() => openTaskFromCalendar(item.task)}
+                                                        {...(!projected ? { 'data-task-edit-trigger': true } : {})}
+                                                        draggable={!projected}
+                                                        disabled={projected}
+                                                        onDragStart={(event) => handleCalendarTaskDragStart(event, item.task, item.kind)}
+                                                        onClick={() => {
+                                                            if (!projected) openTaskFromCalendar(item.task);
+                                                        }}
                                                         className={cn(
                                                             "flex w-full items-center gap-3 rounded px-3 py-2 text-left text-sm hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary/40",
-                                                            item.kind === 'scheduled' ? "bg-primary/10 text-primary" : "border-l-[3px] border-destructive/70 bg-background"
+                                                            projected
+                                                                ? "border border-dashed border-primary/50 bg-primary/5 text-primary"
+                                                                : item.kind === 'scheduled' ? "bg-primary/10 text-primary" : "border-l-[3px] border-destructive/70 bg-background"
                                                         )}
                                                     >
                                                         <span className="w-20 shrink-0 text-xs font-medium text-muted-foreground">{timeLabel}</span>
                                                         <span className="min-w-0 flex-1 truncate text-foreground">{item.title}</span>
+                                                        {projected && (
+                                                            <span className="shrink-0 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                                                                {projectedLabel}
+                                                            </span>
+                                                        )}
                                                     </button>
                                                 );
                                             })}
@@ -581,9 +797,15 @@ export function CalendarView() {
                 )}
 
                 <CalendarSelectedDayPanel controller={controller} />
-                <CalendarOpenTaskModal controller={controller} />
-                <CalendarTaskComposerModal controller={controller} />
+                </div>
+                <CalendarPlanningPanel
+                    controller={controller}
+                    isCollapsed={isPlanningPanelCollapsed}
+                    onCollapsedChange={handlePlanningPanelCollapsedChange}
+                />
         </div>
+            <CalendarOpenTaskModal controller={controller} />
+            <CalendarTaskComposerModal controller={controller} />
         </div>
         </ErrorBoundary>
     );

@@ -4,9 +4,12 @@ import {
     getActiveMarkdownReferenceQuery,
     insertMarkdownReferenceAtQuery,
     normalizeMarkdownInternalLinks,
+    parseInlineMarkdown,
     parseMarkdownReferenceHref,
     searchMarkdownReferences,
     stripMarkdown,
+    syncMarkdownChecklistCompletion,
+    syncMarkdownChecklistWithCanonical,
 } from './markdown';
 import type { Project, Task } from './types';
 
@@ -38,6 +41,40 @@ describe('stripMarkdown', () => {
     });
 });
 
+describe('parseInlineMarkdown', () => {
+    it('autolinks raw safe URLs outside explicit markdown links', () => {
+        expect(parseInlineMarkdown('See https://example.com/docs.')).toEqual([
+            { type: 'text', text: 'See ' },
+            { type: 'link', text: 'https://example.com/docs', href: 'https://example.com/docs' },
+            { type: 'text', text: '.' },
+        ]);
+    });
+
+    it('keeps explicit markdown link labels and hrefs', () => {
+        expect(parseInlineMarkdown('See [docs](https://example.com/docs).')).toEqual([
+            { type: 'text', text: 'See ' },
+            { type: 'link', text: 'docs', href: 'https://example.com/docs' },
+            { type: 'text', text: '.' },
+        ]);
+    });
+
+    it('autolinks RFC 2392 message-id links', () => {
+        expect(parseInlineMarkdown('Reply later mid:960830.1639@example.com.')).toEqual([
+            { type: 'text', text: 'Reply later ' },
+            { type: 'link', text: 'mid:960830.1639@example.com', href: 'mid:960830.1639@example.com' },
+            { type: 'text', text: '.' },
+        ]);
+    });
+
+    it('keeps explicit RFC 2392 message-id link labels and hrefs', () => {
+        expect(parseInlineMarkdown('See [email](mid:960830.1639@example.com).')).toEqual([
+            { type: 'text', text: 'See ' },
+            { type: 'link', text: 'email', href: 'mid:960830.1639@example.com' },
+            { type: 'text', text: '.' },
+        ]);
+    });
+});
+
 describe('extractChecklistFromMarkdown', () => {
     it('extracts markdown task list items', () => {
         const input = '- [x] Done item\n[ ] Todo item\n+ [X] Another done\n- plain bullet';
@@ -46,6 +83,67 @@ describe('extractChecklistFromMarkdown', () => {
             { title: 'Todo item', isCompleted: false },
             { title: 'Another done', isCompleted: true },
         ]);
+    });
+});
+
+describe('syncMarkdownChecklistCompletion', () => {
+    it('updates matching markdown task list markers from canonical checklist state', () => {
+        const input = '- [ ] **Draft** spec\n- [x] Review [notes](https://example.com)';
+
+        expect(syncMarkdownChecklistCompletion(input, [
+            { title: '**Draft** spec', isCompleted: true },
+            { title: 'Review [notes](https://example.com)', isCompleted: false },
+        ])).toBe('- [x] **Draft** spec\n- [ ] Review [notes](https://example.com)');
+    });
+
+    it('leaves unrelated markdown task list items unchanged', () => {
+        const input = '- [ ] Draft spec\n- [x] Keep independent';
+
+        expect(syncMarkdownChecklistCompletion(input, [
+            { title: 'Draft spec', isCompleted: true },
+        ])).toBe('- [x] Draft spec\n- [x] Keep independent');
+    });
+});
+
+describe('syncMarkdownChecklistWithCanonical', () => {
+    it('reorders matching markdown task-list lines to follow the canonical checklist', () => {
+        const input = [
+            'Intro',
+            '- [ ] Desktop layout',
+            '- [x] Tablet layout',
+            '- [ ] Mobile layout',
+            'Outro',
+        ].join('\n');
+
+        expect(syncMarkdownChecklistWithCanonical(input, [
+            { title: 'Tablet layout', isCompleted: true },
+            { title: 'Desktop layout', isCompleted: false },
+            { title: 'Mobile layout', isCompleted: false },
+        ])).toBe([
+            'Intro',
+            '- [x] Tablet layout',
+            '- [ ] Desktop layout',
+            '- [ ] Mobile layout',
+            'Outro',
+        ].join('\n'));
+    });
+
+    it('removes stale markdown task-list lines missing from the canonical checklist', () => {
+        const input = '- [ ] Desktop layout\n- [ ] Tablet layout\n- [ ] Mobile layout';
+
+        expect(syncMarkdownChecklistWithCanonical(input, [
+            { title: 'Desktop layout', isCompleted: false },
+            { title: 'Mobile layout', isCompleted: false },
+        ])).toBe('- [ ] Desktop layout\n- [ ] Mobile layout');
+    });
+
+    it('adds new canonical checklist items after the existing markdown task-list block', () => {
+        const input = 'Intro\n- [ ] Desktop layout\nOutro';
+
+        expect(syncMarkdownChecklistWithCanonical(input, [
+            { title: 'Desktop layout', isCompleted: false },
+            { title: 'Tablet layout', isCompleted: true },
+        ])).toBe('Intro\n- [ ] Desktop layout\n- [x] Tablet layout\nOutro');
     });
 });
 
@@ -92,6 +190,13 @@ describe('markdown references', () => {
             end: value.length,
             query: 'la',
         });
+    });
+
+    it('does not detect the active [[ query when editor assist is disabled', () => {
+        const value = 'Link to [[la';
+        expect(
+            getActiveMarkdownReferenceQuery(value, { start: value.length, end: value.length }, { assist: false }),
+        ).toBeNull();
     });
 
     it('inserts a stable markdown reference token', () => {

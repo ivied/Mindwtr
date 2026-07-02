@@ -47,7 +47,18 @@ describe('task-meta-navigation', () => {
 
         expect(routerMocks.push).toHaveBeenCalledWith({
             pathname: '/projects-screen',
-            params: { projectId: 'project-1', taskId: 'task-1', openToken: '12345' },
+            params: { projectId: 'project-1', taskId: 'task-1', openToken: '12345', taskTab: 'view' },
+        });
+    });
+
+    it('can open a task directly on the task edit tab', () => {
+        vi.spyOn(Date, 'now').mockReturnValueOnce(67890);
+
+        openTaskScreen('task-2', 'project-2', 'task');
+
+        expect(routerMocks.push).toHaveBeenCalledWith({
+            pathname: '/projects-screen',
+            params: { projectId: 'project-2', taskId: 'task-2', openToken: '67890', taskTab: 'task' },
         });
     });
 
@@ -58,7 +69,7 @@ describe('task-meta-navigation', () => {
 
         expect(routerMocks.push).toHaveBeenCalledWith({
             pathname: '/focus',
-            params: { taskId: 'task-9', openToken: '98765' },
+            params: { taskId: 'task-9', openToken: '98765', taskTab: 'view' },
         });
     });
 

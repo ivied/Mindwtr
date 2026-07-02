@@ -9,7 +9,7 @@ import {
     getCopilotModelOptions,
     getModelOptions,
 } from '@mindwtr/core';
-import { BaseDirectory, exists, mkdir, remove, size, writeFile } from '@tauri-apps/plugin-fs';
+import { exists, remove, size } from '@tauri-apps/plugin-fs';
 import { dataDir, join } from '@tauri-apps/api/path';
 import { loadAIKey, saveAIKey } from '../../../lib/ai-config';
 import { reportError } from '../../../lib/report-error';
@@ -17,10 +17,13 @@ import { logWarn } from '../../../lib/app-log';
 import { markSettingsOpenTrace, measureSettingsOpenStep } from '../../../lib/settings-open-diagnostics';
 import { useUiStore } from '../../../store/ui-store';
 import {
+    DEFAULT_PARAKEET_MODEL,
     DEFAULT_WHISPER_MODEL,
     GEMINI_SPEECH_MODELS,
     OPENAI_SPEECH_MODELS,
-    WHISPER_MODEL_BASE_URL,
+    PARAKEET_MODELS,
+    PARAKEET_MODEL_INSTALL_DIR,
+    PARAKEET_REQUIRED_FILES,
     WHISPER_MODELS,
 } from '../../../lib/speech-models';
 
@@ -35,6 +38,13 @@ type UseAiSettingsOptions = {
 type AiSettingsUpdate = Partial<AiSettings>;
 type SpeechSettings = NonNullable<AiSettings['speechToText']>;
 type SpeechSettingsUpdate = Partial<SpeechSettings>;
+type SpeechProvider = NonNullable<SpeechSettings['provider']>;
+type SpeechDownloadProgress = {
+    stage: string;
+    loaded: number;
+    total?: number | null;
+    percent?: number | null;
+};
 
 export function useAiSettings({ isTauri, settings, updateSettings, showSaved, enabled = true }: UseAiSettingsOptions) {
     const [aiApiKey, setAiApiKey] = useState('');
@@ -43,6 +53,8 @@ export function useAiSettings({ isTauri, settings, updateSettings, showSaved, en
     const [speechDownloadError, setSpeechDownloadError] = useState<string | null>(null);
     const [speechOfflinePath, setSpeechOfflinePath] = useState<string | null>(null);
     const [speechOfflineSize, setSpeechOfflineSize] = useState<number | null>(null);
+    const [speechOfflineReadyState, setSpeechOfflineReadyState] = useState(false);
+    const [speechDownloadProgress, setSpeechDownloadProgress] = useState<SpeechDownloadProgress | null>(null);
     const showToast = useUiStore((state) => state.showToast);
 
     const aiProvider = (settings?.ai?.provider ?? 'openai') as AIProviderId;
@@ -50,6 +62,7 @@ export function useAiSettings({ isTauri, settings, updateSettings, showSaved, en
     const aiDefaults = getDefaultAIConfig(aiProvider);
     const aiModel = settings?.ai?.model ?? aiDefaults.model;
     const aiBaseUrl = settings?.ai?.baseUrl ?? '';
+    const aiOpenAIExtraBodyParams = settings?.ai?.openAIExtraBodyParams;
     const aiReasoningEffort = (settings?.ai?.reasoningEffort ?? DEFAULT_REASONING_EFFORT) as AIReasoningEffort;
     const aiThinkingBudget = settings?.ai?.thinkingBudget ?? aiDefaults.thinkingBudget ?? DEFAULT_GEMINI_THINKING_BUDGET;
     const anthropicThinkingEnabled = aiProvider === 'anthropic' && aiThinkingBudget > 0;
@@ -65,7 +78,9 @@ export function useAiSettings({ isTauri, settings, updateSettings, showSaved, en
             ? OPENAI_SPEECH_MODELS[0]
             : speechProvider === 'gemini'
                 ? GEMINI_SPEECH_MODELS[0]
-                : DEFAULT_WHISPER_MODEL
+                : speechProvider === 'parakeet'
+                    ? DEFAULT_PARAKEET_MODEL
+                    : DEFAULT_WHISPER_MODEL
     );
     const speechLanguage = speechSettings.language ?? '';
     const speechMode = (speechSettings.mode ?? 'smart_parse') as AudioCaptureMode;
@@ -74,7 +89,15 @@ export function useAiSettings({ isTauri, settings, updateSettings, showSaved, en
         ? OPENAI_SPEECH_MODELS
         : speechProvider === 'gemini'
             ? GEMINI_SPEECH_MODELS
-            : WHISPER_MODELS.map((model) => model.id);
+            : speechProvider === 'parakeet'
+                ? PARAKEET_MODELS.map((model) => model.id)
+                : WHISPER_MODELS.map((model) => model.id);
+
+    const selectedLocalSpeechModelSize = speechProvider === 'whisper'
+        ? WHISPER_MODELS.find((model) => model.id === speechModel)?.sizeBytes ?? null
+        : speechProvider === 'parakeet'
+            ? PARAKEET_MODELS.find((model) => model.id === speechModel)?.sizeBytes ?? null
+            : null;
 
     const updateAISettings = useCallback((next: AiSettingsUpdate) => {
         updateSettings({ ai: { ...(settings?.ai ?? {}), ...next } })
@@ -113,22 +136,27 @@ export function useAiSettings({ isTauri, settings, updateSettings, showSaved, en
         saveAIKey(aiProvider, value).catch((error) => reportError('Failed to save AI key', error));
     }, [aiProvider, enabled]);
 
-    const handleSpeechProviderChange = useCallback((provider: 'openai' | 'gemini' | 'whisper') => {
+    const handleSpeechProviderChange = useCallback((provider: SpeechProvider) => {
         const nextModel = provider === 'openai'
             ? OPENAI_SPEECH_MODELS[0]
             : provider === 'gemini'
                 ? GEMINI_SPEECH_MODELS[0]
-                : DEFAULT_WHISPER_MODEL;
+                : provider === 'parakeet'
+                    ? DEFAULT_PARAKEET_MODEL
+                    : DEFAULT_WHISPER_MODEL;
+        const currentProvider = speechSettings.provider ?? 'gemini';
         updateSpeechSettings({
             provider,
             model: nextModel,
-            offlineModelPath: provider === 'whisper' ? speechSettings.offlineModelPath : undefined,
+            offlineModelPath: provider === currentProvider && (provider === 'whisper' || provider === 'parakeet')
+                ? speechSettings.offlineModelPath
+                : undefined,
         });
-    }, [speechSettings.offlineModelPath, updateSpeechSettings]);
+    }, [speechSettings.offlineModelPath, speechSettings.provider, updateSpeechSettings]);
 
     const handleSpeechApiKeyChange = useCallback((value: string) => {
         setSpeechApiKey(value);
-        if (speechProvider !== 'whisper') {
+        if (speechProvider !== 'whisper' && speechProvider !== 'parakeet') {
             saveAIKey(speechProvider as AIProviderId, value).catch((error) => reportError('Failed to save speech API key', error));
         }
     }, [speechProvider, enabled]);
@@ -140,6 +168,20 @@ export function useAiSettings({ isTauri, settings, updateSettings, showSaved, en
         const base = await dataDir();
         return await join(base, 'mindwtr', 'whisper-models', entry.fileName);
     }, [isTauri]);
+
+    const resolveParakeetPath = useCallback(async () => {
+        if (!isTauri) return null;
+        const base = await dataDir();
+        return await join(base, 'mindwtr', PARAKEET_MODEL_INSTALL_DIR);
+    }, [isTauri]);
+
+    const checkParakeetModelReady = useCallback(async (modelPath: string) => {
+        for (const fileName of PARAKEET_REQUIRED_FILES) {
+            const filePath = await join(modelPath, fileName);
+            if (!await exists(filePath)) return false;
+        }
+        return true;
+    }, []);
 
     useEffect(() => {
         let active = true;
@@ -168,7 +210,7 @@ export function useAiSettings({ isTauri, settings, updateSettings, showSaved, en
                 active = false;
             };
         }
-        if (speechProvider === 'whisper') {
+        if (speechProvider === 'whisper' || speechProvider === 'parakeet') {
             setSpeechApiKey('');
             return () => {
                 active = false;
@@ -188,8 +230,79 @@ export function useAiSettings({ isTauri, settings, updateSettings, showSaved, en
     }, [speechProvider]);
 
     useEffect(() => {
+        if (!enabled || !isTauri) {
+            setSpeechDownloadProgress(null);
+            return;
+        }
+        let active = true;
+        let unlisteners: Array<() => void> = [];
+        import('@tauri-apps/api/event')
+            .then(async ({ listen }) => {
+                const handleProgress = (event: { payload: SpeechDownloadProgress }) => {
+                    if (active) setSpeechDownloadProgress(event.payload);
+                };
+                return await Promise.all([
+                    listen<SpeechDownloadProgress>('parakeet-model-download-progress', handleProgress),
+                    listen<SpeechDownloadProgress>('whisper-model-download-progress', handleProgress),
+                ]);
+            })
+            .then((dispose) => {
+                if (active) {
+                    unlisteners = dispose;
+                } else {
+                    dispose.forEach((unlisten) => unlisten());
+                }
+            })
+            .catch((error) => reportError('Failed to subscribe to offline model download progress', error));
+        return () => {
+            active = false;
+            unlisteners.forEach((unlisten) => unlisten());
+        };
+    }, [enabled, isTauri]);
+
+    useEffect(() => {
         let active = true;
         if (!enabled) {
+            return () => {
+                active = false;
+            };
+        }
+        if (speechProvider === 'parakeet') {
+            const load = async () => {
+                setSpeechOfflineSize(null);
+                if (!isTauri) {
+                    setSpeechOfflinePath(speechSettings.offlineModelPath ?? null);
+                    setSpeechOfflineReadyState(false);
+                    return;
+                }
+                markSettingsOpenTrace('ai-settings-load-parakeet-state', { model: speechModel });
+                const resolved = speechSettings.offlineModelPath || await measureSettingsOpenStep(
+                    `ai-resolve-parakeet-path:${speechModel}`,
+                    resolveParakeetPath
+                );
+                if (!active) return;
+                setSpeechOfflinePath(resolved);
+                if (!resolved) {
+                    setSpeechOfflineReadyState(false);
+                    return;
+                }
+                const ready = await measureSettingsOpenStep(
+                    `ai-check-parakeet-files:${speechModel}`,
+                    () => checkParakeetModelReady(resolved)
+                );
+                if (!active) return;
+                setSpeechOfflineReadyState(ready);
+                setSpeechOfflineSize(ready ? selectedLocalSpeechModelSize : null);
+                if (ready && !speechSettings.offlineModelPath) {
+                    updateSpeechSettings({ offlineModelPath: resolved, model: speechModel });
+                }
+            };
+            load().catch(() => {
+                if (active) {
+                    setSpeechOfflineReadyState(false);
+                    setSpeechOfflineSize(null);
+                }
+            });
             return () => {
                 active = false;
             };
@@ -197,6 +310,7 @@ export function useAiSettings({ isTauri, settings, updateSettings, showSaved, en
         if (!isTauri || speechProvider !== 'whisper') {
             setSpeechOfflinePath(null);
             setSpeechOfflineSize(null);
+            setSpeechOfflineReadyState(false);
             return () => {
                 active = false;
             };
@@ -211,6 +325,7 @@ export function useAiSettings({ isTauri, settings, updateSettings, showSaved, en
             setSpeechOfflinePath(resolved);
             if (!resolved) {
                 setSpeechOfflineSize(null);
+                setSpeechOfflineReadyState(false);
                 return;
             }
             try {
@@ -220,6 +335,7 @@ export function useAiSettings({ isTauri, settings, updateSettings, showSaved, en
                 );
                 if (!present) {
                     setSpeechOfflineSize(null);
+                    setSpeechOfflineReadyState(false);
                     return;
                 }
                 if (!speechSettings.offlineModelPath) {
@@ -231,25 +347,31 @@ export function useAiSettings({ isTauri, settings, updateSettings, showSaved, en
                 );
                 if (active) {
                     setSpeechOfflineSize(fileSize);
+                    setSpeechOfflineReadyState(true);
                 }
             } catch {
                 if (active) {
                     setSpeechOfflineSize(null);
+                    setSpeechOfflineReadyState(false);
                 }
             }
         };
         load().catch(() => {
             if (active) {
                 setSpeechOfflineSize(null);
+                setSpeechOfflineReadyState(false);
             }
         });
         return () => {
             active = false;
         };
     }, [
+        checkParakeetModelReady,
         enabled,
         isTauri,
+        resolveParakeetPath,
         resolveWhisperPath,
+        selectedLocalSpeechModelSize,
         speechModel,
         speechProvider,
         speechSettings.offlineModelPath,
@@ -257,74 +379,85 @@ export function useAiSettings({ isTauri, settings, updateSettings, showSaved, en
     ]);
 
     const handleDownloadWhisperModel = useCallback(async () => {
-        const entry = WHISPER_MODELS.find((model) => model.id === speechModel);
-        if (!entry || !isTauri) return;
+        if (!isTauri) return;
         setSpeechDownloadError(null);
+        setSpeechDownloadProgress(null);
         setSpeechDownloadState('downloading');
         try {
-            const targetDir = 'mindwtr/whisper-models';
-            await mkdir(targetDir, { baseDir: BaseDirectory.Data, recursive: true });
-            const targetPath = `${targetDir}/${entry.fileName}`;
-            const alreadyExists = await exists(targetPath, { baseDir: BaseDirectory.Data });
-            if (alreadyExists) {
-                const resolved = await resolveWhisperPath(entry.id);
-                const fileSize = resolved ? await size(resolved) : null;
-                setSpeechOfflineSize(fileSize);
+            if (speechProvider === 'parakeet') {
+                const { invoke } = await import('@tauri-apps/api/core');
+                const resolved = await invoke<string>('download_parakeet_model', { model: speechModel });
                 setSpeechOfflinePath(resolved);
-                updateSpeechSettings({ offlineModelPath: resolved ?? undefined, model: entry.id });
+                setSpeechOfflineSize(selectedLocalSpeechModelSize);
+                setSpeechOfflineReadyState(true);
+                updateSpeechSettings({ offlineModelPath: resolved, model: speechModel });
+                setSpeechDownloadProgress(null);
                 setSpeechDownloadState('success');
                 setTimeout(() => setSpeechDownloadState('idle'), 2000);
                 return;
             }
-            const url = `${WHISPER_MODEL_BASE_URL}/${entry.fileName}`;
-            const response = await fetch(url);
-            if (!response.ok) {
-                throw new Error(`Download failed (${response.status})`);
-            }
-            const buffer = await response.arrayBuffer();
-            const bytes = new Uint8Array(buffer);
-            await writeFile(targetPath, bytes, { baseDir: BaseDirectory.Data });
-            const resolved = await resolveWhisperPath(entry.id);
-            setSpeechOfflineSize(bytes.length);
+
+            const entry = WHISPER_MODELS.find((model) => model.id === speechModel);
+            if (!entry) return;
+            const { invoke } = await import('@tauri-apps/api/core');
+            const resolved = await invoke<string>('download_whisper_model', { model: entry.id });
+            const fileSize = resolved ? await size(resolved).catch(() => selectedLocalSpeechModelSize) : null;
+            setSpeechOfflineSize(fileSize);
             setSpeechOfflinePath(resolved);
+            setSpeechOfflineReadyState(Boolean(resolved));
             updateSpeechSettings({ offlineModelPath: resolved ?? undefined, model: entry.id });
+            setSpeechDownloadProgress(null);
             setSpeechDownloadState('success');
             setTimeout(() => setSpeechDownloadState('idle'), 2000);
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             setSpeechDownloadError(message);
+            setSpeechDownloadProgress(null);
             setSpeechDownloadState('error');
             showToast(`Offline model download failed: ${message}`, 'error', 6000);
         }
-    }, [isTauri, resolveWhisperPath, showToast, speechModel, updateSpeechSettings]);
+    }, [isTauri, selectedLocalSpeechModelSize, showToast, speechModel, speechProvider, updateSpeechSettings]);
 
     const handleDeleteWhisperModel = useCallback(async () => {
-        if (!speechOfflinePath) {
+        const currentPath = speechOfflinePath || speechSettings.offlineModelPath;
+        if (!currentPath) {
             updateSpeechSettings({ offlineModelPath: undefined });
+            setSpeechOfflineReadyState(false);
             return;
         }
         try {
-            await remove(speechOfflinePath);
+            if (speechProvider === 'parakeet') {
+                await remove(currentPath, { recursive: true });
+            } else {
+                await remove(currentPath);
+            }
             setSpeechOfflineSize(null);
-            setSpeechOfflinePath(null);
+            setSpeechOfflineReadyState(false);
+            if (speechProvider === 'parakeet') {
+                setSpeechOfflinePath(await resolveParakeetPath());
+            } else {
+                setSpeechOfflinePath(null);
+            }
             updateSpeechSettings({ offlineModelPath: undefined });
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            void logWarn('Whisper model delete failed', {
+            void logWarn('Offline model delete failed', {
                 scope: 'ai',
                 extra: { error: message },
             });
             setSpeechDownloadError(message);
+            setSpeechDownloadProgress(null);
             setSpeechDownloadState('error');
             showToast(`Offline model delete failed: ${message}`, 'error', 6000);
         }
-    }, [showToast, speechOfflinePath, updateSpeechSettings]);
+    }, [resolveParakeetPath, showToast, speechOfflinePath, speechProvider, speechSettings.offlineModelPath, updateSpeechSettings]);
 
     return {
         aiEnabled,
         aiProvider,
         aiModel,
         aiBaseUrl,
+        aiOpenAIExtraBodyParams,
         aiModelOptions,
         aiCopilotModel,
         aiCopilotOptions,
@@ -340,10 +473,13 @@ export function useAiSettings({ isTauri, settings, updateSettings, showSaved, en
         speechMode,
         speechFieldStrategy,
         speechApiKey,
-        speechOfflineReady: Boolean(speechOfflineSize),
+        speechOfflineReady: speechOfflineReadyState,
+        speechOfflineModelPath: speechOfflinePath ?? speechSettings.offlineModelPath ?? '',
+        speechOfflineEstimatedSize: selectedLocalSpeechModelSize,
         speechOfflineSize,
         speechDownloadState,
         speechDownloadError,
+        speechDownloadProgress,
         onUpdateAISettings: updateAISettings,
         onUpdateSpeechSettings: updateSpeechSettings,
         onProviderChange: handleAIProviderChange,

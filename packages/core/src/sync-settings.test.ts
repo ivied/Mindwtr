@@ -20,7 +20,11 @@ describe('Sync Logic', () => {
                 settings: {
                     gtd: {
                         defaultScheduleTime: '08:00',
+                        defaultAreaMode: 'fixed',
+                        defaultAreaId: 'area-local',
                         focusTaskLimit: 3,
+                        focusGroupBy: 'context',
+                        defaultProjectFlowMode: 'parallel',
                         inboxProcessing: { scheduleEnabled: true },
                     },
                     language: 'en',
@@ -40,7 +44,11 @@ describe('Sync Logic', () => {
                 settings: {
                     gtd: {
                         defaultScheduleTime: '09:30',
+                        defaultAreaMode: 'active',
+                        defaultAreaId: 'area-incoming',
                         focusTaskLimit: 5,
+                        focusGroupBy: 'project',
+                        defaultProjectFlowMode: 'sequential',
                     },
                     language: 'es',
                     weekStart: 'monday',
@@ -61,8 +69,116 @@ describe('Sync Logic', () => {
             expect(merged.settings.dateFormat).toBe('yyyy-MM-dd');
             expect(merged.settings.timeFormat).toBe('12h');
             expect(merged.settings.gtd?.defaultScheduleTime).toBe('09:30');
+            expect(merged.settings.gtd?.defaultAreaMode).toBe('active');
+            expect(merged.settings.gtd?.defaultAreaId).toBe('area-incoming');
             expect(merged.settings.gtd?.focusTaskLimit).toBe(5);
+            expect(merged.settings.gtd?.focusGroupBy).toBe('project');
+            expect(merged.settings.gtd?.defaultProjectFlowMode).toBe('sequential');
             expect(merged.settings.gtd?.inboxProcessing?.scheduleEnabled).toBe(true);
+        });
+
+        it('syncs clearing the default area mode as an explicit GTD setting', () => {
+            const local: AppData = {
+                ...mockAppData(),
+                settings: {
+                    gtd: { defaultAreaMode: 'active', defaultAreaId: null },
+                    syncPreferences: { gtd: true },
+                    syncPreferencesUpdatedAt: {
+                        gtd: '2024-01-01T00:00:00.000Z',
+                    },
+                },
+            };
+            const incoming: AppData = {
+                ...mockAppData(),
+                settings: {
+                    gtd: { defaultAreaMode: 'none', defaultAreaId: null },
+                    syncPreferences: { gtd: true },
+                    syncPreferencesUpdatedAt: {
+                        gtd: '2024-01-02T00:00:00.000Z',
+                    },
+                },
+            };
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.settings.gtd?.defaultAreaMode).toBe('none');
+            expect(merged.settings.gtd?.defaultAreaId).toBeNull();
+        });
+
+        it('syncs clearing the default area as an explicit GTD setting', () => {
+            const local: AppData = {
+                ...mockAppData(),
+                settings: {
+                    gtd: { defaultAreaId: 'area-work' },
+                    syncPreferences: { gtd: true },
+                    syncPreferencesUpdatedAt: {
+                        gtd: '2024-01-01T00:00:00.000Z',
+                    },
+                },
+            };
+            const incoming: AppData = {
+                ...mockAppData(),
+                settings: {
+                    gtd: { defaultAreaId: null },
+                    syncPreferences: { gtd: true },
+                    syncPreferencesUpdatedAt: {
+                        gtd: '2024-01-02T00:00:00.000Z',
+                    },
+                },
+            };
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.settings.gtd?.defaultAreaId).toBeNull();
+        });
+
+        it('tombstones duplicate live areas by name during sync repair', () => {
+            const nowIso = '2026-06-12T12:00:00.000Z';
+            const local: AppData = {
+                ...mockAppData(),
+                tasks: [{
+                    id: 'task-a',
+                    title: 'Area task',
+                    status: 'next',
+                    tags: [],
+                    contexts: [],
+                    areaId: 'area-b',
+                    createdAt: '2026-06-01T00:00:00.000Z',
+                    updatedAt: '2026-06-01T00:00:00.000Z',
+                }],
+                projects: [{
+                    id: 'project-a',
+                    title: 'Launch',
+                    status: 'active',
+                    color: '#3B82F6',
+                    order: 0,
+                    tagIds: [],
+                    areaId: 'area-b',
+                    areaTitle: 'Work',
+                    createdAt: '2026-06-01T00:00:00.000Z',
+                    updatedAt: '2026-06-01T00:00:00.000Z',
+                }],
+                areas: [
+                    { ...createMockArea('area-a', '2026-06-01T00:00:00.000Z'), name: 'Work', order: 0 },
+                    { ...createMockArea('area-b', '2026-06-02T00:00:00.000Z'), name: 'Work', order: 1 },
+                ],
+                settings: {
+                    gtd: { defaultAreaId: 'area-b' },
+                },
+            };
+            const incoming: AppData = { ...mockAppData(), areas: [] };
+
+            const merged = mergeAppData(local, incoming, { nowIso });
+
+            expect(merged.areas.find((area) => area.id === 'area-a')?.deletedAt).toBeUndefined();
+            expect(merged.areas.find((area) => area.id === 'area-b')).toMatchObject({
+                deletedAt: nowIso,
+                updatedAt: nowIso,
+            });
+            expect(merged.projects.find((project) => project.id === 'project-a')?.areaId).toBe('area-a');
+            expect(merged.tasks.find((task) => task.id === 'task-a')?.areaId).toBe('area-a');
+            expect(merged.settings.gtd?.defaultAreaId).toBe('area-a');
+            expect(merged.settings.syncPreferencesUpdatedAt?.gtd).toBe(nowIso);
         });
 
         it('does not sync default schedule time with the language group', () => {
@@ -188,7 +304,7 @@ describe('Sync Logic', () => {
             const incoming: AppData = {
                 ...mockAppData(),
                 settings: {
-                    appearance: { density: 'compact', textSize: 'large', mobileQuickAccessView: 'calendar' },
+                    appearance: { density: 'compact', textSize: 'small', mobileQuickAccessView: 'calendar' },
                     syncPreferences: { appearance: true },
                     syncPreferencesUpdatedAt: {
                         preferences: '2024-01-02T00:00:00.000Z',
@@ -199,7 +315,40 @@ describe('Sync Logic', () => {
 
             const merged = mergeAppData(local, incoming);
 
-            expect(merged.settings.appearance).toEqual({ density: 'compact', textSize: 'large', mobileQuickAccessView: 'calendar' });
+            expect(merged.settings.appearance).toEqual({ density: 'compact', textSize: 'small', mobileQuickAccessView: 'calendar' });
+        });
+
+        it('preserves local mobile quick access when newer incoming appearance omits it', () => {
+            const local: AppData = {
+                ...mockAppData(),
+                settings: {
+                    appearance: { mobileQuickAccessView: 'contexts' },
+                    syncPreferences: { appearance: true },
+                    syncPreferencesUpdatedAt: {
+                        preferences: '2024-01-01T00:00:00.000Z',
+                        appearance: '2024-01-01T00:00:00.000Z',
+                    },
+                },
+            };
+            const incoming: AppData = {
+                ...mockAppData(),
+                settings: {
+                    appearance: { density: 'compact', textSize: 'small' },
+                    syncPreferences: { appearance: true },
+                    syncPreferencesUpdatedAt: {
+                        preferences: '2024-01-02T00:00:00.000Z',
+                        appearance: '2024-01-02T00:00:00.000Z',
+                    },
+                },
+            };
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.settings.appearance).toEqual({
+                density: 'compact',
+                textSize: 'small',
+                mobileQuickAccessView: 'contexts',
+            });
         });
 
         it('merges synced future-start visibility preference', () => {
@@ -262,7 +411,7 @@ describe('Sync Logic', () => {
 
         it('deep-clones merged settings arrays to avoid shared references', () => {
             const incomingCalendars = [
-                { id: 'cal-1', name: 'Team', url: 'https://calendar.example.com/team.ics', enabled: true },
+                { id: 'cal-1', name: 'Team', url: 'https://calendar.example.com/team.ics', enabled: true, color: '#7c3aed' },
             ];
             const local: AppData = {
                 ...mockAppData(),
@@ -287,7 +436,9 @@ describe('Sync Logic', () => {
 
             const merged = mergeAppData(local, incoming);
 
-            expect(merged.settings.externalCalendars).toEqual(incomingCalendars);
+            expect(merged.settings.externalCalendars).toEqual([
+                { id: 'cal-1', name: 'Team', url: 'https://calendar.example.com/team.ics', enabled: true, color: '#7C3AED' },
+            ]);
             expect(merged.settings.externalCalendars).not.toBe(incomingCalendars);
 
             incomingCalendars[0].name = 'Mutated Incoming';
@@ -296,7 +447,8 @@ describe('Sync Logic', () => {
 
         it('keeps local file calendar sources out of synced settings merges', () => {
             const localCalendars = [
-                { id: 'cal-local', name: 'Local', url: 'file:///home/user/agenda.ics', enabled: true },
+                { id: 'cal-local', name: 'Local', url: 'file:///home/user/agenda.ics', enabled: true, color: '#DB2777' },
+                { id: 'cal-android-local', name: 'Android Local', url: 'content://calendar/agenda.ics', enabled: true, color: '#059669' },
             ];
             const local: AppData = {
                 ...mockAppData(),
@@ -312,7 +464,8 @@ describe('Sync Logic', () => {
                 settings: {
                     externalCalendars: [
                         { id: 'cal-file', name: 'File', url: 'file:///tmp/other.ics', enabled: true },
-                        { id: 'cal-team', name: 'Team', url: 'https://calendar.example.com/team.ics', enabled: true },
+                        { id: 'cal-content', name: 'Android File', url: 'content://downloads/other.ics', enabled: true },
+                        { id: 'cal-team', name: 'Team', url: 'https://calendar.example.com/team.ics', enabled: true, color: '#EA580C' },
                     ],
                     syncPreferencesUpdatedAt: {
                         externalCalendars: '2024-01-02T00:00:00.000Z',
@@ -323,8 +476,8 @@ describe('Sync Logic', () => {
             const merged = mergeAppData(local, incoming);
 
             expect(merged.settings.externalCalendars).toEqual([
-                { id: 'cal-team', name: 'Team', url: 'https://calendar.example.com/team.ics', enabled: true },
-                localCalendars[0],
+                { id: 'cal-team', name: 'Team', url: 'https://calendar.example.com/team.ics', enabled: true, color: '#EA580C' },
+                ...localCalendars,
             ]);
         });
 
@@ -406,6 +559,49 @@ describe('Sync Logic', () => {
                     syncPreferences: { savedFilters: true },
                     syncPreferencesUpdatedAt: {
                         savedFilters: '2024-01-04T00:00:00.000Z',
+                    },
+                },
+            };
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.settings.savedFilters).toEqual([incomingFilter]);
+        });
+
+        it('keeps a newer saved filter even when it falls inside the entity clock-skew window', () => {
+            const localFilter = {
+                id: 'filter-shared',
+                name: 'zz older local',
+                view: 'focus' as const,
+                criteria: { tags: ['#older'] },
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt: '2024-01-05T00:00:00.000Z',
+            };
+            const incomingFilter = {
+                id: 'filter-shared',
+                name: 'aa newer incoming',
+                view: 'focus' as const,
+                criteria: { tags: ['#newer'] },
+                createdAt: '2024-01-01T00:00:00.000Z',
+                updatedAt: '2024-01-05T00:03:00.000Z',
+            };
+            const local: AppData = {
+                ...mockAppData(),
+                settings: {
+                    savedFilters: [localFilter],
+                    syncPreferences: { savedFilters: true },
+                    syncPreferencesUpdatedAt: {
+                        savedFilters: '2024-01-05T00:00:00.000Z',
+                    },
+                },
+            };
+            const incoming: AppData = {
+                ...mockAppData(),
+                settings: {
+                    savedFilters: [incomingFilter],
+                    syncPreferences: { savedFilters: true },
+                    syncPreferencesUpdatedAt: {
+                        savedFilters: '2024-01-05T00:03:00.000Z',
                     },
                 },
             };
@@ -685,6 +881,45 @@ describe('Sync Logic', () => {
             expect(merged.settings.dateFormat).toBe('yyyy-MM-dd');
             expect(merged.settings.externalCalendars).toEqual(local.settings.externalCalendars);
             expect(merged.settings.syncPreferences).toEqual(local.settings.syncPreferences);
+        });
+
+        it('keeps Parakeet as a valid synced speech-to-text provider', () => {
+            const local: AppData = {
+                ...mockAppData(),
+                settings: {
+                    syncPreferences: { ai: true },
+                    syncPreferencesUpdatedAt: { ai: '2024-01-01T00:00:00.000Z' },
+                    ai: {
+                        speechToText: {
+                            enabled: true,
+                            provider: 'whisper',
+                            model: 'whisper-base',
+                            offlineModelPath: '/local/whisper.bin',
+                        },
+                    },
+                },
+            };
+            const incoming: AppData = {
+                ...mockAppData(),
+                settings: {
+                    syncPreferences: { ai: true },
+                    syncPreferencesUpdatedAt: { ai: '2024-01-02T00:00:00.000Z' },
+                    ai: {
+                        speechToText: {
+                            enabled: true,
+                            provider: 'parakeet',
+                            model: 'parakeet-tdt-0.6b-v3-int8',
+                            offlineModelPath: '/remote/parakeet',
+                        },
+                    },
+                },
+            };
+
+            const merged = mergeAppData(local, incoming);
+
+            expect(merged.settings.ai?.speechToText?.provider).toBe('parakeet');
+            expect(merged.settings.ai?.speechToText?.model).toBe('parakeet-tdt-0.6b-v3-int8');
+            expect(merged.settings.ai?.speechToText?.offlineModelPath).toBeUndefined();
         });
 
         it('keeps area tombstones so deletions sync across devices', () => {

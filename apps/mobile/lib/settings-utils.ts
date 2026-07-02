@@ -1,16 +1,9 @@
-import { DropboxUnauthorizedError } from './dropbox-sync';
+import { isDropboxUnauthorizedError } from '@mindwtr/core';
 import { logError, logWarn } from './app-log';
 
 export const formatError = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-export const isDropboxUnauthorizedError = (error: unknown): boolean => {
-    if (error instanceof DropboxUnauthorizedError) return true;
-    const message = formatError(error).toLowerCase();
-    return message.includes('http 401')
-        || message.includes('invalid_access_token')
-        || message.includes('expired_access_token')
-        || message.includes('unauthorized');
-};
+export { isDropboxUnauthorizedError };
 
 export const compareVersions = (v1: string, v2: string): number => {
     const parseVersionParts = (version: string): number[] => (

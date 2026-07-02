@@ -1,21 +1,37 @@
-import { useState, useMemo, useEffect, useCallback, type ReactNode } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef, useLayoutEffect, type Key, type ReactNode, type RefObject } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
     Attachment,
     Task,
+    buildBulkOrganizeTaskUpdates,
+    buildBulkTaskTokenUpdates,
+    collectBulkTaskTokens,
+    getSequentialProjectTaskCues,
     type Area,
+    type BulkOrganizeTaskUpdateInput,
     type Project,
+    type ProjectSequenceTaskCue,
+    type RangeSelectionOptions,
     type Section,
     type StoreActionResult,
+    type TaskStatus,
     generateUUID,
-    parseQuickAdd,
+    sortTasksBy,
+    splitCompletedTasks,
+    updateRangeSelection,
 } from '@mindwtr/core';
 import { DndContext, PointerSensor, MeasuringStrategy, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
-import { ChevronDown, ChevronRight, FileText, Folder, Pencil, Plus, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, CheckCircle2, ChevronDown, ChevronRight, FileText, Folder, PanelLeftOpen, Pencil, Plus, Trash2, X } from 'lucide-react';
 
 import { PromptModal } from '../../PromptModal';
+import { TokenPickerModal } from '../../TokenPickerModal';
 import { TaskItem } from '../../TaskItem';
-import { TaskInput } from '../../Task/TaskInput';
+import { useUiStore } from '../../../store/ui-store';
+import { BulkSelectionToolbar } from '../list/BulkSelectionToolbar';
+import { sortDoneTasksForListView } from '../list/done-sort';
+import { ListBulkActions } from '../list/ListBulkActions';
+import { TaskBulkOrganizeModal } from '../list/TaskBulkOrganizeModal';
 import { normalizeAttachmentInput } from '../../../lib/attachment-utils';
 import { cn } from '../../../lib/utils';
 import { reportError } from '../../../lib/report-error';
@@ -43,6 +59,209 @@ const projectTaskDndMeasuring = {
     },
 } as const;
 
+const PROJECT_TASK_VIRTUALIZATION_THRESHOLD = 80;
+const PROJECT_TASK_ROW_ESTIMATE = 88;
+const PROJECT_TASK_VIRTUAL_OVERSCAN = 8;
+const PROJECT_TASK_VIRTUAL_INITIAL_HEIGHT = 720;
+const PROJECT_TASK_TOOLBAR_COLLAPSE_SCROLL_Y = 96;
+const PROJECT_TASK_TOOLBAR_EXPAND_SCROLL_Y = 8;
+
+type ProjectScrollSnapshot = {
+    scrollTop: number;
+    scrollLeft: number;
+    projectId: string | null;
+    anchorKey?: string;
+    anchorTop?: number;
+};
+
+const PROJECT_SCROLL_ANCHOR_SELECTOR = '[data-task-id],[data-project-completed-toggle]';
+
+const getProjectScrollAnchorKey = (element: HTMLElement): string | null => {
+    const taskId = element.getAttribute('data-task-id');
+    if (taskId) return `task:${taskId}`;
+    if (element.hasAttribute('data-project-completed-toggle')) return 'completed-toggle';
+    return null;
+};
+
+const findProjectScrollAnchorByKey = (scrollElement: HTMLElement, anchorKey: string): HTMLElement | null => (
+    Array.from(scrollElement.querySelectorAll<HTMLElement>(PROJECT_SCROLL_ANCHOR_SELECTOR))
+        .find((element) => getProjectScrollAnchorKey(element) === anchorKey) ?? null
+);
+
+const createProjectScrollSnapshot = (scrollElement: HTMLElement, projectId: string | null): ProjectScrollSnapshot => {
+    const snapshot: ProjectScrollSnapshot = {
+        scrollTop: scrollElement.scrollTop,
+        scrollLeft: scrollElement.scrollLeft,
+        projectId,
+    };
+    const scrollRect = scrollElement.getBoundingClientRect();
+    const visibleAnchor = Array.from(scrollElement.querySelectorAll<HTMLElement>(PROJECT_SCROLL_ANCHOR_SELECTOR))
+        .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+        .filter(({ rect }) => (
+            Number.isFinite(rect.top)
+            && Number.isFinite(rect.bottom)
+            && rect.bottom > scrollRect.top
+            && rect.top < scrollRect.bottom
+        ))
+        .sort((a, b) => Math.abs(a.rect.top - scrollRect.top) - Math.abs(b.rect.top - scrollRect.top))[0];
+    if (!visibleAnchor) return snapshot;
+    const anchorKey = getProjectScrollAnchorKey(visibleAnchor.element);
+    if (!anchorKey) return snapshot;
+    return {
+        ...snapshot,
+        anchorKey,
+        anchorTop: visibleAnchor.rect.top,
+    };
+};
+
+const restoreProjectScrollSnapshot = (scrollElement: HTMLElement, snapshot: ProjectScrollSnapshot) => {
+    scrollElement.scrollTop = snapshot.scrollTop;
+    scrollElement.scrollLeft = snapshot.scrollLeft;
+
+    if (!snapshot.anchorKey || typeof snapshot.anchorTop !== 'number') return;
+    const anchor = findProjectScrollAnchorByKey(scrollElement, snapshot.anchorKey);
+    if (!anchor) return;
+    const nextAnchorTop = anchor.getBoundingClientRect().top;
+    const delta = nextAnchorTop - snapshot.anchorTop;
+    if (!Number.isFinite(delta) || Math.abs(delta) < 0.5) return;
+    scrollElement.scrollTop += delta;
+};
+
+type ProjectTaskRowsProps = {
+    tasks: readonly Task[];
+    renderTask: (task: Task) => ReactNode;
+    scrollRef: RefObject<HTMLDivElement | null>;
+    pinnedTaskId?: string | null;
+};
+
+type ProjectTaskVirtualRow = {
+    index: number;
+    key: Key;
+    start: number;
+};
+
+function ProjectTaskRows({ tasks, renderTask, scrollRef, pinnedTaskId }: ProjectTaskRowsProps) {
+    const shouldVirtualize = tasks.length > PROJECT_TASK_VIRTUALIZATION_THRESHOLD;
+    const listRef = useRef<HTMLDivElement | null>(null);
+    const [scrollMargin, setScrollMargin] = useState(0);
+
+    const updateScrollMargin = useCallback(() => {
+        const scrollElement = scrollRef.current;
+        const listElement = listRef.current;
+        if (!scrollElement || !listElement) return;
+
+        const scrollRect = scrollElement.getBoundingClientRect();
+        const listRect = listElement.getBoundingClientRect();
+        setScrollMargin(listRect.top - scrollRect.top + scrollElement.scrollTop);
+    }, [scrollRef]);
+
+    useLayoutEffect(() => {
+        if (!shouldVirtualize) return;
+
+        updateScrollMargin();
+
+        if (typeof window === 'undefined') return;
+
+        const resizeObserver = typeof ResizeObserver !== 'undefined'
+            ? new ResizeObserver(updateScrollMargin)
+            : null;
+
+        if (resizeObserver) {
+            if (scrollRef.current) resizeObserver.observe(scrollRef.current);
+            if (listRef.current) resizeObserver.observe(listRef.current);
+        }
+
+        window.addEventListener('resize', updateScrollMargin);
+        return () => {
+            resizeObserver?.disconnect();
+            window.removeEventListener('resize', updateScrollMargin);
+        };
+    }, [shouldVirtualize, scrollRef, tasks.length, updateScrollMargin]);
+
+    useLayoutEffect(() => {
+        if (shouldVirtualize) updateScrollMargin();
+    });
+
+    const rowVirtualizer = useVirtualizer({
+        count: shouldVirtualize ? tasks.length : 0,
+        getScrollElement: () => scrollRef.current,
+        estimateSize: () => PROJECT_TASK_ROW_ESTIMATE,
+        overscan: PROJECT_TASK_VIRTUAL_OVERSCAN,
+        getItemKey: (index) => tasks[index]?.id ?? index,
+        initialRect: { width: 0, height: PROJECT_TASK_VIRTUAL_INITIAL_HEIGHT },
+        scrollMargin,
+    });
+
+    if (!shouldVirtualize) {
+        return (
+            <div className="divide-y divide-border/30">
+                {tasks.map((task) => renderTask(task))}
+            </div>
+        );
+    }
+
+    const virtualRows = rowVirtualizer.getVirtualItems();
+    let rowsToRender: ProjectTaskVirtualRow[] = virtualRows.length > 0
+        ? virtualRows.map((row) => ({
+            index: row.index,
+            key: row.key,
+            start: row.start,
+        }))
+        : Array.from({
+            length: Math.min(
+                tasks.length,
+                Math.ceil(PROJECT_TASK_VIRTUAL_INITIAL_HEIGHT / PROJECT_TASK_ROW_ESTIMATE)
+                    + PROJECT_TASK_VIRTUAL_OVERSCAN * 2,
+            ),
+        }, (_, index) => ({
+            index,
+            key: tasks[index]?.id ?? index,
+            start: index * PROJECT_TASK_ROW_ESTIMATE,
+        }));
+    const pinnedTaskIndex = pinnedTaskId
+        ? tasks.findIndex((task) => task.id === pinnedTaskId)
+        : -1;
+    if (pinnedTaskIndex >= 0 && !rowsToRender.some((row) => row.index === pinnedTaskIndex)) {
+        rowsToRender = [
+            ...rowsToRender,
+            {
+                index: pinnedTaskIndex,
+                key: tasks[pinnedTaskIndex]?.id ?? pinnedTaskIndex,
+                start: pinnedTaskIndex * PROJECT_TASK_ROW_ESTIMATE,
+            },
+        ].sort((a, b) => a.index - b.index);
+    }
+    const totalSize = rowVirtualizer.getTotalSize() || tasks.length * PROJECT_TASK_ROW_ESTIMATE;
+
+    return (
+        <div
+            ref={listRef}
+            data-virtualized-task-list="true"
+            className="relative"
+            style={{ height: totalSize }}
+        >
+            {rowsToRender.map((virtualRow) => {
+                const task = tasks[virtualRow.index];
+                if (!task) return null;
+
+                return (
+                    <div
+                        key={virtualRow.key}
+                        ref={virtualRows.length > 0 ? rowVirtualizer.measureElement : undefined}
+                        data-index={virtualRow.index}
+                        className="absolute left-0 top-0 w-full border-b border-border/30"
+                        style={{
+                            transform: `translateY(${virtualRow.start - scrollMargin}px)`,
+                        }}
+                    >
+                        {renderTask(task)}
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
 type ShowToast = (
     message: string,
     tone?: 'success' | 'error' | 'info',
@@ -50,14 +269,15 @@ type ShowToast = (
     action?: { label: string; onClick: () => void }
 ) => void;
 
+type BulkTokenPickerState = {
+    field: 'tags' | 'contexts';
+    action: 'add' | 'remove';
+} | null;
+
+type ProjectTaskSortBy = 'default' | 'due';
+
 type ProjectWorkspaceProps = {
-    addProject: (
-        title: string,
-        color: string,
-        options?: { areaId?: string }
-    ) => Promise<Project | null | undefined> | Project | null | undefined;
     addSection: (projectId: string, title: string) => Promise<unknown> | unknown;
-    addTask: (title: string, initialProps?: Partial<Task>) => Promise<unknown> | unknown;
     allTasks: Task[];
     allTokens: string[];
     areaById: Map<string, Area>;
@@ -72,23 +292,37 @@ type ProjectWorkspaceProps = {
     onDuplicateProject: (projectId: string) => Promise<void> | void;
     onManageAreas: () => void;
     onRequestQuickArea: (projectId: string) => void;
+    onToggleShowCompletedTasks: () => void;
     projects: Project[];
     reorderProjectTasks: (
         projectId: string,
         taskIds: string[],
         sectionId?: string | null,
     ) => Promise<unknown> | unknown;
+    reorderSections: (
+        projectId: string,
+        sectionIds: string[],
+    ) => Promise<unknown> | unknown;
     requestConfirmation: (options: ConfirmationRequestOptions) => Promise<boolean>;
     restoreProject: (projectId: string) => Promise<StoreActionResult | void> | StoreActionResult | void;
     sections: Section[];
     selectedProject: Project | undefined;
     selectedProjectId: string | null;
+    selectedProjectTasks?: readonly Task[];
     setHighlightTask: (taskId: string | null) => void;
     setSelectedProjectId: (taskId: string | null) => void;
+    showCompletedTasks: boolean;
     showToast: ShowToast;
     sortedAreas: Area[];
     t: (key: string) => string;
+    projectsSidebarCollapsed?: boolean;
+    onToggleProjectsSidebar?: () => void;
     undoNotificationsEnabled: boolean;
+    batchMoveTasks: (taskIds: string[], newStatus: TaskStatus) => Promise<unknown> | unknown;
+    batchDeleteTasks: (taskIds: string[]) => Promise<unknown> | unknown;
+    batchUpdateTasks: (
+        updates: Array<{ id: string; updates: Partial<Task> }>
+    ) => Promise<unknown> | unknown;
     updateProject: (
         projectId: string,
         updates: Partial<Project>,
@@ -103,18 +337,21 @@ type ProjectWorkspaceProps = {
     ) => Promise<StoreActionResult | void> | StoreActionResult | void;
 };
 
-export function shouldShowProjectWorkspaceTask(task: Task, project?: Project): boolean {
+export function shouldShowProjectWorkspaceTask(
+    task: Task,
+    project?: Project,
+    showCompletedTasks = false,
+): boolean {
     if (!project) return false;
     if (task.deletedAt || task.projectId !== project.id) return false;
     if (task.status === 'reference') return false;
     if (project.status === 'archived') return task.status === 'done' || task.status === 'archived';
-    return task.status !== 'done' && task.status !== 'archived';
+    if (task.status === 'done') return showCompletedTasks;
+    return task.status !== 'archived';
 }
 
 export function ProjectWorkspace({
-    addProject,
     addSection,
-    addTask,
     allTasks,
     allTokens,
     areaById,
@@ -129,19 +366,28 @@ export function ProjectWorkspace({
     onDuplicateProject,
     onManageAreas,
     onRequestQuickArea,
+    onToggleShowCompletedTasks,
     projects,
+    reorderSections,
     reorderProjectTasks,
     requestConfirmation,
     restoreProject,
     sections,
     selectedProject,
     selectedProjectId,
+    selectedProjectTasks,
     setHighlightTask,
     setSelectedProjectId,
+    showCompletedTasks,
     showToast,
     sortedAreas,
     t,
+    projectsSidebarCollapsed = false,
+    onToggleProjectsSidebar,
     undoNotificationsEnabled,
+    batchMoveTasks,
+    batchDeleteTasks,
+    batchUpdateTasks,
     updateProject,
     updateSection,
     updateTask,
@@ -151,20 +397,91 @@ export function ProjectWorkspace({
     const [sectionDraft, setSectionDraft] = useState('');
     const [editingSectionId, setEditingSectionId] = useState<string | null>(null);
     const [sectionNotesOpen, setSectionNotesOpen] = useState<Record<string, boolean>>({});
-    const [showSectionTaskPrompt, setShowSectionTaskPrompt] = useState(false);
-    const [sectionTaskDraft, setSectionTaskDraft] = useState('');
-    const [sectionTaskTargetId, setSectionTaskTargetId] = useState<string | null>(null);
     const [tagDraft, setTagDraft] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
     const [editProjectTitle, setEditProjectTitle] = useState('');
-    const [projectTaskTitle, setProjectTaskTitle] = useState('');
+    const [projectTaskSortBy, setProjectTaskSortBy] = useState<ProjectTaskSortBy>('default');
     const [projectDetailsExpanded, setProjectDetailsExpanded] = useState(false);
     const [isProjectDeleting, setIsProjectDeleting] = useState(false);
+    const [selectionMode, setSelectionMode] = useState(false);
+    const [multiSelectedIds, setMultiSelectedIds] = useState<Set<string>>(new Set());
+    const [bulkTokenPicker, setBulkTokenPicker] = useState<BulkTokenPickerState>(null);
+    const [bulkOrganizeOpen, setBulkOrganizeOpen] = useState(false);
+    const [isBulkOrganizing, setIsBulkOrganizing] = useState(false);
+    const [isBatchDeleting, setIsBatchDeleting] = useState(false);
+    const [completedTasksCollapsed, setCompletedTasksCollapsed] = useState(true);
+    const [projectTaskToolbarCompact, setProjectTaskToolbarCompact] = useState(false);
+    const editingTaskId = useUiStore((state) => state.editingTaskId);
+    const multiSelectAnchorIdRef = useRef<string | null>(null);
+    const projectScrollRef = useRef<HTMLDivElement | null>(null);
+    const searchInputRef = useRef<HTMLInputElement | null>(null);
+    const lastProjectScrollTopRef = useRef(0);
+    const pendingProjectScrollRestoreRef = useRef<ProjectScrollSnapshot | null>(null);
+    const selectedProjectIdRef = useRef<string | null>(selectedProjectId);
     const isArchivedProject = selectedProject?.status === 'archived';
+    const shouldGroupCompletedTasks = Boolean(selectedProject && !isArchivedProject && showCompletedTasks);
     const resolveText = useCallback((key: string, fallback: string) => {
         const value = t(key);
         return value && value !== key ? value : fallback;
     }, [t]);
+
+    useLayoutEffect(() => {
+        selectedProjectIdRef.current = selectedProjectId;
+    }, [selectedProjectId]);
+
+    const captureProjectScrollBeforeLayoutChange = useCallback(() => {
+        const scrollElement = projectScrollRef.current;
+        if (!scrollElement) return;
+        pendingProjectScrollRestoreRef.current = createProjectScrollSnapshot(scrollElement, selectedProjectIdRef.current);
+    }, []);
+
+    useLayoutEffect(() => {
+        const snapshot = pendingProjectScrollRestoreRef.current;
+        if (!snapshot) return;
+        pendingProjectScrollRestoreRef.current = null;
+        if (selectedProjectIdRef.current !== snapshot.projectId) return;
+        const scrollElement = projectScrollRef.current;
+        if (!scrollElement) return;
+        restoreProjectScrollSnapshot(scrollElement, snapshot);
+    });
+
+    const handleProjectScroll = useCallback(() => {
+        const scrollElement = projectScrollRef.current;
+        if (!scrollElement) return;
+        const scrollTop = scrollElement.scrollTop;
+        const previousScrollTop = lastProjectScrollTopRef.current;
+
+        setProjectTaskToolbarCompact((current) => {
+            if (scrollTop <= PROJECT_TASK_TOOLBAR_EXPAND_SCROLL_Y) return false;
+            if (current) return true;
+            if (scrollTop > previousScrollTop && scrollTop >= PROJECT_TASK_TOOLBAR_COLLAPSE_SCROLL_Y) return true;
+            return current;
+        });
+        lastProjectScrollTopRef.current = scrollTop;
+    }, []);
+
+    useEffect(() => {
+        setProjectTaskToolbarCompact(false);
+        lastProjectScrollTopRef.current = 0;
+    }, [selectedProjectId]);
+
+    const handleClearProjectSearch = useCallback(() => {
+        setSearchQuery('');
+        searchInputRef.current?.focus();
+    }, []);
+
+    const openProjectQuickAdd = useCallback((sectionId?: string | null) => {
+        if (!selectedProject) return;
+        window.dispatchEvent(new CustomEvent('mindwtr:quick-add', {
+            detail: {
+                initialProps: {
+                    projectId: selectedProject.id,
+                    status: 'next',
+                    ...(sectionId ? { sectionId } : {}),
+                },
+            },
+        }));
+    }, [selectedProject]);
 
     const {
         handleAddSection,
@@ -172,7 +489,6 @@ export function ProjectWorkspace({
         handleDeleteSection,
         handleToggleSection,
         handleToggleSectionNotes,
-        handleOpenSectionTaskPrompt,
     } = useProjectSectionActions({
         t,
         selectedProject,
@@ -182,9 +498,6 @@ export function ProjectWorkspace({
         deleteSection,
         updateSection,
         setSectionNotesOpen,
-        setSectionTaskTargetId,
-        setSectionTaskDraft,
-        setShowSectionTaskPrompt,
         requestConfirmation,
     });
 
@@ -209,7 +522,7 @@ export function ProjectWorkspace({
     }, [selectedProject?.id, selectedProject?.tagIds]);
 
     useEffect(() => {
-        setProjectTaskTitle('');
+        setProjectTaskSortBy('default');
     }, [selectedProject?.id]);
 
     useEffect(() => {
@@ -217,26 +530,32 @@ export function ProjectWorkspace({
     }, [selectedProject?.id]);
 
     useEffect(() => {
+        setCompletedTasksCollapsed(true);
+    }, [selectedProject?.id, showCompletedTasks]);
+
+    useEffect(() => {
         setSectionNotesOpen({});
-        setShowSectionTaskPrompt(false);
-        setSectionTaskTargetId(null);
     }, [selectedProjectId]);
 
+    const projectTaskSource = selectedProjectTasks ?? allTasks;
     const projectAllTasks = useMemo(() => {
         if (!selectedProjectId) return [];
-        return allTasks.filter((task) => {
+        return projectTaskSource.filter((task) => {
             if (task.deletedAt || task.projectId !== selectedProjectId) return false;
             if (normalizedSearchQuery && !task.title.toLowerCase().includes(normalizedSearchQuery)) return false;
             return true;
         });
-    }, [allTasks, normalizedSearchQuery, selectedProjectId]);
+    }, [projectTaskSource, normalizedSearchQuery, selectedProjectId]);
 
     const projectTasks = useMemo(
-        () => projectAllTasks.filter((task) => shouldShowProjectWorkspaceTask(task, selectedProject)),
-        [projectAllTasks, selectedProject],
+        () => projectAllTasks.filter((task) => shouldShowProjectWorkspaceTask(task, selectedProject, showCompletedTasks)),
+        [projectAllTasks, selectedProject, showCompletedTasks],
     );
 
     const sortProjectTasks = useCallback((items: Task[]) => {
+        if (projectTaskSortBy === 'due') {
+            return sortTasksBy(items, 'due');
+        }
         const sorted = [...items];
         const hasOrder = sorted.some((task) => Number.isFinite(task.order) || Number.isFinite(task.orderNum));
         sorted.sort((a, b) => {
@@ -256,12 +575,23 @@ export function ProjectWorkspace({
             return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
         });
         return sorted;
-    }, []);
+    }, [projectTaskSortBy]);
 
-    const orderedProjectTasks = useMemo(() => {
+    const sortedProjectTasks = useMemo(() => {
         if (!selectedProject) return projectTasks;
         return sortProjectTasks(projectTasks);
     }, [projectTasks, selectedProject, sortProjectTasks]);
+
+    const { activeTasks: orderedProjectTasks, completedTasks: completedProjectTasks } = useMemo(() => {
+        if (!shouldGroupCompletedTasks) {
+            return { activeTasks: sortedProjectTasks, completedTasks: [] as Task[] };
+        }
+        const { activeTasks, completedTasks } = splitCompletedTasks(sortedProjectTasks);
+        return {
+            activeTasks,
+            completedTasks: sortDoneTasksForListView(completedTasks),
+        };
+    }, [shouldGroupCompletedTasks, sortedProjectTasks]);
 
     const projectSections = useMemo(() => {
         if (!selectedProjectId) return [];
@@ -275,6 +605,21 @@ export function ProjectWorkspace({
             });
     }, [sections, selectedProjectId]);
 
+    const handleMoveSection = useCallback((sectionId: string, offset: -1 | 1) => {
+        if (!selectedProject) return;
+        const currentIndex = projectSections.findIndex((section) => section.id === sectionId);
+        const nextIndex = currentIndex + offset;
+        if (currentIndex < 0 || nextIndex < 0 || nextIndex >= projectSections.length) return;
+        const nextSections = [...projectSections];
+        const [moved] = nextSections.splice(currentIndex, 1);
+        if (!moved) return;
+        nextSections.splice(nextIndex, 0, moved);
+        void Promise.resolve(reorderSections(selectedProject.id, nextSections.map((section) => section.id))).catch((error) => {
+            reportError('Failed to reorder sections', error);
+            showToast(resolveText('projects.sectionReorderFailed', 'Failed to reorder sections.'), 'error');
+        });
+    }, [projectSections, reorderSections, resolveText, selectedProject, showToast]);
+
     const sectionTaskGroups = useMemo(() => {
         if (!selectedProjectId || projectSections.length === 0) {
             return { sections: [] as Array<{ section: Section; tasks: Task[] }>, unsectioned: orderedProjectTasks };
@@ -284,7 +629,7 @@ export function ProjectWorkspace({
         const tasksBySection = new Map<string, Task[]>();
         const unsectioned: Task[] = [];
 
-        projectTasks.forEach((task) => {
+        orderedProjectTasks.forEach((task) => {
             const sectionId = task.sectionId && sectionIds.has(task.sectionId) ? task.sectionId : null;
             if (sectionId) {
                 const list = tasksBySection.get(sectionId) ?? [];
@@ -302,10 +647,10 @@ export function ProjectWorkspace({
             })),
             unsectioned: sortProjectTasks(unsectioned),
         };
-    }, [orderedProjectTasks, projectSections, projectTasks, selectedProjectId, sortProjectTasks]);
+    }, [orderedProjectTasks, projectSections, selectedProjectId, sortProjectTasks]);
 
     const orderedProjectTaskList = useMemo(() => {
-        if (projectSections.length === 0) return orderedProjectTasks;
+        if (projectSections.length === 0) return [...orderedProjectTasks, ...completedProjectTasks];
         const combined: Task[] = [];
         sectionTaskGroups.sections.forEach((group) => {
             combined.push(...group.tasks);
@@ -313,8 +658,201 @@ export function ProjectWorkspace({
         if (sectionTaskGroups.unsectioned.length > 0) {
             combined.push(...sectionTaskGroups.unsectioned);
         }
+        if (completedProjectTasks.length > 0) {
+            combined.push(...completedProjectTasks);
+        }
         return combined;
-    }, [orderedProjectTasks, projectSections.length, sectionTaskGroups.sections, sectionTaskGroups.unsectioned]);
+    }, [completedProjectTasks, orderedProjectTasks, projectSections.length, sectionTaskGroups.sections, sectionTaskGroups.unsectioned]);
+    const projectTaskSequenceCues = useMemo<Map<string, ProjectSequenceTaskCue>>(() => {
+        if (!selectedProject || projectTaskSortBy !== 'default') return new Map();
+        return getSequentialProjectTaskCues(selectedProject, orderedProjectTaskList, {
+            sectionIds: projectSections.map((section) => section.id),
+        });
+    }, [orderedProjectTaskList, projectSections, projectTaskSortBy, selectedProject]);
+    const availableSequenceLabel = resolveText('projects.availableNextAction', 'Available next action');
+    const visibleProjectTaskList = useMemo(() => {
+        if (projectSections.length === 0) {
+            return completedTasksCollapsed
+                ? orderedProjectTasks
+                : [...orderedProjectTasks, ...completedProjectTasks];
+        }
+        const combined: Task[] = [];
+        sectionTaskGroups.sections.forEach((group) => {
+            if (!group.section.isCollapsed) {
+                combined.push(...group.tasks);
+            }
+        });
+        combined.push(...sectionTaskGroups.unsectioned);
+        if (!completedTasksCollapsed) {
+            combined.push(...completedProjectTasks);
+        }
+        return combined;
+    }, [completedProjectTasks, completedTasksCollapsed, orderedProjectTasks, projectSections.length, sectionTaskGroups.sections, sectionTaskGroups.unsectioned]);
+    const visibleProjectTaskIds = useMemo(
+        () => visibleProjectTaskList.map((task) => task.id),
+        [visibleProjectTaskList],
+    );
+    const selectedIdsArray = useMemo(() => Array.from(multiSelectedIds), [multiSelectedIds]);
+    const selectedVisibleCount = visibleProjectTaskIds.filter((id) => multiSelectedIds.has(id)).length;
+    const allVisibleTasksSelected = visibleProjectTaskIds.length > 0 && selectedVisibleCount === visibleProjectTaskIds.length;
+    const tasksById = useMemo(() => new Map(allTasks.map((task) => [task.id, task])), [allTasks]);
+    const bulkAreaOptions = useMemo(
+        () => sortedAreas
+            .filter((area) => !area.deletedAt)
+            .map((area) => ({ id: area.id, name: area.name })),
+        [sortedAreas],
+    );
+    const addTagOptions = useMemo(
+        () => allTokens.filter((token) => token.startsWith('#')),
+        [allTokens],
+    );
+    const addContextOptions = useMemo(
+        () => allTokens.filter((token) => token.startsWith('@')),
+        [allTokens],
+    );
+    const removableTagOptions = useMemo(
+        () => collectBulkTaskTokens(selectedIdsArray, tasksById, 'tags'),
+        [selectedIdsArray, tasksById],
+    );
+    const removableContextOptions = useMemo(
+        () => collectBulkTaskTokens(selectedIdsArray, tasksById, 'contexts'),
+        [selectedIdsArray, tasksById],
+    );
+
+    const exitSelectionMode = useCallback(() => {
+        setSelectionMode(false);
+        setMultiSelectedIds(new Set());
+        setBulkTokenPicker(null);
+        setBulkOrganizeOpen(false);
+        multiSelectAnchorIdRef.current = null;
+    }, []);
+
+    useEffect(() => {
+        setMultiSelectedIds((prev) => {
+            const visible = new Set(visibleProjectTaskIds);
+            const next = new Set(Array.from(prev).filter((id) => visible.has(id)));
+            if (next.size === prev.size) return prev;
+            return next;
+        });
+        if (multiSelectAnchorIdRef.current && !visibleProjectTaskIds.includes(multiSelectAnchorIdRef.current)) {
+            multiSelectAnchorIdRef.current = null;
+        }
+    }, [visibleProjectTaskIds]);
+
+    useEffect(() => {
+        exitSelectionMode();
+    }, [exitSelectionMode, selectedProjectId]);
+
+    const toggleMultiSelect = useCallback((taskId: string, options: RangeSelectionOptions = {}) => {
+        setMultiSelectedIds((prev) => {
+            const result = updateRangeSelection({
+                anchorId: multiSelectAnchorIdRef.current,
+                range: options.range,
+                selectedIds: prev,
+                targetId: taskId,
+                visibleIds: visibleProjectTaskIds,
+            });
+            multiSelectAnchorIdRef.current = result.anchorId;
+            return result.selectedIds;
+        });
+    }, [visibleProjectTaskIds]);
+
+    const selectAllVisibleTasks = useCallback(() => {
+        multiSelectAnchorIdRef.current = visibleProjectTaskIds[0] ?? null;
+        setMultiSelectedIds(new Set(visibleProjectTaskIds));
+    }, [visibleProjectTaskIds]);
+
+    const clearTaskSelection = useCallback(() => {
+        multiSelectAnchorIdRef.current = null;
+        setMultiSelectedIds(new Set());
+    }, []);
+
+    const handleBatchMove = useCallback(async (newStatus: TaskStatus) => {
+        if (selectedIdsArray.length === 0) return;
+        try {
+            await Promise.resolve(batchMoveTasks(selectedIdsArray, newStatus));
+            exitSelectionMode();
+        } catch (error) {
+            reportError('Failed to batch move project tasks', error);
+            showToast(resolveText('bulk.moveFailed', 'Failed to move selected tasks'), 'error');
+        }
+    }, [batchMoveTasks, exitSelectionMode, resolveText, selectedIdsArray, showToast]);
+
+    const handleBatchAssignArea = useCallback(async (areaId: string | null) => {
+        if (selectedIdsArray.length === 0) return;
+        try {
+            await Promise.resolve(batchUpdateTasks(selectedIdsArray.map((id) => ({
+                id,
+                updates: { areaId: areaId ?? undefined },
+            }))));
+            exitSelectionMode();
+        } catch (error) {
+            reportError('Failed to batch assign project task area', error);
+            showToast(resolveText('bulk.updateFailed', 'Failed to update selected tasks'), 'error');
+        }
+    }, [batchUpdateTasks, exitSelectionMode, resolveText, selectedIdsArray, showToast]);
+
+    const handleApplyTaskBulkOrganize = useCallback(async (input: BulkOrganizeTaskUpdateInput) => {
+        if (selectedIdsArray.length === 0 || isBulkOrganizing) return;
+        const updates = buildBulkOrganizeTaskUpdates(selectedIdsArray, tasksById, input);
+        if (updates.length === 0) return;
+        setIsBulkOrganizing(true);
+        try {
+            await Promise.resolve(batchUpdateTasks(updates));
+            exitSelectionMode();
+        } catch (error) {
+            reportError('Failed to bulk organize project tasks', error);
+            showToast(resolveText('bulk.organizeFailed', 'Failed to organize selected tasks'), 'error');
+        } finally {
+            setIsBulkOrganizing(false);
+        }
+    }, [batchUpdateTasks, exitSelectionMode, isBulkOrganizing, resolveText, selectedIdsArray, showToast, tasksById]);
+
+    const handleBatchDelete = useCallback(async () => {
+        if (selectedIdsArray.length === 0) return;
+        const confirmed = await requestConfirmation({
+            title: t('common.delete') || 'Delete',
+            description: t('list.confirmBatchDelete') || 'Delete selected tasks?',
+            confirmLabel: t('common.delete') || 'Delete',
+            cancelLabel: t('common.cancel') || 'Cancel',
+        });
+        if (!confirmed) return;
+        setIsBatchDeleting(true);
+        try {
+            await Promise.resolve(batchDeleteTasks(selectedIdsArray));
+            exitSelectionMode();
+        } catch (error) {
+            reportError('Failed to batch delete project tasks', error);
+            showToast(resolveText('projects.deleteFailed', 'Failed to delete selected tasks'), 'error');
+        } finally {
+            setIsBatchDeleting(false);
+        }
+    }, [batchDeleteTasks, exitSelectionMode, requestConfirmation, resolveText, selectedIdsArray, showToast, t]);
+
+    const handleBatchTokenPick = useCallback((field: 'tags' | 'contexts', action: 'add' | 'remove') => {
+        if (selectedIdsArray.length === 0) return;
+        setBulkTokenPicker({ field, action });
+    }, [selectedIdsArray.length]);
+
+    const handleBulkTokenConfirm = useCallback(async (value: string) => {
+        if (!bulkTokenPicker || selectedIdsArray.length === 0) return;
+        try {
+            const updates = buildBulkTaskTokenUpdates(
+                selectedIdsArray,
+                tasksById,
+                bulkTokenPicker.field,
+                value,
+                bulkTokenPicker.action,
+            );
+            setBulkTokenPicker(null);
+            if (updates.length === 0) return;
+            await Promise.resolve(batchUpdateTasks(updates));
+            exitSelectionMode();
+        } catch (error) {
+            reportError('Failed to batch update project task tokens', error);
+            showToast(resolveText('bulk.updateFailed', 'Failed to update selected tasks'), 'error');
+        }
+    }, [batchUpdateTasks, bulkTokenPicker, exitSelectionMode, resolveText, selectedIdsArray, showToast, tasksById]);
 
     const projectReferenceTasks = useMemo(() => {
         if (!selectedProject) return [] as Task[];
@@ -340,12 +878,27 @@ export function ProjectWorkspace({
         if (!highlightTaskId) return;
         const exists = [...orderedProjectTaskList, ...projectReferenceTasks].some((task) => task.id === highlightTaskId);
         if (!exists) return;
-        const el = document.querySelector(`[data-task-id="${highlightTaskId}"]`) as HTMLElement | null;
-        if (el) {
-            el.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        }
+        let retryTimer: number | null = null;
+        let cancelled = false;
+        let attempts = 0;
+        const scrollHighlightedTask = () => {
+            if (cancelled) return;
+            const el = document.querySelector(`[data-task-id="${highlightTaskId}"]`) as HTMLElement | null;
+            if (el) {
+                el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                return;
+            }
+            if (attempts >= 8) return;
+            attempts += 1;
+            retryTimer = window.setTimeout(scrollHighlightedTask, 50);
+        };
+        scrollHighlightedTask();
         const timer = window.setTimeout(() => setHighlightTask(null), 4000);
-        return () => window.clearTimeout(timer);
+        return () => {
+            cancelled = true;
+            if (retryTimer !== null) window.clearTimeout(retryTimer);
+            window.clearTimeout(timer);
+        };
     }, [highlightTaskId, orderedProjectTaskList, projectReferenceTasks, setHighlightTask]);
 
     const { taskIdsByContainer, taskIdToContainer } = useMemo(() => {
@@ -431,39 +984,131 @@ export function ProjectWorkspace({
 
     const renderSortableTasks = (list: Task[]) => (
         <SortableContext items={list.map((task) => task.id)} strategy={verticalListSortingStrategy}>
-            <div className="divide-y divide-border/30">
-                {list.map((task) => (
-                    <SortableProjectTaskRow key={task.id} task={task} project={selectedProject!} />
-                ))}
-            </div>
+            <ProjectTaskRows
+                tasks={list}
+                scrollRef={projectScrollRef}
+                pinnedTaskId={editingTaskId ?? highlightTaskId}
+                renderTask={(task) => (
+                    <SortableProjectTaskRow
+                        key={task.id}
+                        task={task}
+                        project={selectedProject!}
+                        sequenceCue={projectTaskSequenceCues.get(task.id)}
+                        availableSequenceLabel={availableSequenceLabel}
+                    />
+                )}
+            />
         </SortableContext>
     );
+
+    const renderSelectableTasks = (list: Task[]) => (
+        <ProjectTaskRows
+            tasks={list}
+            scrollRef={projectScrollRef}
+            pinnedTaskId={editingTaskId ?? highlightTaskId}
+            renderTask={(task) => (
+                <TaskItem
+                    key={task.id}
+                    task={task}
+                    project={selectedProject}
+                    enableDoubleClickEdit
+                    showProjectBadgeInActions={false}
+                    showProjectBadgeInMetadata={false}
+                    selectionMode={selectionMode}
+                    isMultiSelected={multiSelectedIds.has(task.id)}
+                    onToggleSelect={(options) => toggleMultiSelect(task.id, options)}
+                />
+            )}
+        />
+    );
+
+    const renderStaticTasks = (list: Task[]) => (
+        <ProjectTaskRows
+            tasks={list}
+            scrollRef={projectScrollRef}
+            pinnedTaskId={editingTaskId ?? highlightTaskId}
+            renderTask={(task) => (
+                <TaskItem
+                    key={task.id}
+                    task={task}
+                    project={selectedProject}
+                    enableDoubleClickEdit
+                    showProjectBadgeInActions={false}
+                    showProjectBadgeInMetadata={false}
+                />
+            )}
+        />
+    );
+
+    const renderCompletedTaskGroup = () => {
+        if (completedProjectTasks.length === 0) return null;
+        const completedLabel = resolveText('list.done', resolveText('status.done', 'Completed'));
+        const renderCompletedTasks = selectionMode ? renderSelectableTasks : renderStaticTasks;
+
+        return (
+            <div className="rounded-lg border border-border/60 bg-muted/10">
+                <button
+                    type="button"
+                    onClick={() => {
+                        captureProjectScrollBeforeLayoutChange();
+                        setCompletedTasksCollapsed((value) => !value);
+                    }}
+                    aria-expanded={!completedTasksCollapsed}
+                    data-project-completed-toggle
+                    className="flex w-full items-center justify-between border-b border-border/50 px-3 py-2 text-left text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground"
+                >
+                    <span className="flex items-center gap-2">
+                        {completedTasksCollapsed ? (
+                            <ChevronRight className="h-4 w-4" />
+                        ) : (
+                            <ChevronDown className="h-4 w-4" />
+                        )}
+                        <CheckCircle2 className="h-4 w-4" />
+                        <span>{completedLabel}</span>
+                    </span>
+                    <span className="text-xs">{completedProjectTasks.length}</span>
+                </button>
+                {!completedTasksCollapsed && (
+                    <div className="p-3">
+                        {renderCompletedTasks(completedProjectTasks)}
+                    </div>
+                )}
+            </div>
+        );
+    };
 
     const renderProjectSections = (renderTasks: (list: Task[]) => ReactNode) => {
         if (projectSections.length === 0) {
             return (
-                <SectionDropZone
-                    id={NO_SECTION_CONTAINER}
-                    className="min-h-[120px] rounded-lg border border-dashed border-border/70 p-4"
-                >
-                    {orderedProjectTasks.length > 0 ? (
-                        renderTasks(orderedProjectTasks)
-                    ) : (
-                        <div className="py-12 text-center text-muted-foreground">
-                            {t('projects.noActiveTasks')}
-                        </div>
-                    )}
-                </SectionDropZone>
+                <div className="space-y-3">
+                    <SectionDropZone
+                        id={NO_SECTION_CONTAINER}
+                        className="min-h-[120px] rounded-lg border border-dashed border-border/70 p-4"
+                    >
+                        {orderedProjectTasks.length > 0 ? (
+                            renderTasks(orderedProjectTasks)
+                        ) : (
+                            <div className="py-12 text-center text-muted-foreground">
+                                {t('projects.noActiveTasks')}
+                            </div>
+                        )}
+                    </SectionDropZone>
+                    {renderCompletedTaskGroup()}
+                </div>
             );
         }
 
         return (
             <div className="space-y-3">
-                {sectionTaskGroups.sections.map((group) => {
+                {sectionTaskGroups.sections.map((group, index) => {
                     const isCollapsed = group.section.isCollapsed;
                     const taskCount = group.tasks.length;
                     const hasNotes = Boolean(group.section.description?.trim());
                     const notesOpen = sectionNotesOpen[group.section.id] ?? false;
+                    const canMoveUp = index > 0;
+                    const canMoveDown = index < sectionTaskGroups.sections.length - 1;
+                    const moveSectionUpLabel = resolveText('projects.moveSectionUp', 'Move section up');
+                    const moveSectionDownLabel = resolveText('projects.moveSectionDown', 'Move section down');
 
                     return (
                         <SectionDropZone
@@ -486,9 +1131,40 @@ export function ProjectWorkspace({
                                     <span className="text-xs text-muted-foreground">{taskCount}</span>
                                 </button>
                                 <div className="flex items-center gap-2">
+                                    {sectionTaskGroups.sections.length > 1 && (
+                                        <>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleMoveSection(group.section.id, -1)}
+                                                disabled={!canMoveUp}
+                                                className={cn(
+                                                    "flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/40 hover:text-foreground",
+                                                    !canMoveUp && "cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted-foreground"
+                                                )}
+                                                aria-label={`${moveSectionUpLabel}: ${group.section.title}`}
+                                                title={moveSectionUpLabel}
+                                            >
+                                                <ArrowUp className="h-3.5 w-3.5" />
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleMoveSection(group.section.id, 1)}
+                                                disabled={!canMoveDown}
+                                                className={cn(
+                                                    "flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/40 hover:text-foreground",
+                                                    !canMoveDown && "cursor-not-allowed opacity-40 hover:bg-transparent hover:text-muted-foreground"
+                                                )}
+                                                aria-label={`${moveSectionDownLabel}: ${group.section.title}`}
+                                                title={moveSectionDownLabel}
+                                            >
+                                                <ArrowDown className="h-3.5 w-3.5" />
+                                            </button>
+                                        </>
+                                    )}
                                     <button
                                         type="button"
-                                        onClick={() => handleOpenSectionTaskPrompt(group.section.id)}
+                                        data-add-task-trigger
+                                        onClick={() => openProjectQuickAdd(group.section.id)}
                                         className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted/40 hover:text-foreground"
                                         aria-label={t('projects.addTask')}
                                     >
@@ -577,11 +1253,17 @@ export function ProjectWorkspace({
                         {t('projects.noActiveTasks')}
                     </div>
                 )}
+                {renderCompletedTaskGroup()}
             </div>
         );
     };
 
-    const tasksContent = (
+    const canReorderProjectTasks = projectTaskSortBy === 'default';
+    const tasksContent = selectionMode ? (
+        renderProjectSections(renderSelectableTasks)
+    ) : !canReorderProjectTasks ? (
+        renderProjectSections(renderStaticTasks)
+    ) : (
         <DndContext
             sensors={taskSensors}
             collisionDetection={projectTaskCollisionDetection}
@@ -593,7 +1275,8 @@ export function ProjectWorkspace({
     );
 
     const visibleAttachments = (selectedProject?.attachments || []).filter((attachment) => !attachment.deletedAt);
-    const projectProgress = useMemo(() => {
+    const completedProjectTaskCount = projectAllTasks.filter((task) => task.status === 'done').length;
+    const projectProgress = (() => {
         if (!selectedProjectId) return null;
         if (isArchivedProject) {
             const completedCount = projectAllTasks.filter((task) => task.status === 'done' || task.status === 'archived').length;
@@ -605,13 +1288,13 @@ export function ProjectWorkspace({
             };
         }
         const doneCount = projectAllTasks.filter((task) => task.status === 'done').length;
-        const remainingCount = projectTasks.length;
+        const remainingCount = projectAllTasks.filter((task) => shouldShowProjectWorkspaceTask(task, selectedProject, false)).length;
         return {
             doneCount,
             remainingCount,
             total: doneCount + remainingCount,
         };
-    }, [isArchivedProject, projectAllTasks, projectTasks, selectedProjectId]);
+    })();
 
     const handleCommitProjectTitle = () => {
         if (!selectedProject) return;
@@ -715,76 +1398,116 @@ export function ProjectWorkspace({
         resolveValidationMessage,
     });
 
-    const selectedProjectAreaLabel = useMemo(() => {
+    const selectedProjectAreaLabel = (() => {
         if (!selectedProject?.areaId) return undefined;
         return areaById.get(selectedProject.areaId)?.name;
-    }, [areaById, selectedProject?.areaId]);
+    })();
+    const expandProjectsSidebarLabel = resolveText('projects.expandSidebar', 'Expand projects panel');
+    const showProjectsSidebarToggle = projectsSidebarCollapsed && Boolean(onToggleProjectsSidebar);
+    const removeTagLabel = resolveText('bulk.removeTag', 'Remove tag');
+    const tokenPickerTitle = (() => {
+        if (!bulkTokenPicker) return '';
+        if (bulkTokenPicker.field === 'tags') {
+            return bulkTokenPicker.action === 'add' ? t('bulk.addTag') : removeTagLabel;
+        }
+        return bulkTokenPicker.action === 'add' ? t('bulk.addContext') : t('bulk.removeContext');
+    })();
+    const tokenPickerOptions = (() => {
+        if (!bulkTokenPicker) return [] as string[];
+        if (bulkTokenPicker.field === 'tags') {
+            return bulkTokenPicker.action === 'add' ? addTagOptions : removableTagOptions;
+        }
+        return bulkTokenPicker.action === 'add' ? addContextOptions : removableContextOptions;
+    })();
+    const tokenPickerPlaceholder = bulkTokenPicker?.field === 'tags'
+        ? t('taskEdit.tagsPlaceholder')
+        : t('taskEdit.contextsPlaceholder');
 
-    const handleAddTaskForProject = useCallback(
-        async (value: string, sectionId?: string | null) => {
-            if (!selectedProject) return;
-            const {
-                title: parsedTitle,
-                props,
-                projectTitle,
-                invalidDateCommands,
-            } = parseQuickAdd(value, projects, new Date(), areas);
-            if (invalidDateCommands && invalidDateCommands.length > 0) {
-                showToast(`${t('quickAdd.invalidDateCommand')}: ${invalidDateCommands.join(', ')}`, 'error');
-                return;
-            }
-
-            const finalTitle = (parsedTitle || value).trim();
-            if (!finalTitle) return;
-
-            const initialProps: Partial<Task> = {
-                projectId: selectedProject.id,
-                status: 'someday',
-                ...props,
-            };
-            if (!props.status) initialProps.status = 'someday';
-            if (!props.projectId) initialProps.projectId = selectedProject.id;
-
-            if (!initialProps.projectId && projectTitle) {
-                const created = await addProject(projectTitle, DEFAULT_AREA_COLOR);
-                if (!created) return;
-                initialProps.projectId = created.id;
-            }
-
-            if (sectionId && initialProps.projectId === selectedProject.id) {
-                initialProps.sectionId = sectionId;
-            } else {
-                initialProps.sectionId = undefined;
-            }
-
-            try {
-                await addTask(finalTitle, initialProps);
-            } catch (error) {
-                reportError('Failed to add task to project', error);
-                showToast(t('projects.addTaskFailed') || 'Failed to add task', 'error');
-            }
-        },
-        [addProject, addTask, areas, projects, selectedProject, showToast, t],
-    );
+    const clearSearchLabel = resolveText('common.clearSearch', 'Clear search');
+    const projectAddTaskButton = !isArchivedProject ? (
+        <button
+            type="button"
+            data-add-task-trigger
+            onClick={() => openProjectQuickAdd()}
+            className={cn(
+                'inline-flex h-8 items-center gap-2 rounded-md bg-primary font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+                projectTaskToolbarCompact ? 'px-3 text-xs' : 'mb-3 px-4 text-sm',
+            )}
+        >
+            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+            {t('projects.addTask')}
+        </button>
+    ) : null;
+    const selectProjectTasksButton = selectedProject ? (
+        <button
+            type="button"
+            onClick={() => {
+                captureProjectScrollBeforeLayoutChange();
+                if (selectionMode) exitSelectionMode();
+                else setSelectionMode(true);
+            }}
+            className={cn(
+                'h-8 whitespace-nowrap rounded-md border px-2.5 text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-primary/40',
+                selectionMode
+                    ? 'border-primary bg-primary/10 text-primary'
+                    : 'border-border bg-background text-muted-foreground hover:bg-muted/40 hover:text-foreground',
+            )}
+        >
+            {selectionMode ? t('bulk.exitSelect') : t('bulk.select')}
+        </button>
+    ) : null;
 
     return (
         <>
             <div className="flex-1 min-w-0 h-full flex">
                 <div className="flex h-full min-h-0 w-full max-w-none flex-col">
                     <div className="mb-4">
-                        <div className="flex flex-col gap-2 sm:flex-row">
-                            <input
-                                type="text"
-                                data-view-filter-input
-                                placeholder={t('common.search')}
-                                value={searchQuery}
-                                onChange={(event) => setSearchQuery(event.target.value)}
-                                className="min-w-0 flex-1 rounded border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                            />
+                        <div data-project-search-row className="flex flex-col gap-2 sm:flex-row">
+                            {showProjectsSidebarToggle && (
+                                <button
+                                    type="button"
+                                    onClick={onToggleProjectsSidebar}
+                                    className="inline-flex h-9 w-9 flex-none items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                                    title={expandProjectsSidebarLabel}
+                                    aria-label={expandProjectsSidebarLabel}
+                                    aria-expanded={false}
+                                >
+                                    <PanelLeftOpen className="h-4 w-4" />
+                                </button>
+                            )}
+                            <div className="relative min-w-0 flex-1">
+                                <input
+                                    ref={searchInputRef}
+                                    type="text"
+                                    data-view-filter-input
+                                    placeholder={t('common.search')}
+                                    value={searchQuery}
+                                    onChange={(event) => setSearchQuery(event.target.value)}
+                                    className={cn(
+                                        'w-full min-w-0 rounded border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30',
+                                        searchQuery && 'pr-9',
+                                    )}
+                                />
+                                {searchQuery && (
+                                    <button
+                                        type="button"
+                                        onClick={handleClearProjectSearch}
+                                        aria-label={clearSearchLabel}
+                                        className="absolute right-1.5 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                                    >
+                                        <X className="h-3.5 w-3.5" aria-hidden="true" />
+                                    </button>
+                                )}
+                            </div>
                         </div>
                     </div>
                     {selectedProject ? (
-                        <div className="flex-1 min-h-0 overflow-y-auto pr-2">
+                        <div
+                            ref={projectScrollRef}
+                            data-project-scroll-container
+                            onScroll={handleProjectScroll}
+                            className="flex-1 min-h-0 overflow-y-auto pr-2"
+                        >
                             {(isCreatingProject || isProjectDeleting || isAreaCreating) && (
                                 <div className="mb-4 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
                                     {t('common.loading') || 'Loading...'}
@@ -830,6 +1553,7 @@ export function ProjectWorkspace({
                                         noAreaId={noAreaId}
                                         t={t}
                                         tagDraft={tagDraft}
+                                        tagSuggestions={addTagOptions}
                                         onTagDraftChange={setTagDraft}
                                         onCommitTags={() => {
                                             updateProject(selectedProject.id, { tagIds: parseTagInput(tagDraft) });
@@ -841,6 +1565,8 @@ export function ProjectWorkspace({
                                         }}
                                         isSequential={selectedProject.isSequential === true}
                                         onToggleSequential={() => updateProject(selectedProject.id, { isSequential: !selectedProject.isSequential })}
+                                        sequentialScope={selectedProject.sequentialScope ?? 'project'}
+                                        onSequentialScopeChange={(sequentialScope) => updateProject(selectedProject.id, { sequentialScope })}
                                         status={selectedProject.status}
                                         onChangeStatus={(status) => updateProject(selectedProject.id, { status })}
                                         dueDateValue={toDateInputValue(selectedProject.dueDate)}
@@ -868,52 +1594,126 @@ export function ProjectWorkspace({
                             )}
 
                             <section className="border-t border-border/50 py-5">
-                                {!isArchivedProject && (
-                                    <form
-                                        onSubmit={async (event) => {
-                                            event.preventDefault();
-                                            if (!projectTaskTitle.trim()) return;
-                                            await handleAddTaskForProject(projectTaskTitle);
-                                            setProjectTaskTitle('');
-                                        }}
-                                        className="mb-4 flex gap-2"
-                                    >
-                                        <TaskInput
-                                            value={projectTaskTitle}
-                                            projects={projects}
-                                            contexts={allTokens}
-                                            areas={areas}
-                                            onCreateProject={async (title) => {
-                                                const created = await addProject(title, DEFAULT_AREA_COLOR);
-                                                return created?.id ?? null;
-                                            }}
-                                            onChange={(next) => setProjectTaskTitle(next)}
-                                            placeholder={t('projects.addTaskPlaceholder')}
-                                            containerClassName="flex-1"
-                                            className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-                                        />
-                                        <button
-                                            type="submit"
-                                            className="h-9 whitespace-nowrap rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-                                        >
-                                            {t('projects.addTask')}
-                                        </button>
-                                    </form>
-                                )}
-                                <div className="mb-3 flex items-center justify-between">
-                                    <div className="text-xs uppercase tracking-wider text-muted-foreground">
-                                        {t('projects.sectionsLabel')}
+                                <div
+                                    data-project-task-toolbar
+                                    data-compact={projectTaskToolbarCompact ? 'true' : 'false'}
+                                    className={cn(
+                                        'sticky top-0 z-20 -mx-2 mb-4 border-y border-border/60 bg-background/95 px-2 shadow-sm backdrop-blur transition-[padding] duration-150 supports-[backdrop-filter]:bg-background/85',
+                                        projectTaskToolbarCompact ? 'py-2' : 'py-3',
+                                    )}
+                                >
+                                    {!projectTaskToolbarCompact && projectAddTaskButton}
+                                    <div className={cn(
+                                        'flex gap-3',
+                                        projectTaskToolbarCompact
+                                            ? 'flex-wrap items-center justify-between'
+                                            : 'items-center justify-between',
+                                    )}>
+                                        <div className="text-xs uppercase tracking-wider text-muted-foreground">
+                                            {t('projects.sectionsLabel')}
+                                        </div>
+                                        <div className="flex flex-wrap items-center justify-end gap-2">
+                                            {projectTaskToolbarCompact && projectAddTaskButton}
+                                            <div
+                                                role="group"
+                                                aria-label={resolveText('sort.label', 'Sort')}
+                                                className="inline-flex h-8 items-center rounded-md border border-border bg-muted/30 p-0.5"
+                                            >
+                                                {(['default', 'due'] as const).map((option) => {
+                                                    const active = projectTaskSortBy === option;
+                                                    const label = option === 'default'
+                                                        ? resolveText('sort.default', 'Default')
+                                                        : resolveText('sort.due', 'Due date');
+                                                    return (
+                                                        <button
+                                                            key={option}
+                                                            type="button"
+                                                            aria-pressed={active}
+                                                            onClick={() => setProjectTaskSortBy(option)}
+                                                            className={cn(
+                                                                'h-7 whitespace-nowrap rounded px-2 text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40',
+                                                                active
+                                                                    ? 'bg-primary text-primary-foreground'
+                                                                    : 'text-muted-foreground hover:bg-background hover:text-foreground',
+                                                            )}
+                                                        >
+                                                            {label}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                            {selectProjectTasksButton}
+                                            {!isArchivedProject && (
+                                                <>
+                                                    <button
+                                                        type="button"
+                                                        onClick={onToggleShowCompletedTasks}
+                                                        aria-label={showCompletedTasks
+                                                            ? resolveText('common.hideCompleted', 'Hide completed')
+                                                            : resolveText('common.showCompleted', 'Show completed')}
+                                                        aria-pressed={showCompletedTasks}
+                                                        className={cn(
+                                                            'inline-flex items-center gap-2 whitespace-nowrap rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors',
+                                                            showCompletedTasks
+                                                                ? 'border-primary/40 bg-primary/10 text-primary'
+                                                                : 'border-border bg-background text-muted-foreground hover:bg-muted/40 hover:text-foreground'
+                                                        )}
+                                                    >
+                                                        <CheckCircle2 className="h-3.5 w-3.5" />
+                                                        {showCompletedTasks
+                                                            ? resolveText('common.hideCompleted', 'Hide completed')
+                                                            : resolveText('common.showCompleted', 'Show completed')}
+                                                        {!showCompletedTasks && completedProjectTaskCount > 0 && (
+                                                            <span
+                                                                aria-hidden="true"
+                                                                className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                                                            >
+                                                                {completedProjectTaskCount}
+                                                            </span>
+                                                        )}
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleAddSection}
+                                                        aria-label={t('projects.addSection')}
+                                                        className="inline-flex items-center gap-2 whitespace-nowrap rounded-md border border-border bg-background px-2.5 py-1.5 text-xs transition-colors hover:bg-muted/40"
+                                                    >
+                                                        <Plus className="h-3.5 w-3.5" />
+                                                        {t('projects.addSection')}
+                                                    </button>
+                                                </>
+                                            )}
+                                        </div>
                                     </div>
-                                    {!isArchivedProject && (
-                                        <button
-                                            type="button"
-                                            onClick={handleAddSection}
-                                            aria-label={t('projects.addSection')}
-                                            className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs transition-colors hover:bg-muted/40"
-                                        >
-                                            <Plus className="h-3.5 w-3.5" />
-                                            {t('projects.addSection')}
-                                        </button>
+                                    {selectionMode && (
+                                        <div className="mt-3 space-y-3">
+                                            <BulkSelectionToolbar
+                                                selectionCount={selectedIdsArray.length}
+                                                totalCount={visibleProjectTaskList.length}
+                                                allSelected={allVisibleTasksSelected}
+                                                onSelectAll={selectAllVisibleTasks}
+                                                onClearSelection={clearTaskSelection}
+                                                t={t}
+                                            />
+                                            {selectedIdsArray.length > 0 && (
+                                                <ListBulkActions
+                                                    selectionCount={selectedIdsArray.length}
+                                                    onMoveToStatus={handleBatchMove}
+                                                    onAssignArea={handleBatchAssignArea}
+                                                    areaOptions={bulkAreaOptions}
+                                                    onBulkOrganize={() => setBulkOrganizeOpen(true)}
+                                                    onAddTag={() => handleBatchTokenPick('tags', 'add')}
+                                                    onRemoveTag={() => handleBatchTokenPick('tags', 'remove')}
+                                                    disableRemoveTag={removableTagOptions.length === 0}
+                                                    onAddContext={() => handleBatchTokenPick('contexts', 'add')}
+                                                    onRemoveContext={() => handleBatchTokenPick('contexts', 'remove')}
+                                                    disableRemoveContext={removableContextOptions.length === 0}
+                                                    onDelete={handleBatchDelete}
+                                                    isDeleting={isBatchDeleting}
+                                                    t={t}
+                                                />
+                                            )}
+                                        </div>
                                     )}
                                 </div>
                                 {tasksContent}
@@ -926,16 +1726,8 @@ export function ProjectWorkspace({
                                             {t('status.reference')} ({projectReferenceTasks.length})
                                         </div>
                                     </div>
-                                    <div className="divide-y divide-border/30 border-t border-border/40">
-                                        {projectReferenceTasks.map((task) => (
-                                            <TaskItem
-                                                key={`project-reference-${task.id}`}
-                                                task={task}
-                                                project={selectedProject}
-                                                enableDoubleClickEdit
-                                                showProjectBadgeInActions={false}
-                                            />
-                                        ))}
+                                    <div className="border-t border-border/40">
+                                        {renderStaticTasks(projectReferenceTasks)}
                                     </div>
                                 </section>
                             )}
@@ -980,28 +1772,6 @@ export function ProjectWorkspace({
             />
 
             <PromptModal
-                isOpen={showSectionTaskPrompt}
-                title={t('projects.addTask')}
-                description={t('projects.addTaskPlaceholder')}
-                placeholder={t('projects.addTaskPlaceholder')}
-                defaultValue={sectionTaskDraft}
-                confirmLabel={t('projects.addTask')}
-                cancelLabel={t('common.cancel')}
-                onCancel={() => {
-                    setShowSectionTaskPrompt(false);
-                    setSectionTaskTargetId(null);
-                    setSectionTaskDraft('');
-                }}
-                onConfirm={async (value) => {
-                    if (!sectionTaskTargetId) return;
-                    await handleAddTaskForProject(value, sectionTaskTargetId);
-                    setShowSectionTaskPrompt(false);
-                    setSectionTaskTargetId(null);
-                    setSectionTaskDraft('');
-                }}
-            />
-
-            <PromptModal
                 isOpen={showLinkPrompt}
                 title={t('attachments.addLink')}
                 description={t('attachments.linkInputHint')}
@@ -1028,6 +1798,28 @@ export function ProjectWorkspace({
                     });
                     setShowLinkPrompt(false);
                 }}
+            />
+            <TokenPickerModal
+                isOpen={bulkTokenPicker !== null}
+                title={tokenPickerTitle}
+                description={tokenPickerTitle}
+                tokens={tokenPickerOptions}
+                placeholder={tokenPickerPlaceholder}
+                allowCustomValue={bulkTokenPicker?.action === 'add'}
+                confirmLabel={t('common.save')}
+                cancelLabel={t('common.cancel')}
+                onCancel={() => setBulkTokenPicker(null)}
+                onConfirm={handleBulkTokenConfirm}
+            />
+            <TaskBulkOrganizeModal
+                isOpen={bulkOrganizeOpen}
+                selectedCount={selectedIdsArray.length}
+                projects={projects}
+                areas={areas}
+                isApplying={isBulkOrganizing}
+                t={t}
+                onCancel={() => setBulkOrganizeOpen(false)}
+                onApply={handleApplyTaskBulkOrganize}
             />
         </>
     );

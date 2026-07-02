@@ -94,11 +94,15 @@ Mindwtr/
 │           └── ...
 │
 ├── scripts/               # Utility scripts (CLI, API, release)
-├── docs/                  # Documentation
-├── wiki/                  # Wiki source
+├── docs/                  # Repository-local docs: ADRs, release notes, contribution docs
+├── wiki/                  # Legacy GitHub Wiki mirror during docs migration
 ├── .github/               # CI/CD workflows
 └── package.json           # Monorepo root
 ```
+
+Public user and developer documentation is moving to the Mindwtr web docs source and publishes at https://docs.mindwtr.app/. Prefer that docs repo for new or migrated guide pages:
+
+- https://github.com/dongdongbh/mindwtr-web/tree/main/docs
 
 ---
 
@@ -114,6 +118,8 @@ Mindwtr/
 | `bun mobile:android` | Run on Android           |
 | `bun mobile:ios`     | Run on iOS               |
 | `bun test`           | Run all tests            |
+| `bun typecheck`      | Type-check core, cloud, desktop, and mobile packages |
+| `bun i18n:check`     | Verify locale key parity |
 | `bun mindwtr:cli`    | Run CLI tool             |
 | `bun mindwtr:api`    | Run local API server     |
 
@@ -132,7 +138,7 @@ Mindwtr/
 | `bun start`     | Start Expo server |
 | `bun android`   | Run on Android    |
 | `bun ios`       | Run on iOS        |
-| `bun build:apk` | Build Android APK |
+| `ARCHS=arm64-v8a bash ./scripts/android_build.sh` | Build Android APK |
 
 ### Cloud (`apps/cloud`)
 
@@ -187,6 +193,8 @@ Contributors should treat the snapshot transport as a deliberate product choice,
 5. Test on mobile: `bun mobile:start`
 6. Commit with descriptive message
 7. Open a pull request
+
+When adding a new top-level entity type, update the full persistence and sync surface in the same change: core `AppData` types and normalization, desktop SQLite schema/storage round-trip tests, mobile SQLite schema/backup restore, cloud validation/normalization, MCP tools if exposed, and the [Core API docs source](https://github.com/dongdongbh/mindwtr-web/tree/main/docs).
 
 ### Code Style
 

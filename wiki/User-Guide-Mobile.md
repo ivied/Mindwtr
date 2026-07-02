@@ -30,16 +30,16 @@ The mobile app uses bottom tabs for core flows and a Menu page for additional vi
  
 Tap the **Menu** tab to access additional views:
  
- - 📋 **Board** — Kanban board view
+ - 📋 **Board** — Kanban board view with manual drag ordering inside each status column
  - 🗓️ **Calendar** — Time-based view
  - 📁 **Projects** — Multi-step outcomes
  - 🏷️ **Contexts** — Filter by context
  - ⏳ **Waiting For** — Delegated items
  - 💭 **Someday/Maybe** — Future ideas
  - 📚 **Reference** — Reference material
- - ✅ **Done** — Completed tasks
- - 📦 **Archived** — Archived tasks
- - 🗑️ **Trash** — Deleted tasks
+ - ✅ **Done** — Recently completed tasks
+ - 📦 **Archived** — Completed tasks filed away from normal lists
+ - 🗑️ **Trash** — Deleted tasks and projects
  - ⚙️ **Settings** — App preferences
 
 ---
@@ -60,8 +60,14 @@ Use operators for powerful filtering:
 | `tag:`      | `tag:#focused`     | Filter by tag           |
 | `assigned:` | `assigned:Tom`     | Filter by assignee      |
 | `project:`  | `project:HomeReno` | Filter by project       |
+| `location:` | `location:office`  | Filter by task location |
+| `where:`    | `where:office`     | Alias for task location |
+| `id:`       | `id:abc123`        | Find an exact task ID   |
+| `-id:`      | `-id:abc123`       | Exclude an exact task ID |
 | `due:`      | `due:today`        | Tasks due on date       |
 | `due:<=`    | `due:<=7d`         | Tasks due within 7 days |
+| `start:`    | `start:>=tomorrow` | Tasks starting from date |
+| `created:`  | `created:>=30d`    | Tasks created in last 30 days |
 | `OR`        | `@home OR @work`   | Match either condition  |
 
 ### Saved Searches
@@ -93,7 +99,8 @@ Capture tasks from any app using the share sheet:
 1. In any app (browser, email, notes), find something you want to capture
 2. Tap the **Share** button
 3. Select **Mindwtr** from the share options
-4. The content is added to your Inbox automatically
+4. Mindwtr opens the capture screen with the shared content attached as notes
+5. Add a title, adjust any fields, and save it to your Inbox
 
 Great for:
 - Saving articles to read later
@@ -121,6 +128,54 @@ On Android, add the Mindwtr capture tile to Quick Settings for one-swipe Inbox c
 
 Android builds expose a capture action to supported assistants, including Gemini/Assistant surfaces that route through Android App Actions. Voice-created captures open Mindwtr's confirmation flow so you can review the title and note before saving.
 
+### Android Context Automation Intents
+
+Automation apps such as Tasker, MacroDroid, or Phone Profiles can activate a Mindwtr context. Use the Android broadcast form for background-only triggers. When activated, Mindwtr checks matching `/next` actions that are available now and sends a notification only when there is work to show. Tapping that notification opens the matching Contexts view.
+
+Android broadcast form:
+
+| Field | Value |
+| --- | --- |
+| Package | `tech.dongdongbh.mindwtr` |
+| Class | `tech.dongdongbh.mindwtr.ContextAutomationReceiver` |
+| Target | Broadcast Receiver |
+| Activate action | `tech.dongdongbh.mindwtr.action.ACTIVATE_CONTEXT` |
+| Deactivate action | `tech.dongdongbh.mindwtr.action.DEACTIVATE_CONTEXT` |
+| String extra | `context=parents` or `context=@parents` |
+
+ADB examples:
+
+```bash
+adb shell am broadcast -n tech.dongdongbh.mindwtr/.ContextAutomationReceiver -a tech.dongdongbh.mindwtr.action.ACTIVATE_CONTEXT --es context parents
+adb shell am broadcast -n tech.dongdongbh.mindwtr/.ContextAutomationReceiver -a tech.dongdongbh.mindwtr.action.DEACTIVATE_CONTEXT --es context parents
+```
+
+URL form:
+
+| URL | Action |
+| --- | --- |
+| `mindwtr://contexts?token=%40parents&contextAction=activate` | Activate `@parents` |
+| `mindwtr://contexts?token=%40parents&contextAction=deactivate` | Deactivate `@parents` |
+
+URL examples:
+
+```bash
+adb shell am start -a android.intent.action.VIEW -d 'mindwtr://contexts?token=%40parents&contextAction=activate' tech.dongdongbh.mindwtr
+```
+
+Notes:
+- URL launches may open Mindwtr. Use the broadcast receiver form when the automation should stay in the background.
+- Context names are normalized to `@context`, so `parents` and `@parents` both match `@parents`.
+- Hierarchical contexts match below the selected context, so `@parents` also matches `@parents/errands`.
+- If no currently available `/next` actions match the context, Mindwtr stays silent.
+- Deactivation is a silent no-op for now. It acknowledges the automation exit trigger and is reserved for future active-context state; it does not delete, hide, or change tasks.
+- On Android, context automation URLs and intents return Mindwtr to the background after handling. Use the notification tap when you want to open the matching Contexts view.
+- Mindwtr does not detect locations or device states itself; the automation app owns the trigger.
+
+### Apple Shortcuts
+
+On iPhone and iPad, Mindwtr exposes native Apple Shortcuts actions for Inbox capture and opening GTD views such as Focus, Waiting, Someday, Projects, Review, and Calendar. See [[Apple Shortcuts]] for setup, examples, and v1 limitations.
+
 ### URL Scheme Quick Capture (iOS Shortcuts / Android Automations)
 
 Mindwtr registers the URL scheme `mindwtr://`, so you can capture tasks from iOS Shortcuts, Tasker, or other automation tools.
@@ -129,9 +184,9 @@ Supported URLs:
 
 | URL | Action |
 | --- | --- |
-| `mindwtr://capture?title=Buy%20groceries` | Create Inbox task with title |
-| `mindwtr://capture?title=Buy%20groceries&note=From%20store` | Create Inbox task + note |
-| `mindwtr://capture?title=Buy%20groceries&project=Shopping&tags=errands,home` | Create Inbox task + project (auto-create if missing) + tags |
+| `mindwtr://capture?title=Buy%20groceries` | Open capture with a title |
+| `mindwtr://capture?title=Buy%20groceries&note=From%20store` | Open capture with title and note |
+| `mindwtr://capture?title=Buy%20groceries&project=Shopping&tags=errands,home` | Open capture with project and tags |
 
 Notes:
 - `title` is required (alias: `text`).
@@ -143,7 +198,7 @@ iOS Shortcuts example:
 1. Open **Shortcuts** and create a shortcut.
 2. Add **Ask for Input** (prompt: task title).
 3. Add **Open URLs** with: `mindwtr://capture?title=[Provided Input]`.
-4. Run the shortcut; Mindwtr opens and adds the task to Inbox.
+4. Run the shortcut; Mindwtr opens the capture screen so you can review and save the task.
 
 ### Quick-Add Syntax
 
@@ -191,6 +246,8 @@ Capture tasks using your voice with AI-powered transcription.
 
 Your capture zone for quick task entry.
 
+Use **Mind Sweep** when you want guided capture prompts for work, home, people, errands, and open loops instead of starting from a blank input.
+
 ### Adding Tasks
 
 1. Tap the input field at the bottom
@@ -237,6 +294,8 @@ Your primary dashboard for doing. Focus is an Engage dashboard, not a full inven
 
 Focus hides future-start tasks and later tasks in sequential projects so the list stays limited to what you can act on now. Use **Contexts**, **Projects**, or **Search** when you want to inspect the broader task inventory.
 
+Default Next Actions order is due-soon actions first, undated actions next, and far-future due actions last. Within the same bucket, Focus uses priority when enabled, then start time, creation date, title, and id. See [[GTD Workflow in Mindwtr#How Focus sorts available actions]] for the full logic.
+
 ### Features
 
 - **Context filter** — Tap a context chip to filter the Next list.
@@ -255,6 +314,7 @@ Review your tasks and update their status.
 - Quickly mark tasks as done
 - Navigate between tasks
 - **Select mode**: Batch select tasks and share them
+- During Weekly Review, use the **Process Inbox** step to clear captured items before continuing through calendar, waiting-for, projects, and someday review.
 
 ---
 
@@ -275,13 +335,16 @@ Description markdown supports unordered lists and task checkboxes (`- item`, `[ 
 Type `[[` in task descriptions or project notes to link another task or project from the link picker sheet.
 Those links are navigational only; they do not sync completion state between tasks.
 Markdown checkbox lines can populate checklist items when you save.
+The **Assignee / Person** field stores delegated people for Waiting For, suggestions, and `assigned:` search. Manage saved people, notes, and reference links from **Settings → Manage**.
 
 Recurring tasks support two strategies:
 - **Strict** (fixed cadence)
 - **Repeat after completion** (next date from completion time)
 - **Ends: Never / On date / After N occurrences**
 
-Use the recurrence field in the task editor, then toggle **Repeat after completion** when needed.
+Mindwtr keeps one active instance of a recurring task. The Calendar shows that current instance when it has a due date or start time; future occurrences are not pre-filled until the current one is completed unless **Show next occurrence in Calendar** is enabled for a planning-only preview.
+
+Use the recurrence field in the task editor, then toggle **Repeat after completion** or **Show next occurrence in Calendar** when needed.
 The same sheet lets you stop a series on a target date or after a fixed number of total occurrences.
 
 ### Attachments
@@ -316,13 +379,25 @@ Use checklists as templates:
 
 ## Calendar Integration
 
-Mindwtr can overlay external calendars (ICS subscriptions) in the Calendar view:
+Mindwtr can overlay external calendars and push dated Mindwtr tasks to the device calendar. Detailed setup lives in [[Calendar Integration]].
 
-1. Go to **Settings → Advanced → Calendar**
+To push tasks to Android/Google Calendar or Apple Calendar on iOS:
+
+1. Go to **Settings -> Calendar**
+2. Enable **Push tasks to calendar**
+3. Grant calendar permission
+4. Expand **Sync target**
+5. Choose a dedicated `Mindwtr` calendar or another writable calendar target
+
+For Android Google Calendar and iOS Apple Calendar target setup, see [[Calendar Integration]].
+
+To overlay external calendars with ICS subscriptions:
+
+1. Go to **Settings -> Calendar**
 2. Add your **ICS URL**
 3. Refresh to fetch events
 
-External events are view‑only and are not synced.
+External events are view-only and are not synced back to their source. Tap an external event and choose **Create task** to make a separate Mindwtr task; Mindwtr copies the event title, date/time, location, description, and calendar name where available.
 
 ---
 
@@ -341,6 +416,8 @@ Time-based view with scheduling capabilities.
 2. Select from Next Actions (shown first) or search Todo tasks
 3. Mindwtr finds the earliest free slot (avoids conflicts with external events)
 4. Task gets a start time based on its time estimate
+
+The scheduling panel is the mobile planning surface: use it when you are looking at a day and want to turn unscheduled Next Actions or due-but-unscheduled work into concrete time blocks. Collapse it when you want to focus on the calendar grid.
 
 ### Drag to Reschedule
 
@@ -375,7 +452,7 @@ Open Projects from **Menu → Projects**.
 
 - View all tasks in the project
 - Add new tasks
-- Group tasks with **Sections** inside the project
+- Group tasks with **Sections** inside the project. Sections are headings inside one project, not subtasks or separate projects.
 - Tap a task to assign a **Section** in the task editor
 - Edit project settings (name, color, notes)
 - Assign **Area of Focus** (e.g., Work, Personal)
@@ -385,12 +462,16 @@ Open Projects from **Menu → Projects**.
 - Reorder project tasks with the drag handle when custom ordering is enabled
 - Complete or archive the project
 
+The **Project Section** field in the task editor assigns a task to one of the sections in its current project. It only matters after the task belongs to a project that has sections; otherwise, leave it blank.
+
 ### Sequential vs Parallel
 
 | Mode           | Behavior                                             |
 | -------------- | ---------------------------------------------------- |
 | **Sequential** | Only the first available project task appears in Focus |
 | **Parallel**   | All available project tasks can appear in Focus        |
+
+Sequential projects can run project-wide or section-by-section. Section-scoped sequencing shows the first available task in each project section, so separate phases or workstreams can move forward in parallel without making every task visible.
 
 ---
 
@@ -477,7 +558,7 @@ Make sure notifications are enabled:
 ### General
 
 - **Appearance** — System, Light, or Dark
-- **Language** — English, Chinese (Simplified), Chinese (Traditional), Spanish, Hindi, Arabic, German, Russian, Japanese, French, Portuguese, Polish, Korean, Italian, Turkish
+- **Language** — English, Vietnamese, Chinese (Simplified), Chinese (Traditional), Spanish, Hindi, Arabic, German, Russian, Japanese, French, Portuguese, Polish, Korean, Czech, Italian, Turkish, Dutch
 
 ### Notifications
 
@@ -507,7 +588,7 @@ Customize how Mindwtr works for your GTD workflow:
 - Default: 10m, 30m, 1h, 2h, 3h, 4h, 4h+
 
 **Auto-Archive:**
-- Automatically move completed tasks to the Archive after a set number of days (default: 7 days)
+- Automatically move Done tasks to Archived after a set number of days (default: 7 days)
 - Set to "Never" to keep completions in the Done list indefinitely
 
 **Inbox Processing:**
@@ -522,7 +603,7 @@ Customize how Mindwtr works for your GTD workflow:
 - Hidden fields can be revealed with the **More** button in the editor
 
 **Manage:**
-- Use **Settings → Manage** to edit saved **Areas**, **Contexts**, and **Tags**
+- Use **Settings → Manage** to edit saved **Areas**, **People**, **Contexts**, and **Tags**
 - This is the fastest place to clean up duplicates or rename reusable metadata
 
 ### Data & Sync
@@ -530,8 +611,9 @@ Customize how Mindwtr works for your GTD workflow:
 See [[Data and Sync]] for sync setup.
 
 **Sync Backend:**
-- **File** — Sync via a shared JSON file (Dropbox, Google Drive, etc.)
-- **WebDAV** — Sync to a WebDAV server (Nextcloud, ownCloud, etc.)
+- **Cloud Sync** — Dropbox in supported builds, plus iCloud on iOS where available
+- **Folder / File Sync** — File sync via a shared JSON file/folder (Google Drive, Syncthing, OneDrive, etc.)
+- **Advanced / Custom Server** — WebDAV or Self-Hosted Mindwtr Cloud
 
 **Other Options:**
 - **Sync** — Manually trigger sync
@@ -559,6 +641,7 @@ See [[Data and Sync]] for sync setup.
 
 - Version number
 - Check for updates
+- **Send feedback** for bug reports, feature requests, or other notes when the build has feedback enabled. You can include a reply email if you want follow-up.
 - Website and GitHub links
 
 ---
@@ -566,5 +649,6 @@ See [[Data and Sync]] for sync setup.
 ## See Also
 
 - [[Mobile Installation]]
+- [[Apple Shortcuts]]
 - [[Data and Sync]]
 - [[GTD Workflow in Mindwtr]]

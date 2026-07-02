@@ -1,9 +1,15 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import type { KeyboardEventHandler, RefObject } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { ClipboardEventHandler, KeyboardEventHandler, RefObject } from 'react';
 import type { Area, Project } from '@mindwtr/core';
 import { cn } from '../../lib/utils';
+import {
+    compareAutocompleteLabels,
+    matchesAutocompleteQuery,
+    normalizeAutocompleteTokens,
+} from './token-autocomplete';
 
-type TriggerType = 'project' | 'context' | 'tag' | 'area';
+type TriggerType = 'project' | 'context' | 'tag' | 'area' | 'command';
+type SlashCommand = 'due' | 'start' | 'review' | 'note' | 'inbox' | 'next' | 'waiting' | 'someday' | 'done';
 
 interface TriggerState {
     type: TriggerType;
@@ -17,43 +23,124 @@ interface InputSelection {
     end: number;
 }
 
+type PendingSelectionRestore = {
+    selection: InputSelection;
+    expectedValue: string;
+};
+
+type ActiveTrigger = {
+    text: string;
+    trigger: TriggerState;
+    selection: InputSelection;
+};
+
 type Option =
     | { kind: 'create'; label: string; value: string }
-    | { kind: 'project'; label: string; value: string }
+    | { kind: 'project'; label: string; value: string; id: string }
     | { kind: 'context'; label: string; value: string }
     | { kind: 'tag'; label: string; value: string }
-    | { kind: 'area'; label: string; value: string };
+    | { kind: 'area'; label: string; value: string; id: string }
+    | { kind: 'command'; label: string; value: string; command: SlashCommand; requiresArgument: boolean };
+
+export type TaskInputAcceptedSuggestion =
+    | { kind: 'project'; label: string; value: string; projectId: string }
+    | { kind: 'createProject'; label: string; value: string; projectId: string | null }
+    | { kind: 'context'; label: string; value: string }
+    | { kind: 'tag'; label: string; value: string }
+    | { kind: 'area'; label: string; value: string; areaId: string }
+    | { kind: 'command'; label: string; value: string; command: SlashCommand };
 
 interface TaskInputProps {
+    id?: string;
     value: string;
     onChange: (value: string) => void;
     projects: Project[];
     contexts: readonly string[];
     areas?: Area[];
     onCreateProject?: (title: string) => Promise<string | null>;
+    onAcceptSuggestion?: (suggestion: TaskInputAcceptedSuggestion) => boolean | Promise<boolean>;
     placeholder?: string;
     className?: string;
     containerClassName?: string;
     autoFocus?: boolean;
     inputRef?: RefObject<HTMLInputElement | null>;
     onKeyDown?: KeyboardEventHandler<HTMLInputElement>;
+    onPaste?: ClipboardEventHandler<HTMLInputElement>;
     dir?: 'ltr' | 'rtl';
+    ariaLabel?: string;
+}
+
+const SLASH_COMMANDS: Array<{
+    command: SlashCommand;
+    hint?: string;
+    requiresArgument: boolean;
+}> = [
+    { command: 'due', hint: '<when>', requiresArgument: true },
+    { command: 'start', hint: '<when>', requiresArgument: true },
+    { command: 'review', hint: '<when>', requiresArgument: true },
+    { command: 'note', hint: '<text>', requiresArgument: true },
+    { command: 'next', requiresArgument: false },
+    { command: 'waiting', requiresArgument: false },
+    { command: 'someday', requiresArgument: false },
+    { command: 'inbox', requiresArgument: false },
+    { command: 'done', requiresArgument: false },
+];
+
+function getSlashCommandOptions(query: string): Option[] {
+    const separatorIndex = query.indexOf(':');
+    const rawCommandQuery = (separatorIndex >= 0 ? query.slice(0, separatorIndex) : query).trim().toLowerCase();
+    const rawValue = separatorIndex >= 0 ? query.slice(separatorIndex + 1).trim() : '';
+
+    return SLASH_COMMANDS
+        .filter(({ command }) => (
+            rawCommandQuery.length === 0
+            || command.startsWith(rawCommandQuery)
+            || command.includes(rawCommandQuery)
+        ))
+        .map(({ command, hint, requiresArgument }) => {
+            const label = requiresArgument
+                ? `/${command}:${rawValue || hint || ''}`
+                : `/${command}`;
+            return {
+                kind: 'command' as const,
+                label,
+                value: rawValue,
+                command,
+                requiresArgument,
+            };
+        });
 }
 
 function getTrigger(text: string, caret: number): TriggerState | null {
     if (caret < 0) return null;
     const before = text.slice(0, caret);
+    const commandMatch = /(?:^|\s)\/([a-z-]*)(?::([\s\S]*))?$/i.exec(before);
+    if (commandMatch) {
+        const rawMatch = commandMatch[0] ?? '';
+        const slashOffset = rawMatch.indexOf('/');
+        if (slashOffset >= 0) {
+            const start = (commandMatch.index ?? 0) + slashOffset;
+            return {
+                type: 'command',
+                start,
+                end: caret,
+                query: before.slice(start + 1),
+            };
+        }
+    }
     const lastSpace = Math.max(before.lastIndexOf(' '), before.lastIndexOf('\n'), before.lastIndexOf('\t'));
     const start = lastSpace + 1;
     const token = before.slice(start);
-    if (!token.startsWith('+') && !token.startsWith('@') && !token.startsWith('#') && !token.startsWith('!')) return null;
+    if (!token.startsWith('+') && !token.startsWith('@') && !token.startsWith('#') && !token.startsWith('!') && !token.startsWith('/')) return null;
     const type: TriggerType = token.startsWith('+')
         ? 'project'
         : token.startsWith('@')
             ? 'context'
             : token.startsWith('#')
                 ? 'tag'
-            : 'area';
+                : token.startsWith('!')
+                    ? 'area'
+                    : 'command';
     return {
         type,
         start,
@@ -62,20 +149,52 @@ function getTrigger(text: string, caret: number): TriggerState | null {
     };
 }
 
+function removeAcceptedTriggerText(text: string, trigger: TriggerState): { value: string; caret: number } {
+    const before = text.slice(0, trigger.start);
+    const after = text.slice(trigger.end);
+    if (before.length === 0) {
+        return {
+            value: after.replace(/^\s+/, ''),
+            caret: 0,
+        };
+    }
+    if (after.length === 0) {
+        const value = before.replace(/\s+$/, '');
+        return {
+            value,
+            caret: value.length,
+        };
+    }
+    if (/\s$/.test(before) && /^\s+/.test(after)) {
+        return {
+            value: `${before}${after.replace(/^\s+/, '')}`,
+            caret: before.length,
+        };
+    }
+    return {
+        value: `${before}${after}`,
+        caret: before.length,
+    };
+}
+
 export function TaskInput({
+    id,
     value,
     onChange,
     projects,
     contexts,
     areas = [],
     onCreateProject,
+    onAcceptSuggestion,
     placeholder,
     className,
     containerClassName,
     autoFocus,
     inputRef,
     onKeyDown,
+    onPaste,
     dir,
+    ariaLabel,
 }: TaskInputProps) {
     const localRef = useRef<HTMLInputElement>(null);
     const mergedRef = inputRef ?? localRef;
@@ -87,17 +206,27 @@ export function TaskInput({
         start: value.length,
         end: value.length,
     });
+    const pendingSelectionRef = useRef<PendingSelectionRestore | null>(null);
     const undoRef = useRef<Array<{ value: string; selection: InputSelection }>>([]);
 
     const options = useMemo<Option[]>(() => {
         if (!trigger) return [];
         const query = trigger.query.trim().toLowerCase();
+        if (trigger.type === 'command') {
+            return getSlashCommandOptions(trigger.query);
+        }
         if (trigger.type === 'project') {
-            const matches = projects.filter((project) =>
-                project.title.toLowerCase().includes(query)
-            );
-            const hasExact = query.length > 0 && projects.some((project) => project.title.toLowerCase() === query);
-            const result: Option[] = [];
+            const activeProjects = projects.filter((project) => project.status !== 'archived');
+            const matches = activeProjects
+                .filter((project) => matchesAutocompleteQuery(project.title, query))
+                .sort((a, b) => compareAutocompleteLabels(a.title, b.title, query));
+            const hasExact = query.length > 0 && activeProjects.some((project) => project.title.toLowerCase() === query);
+            const result: Option[] = matches.map((project) => ({
+                kind: 'project' as const,
+                label: project.title,
+                value: project.title,
+                id: project.id,
+            }));
             if (!hasExact && query.length > 0) {
                 result.push({
                     kind: 'create' as const,
@@ -105,34 +234,24 @@ export function TaskInput({
                     value: trigger.query.trim(),
                 });
             }
-            result.push(
-                ...matches.map((project) => ({
-                    kind: 'project' as const,
-                    label: project.title,
-                    value: project.title,
-                }))
-            );
             return result;
         }
         if (trigger.type === 'area') {
-            const matches = areas.filter((area) => area.name.toLowerCase().includes(query));
+            const matches = areas
+                .filter((area) => matchesAutocompleteQuery(area.name, query))
+                .sort((a, b) => compareAutocompleteLabels(a.name, b.name, query));
             return matches.map((area) => ({
                 kind: 'area' as const,
                 label: area.name,
                 value: area.name,
+                id: area.id,
             }));
         }
         const expectedPrefix = trigger.type === 'tag' ? '#' : '@';
-        const normalizedTokens = contexts
-            .map((token) => {
-                if (token.startsWith('@') || token.startsWith('#')) return token;
-                return `${expectedPrefix}${token}`;
-            })
-            .filter((token) => token.startsWith(expectedPrefix));
-        const matches = normalizedTokens.filter((token) => {
-            const raw = token.slice(1);
-            return raw.toLowerCase().includes(query);
-        });
+        const normalizedTokens = normalizeAutocompleteTokens(contexts, expectedPrefix);
+        const matches = normalizedTokens
+            .filter((token) => matchesAutocompleteQuery(token.slice(1), query))
+            .sort((a, b) => compareAutocompleteLabels(a.slice(1), b.slice(1), query));
         return matches.map((token) => ({
             kind: (trigger.type === 'tag' ? 'tag' : 'context') as 'tag' | 'context',
             label: token,
@@ -169,6 +288,49 @@ export function TaskInput({
         };
     };
 
+    const resolveInputSelection = (input: HTMLInputElement | null): InputSelection => {
+        if (!input) return selectionRef.current;
+        const selection = {
+            start: input.selectionStart ?? input.value.length,
+            end: input.selectionEnd ?? input.value.length,
+        };
+        selectionRef.current = selection;
+        return selection;
+    };
+
+    const restoreSelection = (selection: InputSelection) => {
+        mergedRef.current?.focus();
+        mergedRef.current?.setSelectionRange(selection.start, selection.end);
+        selectionRef.current = selection;
+    };
+
+    const scheduleSelectionRestore = (selection: InputSelection) => {
+        const pendingRestore: PendingSelectionRestore = {
+            selection,
+            expectedValue: valueRef.current,
+        };
+        pendingSelectionRef.current = pendingRestore;
+        requestAnimationFrame(() => {
+            if (pendingSelectionRef.current !== pendingRestore) return;
+            restoreSelection(pendingRestore.selection);
+            const input = mergedRef.current;
+            if (!input || input.value === pendingRestore.expectedValue) {
+                pendingSelectionRef.current = null;
+            }
+        });
+    };
+
+    useLayoutEffect(() => {
+        const pendingRestore = pendingSelectionRef.current;
+        if (!pendingRestore) return;
+        if (value !== pendingRestore.expectedValue) {
+            pendingSelectionRef.current = null;
+            return;
+        }
+        restoreSelection(pendingRestore.selection);
+        pendingSelectionRef.current = null;
+    }, [value]);
+
     useEffect(() => {
         const isFocused = typeof document !== 'undefined' && mergedRef.current === document.activeElement;
         if (!isFocused && value !== valueRef.current) {
@@ -188,39 +350,97 @@ export function TaskInput({
         setSelectedIndex(0);
     };
 
+    const resolveActiveTrigger = (): ActiveTrigger | null => {
+        const input = mergedRef.current;
+        const text = input?.value ?? valueRef.current;
+        const selection = resolveInputSelection(input);
+        const nextTrigger = getTrigger(text, selection.start);
+        if (nextTrigger) {
+            return { text, trigger: nextTrigger, selection };
+        }
+        if (trigger) {
+            return { text, trigger, selection };
+        }
+        return null;
+    };
+
     const applyOption = async (option: Option) => {
-        if (!trigger) return;
+        const active = resolveActiveTrigger();
+        if (!active) return;
+        const activeTrigger = active.trigger;
+        const expectedTriggerType = option.kind === 'create' ? 'project' : option.kind;
+        if (activeTrigger.type !== expectedTriggerType) return;
+
         let tokenValue = option.value;
+        let createdProjectId: string | null = null;
+        if (option.kind === 'command' && option.requiresArgument && !option.value.trim()) {
+            tokenValue = `/${option.command}:`;
+            const before = active.text.slice(0, activeTrigger.start);
+            const after = active.text.slice(activeTrigger.end);
+            const nextValue = `${before}${tokenValue}${after}`;
+            pushUndoEntry(active.text, active.selection);
+            valueRef.current = nextValue;
+            onChange(nextValue);
+            closeTrigger();
+            const caret = before.length + tokenValue.length;
+            scheduleSelectionRestore({ start: caret, end: caret });
+            return;
+        }
         if (option.kind === 'create' && onCreateProject) {
             const title = option.value.trim();
             if (title) {
-                await onCreateProject(title);
+                createdProjectId = await onCreateProject(title);
             }
         }
-        if (trigger.type === 'project') {
+        if (onAcceptSuggestion) {
+            const acceptedSuggestion: TaskInputAcceptedSuggestion | null = option.kind === 'project'
+                ? { kind: 'project', label: option.label, value: option.value, projectId: option.id }
+                : option.kind === 'create'
+                    ? { kind: 'createProject', label: option.label, value: option.value, projectId: createdProjectId }
+                    : option.kind === 'area'
+                        ? { kind: 'area', label: option.label, value: option.value, areaId: option.id }
+                        : option.kind === 'command'
+                            ? { kind: 'command', label: option.label, value: option.value, command: option.command }
+                        : option.kind === 'context'
+                            ? { kind: 'context', label: option.label, value: option.value }
+                            : { kind: 'tag', label: option.label, value: option.value };
+            const handled = await onAcceptSuggestion(acceptedSuggestion);
+            if (handled) {
+                const next = removeAcceptedTriggerText(active.text, activeTrigger);
+                pushUndoEntry(active.text, active.selection);
+                valueRef.current = next.value;
+                onChange(next.value);
+                closeTrigger();
+                scheduleSelectionRestore({ start: next.caret, end: next.caret });
+                return;
+            }
+            if (option.kind === 'command') {
+                closeTrigger();
+                return;
+            }
+        }
+        if (activeTrigger.type === 'project') {
             tokenValue = `+${tokenValue}`;
-        } else if (trigger.type === 'area') {
+        } else if (activeTrigger.type === 'area') {
             tokenValue = `!${tokenValue}`;
-        } else if (trigger.type === 'tag') {
+        } else if (activeTrigger.type === 'tag') {
             tokenValue = tokenValue.startsWith('#') ? tokenValue : `#${tokenValue}`;
+        } else if (activeTrigger.type === 'command' && option.kind === 'command') {
+            tokenValue = option.requiresArgument ? `/${option.command}:${option.value}` : `/${option.command}`;
         } else {
             tokenValue = tokenValue.startsWith('@') ? tokenValue : `@${tokenValue}`;
         }
 
-        const before = value.slice(0, trigger.start);
-        const after = value.slice(trigger.end);
-        const needsSpace = after.length > 0 && !/^\s/.test(after);
+        const before = active.text.slice(0, activeTrigger.start);
+        const after = active.text.slice(activeTrigger.end);
+        const needsSpace = after.length === 0 || !/^\s/.test(after);
         const nextValue = `${before}${tokenValue}${needsSpace ? ' ' : ''}${after}`;
-        pushUndoEntry(valueRef.current, selectionRef.current);
+        pushUndoEntry(active.text, active.selection);
         valueRef.current = nextValue;
         onChange(nextValue);
         closeTrigger();
-
-        requestAnimationFrame(() => {
-            const caret = before.length + tokenValue.length + (needsSpace ? 1 : 0);
-            mergedRef.current?.setSelectionRange(caret, caret);
-            selectionRef.current = { start: caret, end: caret };
-        });
+        const caret = before.length + tokenValue.length + (needsSpace ? 1 : 0);
+        scheduleSelectionRestore({ start: caret, end: caret });
     };
 
     const handleKeyDown: KeyboardEventHandler<HTMLInputElement> = async (event) => {
@@ -233,13 +453,13 @@ export function TaskInput({
                 valueRef.current = previousEntry.value;
                 onChange(previousEntry.value);
                 closeTrigger();
-                requestAnimationFrame(() => {
-                    mergedRef.current?.focus();
-                    mergedRef.current?.setSelectionRange(previousEntry.selection.start, previousEntry.selection.end);
-                    selectionRef.current = previousEntry.selection;
-                });
+                scheduleSelectionRestore(previousEntry.selection);
                 return;
             }
+        }
+        if (event.nativeEvent.isComposing || event.key === 'Process') {
+            onKeyDown?.(event);
+            return;
         }
         if (trigger && options.length > 0) {
             if (event.key === 'ArrowDown') {
@@ -260,6 +480,12 @@ export function TaskInput({
                 await applyOption(options[selectedIndex]);
                 return;
             }
+            if (event.key === 'Tab' && !event.shiftKey) {
+                event.preventDefault();
+                event.stopPropagation();
+                await applyOption(options[selectedIndex]);
+                return;
+            }
             if (event.key === 'Escape') {
                 event.stopPropagation();
                 closeTrigger();
@@ -275,6 +501,7 @@ export function TaskInput({
     return (
         <div className={cn('relative', containerClassName)}>
             <input
+                id={id}
                 ref={mergedRef}
                 value={value}
                 autoFocus={autoFocus}
@@ -289,6 +516,7 @@ export function TaskInput({
                     updateTrigger(text, event.target.selectionStart ?? text.length);
                 }}
                 onKeyDown={handleKeyDown}
+                onPaste={onPaste}
                 onClick={(event) => {
                     const target = event.target as HTMLInputElement;
                     updateSelection(target);
@@ -313,6 +541,7 @@ export function TaskInput({
                 aria-controls={hasOptions ? listboxId : undefined}
                 aria-owns={hasOptions ? listboxId : undefined}
                 aria-activedescendant={activeDescendantId}
+                aria-label={ariaLabel}
                 className={cn(className, dir === 'rtl' && 'text-right')}
                 dir={dir}
             />

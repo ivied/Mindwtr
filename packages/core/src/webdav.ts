@@ -30,6 +30,8 @@ export type RemoteFileMetadata = {
     contentLength: string | null;
 };
 
+export type RemoteJsonWriteResult = RemoteFileMetadata;
+
 const MAX_WEBDAV_MKCOL_DEPTH = 32;
 
 function bytesToBase64(bytes: Uint8Array): string {
@@ -87,6 +89,24 @@ function buildHeaders(options: WebDavOptions): Record<string, string> {
     return headers;
 }
 
+function buildReadHeaders(options: WebDavOptions): Record<string, string> {
+    const headers = buildHeaders(options);
+    headers['Cache-Control'] = 'no-cache';
+    headers.Pragma = 'no-cache';
+    return headers;
+}
+
+function buildReadRequestInit(options: WebDavOptions, method: 'GET' | 'HEAD'): RequestInit {
+    const init: RequestInit = {
+        method,
+        headers: buildReadHeaders(options),
+    };
+    if (options.signal) {
+        init.signal = options.signal;
+    }
+    return init;
+}
+
 const WEBDAV_HTTPS_ERROR = 'WebDAV requires HTTPS for public URLs (HTTP allowed for localhost, private IPs, and local hostnames).';
 const WEBDAV_TIMEOUT_ERROR = 'WebDAV request timed out';
 const WEBDAV_AUTOMKCOL_HEADER = 'X-NC-WebDAV-AutoMkcol';
@@ -115,7 +135,7 @@ export const buildHttpRemoteFileFingerprint = (
     const lastModified = metadata.lastModified?.trim() || '';
     const contentLength = metadata.contentLength?.trim() || '';
     if (etag) {
-        return `${source}:v1:etag=${etag}:mtime=${lastModified}:len=${contentLength}`;
+        return `${source}:v1:etag=${etag}`;
     }
     if (lastModified && contentLength) {
         if (options.allowWeakFingerprint === false) {
@@ -323,10 +343,7 @@ export async function webdavGetJson<T>(
     const fetcher = options.fetcher ?? fetch;
     const res = await fetchWithTimeout(
         url,
-        {
-            method: 'GET',
-            headers: buildHeaders(options),
-        },
+        buildReadRequestInit(options, 'GET'),
         options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         fetcher,
         WEBDAV_TIMEOUT_ERROR,
@@ -354,7 +371,7 @@ export async function webdavPutJson(
     url: string,
     data: unknown,
     options: WebDavOptions = {}
-): Promise<void> {
+): Promise<RemoteJsonWriteResult> {
     assertWebdavUrl(url, options);
     const fetcher = options.fetcher ?? fetch;
     const headers = buildHeaders(options);
@@ -387,6 +404,10 @@ export async function webdavPutJson(
         (error as { status?: number }).status = res.status;
         throw error;
     }
+    return metadataFromHeaders('webdav', res.headers, {
+        allowWeakFingerprint: options.allowWeakFingerprint,
+        warnOnceKey: getWebdavWeakFingerprintWarningKey(url),
+    });
 }
 
 export async function webdavMakeDirectory(
@@ -455,7 +476,7 @@ export async function webdavFileExists(
     const fetcher = options.fetcher ?? fetch;
     const res = await fetchWithTimeout(
         url,
-        { method: 'HEAD', headers: buildHeaders(options), signal: options.signal },
+        buildReadRequestInit(options, 'HEAD'),
         options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         fetcher,
         WEBDAV_TIMEOUT_ERROR,
@@ -479,7 +500,7 @@ export async function webdavHeadFile(
     const fetcher = options.fetcher ?? fetch;
     const res = await fetchWithTimeout(
         url,
-        { method: 'HEAD', headers: buildHeaders(options), signal: options.signal },
+        buildReadRequestInit(options, 'HEAD'),
         options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         fetcher,
         WEBDAV_TIMEOUT_ERROR,
@@ -514,7 +535,7 @@ export async function webdavGetFile(
     const fetcher = options.fetcher ?? fetch;
     const res = await fetchWithTimeout(
         url,
-        { method: 'GET', headers: buildHeaders(options), signal: options.signal },
+        buildReadRequestInit(options, 'GET'),
         options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         fetcher,
         WEBDAV_TIMEOUT_ERROR,

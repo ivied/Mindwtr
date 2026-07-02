@@ -8,13 +8,9 @@
  */
 import { requireNativeModule, type NativeModule } from 'expo-modules-core';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type { AppData } from '@mindwtr/core';
+import { CLOUDKIT_ATTACHMENT_RECORD_TYPE, type AppData } from '@mindwtr/core';
 import { logInfo, logWarn, logError } from './app-log';
-import {
-    CLOUDKIT_CHANGE_TOKEN_KEY,
-    CLOUDKIT_SEEDED_KEY,
-    CLOUDKIT_ZONE_CREATED_KEY,
-} from './sync-constants';
+import { CLOUDKIT_CHANGE_TOKEN_KEY, CLOUDKIT_SEEDED_KEY, CLOUDKIT_ZONE_CREATED_KEY } from './sync-constants';
 
 // MARK: - Types
 
@@ -34,6 +30,12 @@ interface CloudKitSyncModule extends NativeModule {
     fetchAllRecords(recordType: string): Promise<Array<Record<string, unknown>>>;
     saveRecords(recordType: string, json: string): Promise<string[]>;
     deleteRecords(recordType: string, ids: string[]): Promise<boolean>;
+    saveAttachmentAsset(
+        recordName: string,
+        filePath: string,
+        metadata: CloudKitAttachmentMetadata,
+    ): Promise<CloudKitAttachmentMetadata>;
+    fetchAttachmentAsset(recordName: string, targetPath: string): Promise<CloudKitAttachmentMetadata>;
     consumePendingRemoteChange(): Promise<boolean>;
 }
 
@@ -50,14 +52,29 @@ try {
 const RECORD_TYPES = {
     task: 'MindwtrTask',
     project: 'MindwtrProject',
-    section: 'MindwtrSection',
-    area: 'MindwtrArea',
-    settings: 'MindwtrSettings',
+  section: 'MindwtrSection',
+  area: 'MindwtrArea',
+  person: 'MindwtrPerson',
+  settings: 'MindwtrSettings',
 } as const;
 
 type AccountStatus = 'available' | 'noAccount' | 'restricted' | 'temporarilyUnavailable' | 'unknown';
 type CloudKitOperationOptions = {
     signal?: AbortSignal;
+};
+
+export type CloudKitAttachmentMetadata = {
+    recordName?: string;
+    attachmentId: string;
+    ownerType: 'task' | 'project';
+    ownerId: string;
+    title: string;
+    mimeType?: string;
+    size?: number;
+    fileHash?: string;
+    updatedAt: string;
+    deletedAt?: string;
+    filePath?: string;
 };
 
 const createAbortError = (message: string): Error => {
@@ -78,14 +95,13 @@ const throwIfAborted = (signal: AbortSignal | undefined, fallbackMessage: string
     throw resolveAbortError(signal, fallbackMessage);
 };
 
-const isAbortLikeError = (error: unknown, signal?: AbortSignal): boolean => (
-    Boolean(signal?.aborted) || (error instanceof Error && error.name === 'AbortError')
-);
+const isAbortLikeError = (error: unknown, signal?: AbortSignal): boolean =>
+    Boolean(signal?.aborted) || (error instanceof Error && error.name === 'AbortError');
 
-const runCloudKitOperation = async <T,>(
+const runCloudKitOperation = async <T>(
     operation: () => Promise<T>,
     signal: AbortSignal | undefined,
-    fallbackMessage: string
+    fallbackMessage: string,
 ): Promise<T> => {
     throwIfAborted(signal, fallbackMessage);
     if (!signal) return operation();
@@ -110,7 +126,7 @@ export const isCloudKitAvailable = (): boolean => {
 export const getCloudKitAccountStatus = async (): Promise<AccountStatus> => {
     if (!isCloudKitAvailable()) return 'unknown';
     try {
-        return await CloudKitSync!.getAccountStatus() as AccountStatus;
+        return (await CloudKitSync!.getAccountStatus()) as AccountStatus;
     } catch {
         return 'unknown';
     }
@@ -126,11 +142,7 @@ export const ensureCloudKitReady = async (options: CloudKitOperationOptions = {}
     throwIfAborted(options.signal, 'CloudKit setup cancelled');
     const zoneCreated = await AsyncStorage.getItem(CLOUDKIT_ZONE_CREATED_KEY);
     if (!zoneCreated) {
-        await runCloudKitOperation(
-            () => CloudKitSync!.ensureZone(),
-            options.signal,
-            'CloudKit setup cancelled'
-        );
+        await runCloudKitOperation(() => CloudKitSync!.ensureZone(), options.signal, 'CloudKit setup cancelled');
         await AsyncStorage.setItem(CLOUDKIT_ZONE_CREATED_KEY, '1');
         void logInfo('CloudKit zone created', { scope: 'cloudkit' });
     }
@@ -139,7 +151,7 @@ export const ensureCloudKitReady = async (options: CloudKitOperationOptions = {}
         await runCloudKitOperation(
             () => CloudKitSync!.ensureSubscription(),
             options.signal,
-            'CloudKit subscription setup cancelled'
+            'CloudKit subscription setup cancelled',
         );
     } catch (error) {
         if (isAbortLikeError(error, options.signal)) throw error;
@@ -165,11 +177,13 @@ export const readRemoteCloudKit = async (options: CloudKitOperationOptions = {})
             const result: ChangeResult = await runCloudKitOperation(
                 () => CloudKitSync!.fetchChanges(changeToken),
                 options.signal,
-                'CloudKit read cancelled'
+                'CloudKit read cancelled',
             );
 
             if (result.tokenExpired) {
-                void logInfo('CloudKit change token expired; doing full fetch', { scope: 'cloudkit' });
+                void logInfo('CloudKit change token expired; doing full fetch', {
+                    scope: 'cloudkit',
+                });
                 await AsyncStorage.removeItem(CLOUDKIT_CHANGE_TOKEN_KEY);
                 return await fullFetch(options);
             }
@@ -180,8 +194,9 @@ export const readRemoteCloudKit = async (options: CloudKitOperationOptions = {})
             }
 
             // If no changes, return null to skip merge
-            const hasChanges = Object.values(result.records).some(arr => arr.length > 0)
-                || Object.values(result.deletedIDs).some(arr => arr.length > 0);
+            const hasChanges =
+                Object.values(result.records).some((arr) => arr.length > 0) ||
+                Object.values(result.deletedIDs).some((arr) => arr.length > 0);
 
             if (!hasChanges) {
                 return null;
@@ -197,7 +212,10 @@ export const readRemoteCloudKit = async (options: CloudKitOperationOptions = {})
         return await fullFetch(options);
     } catch (error) {
         if (!isAbortLikeError(error, options.signal)) {
-            void logError(error, { scope: 'cloudkit', extra: { operation: 'readRemote' } });
+            void logError(error, {
+                scope: 'cloudkit',
+                extra: { operation: 'readRemote' },
+            });
         }
         throw error;
     }
@@ -215,6 +233,7 @@ export const writeRemoteCloudKit = async (data: AppData, options: CloudKitOperat
         const allProjects = Array.isArray(data.projects) ? data.projects : [];
         const allSections = Array.isArray(data.sections) ? data.sections : [];
         const allAreas = Array.isArray(data.areas) ? data.areas : [];
+        const allPeople = Array.isArray(data.people) ? data.people : [];
 
         const savePromises: Promise<string[]>[] = [];
 
@@ -223,8 +242,8 @@ export const writeRemoteCloudKit = async (data: AppData, options: CloudKitOperat
                 runCloudKitOperation(
                     () => CloudKitSync!.saveRecords(RECORD_TYPES.task, JSON.stringify(allTasks)),
                     options.signal,
-                    'CloudKit write cancelled'
-                )
+                    'CloudKit write cancelled',
+                ),
             );
         }
         if (allProjects.length > 0) {
@@ -232,8 +251,8 @@ export const writeRemoteCloudKit = async (data: AppData, options: CloudKitOperat
                 runCloudKitOperation(
                     () => CloudKitSync!.saveRecords(RECORD_TYPES.project, JSON.stringify(allProjects)),
                     options.signal,
-                    'CloudKit write cancelled'
-                )
+                    'CloudKit write cancelled',
+                ),
             );
         }
         if (allSections.length > 0) {
@@ -241,8 +260,8 @@ export const writeRemoteCloudKit = async (data: AppData, options: CloudKitOperat
                 runCloudKitOperation(
                     () => CloudKitSync!.saveRecords(RECORD_TYPES.section, JSON.stringify(allSections)),
                     options.signal,
-                    'CloudKit write cancelled'
-                )
+                    'CloudKit write cancelled',
+                ),
             );
         }
         if (allAreas.length > 0) {
@@ -250,24 +269,35 @@ export const writeRemoteCloudKit = async (data: AppData, options: CloudKitOperat
                 runCloudKitOperation(
                     () => CloudKitSync!.saveRecords(RECORD_TYPES.area, JSON.stringify(allAreas)),
                     options.signal,
-                    'CloudKit write cancelled'
-                )
+                    'CloudKit write cancelled',
+                ),
+            );
+        }
+        if (allPeople.length > 0) {
+            savePromises.push(
+                runCloudKitOperation(
+                    () => CloudKitSync!.saveRecords(RECORD_TYPES.person, JSON.stringify(allPeople)),
+                    options.signal,
+                    'CloudKit write cancelled',
+                ),
             );
         }
 
         // Save settings as a single record
         if (data.settings && Object.keys(data.settings).length > 0) {
-            const settingsRecord = [{
-                id: 'settings',
-                payload: data.settings,
-                updatedAt: new Date().toISOString(),
-            }];
+            const settingsRecord = [
+                {
+                    id: 'settings',
+                    payload: data.settings,
+                    updatedAt: new Date().toISOString(),
+                },
+            ];
             savePromises.push(
                 runCloudKitOperation(
                     () => CloudKitSync!.saveRecords(RECORD_TYPES.settings, JSON.stringify(settingsRecord)),
                     options.signal,
-                    'CloudKit write cancelled'
-                )
+                    'CloudKit write cancelled',
+                ),
             );
         }
 
@@ -291,7 +321,7 @@ export const writeRemoteCloudKit = async (data: AppData, options: CloudKitOperat
             const changeResult: ChangeResult = await runCloudKitOperation(
                 async () => CloudKitSync!.fetchChanges(await AsyncStorage.getItem(CLOUDKIT_CHANGE_TOKEN_KEY)),
                 options.signal,
-                'CloudKit write cancelled'
+                'CloudKit write cancelled',
             );
             if (changeResult.changeToken) {
                 await AsyncStorage.setItem(CLOUDKIT_CHANGE_TOKEN_KEY, changeResult.changeToken);
@@ -304,10 +334,58 @@ export const writeRemoteCloudKit = async (data: AppData, options: CloudKitOperat
         });
     } catch (error) {
         if (!isAbortLikeError(error, options.signal)) {
-            void logError(error, { scope: 'cloudkit', extra: { operation: 'writeRemote' } });
+            void logError(error, {
+                scope: 'cloudkit',
+                extra: { operation: 'writeRemote' },
+            });
         }
         throw error;
     }
+};
+
+// MARK: - Attachment Assets
+
+export const saveCloudKitAttachmentAsset = async (
+    recordName: string,
+    filePath: string,
+    metadata: CloudKitAttachmentMetadata,
+    options: CloudKitOperationOptions = {},
+): Promise<CloudKitAttachmentMetadata> => {
+    if (!isCloudKitAvailable()) throw new Error('CloudKit is not available on platform');
+    throwIfAborted(options.signal, 'CloudKit attachment upload cancelled');
+    return runCloudKitOperation(
+        () => CloudKitSync!.saveAttachmentAsset(recordName, filePath, metadata),
+        options.signal,
+        'CloudKit attachment upload cancelled',
+    );
+};
+
+export const fetchCloudKitAttachmentAsset = async (
+    recordName: string,
+    targetPath: string,
+    options: CloudKitOperationOptions = {},
+): Promise<CloudKitAttachmentMetadata> => {
+    if (!isCloudKitAvailable()) throw new Error('CloudKit is not available on platform');
+    throwIfAborted(options.signal, 'CloudKit attachment download cancelled');
+    return runCloudKitOperation(
+        () => CloudKitSync!.fetchAttachmentAsset(recordName, targetPath),
+        options.signal,
+        'CloudKit attachment download cancelled',
+    );
+};
+
+export const deleteCloudKitAttachmentAssets = async (
+    recordNames: string[],
+    options: CloudKitOperationOptions = {},
+): Promise<void> => {
+    if (!isCloudKitAvailable()) return;
+    if (recordNames.length === 0) return;
+    throwIfAborted(options.signal, 'CloudKit attachment delete cancelled');
+    await runCloudKitOperation(
+        () => CloudKitSync!.deleteRecords(CLOUDKIT_ATTACHMENT_RECORD_TYPE, recordNames),
+        options.signal,
+        'CloudKit attachment delete cancelled',
+    );
 };
 
 // MARK: - Seed (first-time upload from local data)
@@ -351,7 +429,9 @@ export const subscribeToCloudKitChanges = (onChanged: () => void): (() => void) 
 
     // Expo SDK 54+: NativeModule from requireNativeModule has addListener built-in
     changeSubscription = (CloudKitSync as any).addListener('onRemoteChange', () => {
-        void logInfo('CloudKit remote change notification received', { scope: 'cloudkit' });
+        void logInfo('CloudKit remote change notification received', {
+            scope: 'cloudkit',
+        });
         onChanged();
     });
 
@@ -366,7 +446,9 @@ export const subscribeToCloudKitChanges = (onChanged: () => void): (() => void) 
         .catch((error) => {
             void logWarn('Failed to consume pending CloudKit remote change', {
                 scope: 'cloudkit',
-                extra: { error: error instanceof Error ? error.message : String(error) },
+                extra: {
+                    error: error instanceof Error ? error.message : String(error),
+                },
             });
         });
 
@@ -380,12 +462,37 @@ export const subscribeToCloudKitChanges = (onChanged: () => void): (() => void) 
 
 async function fullFetch(options: CloudKitOperationOptions = {}): Promise<AppData> {
     throwIfAborted(options.signal, 'CloudKit read cancelled');
-    const [tasks, projects, sections, areas, settingsRecords] = await Promise.all([
-        runCloudKitOperation(() => CloudKitSync!.fetchAllRecords(RECORD_TYPES.task), options.signal, 'CloudKit read cancelled'),
-        runCloudKitOperation(() => CloudKitSync!.fetchAllRecords(RECORD_TYPES.project), options.signal, 'CloudKit read cancelled'),
-        runCloudKitOperation(() => CloudKitSync!.fetchAllRecords(RECORD_TYPES.section), options.signal, 'CloudKit read cancelled'),
-        runCloudKitOperation(() => CloudKitSync!.fetchAllRecords(RECORD_TYPES.area), options.signal, 'CloudKit read cancelled'),
-        runCloudKitOperation(() => CloudKitSync!.fetchAllRecords(RECORD_TYPES.settings), options.signal, 'CloudKit read cancelled'),
+    const [tasks, projects, sections, areas, people, settingsRecords] = await Promise.all([
+        runCloudKitOperation(
+            () => CloudKitSync!.fetchAllRecords(RECORD_TYPES.task),
+            options.signal,
+            'CloudKit read cancelled',
+        ),
+        runCloudKitOperation(
+            () => CloudKitSync!.fetchAllRecords(RECORD_TYPES.project),
+            options.signal,
+            'CloudKit read cancelled',
+        ),
+        runCloudKitOperation(
+            () => CloudKitSync!.fetchAllRecords(RECORD_TYPES.section),
+            options.signal,
+            'CloudKit read cancelled',
+        ),
+        runCloudKitOperation(
+            () => CloudKitSync!.fetchAllRecords(RECORD_TYPES.area),
+            options.signal,
+            'CloudKit read cancelled',
+        ),
+        runCloudKitOperation(
+            () => CloudKitSync!.fetchAllRecords(RECORD_TYPES.person),
+            options.signal,
+            'CloudKit read cancelled',
+        ),
+        runCloudKitOperation(
+            () => CloudKitSync!.fetchAllRecords(RECORD_TYPES.settings),
+            options.signal,
+            'CloudKit read cancelled',
+        ),
     ]);
 
     // Extract settings from the single settings record
@@ -405,7 +512,7 @@ async function fullFetch(options: CloudKitOperationOptions = {}): Promise<AppDat
             const result: ChangeResult = await runCloudKitOperation(
                 () => CloudKitSync!.fetchChanges(null),
                 options.signal,
-                'CloudKit read cancelled'
+                'CloudKit read cancelled',
             );
             if (result.changeToken) {
                 await AsyncStorage.setItem(CLOUDKIT_CHANGE_TOKEN_KEY, result.changeToken);
@@ -422,33 +529,34 @@ async function fullFetch(options: CloudKitOperationOptions = {}): Promise<AppDat
         projects: Array.isArray(projects) ? projects : [],
         sections: Array.isArray(sections) ? sections : [],
         areas: Array.isArray(areas) ? areas : [],
+        people: Array.isArray(people) ? people : [],
         settings,
     } as unknown as AppData;
 }
 
 async function deletePurgedRecords(data: AppData, options: CloudKitOperationOptions = {}): Promise<void> {
     // Find records with purgedAt set — these should be removed from CloudKit entirely
-    const purgedTaskIDs = (data.tasks ?? [])
-        .filter(t => t.purgedAt)
-        .map(t => t.id);
-    const purgedProjectIDs = (data.projects ?? [])
-        .filter(p => (p as any).purgedAt)
-        .map(p => p.id);
+    const purgedTaskIDs = (data.tasks ?? []).filter((t) => t.purgedAt).map((t) => t.id);
+    const purgedProjectIDs = (data.projects ?? []).filter((p) => (p as any).purgedAt).map((p) => p.id);
 
     const deletePromises: Promise<boolean>[] = [];
     if (purgedTaskIDs.length > 0) {
-        deletePromises.push(runCloudKitOperation(
-            () => CloudKitSync!.deleteRecords(RECORD_TYPES.task, purgedTaskIDs),
-            options.signal,
-            'CloudKit write cancelled'
-        ));
+        deletePromises.push(
+            runCloudKitOperation(
+                () => CloudKitSync!.deleteRecords(RECORD_TYPES.task, purgedTaskIDs),
+                options.signal,
+                'CloudKit write cancelled',
+            ),
+        );
     }
     if (purgedProjectIDs.length > 0) {
-        deletePromises.push(runCloudKitOperation(
-            () => CloudKitSync!.deleteRecords(RECORD_TYPES.project, purgedProjectIDs),
-            options.signal,
-            'CloudKit write cancelled'
-        ));
+        deletePromises.push(
+            runCloudKitOperation(
+                () => CloudKitSync!.deleteRecords(RECORD_TYPES.project, purgedProjectIDs),
+                options.signal,
+                'CloudKit write cancelled',
+            ),
+        );
     }
 
     if (deletePromises.length > 0) {

@@ -75,14 +75,14 @@ flatpak run tech.dongdongbh.mindwtr
 Works on most Linux distributions:
 
 ```bash
-# Download
-wget https://github.com/dongdongbh/Mindwtr/releases/latest/download/Mindwtr.AppImage
+# Download the versioned AppImage from:
+# https://github.com/dongdongbh/Mindwtr/releases/latest
 
 # Make executable
-chmod +x Mindwtr*.AppImage
+chmod +x Mindwtr-*.AppImage
 
 # Run
-./Mindwtr*.AppImage
+./Mindwtr-*.AppImage
 ```
 
 > **Tip:** Use [AppImageLauncher](https://github.com/TheAssassin/AppImageLauncher) for better desktop integration.

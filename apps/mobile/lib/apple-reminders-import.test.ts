@@ -5,6 +5,7 @@ const {
   mockSetItem,
   mockGetCalendarsAsync,
   mockGetRemindersAsync,
+  mockDeleteReminderAsync,
   mockGetRemindersPermissionsAsync,
   mockRequestRemindersPermissionsAsync,
   mockPlatform,
@@ -13,6 +14,7 @@ const {
   mockSetItem: vi.fn(async () => undefined),
   mockGetCalendarsAsync: vi.fn(async () => []),
   mockGetRemindersAsync: vi.fn(async () => []),
+  mockDeleteReminderAsync: vi.fn(async () => undefined),
   mockGetRemindersPermissionsAsync: vi.fn(async () => ({ status: 'granted' })),
   mockRequestRemindersPermissionsAsync: vi.fn(async () => ({ status: 'granted' })),
   mockPlatform: { OS: 'ios' },
@@ -34,6 +36,7 @@ vi.mock('expo-calendar', () => ({
   EntityTypes: { REMINDER: 'reminder' },
   getCalendarsAsync: mockGetCalendarsAsync,
   getRemindersAsync: mockGetRemindersAsync,
+  deleteReminderAsync: mockDeleteReminderAsync,
   getRemindersPermissionsAsync: mockGetRemindersPermissionsAsync,
   requestRemindersPermissionsAsync: mockRequestRemindersPermissionsAsync,
 }));
@@ -54,6 +57,7 @@ describe('apple-reminders-import', () => {
     mockSetItem.mockResolvedValue(undefined);
     mockGetCalendarsAsync.mockResolvedValue([]);
     mockGetRemindersAsync.mockResolvedValue([]);
+    mockDeleteReminderAsync.mockResolvedValue(undefined);
     mockGetRemindersPermissionsAsync.mockResolvedValue({ status: 'granted' });
     mockRequestRemindersPermissionsAsync.mockResolvedValue({ status: 'granted' });
   });
@@ -86,6 +90,8 @@ describe('apple-reminders-import', () => {
       listTitle: 'Inbox',
     })).resolves.toEqual({
       importedCount: 1,
+      deletedCount: 0,
+      deleteFailedCount: 0,
       skippedDuplicateCount: 0,
       skippedCompletedCount: 1,
       skippedEmptyTitleCount: 1,
@@ -102,6 +108,70 @@ describe('apple-reminders-import', () => {
         selectedListId: 'list-1',
         selectedListTitle: 'Inbox',
         importedReminderIds: ['rem-1'],
+        deleteImportedReminders: false,
+      }),
+    );
+  });
+
+  it('deletes reminders only after their Inbox task is created when enabled', async () => {
+    const addTask = vi.fn()
+      .mockResolvedValueOnce({ success: true, id: 'task-id' })
+      .mockResolvedValueOnce({ success: false });
+    mockGetRemindersAsync.mockResolvedValue([
+      { id: 'rem-1', title: 'Imported task', completed: false },
+      { id: 'rem-2', title: 'Failed task', completed: false },
+    ] as any);
+
+    await expect(importAppleRemindersIntoInbox({
+      addTask,
+      listId: 'list-1',
+      deleteImportedReminders: true,
+    })).resolves.toEqual({
+      importedCount: 1,
+      deletedCount: 1,
+      deleteFailedCount: 0,
+      skippedDuplicateCount: 0,
+      skippedCompletedCount: 0,
+      skippedEmptyTitleCount: 0,
+      failedCount: 1,
+    });
+
+    expect(mockDeleteReminderAsync).toHaveBeenCalledTimes(1);
+    expect(mockDeleteReminderAsync).toHaveBeenCalledWith('rem-1');
+    expect(mockSetItem).toHaveBeenCalledWith(
+      APPLE_REMINDERS_IMPORT_SETTINGS_KEY,
+      JSON.stringify({
+        selectedListId: 'list-1',
+        importedReminderIds: ['rem-1'],
+        deleteImportedReminders: true,
+      }),
+    );
+  });
+
+  it('keeps imported reminder IDs when deleting from Apple Reminders fails', async () => {
+    const addTask = vi.fn(async () => ({ success: true, id: 'task-id' }));
+    mockDeleteReminderAsync.mockRejectedValue(new Error('delete failed'));
+    mockGetRemindersAsync.mockResolvedValue([
+      { id: 'rem-1', title: 'Imported task', completed: false },
+    ] as any);
+
+    await expect(importAppleRemindersIntoInbox({
+      addTask,
+      listId: 'list-1',
+      deleteImportedReminders: true,
+    })).resolves.toMatchObject({
+      importedCount: 1,
+      deletedCount: 0,
+      deleteFailedCount: 1,
+      failedCount: 0,
+    });
+
+    expect(mockSetItem).toHaveBeenCalledWith(
+      APPLE_REMINDERS_IMPORT_SETTINGS_KEY,
+      JSON.stringify({
+        selectedListId: 'list-1',
+        importedReminderIds: ['rem-1'],
+        deleteImportedReminders: true,
       }),
     );
   });
@@ -110,6 +180,7 @@ describe('apple-reminders-import', () => {
     const addTask = vi.fn(async () => ({ success: true, id: 'task-id' }));
     mockGetItem.mockResolvedValue(JSON.stringify({
       selectedListId: 'list-1',
+      deleteImportedReminders: false,
       importedReminderIds: ['rem-1', 'fallback:list-1:Floating thought:note:::'],
     }));
     mockGetRemindersAsync.mockResolvedValue([
@@ -134,6 +205,7 @@ describe('apple-reminders-import', () => {
       JSON.stringify({
         selectedListId: 'list-1',
         importedReminderIds: ['rem-1', 'fallback:list-1:Floating thought:note:::', 'rem-2'],
+        deleteImportedReminders: false,
       }),
     );
   });
@@ -143,6 +215,7 @@ describe('apple-reminders-import', () => {
 
     await expect(loadAppleRemindersImportSettings()).resolves.toEqual({
       importedReminderIds: [],
+      deleteImportedReminders: false,
     });
   });
 

@@ -41,10 +41,14 @@ jobs:
     timeout-minutes: 120
     env:
       VITE_DROPBOX_APP_KEY: ${{ vars.VITE_DROPBOX_APP_KEY || secrets.VITE_DROPBOX_APP_KEY }}
+      VITE_FEEDBACK_ENDPOINT_URL: ${{ vars.VITE_FEEDBACK_ENDPOINT_URL || 'https://feedback.mindwtr.app' }}
+      VITE_DONATION_PROMPT_ENABLED: "true"
 
     steps:
       - name: Checkout code
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ inputs.tag || github.event.inputs.tag || github.ref }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # stable
@@ -65,7 +69,7 @@ jobs:
           bun-version-file: ".bun-version"
 
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2.0"
@@ -92,6 +96,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VITE_ANALYTICS_HEARTBEAT_URL: ${{ secrets.ANALYTICS_HEARTBEAT_URL }}
+          VITE_ANALYTICS_RELEASE_VERSION: ${{ inputs.tag || github.event.inputs.tag || github.ref_name }}
 
       - name: Create portable ZIP
         shell: pwsh
@@ -129,9 +134,21 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path release-artifacts | Out-Null
+          $releaseVersion = "${{ steps.version.outputs.version }}"
+          $tauriConfig = Get-Content -Raw "apps/desktop/src-tauri/tauri.conf.json" | ConvertFrom-Json
+          $baseVersion = [string]$tauriConfig.version
+
+          function Resolve-ReleaseAssetName {
+            param([Parameter(Mandatory = $true)][string]$Name)
+            $target = $Name.ToLowerInvariant()
+            $target = $target.Replace("_${baseVersion}_", "_${releaseVersion}_")
+            $target = $target.Replace("-${baseVersion}-", "-${releaseVersion}-")
+            return $target
+          }
+
           Get-ChildItem "apps/desktop/src-tauri/target/release/bundle/nsis/*.exe" -ErrorAction SilentlyContinue | ForEach-Object {
-            $lower = $_.Name.ToLower()
-            Copy-Item $_.FullName "release-artifacts/$lower"
+            $target = Resolve-ReleaseAssetName -Name $_.Name
+            Copy-Item $_.FullName "release-artifacts/$target"
           }
           Get-ChildItem "mindwtr_*_windows_x64_portable.zip" -ErrorAction SilentlyContinue | ForEach-Object {
             Copy-Item $_.FullName "release-artifacts/$($_.Name)"
@@ -147,7 +164,7 @@ jobs:
           retention-days: 28
 
       - name: Ensure MakeAppx is available
-        if: startsWith(github.ref, 'refs/tags/') || inputs.run_msstore
+        if: (startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')) || inputs.run_msstore
         shell: pwsh
         run: |
           $makeappx = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits" -Recurse -Filter "makeappx.exe" -ErrorAction SilentlyContinue |
@@ -164,7 +181,7 @@ jobs:
           Write-Error "makeappx.exe not found and winget is unavailable."
 
       - name: Create MSIX layout
-        if: startsWith(github.ref, 'refs/tags/') || inputs.run_msstore
+        if: (startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')) || inputs.run_msstore
         shell: pwsh
         run: |
           $buildDir = "apps/desktop/src-tauri/target/release"
@@ -182,7 +199,7 @@ jobs:
           Copy-Item "$iconDir/Square44x44Logo.png" "$outDir\Assets\Square44x44Logo.png"
 
       - name: Generate AppxManifest.xml
-        if: startsWith(github.ref, 'refs/tags/') || inputs.run_msstore
+        if: (startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')) || inputs.run_msstore
         shell: pwsh
         run: |
           $manifest = @"
@@ -222,7 +239,7 @@ jobs:
           $manifest | Out-File -FilePath "msix-staging\AppxManifest.xml" -Encoding UTF8
 
       - name: Build MSIX package
-        if: startsWith(github.ref, 'refs/tags/') || inputs.run_msstore
+        if: (startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')) || inputs.run_msstore
         shell: pwsh
         run: |
           $msixPath = "mindwtr_${{ steps.version.outputs.version }}_x64.msix"
@@ -235,7 +252,7 @@ jobs:
           & $makeappx pack /d msix-staging /p $msixPath /o
 
       - name: Validate Microsoft Store secrets
-        if: startsWith(github.ref, 'refs/tags/') || inputs.run_msstore
+        if: (startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')) || inputs.run_msstore
         shell: pwsh
         env:
           MS_TENANT_ID: ${{ secrets.MS_TENANT_ID }}
@@ -251,7 +268,7 @@ jobs:
           }
 
       - name: Check Microsoft Store submission status
-        if: startsWith(github.ref, 'refs/tags/') || inputs.run_msstore
+        if: (startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')) || inputs.run_msstore
         id: msstore_status
         shell: pwsh
         env:
@@ -325,7 +342,7 @@ jobs:
           "skip=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Publish to Microsoft Store (metadata + package)
-        if: (startsWith(github.ref, 'refs/tags/') || inputs.run_msstore) && steps.msstore_status.outputs.skip != 'true' && env.MSSTORE_SKIP_PUBLISH != 'true'
+        if: ((startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')) || inputs.run_msstore) && steps.msstore_status.outputs.skip != 'true' && env.MSSTORE_SKIP_PUBLISH != 'true'
         timeout-minutes: 40
         shell: pwsh
         env:
@@ -826,6 +843,45 @@ jobs:
             }
           } else {
             Write-Warning "metadata/metadata.json not found; submitting cloned metadata from last published version."
+          }
+
+          function Set-SubmissionPropertyIfPresent {
+            param(
+              [Parameter(Mandatory = $false)]$Object,
+              [Parameter(Mandatory = $true)][string[]]$Names,
+              [Parameter(Mandatory = $false)]$Value
+            )
+            if (-not $Object) { return }
+            foreach ($name in $Names) {
+              if ($Object.PSObject.Properties.Name -contains $name) {
+                $Object.$name = $Value
+              }
+            }
+          }
+
+          function Apply-PublicSupportPropertiesIfPresent {
+            param([Parameter(Mandatory = $false)]$Object)
+            if (-not $Object) { return }
+            Set-SubmissionPropertyIfPresent -Object $Object -Names @('privacyPolicyUrl', 'PrivacyPolicyUrl', 'privacyPolicy', 'PrivacyPolicy') -Value 'https://mindwtr.app/privacy'
+            Set-SubmissionPropertyIfPresent -Object $Object -Names @('websiteUrl', 'WebsiteUrl', 'website', 'Website') -Value 'https://mindwtr.app/'
+            Set-SubmissionPropertyIfPresent -Object $Object -Names @('supportContactInfo', 'SupportContactInfo', 'supportContact', 'SupportContact') -Value 'support@mindwtr.app'
+            Set-SubmissionPropertyIfPresent -Object $Object -Names @('phoneNumber', 'PhoneNumber', 'phone', 'Phone') -Value ''
+            Set-SubmissionPropertyIfPresent -Object $Object -Names @('address', 'Address', 'addressLine1', 'AddressLine1', 'addressLine2', 'AddressLine2', 'postalCode', 'PostalCode', 'zipCode', 'ZipCode', 'city', 'City', 'state', 'State', 'stateOrProvince', 'StateOrProvince', 'province', 'Province', 'country', 'Country', 'countryOrRegion', 'CountryOrRegion') -Value ''
+          }
+
+          Apply-PublicSupportPropertiesIfPresent -Object $submission
+          if ($submission.PSObject.Properties.Name -contains 'properties') {
+            Apply-PublicSupportPropertiesIfPresent -Object $submission.properties
+          }
+          if ($submission.PSObject.Properties.Name -contains 'listings' -and $submission.listings) {
+            foreach ($listingProp in $submission.listings.PSObject.Properties) {
+              if ($listingProp.Value -and ($listingProp.Value.PSObject.Properties.Name -contains 'baseListing')) {
+                Apply-PublicSupportPropertiesIfPresent -Object $listingProp.Value.baseListing
+              }
+              if ($listingProp.Value -and ($listingProp.Value.PSObject.Properties.Name -contains 'BaseListing')) {
+                Apply-PublicSupportPropertiesIfPresent -Object $listingProp.Value.BaseListing
+              }
+            }
           }
 
           foreach ($prop in @('id', 'status', 'statusDetails', 'fileUploadUrl', 'friendlyName', 'pendingApplicationId', 'sales')) {

@@ -1,4 +1,5 @@
-import type { TaskEnergyLevel, TaskStatus } from '@mindwtr/core';
+import { ClipboardCheck } from 'lucide-react';
+import { tFallback, type TaskEnergyLevel, type TaskStatus } from '@mindwtr/core';
 
 type ListBulkActionsProps = {
     selectionCount: number;
@@ -6,6 +7,7 @@ type ListBulkActionsProps = {
     onAssignArea?: (areaId: string | null) => void;
     areaOptions?: Array<{ id: string; name: string }>;
     onAssignEnergyLevel?: (energyLevel: TaskEnergyLevel) => void;
+    onBulkOrganize?: () => void;
     onAddTag: () => void;
     onRemoveTag?: () => void;
     disableRemoveTag?: boolean;
@@ -26,6 +28,7 @@ export function ListBulkActions({
     onAssignArea,
     areaOptions,
     onAssignEnergyLevel,
+    onBulkOrganize,
     onAddTag,
     onRemoveTag,
     disableRemoveTag = false,
@@ -54,6 +57,16 @@ export function ListBulkActions({
             <span className="text-sm text-muted-foreground">
                 {selectionCount} {t('bulk.selected')}
             </span>
+            {onBulkOrganize && (
+                <button
+                    onClick={onBulkOrganize}
+                    className="inline-flex items-center gap-1.5 rounded bg-primary px-2 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                    aria-label={tFallback(t, 'bulk.organize', 'Bulk organize')}
+                >
+                    <ClipboardCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                    {tFallback(t, 'bulk.organize', 'Bulk organize')}
+                </button>
+            )}
             <select
                 defaultValue=""
                 onChange={(event) => {

@@ -17,36 +17,37 @@ import {
 export const DEFAULT_TASK_EDITOR_ORDER: TaskEditorFieldId[] = [
     'status',
     'project',
-    'section',
     'area',
-    'priority',
-    'energyLevel',
-    'assignedTo',
     'contexts',
-    'description',
-    'tags',
-    'timeEstimate',
+    'dueDate',
+    'section',
     'recurrence',
     'startTime',
-    'dueDate',
     'reviewAt',
+    'tags',
+    'description',
     'attachments',
     'checklist',
+    'priority',
+    'energyLevel',
+    'timeEstimate',
+    'assignedTo',
+    'location',
 ];
 
 export const DEFAULT_TASK_EDITOR_VISIBLE: TaskEditorFieldId[] = [
     'status',
     'project',
-    'section',
     'area',
-    'description',
-    'checklist',
-    'energyLevel',
-    'assignedTo',
     'contexts',
     'dueDate',
-    'priority',
-    'timeEstimate',
+    'recurrence',
+    'startTime',
+    'reviewAt',
+    'tags',
+    'description',
+    'attachments',
+    'checklist',
 ];
 
 export const DEFAULT_TASK_EDITOR_HIDDEN: TaskEditorFieldId[] = DEFAULT_TASK_EDITOR_ORDER.filter(
@@ -65,8 +66,9 @@ export const DEFAULT_TASK_EDITOR_SECTION_BY_FIELD: Record<TaskEditorFieldId, Tas
     priority: 'organization',
     energyLevel: 'organization',
     assignedTo: 'organization',
-    contexts: 'organization',
+    contexts: 'basic',
     tags: 'organization',
+    location: 'details',
     timeEstimate: 'organization',
     recurrence: 'scheduling',
     startTime: 'scheduling',
@@ -86,7 +88,7 @@ export const DEFAULT_TASK_EDITOR_SECTION_OPEN: Record<TaskEditorSectionId, boole
     basic: true,
     scheduling: false,
     organization: false,
-    details: true,
+    details: false,
 };
 
 const isTaskEditorSectionId = (value: unknown): value is TaskEditorSectionId =>
@@ -190,6 +192,9 @@ export function getRecurrenceRRuleValue(recurrence: Task['recurrence']): string 
     const until = getRecurrenceUntilValue(recurrence);
     if (rec.byDay && rec.byDay.length > 0) {
         return buildRRuleString(rec.rule, rec.byDay, undefined, { count, until });
+    }
+    if (rec.byMonthDay && rec.byMonthDay.length > 0) {
+        return buildRRuleString(rec.rule, undefined, undefined, { byMonthDay: rec.byMonthDay, count, until });
     }
     return rec.rule ? buildRRuleString(rec.rule, undefined, undefined, { count, until }) : '';
 }

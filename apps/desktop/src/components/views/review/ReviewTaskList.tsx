@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { Task } from '@mindwtr/core';
+import type { RangeSelectionOptions, Task } from '@mindwtr/core';
 import { StoreTaskItem } from '../list/StoreTaskItem';
 
 type ReviewTaskListProps = {
@@ -9,7 +9,7 @@ type ReviewTaskListProps = {
     selectionMode: boolean;
     multiSelectedIds: Set<string>;
     highlightTaskId?: string | null;
-    onToggleSelect: (taskId: string) => void;
+    onToggleSelect: (taskId: string, options?: RangeSelectionOptions) => void;
     emptyMessage?: string;
     t: (key: string) => string;
 };

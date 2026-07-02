@@ -3,7 +3,9 @@ import { Link2, Maximize2, Paperclip } from 'lucide-react';
 import {
     applyMarkdownToolbarAction,
     continueMarkdownOnEnter,
+    isMarkdownEditorAssistEnabled,
     resolveAutoTextDirection,
+    useTaskStore,
     type Attachment,
     type MarkdownSelection,
     type MarkdownToolbarActionId,
@@ -49,6 +51,7 @@ export function ProjectNotesSection({
     t,
     language,
 }: ProjectNotesSectionProps) {
+    const markdownEditorAssist = useTaskStore((state) => isMarkdownEditorAssistEnabled(state.settings));
     const [draftNotes, setDraftNotes] = useState(project.supportNotes || '');
     const [notesExpanded, setNotesExpanded] = useState(false);
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -167,7 +170,7 @@ export function ProjectNotesSection({
             start: event.currentTarget.selectionStart ?? currentValue.length,
             end: event.currentTarget.selectionEnd ?? currentValue.length,
         };
-        const next = continueMarkdownOnEnter(currentValue, selection);
+        const next = continueMarkdownOnEnter(currentValue, selection, { assist: markdownEditorAssist });
         if (!next) return;
 
         event.preventDefault();

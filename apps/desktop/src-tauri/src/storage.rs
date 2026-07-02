@@ -41,17 +41,26 @@ pub(crate) fn is_portable_mode() -> bool {
     matches!(detect_storage_mode(), StorageMode::Portable { .. })
 }
 
+pub(crate) fn get_config_dir_for_startup() -> PathBuf {
+    if let StorageMode::Portable { profile_root } = detect_storage_mode() {
+        return profile_root.join(PORTABLE_CONFIG_DIR_NAME);
+    }
+    dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(APP_NAME)
+}
+
+pub(crate) fn get_config_path_for_startup() -> PathBuf {
+    get_config_dir_for_startup().join(CONFIG_FILE_NAME)
+}
+
 pub(crate) fn get_config_dir(app: &tauri::AppHandle) -> PathBuf {
     if let StorageMode::Portable { profile_root } = detect_storage_mode() {
         return profile_root.join(PORTABLE_CONFIG_DIR_NAME);
     }
     app.path()
         .resolve(APP_NAME, BaseDirectory::Config)
-        .unwrap_or_else(|_| {
-            // Fallback: use a sensible default under the user's home directory.
-            let home = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-            home.join(APP_NAME)
-        })
+        .unwrap_or_else(|_| get_config_dir_for_startup())
 }
 
 pub(crate) fn get_data_dir(app: &tauri::AppHandle) -> PathBuf {
@@ -94,17 +103,40 @@ pub(crate) fn open_sqlite(app: &tauri::AppHandle) -> Result<Connection, String> 
         .map_err(|e| e.to_string())?;
     ensure_column(&conn, "tasks", "energyLevel", "TEXT")?;
     ensure_column(&conn, "tasks", "assignedTo", "TEXT")?;
+    ensure_column(&conn, "tasks", "textDirection", "TEXT")?;
+    ensure_column(&conn, "tasks", "relativeStartOffset", "TEXT")?;
+    ensure_column(&conn, "tasks", "showFutureRecurrence", "INTEGER")?;
+    ensure_column(&conn, "tasks", "suppressMindwtrReminders", "INTEGER")?;
+    ensure_column(&conn, "tasks", "repeatReminderMinutes", "INTEGER")?;
+    ensure_column(&conn, "tasks", "statusBeforeProjectArchive", "TEXT")?;
+    ensure_column(&conn, "tasks", "completedAtBeforeProjectArchive", "TEXT")?;
+    ensure_column(
+        &conn,
+        "tasks",
+        "isFocusedTodayBeforeProjectArchive",
+        "INTEGER",
+    )?;
+    ensure_column(&conn, "tasks", "projectArchivedAt", "TEXT")?;
+    ensure_column(&conn, "sections", "deletedAtBeforeProjectArchive", "TEXT")?;
+    ensure_column(&conn, "sections", "projectArchivedAt", "TEXT")?;
+    ensure_column(&conn, "areas", "deletedAtBeforeProjectArchive", "TEXT")?;
+    ensure_column(&conn, "areas", "projectArchivedAt", "TEXT")?;
     ensure_tasks_purged_at_column(&conn)?;
     ensure_tasks_order_column(&conn)?;
+    ensure_column(&conn, "tasks", "boardOrder", "INTEGER")?;
     ensure_tasks_area_column(&conn)?;
     ensure_tasks_section_column(&conn)?;
     ensure_tasks_organization_indexes(&conn)?;
     ensure_projects_order_column(&conn)?;
+    ensure_column(&conn, "projects", "sequentialScope", "TEXT")?;
     ensure_projects_due_date_column(&conn)?;
+    ensure_projects_purged_at_column(&conn)?;
     ensure_projects_area_order_index(&conn)?;
     ensure_sync_revision_columns(&conn)?;
+    ensure_tasks_fts_schema(&conn)?;
     ensure_fts_triggers(&conn)?;
     ensure_fts_populated(&conn, false)?;
+    ensure_calendar_sync_schema(&conn)?;
     Ok(conn)
 }
 
@@ -190,7 +222,10 @@ fn persist_data_snapshot(app: &tauri::AppHandle, data: &Value) -> Result<(), Str
     Ok(())
 }
 
-fn persist_data_snapshot_with_retries(app: &tauri::AppHandle, data: &Value) -> Result<(), String> {
+pub(crate) fn persist_data_snapshot_with_retries(
+    app: &tauri::AppHandle,
+    data: &Value,
+) -> Result<(), String> {
     for attempt in 0..STORAGE_RETRY_ATTEMPTS {
         match persist_data_snapshot(app, data) {
             Ok(()) => return Ok(()),
@@ -247,6 +282,22 @@ fn ensure_sync_revision_columns(conn: &Connection) -> Result<(), String> {
     ensure_column(conn, "areas", "deletedAt", "TEXT")?;
     ensure_column(conn, "areas", "rev", "INTEGER")?;
     ensure_column(conn, "areas", "revBy", "TEXT")?;
+    Ok(())
+}
+
+fn ensure_calendar_sync_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS calendar_sync (
+          task_id TEXT NOT NULL,
+          calendar_event_id TEXT NOT NULL,
+          calendar_id TEXT NOT NULL,
+          platform TEXT NOT NULL,
+          last_synced_at TEXT NOT NULL,
+          PRIMARY KEY (task_id, platform)
+        )",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -377,6 +428,10 @@ fn ensure_projects_due_date_column(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+fn ensure_projects_purged_at_column(conn: &Connection) -> Result<(), String> {
+    ensure_column(conn, "projects", "purgedAt", "TEXT")
+}
+
 fn ensure_projects_area_order_index(conn: &Connection) -> Result<(), String> {
     let mut stmt = conn
         .prepare("PRAGMA table_info(projects)")
@@ -401,19 +456,47 @@ fn ensure_projects_area_order_index(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_fts_triggers(conn: &Connection) -> Result<(), String> {
-    let has_v2: Option<i64> = conn
-        .query_row(
-            "SELECT version FROM schema_migrations WHERE version = 2 LIMIT 1",
-            [],
-            |row| row.get(0),
-        )
-        .optional()
+fn ensure_tasks_fts_schema(conn: &Connection) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(tasks_fts)")
         .map_err(|e| e.to_string())?;
-    if has_v2.is_some() {
-        return Ok(());
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| e.to_string())?;
+    for column in columns {
+        if column.map_err(|e| e.to_string())? == "checklist" {
+            return Ok(());
+        }
     }
 
+    conn.execute("DROP TRIGGER IF EXISTS tasks_ai", [])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DROP TRIGGER IF EXISTS tasks_ad", [])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DROP TRIGGER IF EXISTS tasks_au", [])
+        .map_err(|e| e.to_string())?;
+    conn.execute("DROP TABLE IF EXISTS tasks_fts", [])
+        .map_err(|e| e.to_string())?;
+    conn.execute(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS tasks_fts USING fts5(
+          id UNINDEXED,
+          title,
+          description,
+          tags,
+          contexts,
+          checklist,
+          location,
+          content=''
+        )",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn ensure_fts_triggers(conn: &Connection) -> Result<(), String> {
+    conn.execute("DROP TRIGGER IF EXISTS tasks_ai", [])
+        .map_err(|e| e.to_string())?;
     conn.execute("DROP TRIGGER IF EXISTS tasks_ad", [])
         .map_err(|e| e.to_string())?;
     conn.execute("DROP TRIGGER IF EXISTS tasks_au", [])
@@ -424,37 +507,45 @@ fn ensure_fts_triggers(conn: &Connection) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     conn.execute(
-        "CREATE TRIGGER tasks_ad AFTER DELETE ON tasks BEGIN
-          INSERT INTO tasks_fts (tasks_fts, id, title, description, tags, contexts)
-          VALUES ('delete', old.id, old.title, coalesce(old.description, ''), coalesce(old.tags, ''), coalesce(old.contexts, ''));
+        "CREATE TRIGGER IF NOT EXISTS tasks_ai AFTER INSERT ON tasks BEGIN
+          INSERT INTO tasks_fts (rowid, title, description, tags, contexts, checklist, location)
+          VALUES (new.rowid, new.title, coalesce(new.description, ''), coalesce(new.tags, ''), coalesce(new.contexts, ''), coalesce((SELECT group_concat(json_extract(value, '$.title'), ' ') FROM json_each(new.checklist)), ''), coalesce(new.location, ''));
         END",
         [],
     )
     .map_err(|e| e.to_string())?;
     conn.execute(
-        "CREATE TRIGGER tasks_au AFTER UPDATE ON tasks BEGIN
-          INSERT INTO tasks_fts (tasks_fts, id, title, description, tags, contexts)
-          VALUES ('delete', old.id, old.title, coalesce(old.description, ''), coalesce(old.tags, ''), coalesce(old.contexts, ''));
-          INSERT INTO tasks_fts (id, title, description, tags, contexts)
-          VALUES (new.id, new.title, coalesce(new.description, ''), coalesce(new.tags, ''), coalesce(new.contexts, ''));
+        "CREATE TRIGGER IF NOT EXISTS tasks_ad AFTER DELETE ON tasks BEGIN
+          INSERT INTO tasks_fts (tasks_fts, rowid, title, description, tags, contexts, checklist, location)
+          VALUES ('delete', old.rowid, old.title, coalesce(old.description, ''), coalesce(old.tags, ''), coalesce(old.contexts, ''), coalesce((SELECT group_concat(json_extract(value, '$.title'), ' ') FROM json_each(old.checklist)), ''), coalesce(old.location, ''));
         END",
         [],
     )
     .map_err(|e| e.to_string())?;
     conn.execute(
-        "CREATE TRIGGER projects_ad AFTER DELETE ON projects BEGIN
-          INSERT INTO projects_fts (projects_fts, id, title, supportNotes, tagIds, areaTitle)
-          VALUES ('delete', old.id, old.title, coalesce(old.supportNotes, ''), coalesce(old.tagIds, ''), coalesce(old.areaTitle, ''));
+        "CREATE TRIGGER IF NOT EXISTS tasks_au AFTER UPDATE ON tasks BEGIN
+          INSERT INTO tasks_fts (tasks_fts, rowid, title, description, tags, contexts, checklist, location)
+          VALUES ('delete', old.rowid, old.title, coalesce(old.description, ''), coalesce(old.tags, ''), coalesce(old.contexts, ''), coalesce((SELECT group_concat(json_extract(value, '$.title'), ' ') FROM json_each(old.checklist)), ''), coalesce(old.location, ''));
+          INSERT INTO tasks_fts (rowid, title, description, tags, contexts, checklist, location)
+          VALUES (new.rowid, new.title, coalesce(new.description, ''), coalesce(new.tags, ''), coalesce(new.contexts, ''), coalesce((SELECT group_concat(json_extract(value, '$.title'), ' ') FROM json_each(new.checklist)), ''), coalesce(new.location, ''));
         END",
         [],
     )
     .map_err(|e| e.to_string())?;
     conn.execute(
-        "CREATE TRIGGER projects_au AFTER UPDATE ON projects BEGIN
-          INSERT INTO projects_fts (projects_fts, id, title, supportNotes, tagIds, areaTitle)
-          VALUES ('delete', old.id, old.title, coalesce(old.supportNotes, ''), coalesce(old.tagIds, ''), coalesce(old.areaTitle, ''));
-          INSERT INTO projects_fts (id, title, supportNotes, tagIds, areaTitle)
-          VALUES (new.id, new.title, coalesce(new.supportNotes, ''), coalesce(new.tagIds, ''), coalesce(new.areaTitle, ''));
+        "CREATE TRIGGER IF NOT EXISTS projects_ad AFTER DELETE ON projects BEGIN
+          INSERT INTO projects_fts (projects_fts, rowid, title, supportNotes, tagIds, areaTitle)
+          VALUES ('delete', old.rowid, old.title, coalesce(old.supportNotes, ''), coalesce(old.tagIds, ''), coalesce(old.areaTitle, ''));
+        END",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "CREATE TRIGGER IF NOT EXISTS projects_au AFTER UPDATE ON projects BEGIN
+          INSERT INTO projects_fts (projects_fts, rowid, title, supportNotes, tagIds, areaTitle)
+          VALUES ('delete', old.rowid, old.title, coalesce(old.supportNotes, ''), coalesce(old.tagIds, ''), coalesce(old.areaTitle, ''));
+          INSERT INTO projects_fts (rowid, title, supportNotes, tagIds, areaTitle)
+          VALUES (new.rowid, new.title, coalesce(new.supportNotes, ''), coalesce(new.tagIds, ''), coalesce(new.areaTitle, ''));
         END",
         [],
     )
@@ -490,14 +581,14 @@ fn ensure_fts_populated(conn: &Connection, force_rebuild: bool) -> Result<(), St
         .unwrap_or(0);
     let missing_tasks: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM tasks WHERE id NOT IN (SELECT id FROM tasks_fts)",
+            "SELECT COUNT(*) FROM tasks WHERE rowid NOT IN (SELECT rowid FROM tasks_fts)",
             [],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let extra_tasks: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM tasks_fts WHERE id NOT IN (SELECT id FROM tasks)",
+            "SELECT COUNT(*) FROM tasks_fts WHERE rowid NOT IN (SELECT rowid FROM tasks)",
             [],
             |row| row.get(0),
         )
@@ -506,8 +597,8 @@ fn ensure_fts_populated(conn: &Connection, force_rebuild: bool) -> Result<(), St
         conn.execute("INSERT INTO tasks_fts(tasks_fts) VALUES('delete-all')", [])
             .map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT INTO tasks_fts (id, title, description, tags, contexts)
-             SELECT id, title, coalesce(description, ''), coalesce(tags, ''), coalesce(contexts, '') FROM tasks",
+            "INSERT INTO tasks_fts (rowid, title, description, tags, contexts, checklist, location)
+             SELECT rowid, title, coalesce(description, ''), coalesce(tags, ''), coalesce(contexts, ''), coalesce((SELECT group_concat(json_extract(value, '$.title'), ' ') FROM json_each(tasks.checklist)), ''), coalesce(location, '') FROM tasks",
             [],
         )
         .map_err(|e| e.to_string())?;
@@ -518,14 +609,14 @@ fn ensure_fts_populated(conn: &Connection, force_rebuild: bool) -> Result<(), St
         .unwrap_or(0);
     let missing_projects: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM projects WHERE id NOT IN (SELECT id FROM projects_fts)",
+            "SELECT COUNT(*) FROM projects WHERE rowid NOT IN (SELECT rowid FROM projects_fts)",
             [],
             |row| row.get(0),
         )
         .unwrap_or(0);
     let extra_projects: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM projects_fts WHERE id NOT IN (SELECT id FROM projects)",
+            "SELECT COUNT(*) FROM projects_fts WHERE rowid NOT IN (SELECT rowid FROM projects)",
             [],
             |row| row.get(0),
         )
@@ -537,21 +628,86 @@ fn ensure_fts_populated(conn: &Connection, force_rebuild: bool) -> Result<(), St
         )
         .map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT INTO projects_fts (id, title, supportNotes, tagIds, areaTitle)
-             SELECT id, title, coalesce(supportNotes, ''), coalesce(tagIds, ''), coalesce(areaTitle, '') FROM projects",
+            "INSERT INTO projects_fts (rowid, title, supportNotes, tagIds, areaTitle)
+             SELECT rowid, title, coalesce(supportNotes, ''), coalesce(tagIds, ''), coalesce(areaTitle, '') FROM projects",
             [],
         )
         .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
-
 fn json_str(value: Option<&Value>) -> Option<String> {
     value.and_then(|v| serde_json::to_string(v).ok())
 }
 
 fn json_str_or_default(value: Option<&Value>, default: &str) -> String {
     json_str(value).unwrap_or_else(|| default.to_string())
+}
+
+fn upsert_task_row(conn: &Connection, task: &Value) -> Result<(), String> {
+    let tags_json = json_str_or_default(task.get("tags"), "[]");
+    let contexts_json = json_str_or_default(task.get("contexts"), "[]");
+    let relative_start_offset_json = json_str(task.get("relativeStartOffset"));
+    let recurrence_json = json_str(task.get("recurrence"));
+    let checklist_json = json_str(task.get("checklist"));
+    let attachments_json = json_str(task.get("attachments"));
+    conn.execute(
+        "INSERT OR REPLACE INTO tasks (id, title, status, priority, energyLevel, assignedTo, taskMode, startTime, relativeStartOffset, dueDate, recurrence, showFutureRecurrence, pushCount, tags, contexts, checklist, description, textDirection, attachments, location, projectId, sectionId, areaId, orderNum, boardOrder, isFocusedToday, timeEstimate, suppressMindwtrReminders, repeatReminderMinutes, reviewAt, completedAt, statusBeforeProjectArchive, completedAtBeforeProjectArchive, isFocusedTodayBeforeProjectArchive, projectArchivedAt, rev, revBy, createdAt, updatedAt, deletedAt, purgedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41)",
+        params![
+            task.get("id").and_then(|v| v.as_str()).unwrap_or_default(),
+            task.get("title").and_then(|v| v.as_str()).unwrap_or_default(),
+            task.get("status").and_then(|v| v.as_str()).unwrap_or("inbox"),
+            task.get("priority").and_then(|v| v.as_str()),
+            task.get("energyLevel").and_then(|v| v.as_str()),
+            task.get("assignedTo").and_then(|v| v.as_str()),
+            task.get("taskMode").and_then(|v| v.as_str()),
+            task.get("startTime").and_then(|v| v.as_str()),
+            relative_start_offset_json,
+            task.get("dueDate").and_then(|v| v.as_str()),
+            recurrence_json,
+            task.get("showFutureRecurrence").and_then(|v| v.as_bool()).unwrap_or(false) as i32,
+            task.get("pushCount").and_then(|v| v.as_i64()),
+            tags_json,
+            contexts_json,
+            checklist_json,
+            task.get("description").and_then(|v| v.as_str()),
+            task.get("textDirection").and_then(|v| v.as_str()),
+            attachments_json,
+            task.get("location").and_then(|v| v.as_str()),
+            task.get("projectId").and_then(|v| v.as_str()),
+            task.get("sectionId").and_then(|v| v.as_str()),
+            task.get("areaId").and_then(|v| v.as_str()),
+            task.get("orderNum")
+                .and_then(|v| v.as_i64())
+                .or_else(|| task.get("order").and_then(|v| v.as_i64())),
+            task.get("boardOrder").and_then(|v| v.as_i64()),
+            task.get("isFocusedToday").and_then(|v| v.as_bool()).unwrap_or(false) as i32,
+            task.get("timeEstimate").and_then(|v| v.as_str()),
+            task.get("suppressMindwtrReminders").and_then(|v| v.as_bool()).unwrap_or(false) as i32,
+            task.get("repeatReminderMinutes").and_then(|v| v.as_i64()),
+            task.get("reviewAt").and_then(|v| v.as_str()),
+            task.get("completedAt").and_then(|v| v.as_str()),
+            task
+                .get("statusBeforeProjectArchive")
+                .and_then(|v| v.as_str()),
+            task
+                .get("completedAtBeforeProjectArchive")
+                .and_then(|v| v.as_str()),
+            task
+                .get("isFocusedTodayBeforeProjectArchive")
+                .and_then(|v| v.as_bool())
+                .map(|v| v as i32),
+            task.get("projectArchivedAt").and_then(|v| v.as_str()),
+            task.get("rev").and_then(|v| v.as_i64()),
+            task.get("revBy").and_then(|v| v.as_str()),
+            task.get("createdAt").and_then(|v| v.as_str()).unwrap_or_default(),
+            task.get("updatedAt").and_then(|v| v.as_str()).unwrap_or_default(),
+            task.get("deletedAt").and_then(|v| v.as_str()),
+            task.get("purgedAt").and_then(|v| v.as_str()),
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn parse_json_value(raw: Option<String>) -> Value {
@@ -627,6 +783,11 @@ fn row_to_task_value(row: &rusqlite::Row<'_>) -> Result<Value, rusqlite::Error> 
             map.insert("startTime".to_string(), Value::String(v));
         }
     }
+    let relative_start_offset_raw: Option<String> = row.get("relativeStartOffset")?;
+    let relative_start_offset_val = parse_json_value(relative_start_offset_raw);
+    if !relative_start_offset_val.is_null() {
+        map.insert("relativeStartOffset".to_string(), relative_start_offset_val);
+    }
     if let Ok(val) = row.get::<_, Option<String>>("dueDate") {
         if let Some(v) = val {
             map.insert("dueDate".to_string(), Value::String(v));
@@ -636,6 +797,9 @@ fn row_to_task_value(row: &rusqlite::Row<'_>) -> Result<Value, rusqlite::Error> 
     let recurrence_val = parse_json_value(recurrence_raw);
     if !recurrence_val.is_null() {
         map.insert("recurrence".to_string(), recurrence_val);
+    }
+    if let Ok(val) = row.get::<_, i64>("showFutureRecurrence") {
+        map.insert("showFutureRecurrence".to_string(), Value::Bool(val != 0));
     }
     if let Ok(val) = row.get::<_, Option<i64>>("pushCount") {
         if let Some(v) = val {
@@ -654,6 +818,11 @@ fn row_to_task_value(row: &rusqlite::Row<'_>) -> Result<Value, rusqlite::Error> 
     if let Ok(val) = row.get::<_, Option<String>>("description") {
         if let Some(v) = val {
             map.insert("description".to_string(), Value::String(v));
+        }
+    }
+    if let Ok(val) = row.get::<_, Option<String>>("textDirection") {
+        if let Some(v) = val {
+            map.insert("textDirection".to_string(), Value::String(v));
         }
     }
     let attachments_raw: Option<String> = row.get("attachments")?;
@@ -683,17 +852,32 @@ fn row_to_task_value(row: &rusqlite::Row<'_>) -> Result<Value, rusqlite::Error> 
     }
     if let Ok(val) = row.get::<_, Option<i64>>("orderNum") {
         if let Some(v) = val {
+            map.insert("order".to_string(), Value::Number(v.into()));
             map.insert("orderNum".to_string(), Value::Number(v.into()));
         }
     }
-    if let Ok(val) = row.get::<_, i64>("isFocusedToday") {
-        if val != 0 {
-            map.insert("isFocusedToday".to_string(), Value::Bool(true));
+    if let Ok(val) = row.get::<_, Option<i64>>("boardOrder") {
+        if let Some(v) = val {
+            map.insert("boardOrder".to_string(), Value::Number(v.into()));
         }
+    }
+    if let Ok(val) = row.get::<_, i64>("isFocusedToday") {
+        map.insert("isFocusedToday".to_string(), Value::Bool(val != 0));
     }
     if let Ok(val) = row.get::<_, Option<String>>("timeEstimate") {
         if let Some(v) = val {
             map.insert("timeEstimate".to_string(), Value::String(v));
+        }
+    }
+    if let Ok(val) = row.get::<_, i64>("suppressMindwtrReminders") {
+        map.insert(
+            "suppressMindwtrReminders".to_string(),
+            Value::Bool(val != 0),
+        );
+    }
+    if let Ok(val) = row.get::<_, Option<i64>>("repeatReminderMinutes") {
+        if let Some(v) = val {
+            map.insert("repeatReminderMinutes".to_string(), Value::Number(v.into()));
         }
     }
     if let Ok(val) = row.get::<_, Option<String>>("reviewAt") {
@@ -704,6 +888,32 @@ fn row_to_task_value(row: &rusqlite::Row<'_>) -> Result<Value, rusqlite::Error> 
     if let Ok(val) = row.get::<_, Option<String>>("completedAt") {
         if let Some(v) = val {
             map.insert("completedAt".to_string(), Value::String(v));
+        }
+    }
+    if let Ok(val) = row.get::<_, Option<String>>("statusBeforeProjectArchive") {
+        if let Some(v) = val {
+            map.insert("statusBeforeProjectArchive".to_string(), Value::String(v));
+        }
+    }
+    if let Ok(val) = row.get::<_, Option<String>>("completedAtBeforeProjectArchive") {
+        if let Some(v) = val {
+            map.insert(
+                "completedAtBeforeProjectArchive".to_string(),
+                Value::String(v),
+            );
+        }
+    }
+    if let Ok(val) = row.get::<_, Option<i64>>("isFocusedTodayBeforeProjectArchive") {
+        if let Some(v) = val {
+            map.insert(
+                "isFocusedTodayBeforeProjectArchive".to_string(),
+                Value::Bool(v != 0),
+            );
+        }
+    }
+    if let Ok(val) = row.get::<_, Option<String>>("projectArchivedAt") {
+        if let Some(v) = val {
+            map.insert("projectArchivedAt".to_string(), Value::String(v));
         }
     }
     if let Ok(val) = row.get::<_, Option<i64>>("rev") {
@@ -760,14 +970,15 @@ fn row_to_project_value(row: &rusqlite::Row<'_>) -> Result<Value, rusqlite::Erro
     let tag_ids_raw: Option<String> = row.get("tagIds")?;
     map.insert("tagIds".to_string(), parse_json_array(tag_ids_raw));
     if let Ok(val) = row.get::<_, i64>("isSequential") {
-        if val != 0 {
-            map.insert("isSequential".to_string(), Value::Bool(true));
+        map.insert("isSequential".to_string(), Value::Bool(val != 0));
+    }
+    if let Ok(val) = row.get::<_, Option<String>>("sequentialScope") {
+        if let Some(v) = val {
+            map.insert("sequentialScope".to_string(), Value::String(v));
         }
     }
     if let Ok(val) = row.get::<_, i64>("isFocused") {
-        if val != 0 {
-            map.insert("isFocused".to_string(), Value::Bool(true));
-        }
+        map.insert("isFocused".to_string(), Value::Bool(val != 0));
     }
     if let Ok(val) = row.get::<_, Option<String>>("supportNotes") {
         if let Some(v) = val {
@@ -822,6 +1033,11 @@ fn row_to_project_value(row: &rusqlite::Row<'_>) -> Result<Value, rusqlite::Erro
             map.insert("deletedAt".to_string(), Value::String(v));
         }
     }
+    if let Ok(val) = row.get::<_, Option<String>>("purgedAt") {
+        if let Some(v) = val {
+            map.insert("purgedAt".to_string(), Value::String(v));
+        }
+    }
     Ok(Value::Object(map))
 }
 
@@ -847,8 +1063,62 @@ fn row_to_section_value(row: &rusqlite::Row<'_>) -> Result<Value, rusqlite::Erro
         }
     }
     if let Ok(val) = row.get::<_, i64>("isCollapsed") {
-        if val != 0 {
-            map.insert("isCollapsed".to_string(), Value::Bool(true));
+        map.insert("isCollapsed".to_string(), Value::Bool(val != 0));
+    }
+    if let Ok(val) = row.get::<_, Option<i64>>("rev") {
+        if let Some(v) = val {
+            map.insert("rev".to_string(), Value::Number(v.into()));
+        }
+    }
+    if let Ok(val) = row.get::<_, Option<String>>("revBy") {
+        if let Some(v) = val {
+            map.insert("revBy".to_string(), Value::String(v));
+        }
+    }
+    map.insert(
+        "createdAt".to_string(),
+        Value::String(row.get::<_, String>("createdAt")?),
+    );
+    map.insert(
+        "updatedAt".to_string(),
+        Value::String(row.get::<_, String>("updatedAt")?),
+    );
+    if let Ok(val) = row.get::<_, Option<String>>("deletedAt") {
+        if let Some(v) = val {
+            map.insert("deletedAt".to_string(), Value::String(v));
+        }
+    }
+    if let Ok(val) = row.get::<_, Option<String>>("deletedAtBeforeProjectArchive") {
+        if let Some(v) = val {
+            map.insert(
+                "deletedAtBeforeProjectArchive".to_string(),
+                Value::String(v),
+            );
+        }
+    }
+    if let Ok(val) = row.get::<_, Option<String>>("projectArchivedAt") {
+        if let Some(v) = val {
+            map.insert("projectArchivedAt".to_string(), Value::String(v));
+        }
+    }
+    Ok(Value::Object(map))
+}
+
+fn row_to_person_value(row: &rusqlite::Row<'_>) -> Result<Value, rusqlite::Error> {
+    let mut map = serde_json::Map::new();
+    map.insert("id".to_string(), Value::String(row.get::<_, String>("id")?));
+    map.insert(
+        "name".to_string(),
+        Value::String(row.get::<_, String>("name")?),
+    );
+    if let Ok(val) = row.get::<_, Option<String>>("note") {
+        if let Some(v) = val {
+            map.insert("note".to_string(), Value::String(v));
+        }
+    }
+    if let Ok(val) = row.get::<_, Option<String>>("referenceLink") {
+        if let Some(v) = val {
+            map.insert("referenceLink".to_string(), Value::String(v));
         }
     }
     if let Ok(val) = row.get::<_, Option<i64>>("rev") {
@@ -887,6 +1157,8 @@ fn migrate_json_to_sqlite(conn: &mut Connection, data: &Value) -> Result<(), Str
         .map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM sections", [])
         .map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM people", [])
+        .map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM settings", [])
         .map_err(|e| e.to_string())?;
 
@@ -898,11 +1170,12 @@ fn migrate_json_to_sqlite(conn: &mut Connection, data: &Value) -> Result<(), Str
     for task in tasks {
         let tags_json = json_str_or_default(task.get("tags"), "[]");
         let contexts_json = json_str_or_default(task.get("contexts"), "[]");
+        let relative_start_offset_json = json_str(task.get("relativeStartOffset"));
         let recurrence_json = json_str(task.get("recurrence"));
         let checklist_json = json_str(task.get("checklist"));
         let attachments_json = json_str(task.get("attachments"));
         tx.execute(
-            "INSERT OR REPLACE INTO tasks (id, title, status, priority, energyLevel, assignedTo, taskMode, startTime, dueDate, recurrence, pushCount, tags, contexts, checklist, description, attachments, location, projectId, sectionId, areaId, orderNum, isFocusedToday, timeEstimate, reviewAt, completedAt, rev, revBy, createdAt, updatedAt, deletedAt, purgedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31)",
+            "INSERT OR REPLACE INTO tasks (id, title, status, priority, energyLevel, assignedTo, taskMode, startTime, relativeStartOffset, dueDate, recurrence, showFutureRecurrence, pushCount, tags, contexts, checklist, description, textDirection, attachments, location, projectId, sectionId, areaId, orderNum, boardOrder, isFocusedToday, timeEstimate, suppressMindwtrReminders, repeatReminderMinutes, reviewAt, completedAt, statusBeforeProjectArchive, completedAtBeforeProjectArchive, isFocusedTodayBeforeProjectArchive, projectArchivedAt, rev, revBy, createdAt, updatedAt, deletedAt, purgedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41)",
             params![
                 task.get("id").and_then(|v| v.as_str()).unwrap_or_default(),
                 task.get("title").and_then(|v| v.as_str()).unwrap_or_default(),
@@ -912,23 +1185,42 @@ fn migrate_json_to_sqlite(conn: &mut Connection, data: &Value) -> Result<(), Str
                 task.get("assignedTo").and_then(|v| v.as_str()),
                 task.get("taskMode").and_then(|v| v.as_str()),
                 task.get("startTime").and_then(|v| v.as_str()),
+                relative_start_offset_json,
                 task.get("dueDate").and_then(|v| v.as_str()),
                 recurrence_json,
+                task.get("showFutureRecurrence").and_then(|v| v.as_bool()).unwrap_or(false) as i32,
                 task.get("pushCount").and_then(|v| v.as_i64()),
                 tags_json,
                 contexts_json,
                 checklist_json,
                 task.get("description").and_then(|v| v.as_str()),
+                task.get("textDirection").and_then(|v| v.as_str()),
                 attachments_json,
                 task.get("location").and_then(|v| v.as_str()),
                 task.get("projectId").and_then(|v| v.as_str()),
                 task.get("sectionId").and_then(|v| v.as_str()),
                 task.get("areaId").and_then(|v| v.as_str()),
-                task.get("orderNum").and_then(|v| v.as_i64()),
+                task.get("orderNum")
+                    .and_then(|v| v.as_i64())
+                    .or_else(|| task.get("order").and_then(|v| v.as_i64())),
+                task.get("boardOrder").and_then(|v| v.as_i64()),
                 task.get("isFocusedToday").and_then(|v| v.as_bool()).unwrap_or(false) as i32,
                 task.get("timeEstimate").and_then(|v| v.as_str()),
+                task.get("suppressMindwtrReminders").and_then(|v| v.as_bool()).unwrap_or(false) as i32,
+                task.get("repeatReminderMinutes").and_then(|v| v.as_i64()),
                 task.get("reviewAt").and_then(|v| v.as_str()),
                 task.get("completedAt").and_then(|v| v.as_str()),
+                task
+                    .get("statusBeforeProjectArchive")
+                    .and_then(|v| v.as_str()),
+                task
+                    .get("completedAtBeforeProjectArchive")
+                    .and_then(|v| v.as_str()),
+                task
+                    .get("isFocusedTodayBeforeProjectArchive")
+                    .and_then(|v| v.as_bool())
+                    .map(|v| v as i32),
+                task.get("projectArchivedAt").and_then(|v| v.as_str()),
                 task.get("rev").and_then(|v| v.as_i64()),
                 task.get("revBy").and_then(|v| v.as_str()),
                 task.get("createdAt").and_then(|v| v.as_str()).unwrap_or_default(),
@@ -949,7 +1241,7 @@ fn migrate_json_to_sqlite(conn: &mut Connection, data: &Value) -> Result<(), Str
         let tag_ids_json = json_str_or_default(project.get("tagIds"), "[]");
         let attachments_json = json_str(project.get("attachments"));
         tx.execute(
-            "INSERT OR REPLACE INTO projects (id, title, status, color, orderNum, tagIds, isSequential, isFocused, supportNotes, attachments, dueDate, reviewAt, areaId, areaTitle, rev, revBy, createdAt, updatedAt, deletedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+            "INSERT OR REPLACE INTO projects (id, title, status, color, orderNum, tagIds, isSequential, sequentialScope, isFocused, supportNotes, attachments, dueDate, reviewAt, areaId, areaTitle, rev, revBy, createdAt, updatedAt, deletedAt, purgedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
             params![
                 project.get("id").and_then(|v| v.as_str()).unwrap_or_default(),
                 project.get("title").and_then(|v| v.as_str()).unwrap_or_default(),
@@ -958,6 +1250,7 @@ fn migrate_json_to_sqlite(conn: &mut Connection, data: &Value) -> Result<(), Str
                 project.get("order").and_then(|v| v.as_i64()),
                 tag_ids_json,
                 project.get("isSequential").and_then(|v| v.as_bool()).unwrap_or(false) as i32,
+                project.get("sequentialScope").and_then(|v| v.as_str()),
                 project.get("isFocused").and_then(|v| v.as_bool()).unwrap_or(false) as i32,
                 project.get("supportNotes").and_then(|v| v.as_str()),
                 attachments_json,
@@ -970,6 +1263,7 @@ fn migrate_json_to_sqlite(conn: &mut Connection, data: &Value) -> Result<(), Str
                 project.get("createdAt").and_then(|v| v.as_str()).unwrap_or_default(),
                 project.get("updatedAt").and_then(|v| v.as_str()).unwrap_or_default(),
                 project.get("deletedAt").and_then(|v| v.as_str()),
+                project.get("purgedAt").and_then(|v| v.as_str()),
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -982,7 +1276,7 @@ fn migrate_json_to_sqlite(conn: &mut Connection, data: &Value) -> Result<(), Str
         .unwrap_or_default();
     for area in areas {
         tx.execute(
-            "INSERT OR REPLACE INTO areas (id, name, color, icon, orderNum, deletedAt, rev, revBy, createdAt, updatedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT OR REPLACE INTO areas (id, name, color, icon, orderNum, deletedAt, deletedAtBeforeProjectArchive, projectArchivedAt, rev, revBy, createdAt, updatedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 area.get("id").and_then(|v| v.as_str()).unwrap_or_default(),
                 area.get("name").and_then(|v| v.as_str()).unwrap_or_default(),
@@ -990,6 +1284,9 @@ fn migrate_json_to_sqlite(conn: &mut Connection, data: &Value) -> Result<(), Str
                 area.get("icon").and_then(|v| v.as_str()),
                 area.get("order").and_then(|v| v.as_i64()).unwrap_or(0),
                 area.get("deletedAt").and_then(|v| v.as_str()),
+                area.get("deletedAtBeforeProjectArchive")
+                    .and_then(|v| v.as_str()),
+                area.get("projectArchivedAt").and_then(|v| v.as_str()),
                 area.get("rev").and_then(|v| v.as_i64()),
                 area.get("revBy").and_then(|v| v.as_str()),
                 area.get("createdAt").and_then(|v| v.as_str()),
@@ -1006,7 +1303,7 @@ fn migrate_json_to_sqlite(conn: &mut Connection, data: &Value) -> Result<(), Str
         .unwrap_or_default();
     for section in sections {
         tx.execute(
-            "INSERT OR REPLACE INTO sections (id, projectId, title, description, orderNum, isCollapsed, rev, revBy, createdAt, updatedAt, deletedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT OR REPLACE INTO sections (id, projectId, title, description, orderNum, isCollapsed, rev, revBy, createdAt, updatedAt, deletedAt, deletedAtBeforeProjectArchive, projectArchivedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 section.get("id").and_then(|v| v.as_str()).unwrap_or_default(),
                 section.get("projectId").and_then(|v| v.as_str()).unwrap_or_default(),
@@ -1019,6 +1316,33 @@ fn migrate_json_to_sqlite(conn: &mut Connection, data: &Value) -> Result<(), Str
                 section.get("createdAt").and_then(|v| v.as_str()).unwrap_or_default(),
                 section.get("updatedAt").and_then(|v| v.as_str()).unwrap_or_default(),
                 section.get("deletedAt").and_then(|v| v.as_str()),
+                section
+                    .get("deletedAtBeforeProjectArchive")
+                    .and_then(|v| v.as_str()),
+                section.get("projectArchivedAt").and_then(|v| v.as_str()),
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    let people = data
+        .get("people")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    for person in people {
+        tx.execute(
+            "INSERT OR REPLACE INTO people (id, name, note, referenceLink, rev, revBy, createdAt, updatedAt, deletedAt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                person.get("id").and_then(|v| v.as_str()).unwrap_or_default(),
+                person.get("name").and_then(|v| v.as_str()).unwrap_or_default(),
+                person.get("note").and_then(|v| v.as_str()),
+                person.get("referenceLink").and_then(|v| v.as_str()),
+                person.get("rev").and_then(|v| v.as_i64()),
+                person.get("revBy").and_then(|v| v.as_str()),
+                person.get("createdAt").and_then(|v| v.as_str()).unwrap_or_default(),
+                person.get("updatedAt").and_then(|v| v.as_str()).unwrap_or_default(),
+                person.get("deletedAt").and_then(|v| v.as_str()),
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -1035,7 +1359,7 @@ fn migrate_json_to_sqlite(conn: &mut Connection, data: &Value) -> Result<(), Str
     Ok(())
 }
 
-fn read_sqlite_data(conn: &Connection) -> Result<Value, String> {
+pub(crate) fn read_sqlite_data(conn: &Connection) -> Result<Value, String> {
     let mut tasks_stmt = conn
         .prepare("SELECT * FROM tasks")
         .map_err(|e| e.to_string())?;
@@ -1099,6 +1423,19 @@ fn read_sqlite_data(conn: &Connection) -> Result<Value, String> {
                     map.insert("deletedAt".to_string(), Value::String(v));
                 }
             }
+            if let Ok(val) = row.get::<_, Option<String>>("deletedAtBeforeProjectArchive") {
+                if let Some(v) = val {
+                    map.insert(
+                        "deletedAtBeforeProjectArchive".to_string(),
+                        Value::String(v),
+                    );
+                }
+            }
+            if let Ok(val) = row.get::<_, Option<String>>("projectArchivedAt") {
+                if let Some(v) = val {
+                    map.insert("projectArchivedAt".to_string(), Value::String(v));
+                }
+            }
             if let Ok(val) = row.get::<_, Option<i64>>("rev") {
                 if let Some(v) = val {
                     map.insert("rev".to_string(), Value::Number(v.into()));
@@ -1127,6 +1464,17 @@ fn read_sqlite_data(conn: &Connection) -> Result<Value, String> {
         areas.push(row.map_err(|e| e.to_string())?);
     }
 
+    let mut people_stmt = conn
+        .prepare("SELECT * FROM people")
+        .map_err(|e| e.to_string())?;
+    let people_rows = people_stmt
+        .query_map([], |row| row_to_person_value(row))
+        .map_err(|e| e.to_string())?;
+    let mut people: Vec<Value> = Vec::new();
+    for row in people_rows {
+        people.push(row.map_err(|e| e.to_string())?);
+    }
+
     let settings_raw: Option<String> = conn
         .query_row("SELECT data FROM settings WHERE id = 1", [], |row| {
             row.get(0)
@@ -1144,12 +1492,110 @@ fn read_sqlite_data(conn: &Connection) -> Result<Value, String> {
             "projects": projects,
             "sections": sections,
             "areas": areas,
+            "people": people,
             "settings": Value::Object(settings_val),
         })
         .as_object()
         .unwrap()
         .clone(),
     ))
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CalendarSyncEntryRecord {
+    task_id: String,
+    calendar_event_id: String,
+    calendar_id: String,
+    platform: String,
+    last_synced_at: String,
+}
+
+fn row_to_calendar_sync_entry(
+    row: &rusqlite::Row<'_>,
+) -> Result<CalendarSyncEntryRecord, rusqlite::Error> {
+    Ok(CalendarSyncEntryRecord {
+        task_id: row.get("task_id")?,
+        calendar_event_id: row.get("calendar_event_id")?,
+        calendar_id: row.get("calendar_id")?,
+        platform: row.get("platform")?,
+        last_synced_at: row.get("last_synced_at")?,
+    })
+}
+
+#[tauri::command]
+pub(crate) fn get_calendar_sync_entry(
+    app: tauri::AppHandle,
+    task_id: String,
+    platform: String,
+) -> Result<Option<CalendarSyncEntryRecord>, String> {
+    let conn = open_sqlite(&app)?;
+    conn.query_row(
+        "SELECT task_id, calendar_event_id, calendar_id, platform, last_synced_at FROM calendar_sync WHERE task_id = ?1 AND platform = ?2",
+        params![task_id, platform],
+        row_to_calendar_sync_entry,
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub(crate) fn upsert_calendar_sync_entry(
+    app: tauri::AppHandle,
+    entry: CalendarSyncEntryRecord,
+) -> Result<bool, String> {
+    let conn = open_sqlite(&app)?;
+    conn.execute(
+        "INSERT INTO calendar_sync (task_id, calendar_event_id, calendar_id, platform, last_synced_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(task_id, platform) DO UPDATE SET
+           calendar_event_id = excluded.calendar_event_id,
+           calendar_id = excluded.calendar_id,
+           last_synced_at = excluded.last_synced_at",
+        params![
+            entry.task_id,
+            entry.calendar_event_id,
+            entry.calendar_id,
+            entry.platform,
+            entry.last_synced_at,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub(crate) fn delete_calendar_sync_entry(
+    app: tauri::AppHandle,
+    task_id: String,
+    platform: String,
+) -> Result<bool, String> {
+    let conn = open_sqlite(&app)?;
+    conn.execute(
+        "DELETE FROM calendar_sync WHERE task_id = ?1 AND platform = ?2",
+        params![task_id, platform],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub(crate) fn get_all_calendar_sync_entries(
+    app: tauri::AppHandle,
+    platform: String,
+) -> Result<Vec<CalendarSyncEntryRecord>, String> {
+    let conn = open_sqlite(&app)?;
+    let mut stmt = conn
+        .prepare("SELECT task_id, calendar_event_id, calendar_id, platform, last_synced_at FROM calendar_sync WHERE platform = ?1")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![platform], row_to_calendar_sync_entry)
+        .map_err(|e| e.to_string())?;
+    let mut entries = Vec::new();
+    for row in rows {
+        entries.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(entries)
 }
 
 fn get_legacy_config_json_path(app: &tauri::AppHandle) -> PathBuf {
@@ -1233,62 +1679,64 @@ pub(crate) fn ensure_data_file(app: &tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub(crate) async fn get_data(app: tauri::AppHandle) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        ensure_data_file(&app)?;
-        let data_path = get_data_path(&app);
-        let backup_path = data_json_backup_path(&data_path);
-        let mut conn = open_sqlite(&app)?;
+    tauri::async_runtime::spawn_blocking(move || load_data_snapshot(&app))
+        .await
+        .map_err(|e| e.to_string())?
+}
 
-        if !sqlite_has_any_data(&conn)? && data_path.exists() {
-            if let Ok(value) = read_json_with_retries(&data_path, 2) {
-                let _ = fs::copy(&data_path, &backup_path);
-                migrate_json_to_sqlite(&mut conn, &value)?;
-                ensure_fts_populated(&conn, true)?;
-            }
+pub(crate) fn load_data_snapshot(app: &tauri::AppHandle) -> Result<Value, String> {
+    ensure_data_file(app)?;
+    let data_path = get_data_path(app);
+    let backup_path = data_json_backup_path(&data_path);
+    let mut conn = open_sqlite(app)?;
+
+    if !sqlite_has_any_data(&conn)? && data_path.exists() {
+        if let Ok(value) = read_json_with_retries(&data_path, 2) {
+            let _ = fs::copy(&data_path, &backup_path);
+            migrate_json_to_sqlite(&mut conn, &value)?;
+            ensure_fts_populated(&conn, true)?;
         }
+    }
 
-        match read_sqlite_data(&conn) {
-            Ok(mut value) => {
-                let settings_empty = value
-                    .get("settings")
-                    .and_then(|v| v.as_object())
-                    .map(|obj| obj.is_empty())
-                    .unwrap_or(true);
-                if settings_empty && data_path.exists() {
-                    if let Ok(json_value) = read_json_with_retries(&data_path, 2) {
-                        if let Some(json_settings) =
-                            json_value.get("settings").and_then(|v| v.as_object())
-                        {
-                            if !json_settings.is_empty() {
-                                if let Some(map) = value.as_object_mut() {
-                                    map.insert(
-                                        "settings".to_string(),
-                                        Value::Object(json_settings.clone()),
-                                    );
-                                }
+    match read_sqlite_data(&conn) {
+        Ok(mut value) => {
+            let settings_empty = value
+                .get("settings")
+                .and_then(|v| v.as_object())
+                .map(|obj| obj.is_empty())
+                .unwrap_or(true);
+            if settings_empty && data_path.exists() {
+                if let Ok(json_value) = read_json_with_retries(&data_path, 2) {
+                    if let Some(json_settings) =
+                        json_value.get("settings").and_then(|v| v.as_object())
+                    {
+                        if !json_settings.is_empty() {
+                            if let Some(map) = value.as_object_mut() {
+                                map.insert(
+                                    "settings".to_string(),
+                                    Value::Object(json_settings.clone()),
+                                );
                             }
                         }
                     }
                 }
-                Ok(value)
             }
-            Err(primary_err) => {
-                if data_path.exists() {
-                    if let Ok(value) = read_json_with_retries(&data_path, 2) {
-                        return Ok(value);
-                    }
-                }
-                if backup_path.exists() {
-                    if let Ok(value) = read_json_with_retries(&backup_path, 2) {
-                        return Ok(value);
-                    }
-                }
-                Err(primary_err)
-            }
+            Ok(value)
         }
-    })
-    .await
-    .map_err(|e| e.to_string())?
+        Err(primary_err) => {
+            if data_path.exists() {
+                if let Ok(value) = read_json_with_retries(&data_path, 2) {
+                    return Ok(value);
+                }
+            }
+            if backup_path.exists() {
+                if let Ok(value) = read_json_with_retries(&backup_path, 2) {
+                    return Ok(value);
+                }
+            }
+            Err(primary_err)
+        }
+    }
 }
 
 #[tauri::command]
@@ -1306,6 +1754,23 @@ pub(crate) async fn read_data_json(app: tauri::AppHandle) -> Result<Value, Strin
 pub(crate) async fn save_data(app: tauri::AppHandle, data: Value) -> Result<bool, String> {
     tauri::async_runtime::spawn_blocking(move || {
         persist_data_snapshot_with_retries(&app, &data)?;
+        Ok(true)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub(crate) async fn save_task(app: tauri::AppHandle, task: Value) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_sqlite(&app)?;
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| e.to_string())?;
+        if let Err(error) = upsert_task_row(&conn, &task) {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(error);
+        }
+        conn.execute_batch("COMMIT").map_err(|e| e.to_string())?;
         Ok(true)
     })
     .await
@@ -1592,10 +2057,13 @@ pub(crate) fn search_fts(app: tauri::AppHandle, query: String) -> Result<Value, 
     let mut limited = false;
 
     let mut task_stmt = conn
-        .prepare("SELECT t.* FROM tasks_fts f JOIN tasks t ON f.id = t.id WHERE tasks_fts MATCH ?1 AND t.deletedAt IS NULL LIMIT ?2")
+        .prepare("SELECT t.* FROM tasks_fts f JOIN tasks t ON f.rowid = t.rowid WHERE tasks_fts MATCH ?1 AND t.deletedAt IS NULL LIMIT ?2")
         .map_err(|e| e.to_string())?;
     let task_rows = task_stmt
-        .query_map(params![fts_query.clone(), SEARCH_RESULT_QUERY_LIMIT], |row| row_to_task_value(row))
+        .query_map(
+            params![fts_query.clone(), SEARCH_RESULT_QUERY_LIMIT],
+            |row| row_to_task_value(row),
+        )
         .map_err(|e| e.to_string())?;
     for row in task_rows {
         let value = row.map_err(|e| e.to_string())?;
@@ -1607,10 +2075,12 @@ pub(crate) fn search_fts(app: tauri::AppHandle, query: String) -> Result<Value, 
     }
 
     let mut project_stmt = conn
-        .prepare("SELECT p.* FROM projects_fts f JOIN projects p ON f.id = p.id WHERE projects_fts MATCH ?1 AND p.deletedAt IS NULL LIMIT ?2")
+        .prepare("SELECT p.* FROM projects_fts f JOIN projects p ON f.rowid = p.rowid WHERE projects_fts MATCH ?1 AND p.deletedAt IS NULL LIMIT ?2")
         .map_err(|e| e.to_string())?;
     let project_rows = project_stmt
-        .query_map(params![fts_query, SEARCH_RESULT_QUERY_LIMIT], |row| row_to_project_value(row))
+        .query_map(params![fts_query, SEARCH_RESULT_QUERY_LIMIT], |row| {
+            row_to_project_value(row)
+        })
         .map_err(|e| e.to_string())?;
     for row in project_rows {
         let value = row.map_err(|e| e.to_string())?;
@@ -1746,7 +2216,37 @@ mod tests {
             .expect("should read project indexes")
             .map(|row| row.expect("index row"))
             .collect();
-        assert!(index_names.iter().any(|name| name == "idx_projects_dueDate"));
+        assert!(index_names
+            .iter()
+            .any(|name| name == "idx_projects_dueDate"));
+    }
+
+    #[test]
+    fn ensure_projects_purged_at_column_migrates_legacy_schema() {
+        let conn = Connection::open_in_memory().expect("should open in-memory db");
+        conn.execute_batch(
+            r#"
+            CREATE TABLE projects (
+              id TEXT PRIMARY KEY,
+              title TEXT NOT NULL,
+              status TEXT NOT NULL,
+              color TEXT NOT NULL
+            );
+            "#,
+        )
+        .expect("should create legacy projects table");
+
+        ensure_projects_purged_at_column(&conn).expect("should add purgedAt column");
+
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(projects)")
+            .expect("should inspect project columns");
+        let column_names: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("should read project columns")
+            .map(|row| row.expect("column row"))
+            .collect();
+        assert!(column_names.iter().any(|name| name == "purgedAt"));
     }
 
     #[test]
@@ -1775,8 +2275,593 @@ mod tests {
             .expect("should read task indexes")
             .map(|row| row.expect("index row"))
             .collect();
-        assert!(index_names.iter().any(|name| name == "idx_tasks_energyLevel"));
-        assert!(index_names.iter().any(|name| name == "idx_tasks_assignedTo"));
+        assert!(index_names
+            .iter()
+            .any(|name| name == "idx_tasks_energyLevel"));
+        assert!(index_names
+            .iter()
+            .any(|name| name == "idx_tasks_assignedTo"));
+    }
+
+    #[test]
+    fn sqlite_task_upsert_preserves_sync_metadata_fields() {
+        let conn = Connection::open_in_memory().expect("should open in-memory db");
+        conn.execute_batch(SQLITE_SCHEMA)
+            .expect("should create schema");
+        let task = serde_json::json!({
+            "id": "task-upsert-1",
+            "title": "Archived upsert task",
+            "status": "archived",
+            "description": "body",
+            "textDirection": "rtl",
+            "order": 7,
+            "isFocusedToday": false,
+            "suppressMindwtrReminders": false,
+            "statusBeforeProjectArchive": "next",
+            "completedAtBeforeProjectArchive": "2026-05-20T00:00:00.000Z",
+            "isFocusedTodayBeforeProjectArchive": true,
+            "projectArchivedAt": "2026-05-21T00:00:00.000Z",
+            "createdAt": "2026-05-01T00:00:00.000Z",
+            "updatedAt": "2026-05-22T00:00:00.000Z"
+        });
+
+        upsert_task_row(&conn, &task).expect("should upsert task");
+        let round_tripped = read_sqlite_data(&conn).expect("should read sqlite data");
+        let task = round_tripped
+            .get("tasks")
+            .and_then(|value| value.as_array())
+            .and_then(|tasks| tasks.first())
+            .expect("should read task");
+
+        assert_eq!(
+            task.get("textDirection"),
+            Some(&Value::String("rtl".into()))
+        );
+        assert_eq!(task.get("order"), Some(&Value::Number(7.into())));
+        assert_eq!(task.get("orderNum"), Some(&Value::Number(7.into())));
+        assert_eq!(task.get("isFocusedToday"), Some(&Value::Bool(false)));
+        assert_eq!(
+            task.get("suppressMindwtrReminders"),
+            Some(&Value::Bool(false))
+        );
+        assert_eq!(
+            task.get("statusBeforeProjectArchive"),
+            Some(&Value::String("next".into()))
+        );
+        assert_eq!(
+            task.get("completedAtBeforeProjectArchive"),
+            Some(&Value::String("2026-05-20T00:00:00.000Z".into()))
+        );
+        assert_eq!(
+            task.get("isFocusedTodayBeforeProjectArchive"),
+            Some(&Value::Bool(true))
+        );
+        assert_eq!(
+            task.get("projectArchivedAt"),
+            Some(&Value::String("2026-05-21T00:00:00.000Z".into()))
+        );
+    }
+
+    #[test]
+    fn sqlite_round_trip_preserves_sync_metadata_fields() {
+        let mut conn = Connection::open_in_memory().expect("should open in-memory db");
+        conn.execute_batch(SQLITE_SCHEMA)
+            .expect("should create schema");
+        ensure_column(&conn, "tasks", "textDirection", "TEXT").expect("should add textDirection");
+        ensure_column(&conn, "tasks", "statusBeforeProjectArchive", "TEXT")
+            .expect("should add archived status");
+        ensure_column(&conn, "tasks", "completedAtBeforeProjectArchive", "TEXT")
+            .expect("should add archived completedAt");
+        ensure_column(
+            &conn,
+            "tasks",
+            "isFocusedTodayBeforeProjectArchive",
+            "INTEGER",
+        )
+        .expect("should add archived focus flag");
+        ensure_column(&conn, "tasks", "projectArchivedAt", "TEXT")
+            .expect("should add project archived time");
+        ensure_column(&conn, "sections", "deletedAtBeforeProjectArchive", "TEXT")
+            .expect("should add section archived delete time");
+        ensure_column(&conn, "sections", "projectArchivedAt", "TEXT")
+            .expect("should add section project archived time");
+        ensure_column(&conn, "areas", "deletedAtBeforeProjectArchive", "TEXT")
+            .expect("should add area archived delete time");
+        ensure_column(&conn, "areas", "projectArchivedAt", "TEXT")
+            .expect("should add area project archived time");
+
+        let source = serde_json::json!({
+            "tasks": [{
+                "id": "task-1",
+                "title": "Archived task",
+                "status": "archived",
+                "tags": [],
+                "contexts": [],
+                "description": "body",
+                "textDirection": "rtl",
+                "order": 11,
+                "showFutureRecurrence": false,
+                "isFocusedToday": false,
+                "suppressMindwtrReminders": false,
+                "statusBeforeProjectArchive": "waiting",
+                "completedAtBeforeProjectArchive": "2026-05-20T00:00:00.000Z",
+                "isFocusedTodayBeforeProjectArchive": false,
+                "projectArchivedAt": "2026-05-21T00:00:00.000Z",
+                "createdAt": "2026-05-01T00:00:00.000Z",
+                "updatedAt": "2026-05-22T00:00:00.000Z"
+            }],
+            "projects": [{
+                "id": "project-1",
+                "title": "Project",
+                "status": "active",
+                "color": "#6B7280",
+                "order": 1,
+                "tagIds": [],
+                "isSequential": false,
+                "isFocused": false,
+                "createdAt": "2026-05-01T00:00:00.000Z",
+                "updatedAt": "2026-05-22T00:00:00.000Z",
+                "deletedAt": "2026-05-23T00:00:00.000Z",
+                "purgedAt": "2026-05-24T00:00:00.000Z"
+            }],
+            "sections": [{
+                "id": "section-1",
+                "projectId": "project-1",
+                "title": "Archived section",
+                "order": 1,
+                "isCollapsed": false,
+                "createdAt": "2026-05-01T00:00:00.000Z",
+                "updatedAt": "2026-05-22T00:00:00.000Z",
+                "deletedAt": "2026-05-23T00:00:00.000Z",
+                "deletedAtBeforeProjectArchive": "2026-05-20T00:00:00.000Z",
+                "projectArchivedAt": "2026-05-21T00:00:00.000Z"
+            }],
+            "areas": [{
+                "id": "area-1",
+                "name": "Archived area",
+                "order": 1,
+                "createdAt": "2026-05-01T00:00:00.000Z",
+                "updatedAt": "2026-05-22T00:00:00.000Z",
+                "deletedAt": "2026-05-23T00:00:00.000Z",
+                "deletedAtBeforeProjectArchive": "2026-05-20T00:00:00.000Z",
+                "projectArchivedAt": "2026-05-21T00:00:00.000Z"
+            }],
+            "people": [],
+            "settings": {}
+        });
+
+        migrate_json_to_sqlite(&mut conn, &source).expect("should migrate to sqlite");
+        let round_tripped = read_sqlite_data(&conn).expect("should read sqlite data");
+        let task = round_tripped
+            .get("tasks")
+            .and_then(|value| value.as_array())
+            .and_then(|tasks| tasks.first())
+            .expect("should read task");
+        assert_eq!(
+            task.get("textDirection"),
+            Some(&Value::String("rtl".into()))
+        );
+        assert_eq!(task.get("order"), Some(&Value::Number(11.into())));
+        assert_eq!(task.get("orderNum"), Some(&Value::Number(11.into())));
+        assert_eq!(task.get("showFutureRecurrence"), Some(&Value::Bool(false)));
+        assert_eq!(task.get("isFocusedToday"), Some(&Value::Bool(false)));
+        assert_eq!(
+            task.get("suppressMindwtrReminders"),
+            Some(&Value::Bool(false))
+        );
+        assert_eq!(
+            task.get("statusBeforeProjectArchive"),
+            Some(&Value::String("waiting".into()))
+        );
+        assert_eq!(
+            task.get("completedAtBeforeProjectArchive"),
+            Some(&Value::String("2026-05-20T00:00:00.000Z".into()))
+        );
+        assert_eq!(
+            task.get("isFocusedTodayBeforeProjectArchive"),
+            Some(&Value::Bool(false))
+        );
+        assert_eq!(
+            task.get("projectArchivedAt"),
+            Some(&Value::String("2026-05-21T00:00:00.000Z".into()))
+        );
+
+        let project = round_tripped
+            .get("projects")
+            .and_then(|value| value.as_array())
+            .and_then(|projects| projects.first())
+            .expect("should read project");
+        assert_eq!(project.get("isSequential"), Some(&Value::Bool(false)));
+        assert_eq!(project.get("isFocused"), Some(&Value::Bool(false)));
+        assert_eq!(
+            project.get("deletedAt"),
+            Some(&Value::String("2026-05-23T00:00:00.000Z".into()))
+        );
+        assert_eq!(
+            project.get("purgedAt"),
+            Some(&Value::String("2026-05-24T00:00:00.000Z".into()))
+        );
+
+        let section = round_tripped
+            .get("sections")
+            .and_then(|value| value.as_array())
+            .and_then(|sections| sections.first())
+            .expect("should read section");
+        assert_eq!(section.get("isCollapsed"), Some(&Value::Bool(false)));
+        assert_eq!(
+            section.get("deletedAtBeforeProjectArchive"),
+            Some(&Value::String("2026-05-20T00:00:00.000Z".into()))
+        );
+        assert_eq!(
+            section.get("projectArchivedAt"),
+            Some(&Value::String("2026-05-21T00:00:00.000Z".into()))
+        );
+
+        let area = round_tripped
+            .get("areas")
+            .and_then(|value| value.as_array())
+            .and_then(|areas| areas.first())
+            .expect("should read area");
+        assert_eq!(
+            area.get("deletedAtBeforeProjectArchive"),
+            Some(&Value::String("2026-05-20T00:00:00.000Z".into()))
+        );
+        assert_eq!(
+            area.get("projectArchivedAt"),
+            Some(&Value::String("2026-05-21T00:00:00.000Z".into()))
+        );
+    }
+
+    #[test]
+    fn sqlite_round_trip_preserves_fully_populated_task_and_project_fields() {
+        let mut conn = Connection::open_in_memory().expect("should open in-memory db");
+        conn.execute_batch(SQLITE_SCHEMA)
+            .expect("should create schema");
+
+        let task = serde_json::json!({
+            "id": "task-full",
+            "title": "Full task",
+            "status": "completed",
+            "priority": "high",
+            "energyLevel": "medium",
+            "assignedTo": "person-1",
+            "taskMode": "deep",
+            "startTime": "2026-06-01T08:30:00.000Z",
+            "relativeStartOffset": {
+                "amount": -2,
+                "unit": "day"
+            },
+            "dueDate": "2026-06-02T12:00:00.000Z",
+            "recurrence": {
+                "type": "weekly",
+                "interval": 2,
+                "weekdays": [1, 3]
+            },
+            "showFutureRecurrence": true,
+            "pushCount": 3,
+            "tags": ["tag-1", "tag-2"],
+            "contexts": ["context-1"],
+            "checklist": [{
+                "id": "check-1",
+                "title": "Check one",
+                "isCompleted": false
+            }],
+            "description": "Task body",
+            "textDirection": "rtl",
+            "attachments": [{
+                "id": "task-attachment-1",
+                "kind": "file",
+                "title": "task.pdf",
+                "uri": "file:///task.pdf",
+                "cloudKey": "attachments/task.pdf",
+                "localStatus": "available",
+                "createdAt": "2026-06-01T08:00:00.000Z",
+                "updatedAt": "2026-06-01T08:00:00.000Z"
+            }],
+            "location": "Office",
+            "projectId": "project-full",
+            "sectionId": "section-1",
+            "areaId": "area-1",
+            "order": 17,
+            "boardOrder": 4,
+            "isFocusedToday": true,
+            "timeEstimate": "45m",
+            "suppressMindwtrReminders": true,
+            "repeatReminderMinutes": 15,
+            "reviewAt": "2026-06-03T09:00:00.000Z",
+            "completedAt": "2026-06-04T10:00:00.000Z",
+            "statusBeforeProjectArchive": "next",
+            "completedAtBeforeProjectArchive": "2026-06-05T10:00:00.000Z",
+            "isFocusedTodayBeforeProjectArchive": false,
+            "projectArchivedAt": "2026-06-06T10:00:00.000Z",
+            "rev": 42,
+            "revBy": "device-a",
+            "createdAt": "2026-06-01T08:00:00.000Z",
+            "updatedAt": "2026-06-07T08:00:00.000Z",
+            "deletedAt": "2026-06-08T08:00:00.000Z",
+            "purgedAt": "2026-06-09T08:00:00.000Z"
+        });
+        let project = serde_json::json!({
+            "id": "project-full",
+            "title": "Full project",
+            "status": "waiting",
+            "color": "#2563eb",
+            "order": 9,
+            "tagIds": ["tag-1"],
+            "isSequential": true,
+            "sequentialScope": "section",
+            "isFocused": true,
+            "supportNotes": "Project notes",
+            "attachments": [{
+                "id": "project-attachment-1",
+                "kind": "file",
+                "title": "project.pdf",
+                "uri": "file:///project.pdf",
+                "cloudKey": "attachments/project.pdf",
+                "localStatus": "available",
+                "createdAt": "2026-06-01T08:00:00.000Z",
+                "updatedAt": "2026-06-01T08:00:00.000Z"
+            }],
+            "dueDate": "2026-06-10T12:00:00.000Z",
+            "reviewAt": "2026-06-11T09:00:00.000Z",
+            "areaId": "area-1",
+            "areaTitle": "Work",
+            "rev": 43,
+            "revBy": "device-b",
+            "createdAt": "2026-06-01T08:00:00.000Z",
+            "updatedAt": "2026-06-07T08:00:00.000Z",
+            "deletedAt": "2026-06-08T08:00:00.000Z",
+            "purgedAt": "2026-06-09T08:00:00.000Z"
+        });
+        let source = serde_json::json!({
+            "tasks": [task.clone()],
+            "projects": [project.clone()],
+            "areas": [],
+            "sections": [],
+            "people": [],
+            "settings": {}
+        });
+
+        migrate_json_to_sqlite(&mut conn, &source).expect("should write fully populated records");
+        let round_tripped = read_sqlite_data(&conn).expect("should read sqlite data");
+        let round_tripped_task = round_tripped
+            .get("tasks")
+            .and_then(|value| value.as_array())
+            .and_then(|tasks| tasks.first())
+            .expect("should read task");
+        let round_tripped_project = round_tripped
+            .get("projects")
+            .and_then(|value| value.as_array())
+            .and_then(|projects| projects.first())
+            .expect("should read project");
+
+        for key in [
+            "id",
+            "title",
+            "status",
+            "priority",
+            "energyLevel",
+            "assignedTo",
+            "taskMode",
+            "startTime",
+            "relativeStartOffset",
+            "dueDate",
+            "recurrence",
+            "showFutureRecurrence",
+            "pushCount",
+            "tags",
+            "contexts",
+            "checklist",
+            "description",
+            "textDirection",
+            "attachments",
+            "location",
+            "projectId",
+            "sectionId",
+            "areaId",
+            "order",
+            "boardOrder",
+            "isFocusedToday",
+            "timeEstimate",
+            "suppressMindwtrReminders",
+            "repeatReminderMinutes",
+            "reviewAt",
+            "completedAt",
+            "statusBeforeProjectArchive",
+            "completedAtBeforeProjectArchive",
+            "isFocusedTodayBeforeProjectArchive",
+            "projectArchivedAt",
+            "rev",
+            "revBy",
+            "createdAt",
+            "updatedAt",
+            "deletedAt",
+            "purgedAt",
+        ] {
+            assert_eq!(
+                round_tripped_task.get(key),
+                task.get(key),
+                "task field {key}"
+            );
+        }
+        assert_eq!(round_tripped_task.get("orderNum"), task.get("order"));
+
+        for key in [
+            "id",
+            "title",
+            "status",
+            "color",
+            "order",
+            "tagIds",
+            "isSequential",
+            "sequentialScope",
+            "isFocused",
+            "supportNotes",
+            "attachments",
+            "dueDate",
+            "reviewAt",
+            "areaId",
+            "areaTitle",
+            "rev",
+            "revBy",
+            "createdAt",
+            "updatedAt",
+            "deletedAt",
+            "purgedAt",
+        ] {
+            assert_eq!(
+                round_tripped_project.get(key),
+                project.get(key),
+                "project field {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn ensure_tasks_fts_schema_recreates_legacy_index_with_checklist() {
+        let conn = Connection::open_in_memory().expect("should open in-memory db");
+        conn.execute_batch(
+            r#"
+            CREATE VIRTUAL TABLE tasks_fts USING fts5(
+              id UNINDEXED,
+              title,
+              description,
+              tags,
+              contexts,
+              content=''
+            );
+            "#,
+        )
+        .expect("should create legacy fts table");
+
+        ensure_tasks_fts_schema(&conn).expect("should recreate tasks FTS table");
+
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(tasks_fts)")
+            .expect("should inspect fts columns");
+        let column_names: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("should read fts columns")
+            .map(|row| row.expect("column row"))
+            .collect();
+
+        assert!(column_names.iter().any(|name| name == "checklist"));
+        assert!(column_names.iter().any(|name| name == "location"));
+    }
+
+    #[test]
+    fn sqlite_fts_indexes_checklist_titles() {
+        let mut conn = Connection::open_in_memory().expect("should open in-memory db");
+        conn.execute_batch(SQLITE_SCHEMA)
+            .expect("should create schema");
+
+        let data = serde_json::json!({
+            "tasks": [{
+                "id": "task-checklist",
+                "title": "Travel prep",
+                "status": "next",
+                "tags": [],
+                "contexts": [],
+                "checklist": [
+                    { "id": "item-1", "title": "Book shuttle", "isCompleted": false },
+                    { "id": "item-2", "title": "Print ticket", "isCompleted": false }
+                ],
+                "createdAt": "2026-05-25T00:00:00.000Z",
+                "updatedAt": "2026-05-25T00:00:00.000Z"
+            }],
+            "projects": [],
+            "areas": [],
+            "sections": [],
+            "settings": {}
+        });
+
+        migrate_json_to_sqlite(&mut conn, &data).expect("should write data");
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks_fts WHERE tasks_fts MATCH ?1",
+                params!["shuttle*"],
+                |row| row.get(0),
+            )
+            .expect("should search fts");
+
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn sqlite_project_round_trip_preserves_sequential_scope() {
+        let mut conn = Connection::open_in_memory().expect("should open in-memory db");
+        conn.execute_batch(SQLITE_SCHEMA)
+            .expect("should create schema");
+
+        let data = serde_json::json!({
+            "tasks": [],
+            "projects": [{
+                "id": "project-1",
+                "title": "Project",
+                "status": "active",
+                "color": "#6B7280",
+                "order": 1,
+                "tagIds": [],
+                "isSequential": true,
+                "sequentialScope": "section",
+                "createdAt": "2026-05-25T00:00:00.000Z",
+                "updatedAt": "2026-05-25T00:00:00.000Z"
+            }],
+            "areas": [],
+            "sections": [],
+            "settings": {}
+        });
+
+        migrate_json_to_sqlite(&mut conn, &data).expect("should write data");
+        let read = read_sqlite_data(&conn).expect("should read data");
+        let project = read["projects"]
+            .as_array()
+            .and_then(|projects| projects.first())
+            .expect("project should exist");
+
+        assert_eq!(project["sequentialScope"], "section");
+    }
+
+    #[test]
+    fn sqlite_people_round_trip_preserves_people() {
+        let mut conn = Connection::open_in_memory().expect("should open in-memory db");
+        conn.execute_batch(SQLITE_SCHEMA)
+            .expect("should create schema");
+
+        let data = serde_json::json!({
+            "tasks": [],
+            "projects": [],
+            "areas": [],
+            "sections": [],
+            "people": [{
+                "id": "person-1",
+                "name": "Ada Lovelace",
+                "note": "review owner",
+                "referenceLink": "https://example.com/ada",
+                "rev": 7,
+                "revBy": "device-1",
+                "createdAt": "2026-05-25T00:00:00.000Z",
+                "updatedAt": "2026-05-26T00:00:00.000Z"
+            }],
+            "settings": {}
+        });
+
+        migrate_json_to_sqlite(&mut conn, &data).expect("should write data");
+        let read = read_sqlite_data(&conn).expect("should read data");
+        let person = read["people"]
+            .as_array()
+            .and_then(|people| people.first())
+            .expect("person should exist");
+
+        assert_eq!(person["id"], "person-1");
+        assert_eq!(person["name"], "Ada Lovelace");
+        assert_eq!(person["note"], "review owner");
+        assert_eq!(person["referenceLink"], "https://example.com/ada");
+        assert_eq!(person["rev"], 7);
+        assert_eq!(person["revBy"], "device-1");
+        assert_eq!(person["createdAt"], "2026-05-25T00:00:00.000Z");
+        assert_eq!(person["updatedAt"], "2026-05-26T00:00:00.000Z");
     }
 }
 
@@ -1791,6 +2876,12 @@ fn normalize_sync_value(value: Value) -> Value {
         if !matches!(map.get("areas"), Some(Value::Array(_))) {
             map.insert("areas".to_string(), Value::Array(Vec::new()));
         }
+        if !matches!(map.get("sections"), Some(Value::Array(_))) {
+            map.insert("sections".to_string(), Value::Array(Vec::new()));
+        }
+        if !matches!(map.get("people"), Some(Value::Array(_))) {
+            map.insert("people".to_string(), Value::Array(Vec::new()));
+        }
         if !matches!(map.get("settings"), Some(Value::Object(_))) {
             map.insert("settings".to_string(), Value::Object(Map::new()));
         }
@@ -1800,6 +2891,8 @@ fn normalize_sync_value(value: Value) -> Value {
         "tasks": [],
         "projects": [],
         "areas": [],
+        "sections": [],
+        "people": [],
         "settings": {}
     })
 }

@@ -1,8 +1,10 @@
 import { parseIcs, type ExternalCalendarEvent, type ExternalCalendarSubscription } from '@mindwtr/core';
+import { gunzipSync, strFromU8 } from 'fflate';
 import { ExternalCalendarService } from './external-calendar-service';
 import { isLocalCalendarFileUrl } from './external-calendar-source';
 import { isTauriRuntime } from './runtime';
 import { fetchSystemCalendarEvents } from './system-calendar';
+import { getTauriHttpFetch } from './tauri-http';
 
 const MINDWTR_PUSHED_EVENT_PREFIX = 'Mindwtr: ';
 const MINDWTR_MIRROR_CALENDAR_NAMES = new Set(['mindwtr', 'mindwtr calendar', 'mindwtrcal']);
@@ -143,6 +145,12 @@ export function isMindwtrMirrorEvent(
     return event.title.trim().toLowerCase().startsWith(MINDWTR_PUSHED_EVENT_PREFIX.toLowerCase());
 }
 
+async function readCalendarResponseText(res: Response): Promise<string> {
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const isGzip = bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b;
+    return strFromU8(isGzip ? gunzipSync(bytes) : bytes);
+}
+
 async function fetchTextWithTimeout(url: string, timeoutMs: number): Promise<string> {
     if (isLocalCalendarFileUrl(url)) {
         if (!isTauriRuntime()) {
@@ -153,14 +161,13 @@ async function fetchTextWithTimeout(url: string, timeoutMs: number): Promise<str
     }
 
     if (isTauriRuntime()) {
-        const mod: any = await import('@tauri-apps/plugin-http');
-        const tauriFetch: any = mod.fetch;
+        const tauriFetch = await getTauriHttpFetch();
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), timeoutMs);
         try {
-            const res = await tauriFetch(url, { method: 'GET', signal: controller.signal });
+            const res = await (tauriFetch ?? fetch)(url, { method: 'GET', signal: controller.signal });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            return await res.text();
+            return await readCalendarResponseText(res);
         } finally {
             clearTimeout(timeout);
         }
@@ -171,7 +178,7 @@ async function fetchTextWithTimeout(url: string, timeoutMs: number): Promise<str
     try {
         const res = await fetch(url, controller ? { signal: controller.signal } : undefined);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return await res.text();
+        return await readCalendarResponseText(res);
     } finally {
         if (timeout) clearTimeout(timeout);
     }

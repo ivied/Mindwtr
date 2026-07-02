@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { type Attachment, generateUUID, type Project, validateAttachmentForUpload } from '@mindwtr/core';
-import { resolveAttachmentOpenTarget, toAttachmentBrowserUrl } from '../../../lib/attachment-paths';
+import { openAttachmentTarget } from '../../../lib/open-attachment-target';
 import { isTauriRuntime } from '../../../lib/runtime';
 import { logWarn } from '../../../lib/app-log';
 
@@ -26,22 +26,17 @@ export function useProjectAttachmentActions({
     }, [selectedProject?.id]);
 
     const openAttachment = useCallback(async (attachment: Attachment) => {
-        const normalized = toAttachmentBrowserUrl(attachment.uri);
-        const openTarget = resolveAttachmentOpenTarget(attachment.uri);
-        if (isTauriRuntime()) {
-            try {
-                const { invoke } = await import('@tauri-apps/api/core');
-                await invoke('open_path', { path: openTarget });
-                return;
-            } catch (error) {
-                void logWarn('Failed to open attachment', {
-                    scope: 'attachment',
-                    extra: { error: error instanceof Error ? error.message : String(error) },
-                });
-            }
+        try {
+            await openAttachmentTarget(attachment.uri);
+        } catch (error) {
+            void logWarn('Failed to open attachment', {
+                scope: 'attachment',
+                extra: { error: error instanceof Error ? error.message : String(error) },
+            });
+            const message = error instanceof Error ? error.message : String(error);
+            setAttachmentError(message || t('attachments.fileNotSupported'));
         }
-        window.open(normalized, '_blank');
-    }, []);
+    }, [t]);
 
     const addProjectFileAttachment = useCallback(async () => {
         if (!selectedProject) return;

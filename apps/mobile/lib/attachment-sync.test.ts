@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AppData } from '@mindwtr/core';
+import type { AppData, Attachment } from '@mindwtr/core';
 
 const fileSystemMock = vi.hoisted(() => ({
   __esModule: true,
@@ -42,10 +42,30 @@ vi.mock('@mindwtr/core', () => ({
   cloudDeleteFile: vi.fn(),
   cloudPutFile: vi.fn(),
   isAbortError: vi.fn().mockReturnValue(false),
+  isDropboxUnauthorizedError: vi.fn((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.toLowerCase().includes('unauthorized') || message.includes('401');
+  }),
   computeSha256Hex: vi.fn().mockResolvedValue(null),
+  markAttachmentUnrecoverable: vi.fn((attachment: Attachment) => {
+    attachment.cloudKey = undefined;
+    attachment.fileHash = undefined;
+    attachment.localStatus = 'missing';
+    attachment.deletedAt = attachment.deletedAt || new Date().toISOString();
+    attachment.updatedAt = new Date().toISOString();
+    return true;
+  }),
   globalProgressTracker: {
     updateProgress: vi.fn(),
   },
+  decodeUriSafe: vi.fn((value: string) => {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  }),
+  sleep: vi.fn().mockResolvedValue(undefined),
   webdavGetFile: vi.fn(),
   webdavFileExists: vi.fn(),
   webdavMakeDirectory: vi.fn(),
@@ -130,6 +150,73 @@ describe('attachment sync', () => {
     expect(result.size).toBe(3);
   });
 
+  it('persists local file attachments by reading bytes when direct copy fails', async () => {
+    const sourceUri = 'file://document/mindwtr-audio-20260628-225702.m4a';
+    fileSystemMock.getInfoAsync.mockResolvedValueOnce({ exists: false });
+    fileSystemMock.copyAsync.mockRejectedValue(new Error('copy failed'));
+    fileSystemMock.readAsStringAsync.mockResolvedValue('AQID');
+
+    const { persistAttachmentLocally } = await import('./attachment-sync');
+
+    const result = await persistAttachmentLocally({
+      id: 'audio-1',
+      kind: 'file',
+      title: 'Audio Note.m4a',
+      uri: sourceUri,
+      mimeType: 'audio/mp4',
+      size: 112780,
+      createdAt: '2026-06-29T02:57:02.559Z',
+      updatedAt: '2026-06-29T02:57:02.559Z',
+      localStatus: 'available',
+    });
+
+    expect(fileSystemMock.copyAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        from: sourceUri,
+        to: expect.stringMatching(/^file:\/\/document\/attachments\/audio-1\.m4a\.tmp-/),
+      })
+    );
+    expect(fileSystemMock.readAsStringAsync).toHaveBeenCalledWith(
+      sourceUri,
+      { encoding: 'base64' }
+    );
+    expect(fileSystemMock.writeAsStringAsync).toHaveBeenCalledWith(
+      expect.stringMatching(/^file:\/\/document\/attachments\/audio-1\.m4a\.tmp-/),
+      'AQID',
+      { encoding: 'base64' }
+    );
+    expect(result.uri).toBe('file://document/attachments/audio-1.m4a');
+    expect(result.localStatus).toBe('available');
+    expect(result.size).toBe(112780);
+  });
+
+  it('normalizes legacy content-uri attachments when ensuring availability', async () => {
+    const contentUri = 'content://com.android.providers.downloads.documents/document/msf%3A1000006031';
+    fileSystemMock.getInfoAsync
+      .mockResolvedValueOnce({ exists: false })
+      .mockResolvedValueOnce({ exists: true, size: 3 });
+    fileSystemMock.readAsStringAsync.mockResolvedValue('AQID');
+
+    const { ensureAttachmentAvailable } = await import('./attachment-sync');
+
+    const result = await ensureAttachmentAvailable({
+      id: 'att-available',
+      kind: 'file',
+      title: 'Legacy.png',
+      uri: contentUri,
+      createdAt: '2026-03-06T05:14:32.399Z',
+      updatedAt: '2026-03-06T05:14:32.399Z',
+    });
+
+    expect(result?.uri).toBe('file://document/attachments/att-available.png');
+    expect(result?.localStatus).toBe('available');
+    expect(result?.size).toBe(3);
+    expect(fileSystemMock.readAsStringAsync).toHaveBeenCalledWith(
+      contentUri,
+      { encoding: 'base64' }
+    );
+  });
+
   it('reuses an existing SAF attachments directory even when Android returns it with a trailing slash', async () => {
     const syncFileUri = 'content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FMindwtr%20Backup/document/primary%3ADocuments%2FMindwtr%20Backup%2Fdata.json';
     const attachmentsDirUri = 'content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FMindwtr%20Backup/document/primary%3ADocuments%2FMindwtr%20Backup%2Fattachments/';
@@ -205,6 +292,285 @@ describe('attachment sync', () => {
     expect(fileSystemMock.StorageAccessFramework.makeDirectoryAsync).not.toHaveBeenCalled();
     expect(fileSystemMock.StorageAccessFramework.createFileAsync).not.toHaveBeenCalled();
     expect(fileSystemMock.StorageAccessFramework.writeAsStringAsync).not.toHaveBeenCalled();
+  });
+
+  it('reads the SAF attachments directory once per file-sync pass', async () => {
+    const syncFileUri = 'content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FMindwtr%20Backup/document/primary%3ADocuments%2FMindwtr%20Backup%2Fdata.json';
+    const attachmentsDirUri = 'content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FMindwtr%20Backup/document/primary%3ADocuments%2FMindwtr%20Backup%2Fattachments/';
+    const firstRemoteFileUri = `${attachmentsDirUri}first.txt`;
+    const secondRemoteFileUri = `${attachmentsDirUri}second.txt`;
+
+    fileSystemMock.getInfoAsync.mockResolvedValue({ exists: true, size: 3 });
+    fileSystemMock.StorageAccessFramework.readDirectoryAsync.mockImplementation(async (uri: string) => {
+      if (uri === attachmentsDirUri) {
+        return [firstRemoteFileUri, secondRemoteFileUri];
+      }
+      if (uri.includes('primary%3ADocuments%2FMindwtr%20Backup')) {
+        return [attachmentsDirUri];
+      }
+      return [];
+    });
+
+    const { syncFileAttachments } = await import('./attachment-sync');
+
+    const didMutate = await syncFileAttachments({
+      tasks: [
+        {
+          id: 'task-1',
+          title: 'Task',
+          status: 'inbox',
+          tags: [],
+          contexts: [],
+          attachments: [
+            {
+              id: 'first',
+              kind: 'file',
+              title: 'first.txt',
+              uri: 'file://document/attachments/first.txt',
+              cloudKey: 'attachments/first.txt',
+              localStatus: 'available',
+              createdAt: '2026-04-18T10:00:00.000Z',
+              updatedAt: '2026-04-18T10:00:00.000Z',
+            },
+            {
+              id: 'second',
+              kind: 'file',
+              title: 'second.txt',
+              uri: 'file://document/attachments/second.txt',
+              cloudKey: 'attachments/second.txt',
+              localStatus: 'available',
+              createdAt: '2026-04-18T10:00:00.000Z',
+              updatedAt: '2026-04-18T10:00:00.000Z',
+            },
+          ],
+          createdAt: '2026-04-18T10:00:00.000Z',
+          updatedAt: '2026-04-18T10:00:00.000Z',
+        },
+      ],
+      projects: [],
+      sections: [],
+      areas: [],
+      settings: {},
+    }, syncFileUri);
+
+    const attachmentDirReads = fileSystemMock.StorageAccessFramework.readDirectoryAsync.mock.calls
+      .filter(([uri]) => uri === attachmentsDirUri);
+
+    expect(didMutate).toBe(false);
+    expect(attachmentDirReads).toHaveLength(1);
+    expect(fileSystemMock.StorageAccessFramework.createFileAsync).not.toHaveBeenCalled();
+    expect(fileSystemMock.StorageAccessFramework.writeAsStringAsync).not.toHaveBeenCalled();
+  });
+
+  it('migrates legacy content-uri attachments into app-managed storage during sync', async () => {
+    const syncFileUri = 'content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FMindwtr%20Backup/document/primary%3ADocuments%2FMindwtr%20Backup%2Fdata.json';
+    const attachmentsDirUri = 'content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FMindwtr%20Backup/document/primary%3ADocuments%2FMindwtr%20Backup%2Fattachments/';
+    const remoteFileUri = `${attachmentsDirUri}legacy.txt`;
+    const legacyContentUri = 'content://com.android.providers.downloads.documents/document/msf%3A42';
+    const managedUri = 'file://document/attachments/legacy.txt';
+
+    fileSystemMock.getInfoAsync
+      .mockResolvedValueOnce({ exists: false, size: 0 })
+      .mockResolvedValue({ exists: true, size: 3 });
+    fileSystemMock.readAsStringAsync.mockResolvedValue('AQID');
+    fileSystemMock.StorageAccessFramework.readDirectoryAsync.mockImplementation(async (uri: string) => {
+      if (uri === attachmentsDirUri) {
+        return [remoteFileUri];
+      }
+      if (uri.includes('primary%3ADocuments%2FMindwtr%20Backup')) {
+        return [attachmentsDirUri];
+      }
+      return [];
+    });
+
+    const { syncFileAttachments } = await import('./attachment-sync');
+    const appData: AppData = {
+      tasks: [
+        {
+          id: 'task-1',
+          title: 'Task',
+          status: 'inbox',
+          tags: [],
+          contexts: [],
+          attachments: [
+            {
+              id: 'legacy',
+              kind: 'file',
+              title: 'legacy.txt',
+              uri: legacyContentUri,
+              cloudKey: 'attachments/legacy.txt',
+              size: 3,
+              createdAt: '2026-04-18T10:00:00.000Z',
+              updatedAt: '2026-04-18T10:00:00.000Z',
+            },
+          ],
+          createdAt: '2026-04-18T10:00:00.000Z',
+          updatedAt: '2026-04-18T10:00:00.000Z',
+        },
+      ],
+      projects: [],
+      sections: [],
+      areas: [],
+      settings: {},
+    };
+
+    const didMutate = await syncFileAttachments(appData, syncFileUri);
+    const attachment = appData.tasks[0].attachments?.[0];
+
+    expect(didMutate).toBe(true);
+    expect(attachment?.uri).toBe(managedUri);
+    expect(attachment?.localStatus).toBe('available');
+    expect(fileSystemMock.readAsStringAsync).toHaveBeenCalledWith(
+      legacyContentUri,
+      { encoding: 'base64' }
+    );
+    expect(fileSystemMock.writeAsStringAsync).toHaveBeenCalledWith(
+      expect.stringMatching(/^file:\/\/document\/attachments\/legacy\.txt\.tmp-/),
+      'AQID',
+      { encoding: 'base64' }
+    );
+    expect(fileSystemMock.StorageAccessFramework.createFileAsync).not.toHaveBeenCalled();
+  });
+
+  it('limits legacy content-uri migration work per attachment sync pass', async () => {
+    const syncFileUri = 'content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FMindwtr%20Backup/document/primary%3ADocuments%2FMindwtr%20Backup%2Fdata.json';
+    const attachmentsDirUri = 'content://com.android.externalstorage.documents/tree/primary%3ADocuments%2FMindwtr%20Backup/document/primary%3ADocuments%2FMindwtr%20Backup%2Fattachments/';
+
+    fileSystemMock.getInfoAsync
+      .mockResolvedValueOnce({ exists: false, size: 0 })
+      .mockResolvedValueOnce({ exists: true, size: 3 })
+      .mockResolvedValueOnce({ exists: false, size: 0 })
+      .mockResolvedValueOnce({ exists: true, size: 3 })
+      .mockResolvedValueOnce({ exists: false, size: 0 })
+      .mockResolvedValueOnce({ exists: true, size: 3 });
+    fileSystemMock.readAsStringAsync.mockResolvedValue('AQID');
+    fileSystemMock.StorageAccessFramework.readDirectoryAsync.mockImplementation(async (uri: string) => {
+      if (uri === attachmentsDirUri) {
+        return ['legacy-0.txt', 'legacy-1.txt', 'legacy-2.txt', 'legacy-3.txt'].map((name) => `${attachmentsDirUri}${name}`);
+      }
+      if (uri.includes('primary%3ADocuments%2FMindwtr%20Backup')) {
+        return [attachmentsDirUri];
+      }
+      return [];
+    });
+
+    const { ATTACHMENT_LOCAL_MIGRATION_MAX_PER_SYNC, syncFileAttachments } = await import('./attachment-sync');
+    const appData: AppData = {
+      tasks: [
+        {
+          id: 'task-1',
+          title: 'Task',
+          status: 'inbox',
+          tags: [],
+          contexts: [],
+          attachments: Array.from({ length: ATTACHMENT_LOCAL_MIGRATION_MAX_PER_SYNC + 1 }, (_, index) => ({
+            id: `legacy-${index}`,
+            kind: 'file' as const,
+            title: `legacy-${index}.txt`,
+            uri: `content://com.android.providers.downloads.documents/document/msf%3A${index}`,
+            cloudKey: `attachments/legacy-${index}.txt`,
+            size: 3,
+            createdAt: '2026-04-18T10:00:00.000Z',
+            updatedAt: '2026-04-18T10:00:00.000Z',
+          })),
+          createdAt: '2026-04-18T10:00:00.000Z',
+          updatedAt: '2026-04-18T10:00:00.000Z',
+        },
+      ],
+      projects: [],
+      sections: [],
+      areas: [],
+      settings: {},
+    };
+
+    const didMutate = await syncFileAttachments(appData, syncFileUri);
+    const attachments = appData.tasks[0].attachments ?? [];
+
+    expect(didMutate).toBe(true);
+    expect(fileSystemMock.readAsStringAsync).toHaveBeenCalledTimes(ATTACHMENT_LOCAL_MIGRATION_MAX_PER_SYNC);
+    expect(attachments.slice(0, ATTACHMENT_LOCAL_MIGRATION_MAX_PER_SYNC).every((attachment) =>
+      attachment.uri.startsWith('file://document/attachments/')
+    )).toBe(true);
+    expect(attachments[ATTACHMENT_LOCAL_MIGRATION_MAX_PER_SYNC].uri).toMatch(/^content:\/\//);
+    expect(fileSystemMock.StorageAccessFramework.createFileAsync).not.toHaveBeenCalled();
+  });
+
+  it('detects pending attachment work from metadata without touching stable managed files', async () => {
+    const { hasPendingAttachmentSyncWork } = await import('./attachment-sync');
+    const makeData = (attachment: Attachment, settings: AppData['settings'] = {}): AppData => ({
+      tasks: [
+        {
+          id: 'task-1',
+          title: 'Task',
+          status: 'inbox',
+          tags: [],
+          contexts: [],
+          attachments: [attachment],
+          createdAt: '2026-04-18T10:00:00.000Z',
+          updatedAt: '2026-04-18T10:00:00.000Z',
+        },
+      ],
+      projects: [],
+      sections: [],
+      areas: [],
+      settings,
+    });
+    const baseAttachment = {
+      id: 'stable',
+      kind: 'file' as const,
+      title: 'stable.txt',
+      uri: 'file://document/attachments/stable.txt',
+      cloudKey: 'attachments/stable.txt',
+      localStatus: 'available' as const,
+      createdAt: '2026-04-18T10:00:00.000Z',
+      updatedAt: '2026-04-18T10:00:00.000Z',
+    };
+
+    await expect(hasPendingAttachmentSyncWork(makeData(baseAttachment))).resolves.toBe(false);
+    expect(fileSystemMock.makeDirectoryAsync).not.toHaveBeenCalled();
+    expect(fileSystemMock.readDirectoryAsync).not.toHaveBeenCalled();
+    expect(fileSystemMock.StorageAccessFramework.readDirectoryAsync).not.toHaveBeenCalled();
+
+    const legacyManagedAttachment: Attachment = {
+      ...baseAttachment,
+      id: 'legacy-managed',
+      uri: 'file://document/attachments/legacy-managed.txt',
+      localStatus: undefined,
+    };
+    await expect(hasPendingAttachmentSyncWork(makeData(legacyManagedAttachment))).resolves.toBe(true);
+    expect(fileSystemMock.makeDirectoryAsync).not.toHaveBeenCalled();
+
+    const pendingUploadAttachment: Attachment = {
+      id: 'pending-upload',
+      kind: 'file',
+      title: 'pending-upload.txt',
+      uri: 'file://document/attachments/pending-upload.txt',
+      localStatus: 'available',
+      createdAt: '2026-04-18T10:00:00.000Z',
+      updatedAt: '2026-04-18T10:00:00.000Z',
+    };
+    await expect(hasPendingAttachmentSyncWork(makeData(pendingUploadAttachment))).resolves.toBe(true);
+
+    await expect(hasPendingAttachmentSyncWork(makeData({
+      ...baseAttachment,
+      id: 'legacy-content-uri',
+      uri: 'content://com.android.providers.downloads.documents/document/msf%3A42',
+    }))).resolves.toBe(true);
+
+    await expect(hasPendingAttachmentSyncWork(makeData({
+      ...baseAttachment,
+      id: 'missing-download',
+      uri: '',
+      localStatus: 'missing',
+    }))).resolves.toBe(true);
+
+    await expect(hasPendingAttachmentSyncWork(makeData(baseAttachment, {
+      attachments: {
+        pendingRemoteDeletes: [
+          { cloudKey: 'attachments/deleted.txt' },
+        ],
+      },
+    }))).resolves.toBe(true);
   });
 
   it('uploads a pending SAF file attachment into the existing attachments directory', async () => {
@@ -388,6 +754,71 @@ describe('attachment sync', () => {
       'application/octet-stream',
       expect.objectContaining({ signal: controller.signal })
     );
+  });
+
+  it('uploads cloud attachments from the original URI when local cache migration fails', async () => {
+    const originalUri = 'file://document/audio-captures/audio.m4a';
+    const managedUri = 'file://document/attachments/audio.m4a';
+    fileSystemMock.getInfoAsync.mockImplementation(async (uri: string) => {
+      if (uri === managedUri) return { exists: false };
+      if (uri === originalUri) return { exists: true, size: 3 };
+      return { exists: false };
+    });
+    fileSystemMock.copyAsync.mockRejectedValueOnce(new Error('copy failed'));
+    fileSystemMock.writeAsStringAsync.mockRejectedValueOnce(new Error('write failed'));
+    fileSystemMock.readAsStringAsync.mockResolvedValue('AQID');
+    const core = await import('@mindwtr/core');
+    const appData: AppData = {
+      tasks: [
+        {
+          id: 'task-1',
+          title: 'Task',
+          status: 'inbox',
+          tags: [],
+          contexts: [],
+          attachments: [
+            {
+              id: 'audio',
+              kind: 'file',
+              title: 'Audio Note',
+              uri: originalUri,
+              mimeType: 'audio/mp4',
+              size: 3,
+              localStatus: 'available',
+              createdAt: '2026-06-09T14:26:59.059Z',
+              updatedAt: '2026-06-09T14:26:59.059Z',
+            },
+          ],
+          createdAt: '2026-06-09T14:26:59.059Z',
+          updatedAt: '2026-06-09T14:26:59.059Z',
+        },
+      ],
+      projects: [],
+      sections: [],
+      areas: [],
+      settings: {},
+    };
+
+    const { syncCloudAttachments } = await import('./attachment-sync');
+
+    const didMutate = await syncCloudAttachments(
+      appData,
+      { url: 'https://cloud.example/v1/data', token: 'token' },
+      'https://cloud.example/v1'
+    );
+
+    expect(didMutate).toBe(true);
+    expect(core.cloudPutFile).toHaveBeenCalledWith(
+      'https://cloud.example/v1/attachments/audio.m4a',
+      expect.any(ArrayBuffer),
+      'audio/mp4',
+      { token: 'token' }
+    );
+    expect(appData.tasks[0].attachments?.[0]).toMatchObject({
+      cloudKey: 'attachments/audio.m4a',
+      localStatus: 'available',
+      uri: originalUri,
+    });
   });
 
   it('cleans up a cloud upload when local data changes before metadata is stamped', async () => {

@@ -2,7 +2,9 @@ import { format } from 'date-fns';
 import { Check, Search, X } from 'lucide-react';
 import { CALENDAR_TIME_ESTIMATE_OPTIONS } from '@mindwtr/core';
 
+import { TaskInput } from '../../Task/TaskInput';
 import { TaskItem } from '../../TaskItem';
+import { ModalPortal } from '../../ModalPortal';
 import { cn } from '../../../lib/utils';
 import {
     DESKTOP_GRID_SNAP_MINUTES,
@@ -24,6 +26,9 @@ type CalendarTaskComposerModalController = Pick<
     | 'formatDurationLabel'
     | 'formatTimeInputValue'
     | 'normalizeDurationMinutes'
+    | 'areas'
+    | 'projects'
+    | 'quickAddSuggestionTokens'
     | 'resolveText'
     | 'saveTaskComposer'
     | 'selectedComposerTask'
@@ -57,6 +62,7 @@ export function CalendarOpenTaskModal({ controller }: CalendarOpenTaskModalProps
     if (!openTask) return null;
 
     return (
+        <ModalPortal>
         <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
             <div
                 className="absolute inset-0"
@@ -83,6 +89,7 @@ export function CalendarOpenTaskModal({ controller }: CalendarOpenTaskModalProps
                 />
             </div>
         </div>
+        </ModalPortal>
     );
 }
 
@@ -93,6 +100,9 @@ export function CalendarTaskComposerModal({ controller }: CalendarTaskComposerMo
         formatDurationLabel,
         formatTimeInputValue,
         normalizeDurationMinutes,
+        areas,
+        projects,
+        quickAddSuggestionTokens,
         resolveText,
         saveTaskComposer,
         selectedComposerTask,
@@ -110,13 +120,14 @@ export function CalendarTaskComposerModal({ controller }: CalendarTaskComposerMo
     if (!taskComposer) return null;
 
     return (
+        <ModalPortal>
         <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4" role="dialog" aria-modal="true">
             <div
                 className="absolute inset-0"
                 onClick={() => setTaskComposer(null)}
             />
             <form
-                className="relative mt-[10vh] w-full max-w-xl overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl"
+                className="relative mt-[10vh] w-full max-w-xl rounded-xl border border-border bg-popover text-popover-foreground shadow-2xl"
                 onSubmit={(event) => {
                     event.preventDefault();
                     void saveTaskComposer();
@@ -167,17 +178,25 @@ export function CalendarTaskComposerModal({ controller }: CalendarTaskComposerMo
                     </div>
 
                     {taskComposer.mode === 'new' ? (
-                        <label className="block space-y-1 text-sm font-medium">
-                            {resolveText('calendar.taskTitle', 'Task title')}
-                            <input
+                        <div className="space-y-1">
+                            <label className="block text-sm font-medium" htmlFor="calendar-task-composer-title">
+                                {resolveText('calendar.taskTitle', 'Task title')}
+                            </label>
+                            <TaskInput
+                                id="calendar-task-composer-title"
                                 autoFocus
-                                type="text"
                                 value={taskComposer.title}
-                                onChange={(event) => setTaskComposer((prev) => prev ? { ...prev, title: event.target.value, error: null } : prev)}
+                                onChange={(value) => setTaskComposer((prev) => prev ? { ...prev, title: value, error: null } : prev)}
+                                projects={projects}
+                                contexts={quickAddSuggestionTokens}
+                                areas={areas}
                                 className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-normal focus:outline-none focus:ring-2 focus:ring-primary/30"
                                 placeholder={t('calendar.addTask')}
                             />
-                        </label>
+                            <p className="text-xs font-normal text-muted-foreground">
+                                {t('quickAdd.help')}
+                            </p>
+                        </div>
                     ) : (
                         <div className="space-y-2">
                             <label className="block space-y-1 text-sm font-medium">
@@ -310,5 +329,6 @@ export function CalendarTaskComposerModal({ controller }: CalendarTaskComposerMo
                 </div>
             </form>
         </div>
+        </ModalPortal>
     );
 }

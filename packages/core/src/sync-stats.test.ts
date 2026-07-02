@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { appendSyncHistory, filterDeleted, mergeAppDataWithStats } from './sync';
+import { appendSyncHistory, mergeAppDataWithStats } from './sync';
 import { filterNotDeleted } from './sync-helpers';
 import { createMockProject, createMockSection, createMockTask, mockAppData } from './sync-test-utils';
 import { AppData, Attachment, Project, Section, Task } from './types';
@@ -412,19 +412,7 @@ describe('Sync Logic', () => {
         });
     });
 
-    describe('filterDeleted', () => {
-        it('should filter out items with deletedAt set', () => {
-            const tasks = [
-                createMockTask('1', '2023-01-01'),
-                createMockTask('2', '2023-01-01', '2023-01-01'),
-            ];
-
-            const filtered = filterDeleted(tasks);
-
-            expect(filtered).toHaveLength(1);
-            expect(filtered[0].id).toBe('1');
-        });
-
+    describe('filterNotDeleted', () => {
         it('exposes filterNotDeleted as the correctly named helper', () => {
             const tasks = [
                 createMockTask('1', '2023-01-01'),

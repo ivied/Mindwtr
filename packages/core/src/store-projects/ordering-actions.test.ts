@@ -1,0 +1,474 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { flushPendingSave, resetForTests, setStorageAdapter, useTaskStore } from '../store';
+import { sortTasksByBoardOrder } from '../task-utils';
+import type { StorageAdapter } from '../storage';
+import type { AppData, Project, Section, Task } from '../types';
+
+const BASE_NOW = '2026-06-11T12:00:00.000Z';
+
+
+describe('reorderProjectTasks', () => {
+    let saveData: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+        saveData = vi.fn().mockResolvedValue(undefined);
+        const storage: StorageAdapter = {
+            getData: vi.fn().mockResolvedValue({ tasks: [], projects: [], sections: [], areas: [], settings: {} }),
+            saveData,
+        };
+        setStorageAdapter(storage);
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date(BASE_NOW));
+    });
+
+    afterEach(async () => {
+        await flushPendingSave();
+        resetForTests();
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
+    const project: Project = {
+        id: 'project-1',
+        title: 'Project 1',
+        status: 'active',
+        color: '#2563eb',
+        order: 0,
+        tagIds: [],
+        createdAt: '2026-06-01T00:00:00.000Z',
+        updatedAt: '2026-06-01T00:00:00.000Z',
+        rev: 1,
+        revBy: 'device-a',
+    };
+
+    const makeTask = (index: number): Task => ({
+        id: `task-${index}`,
+        title: `Task ${index}`,
+        status: 'next',
+        projectId: project.id,
+        tags: [],
+        contexts: [],
+        order: index * 1024,
+        orderNum: index * 1024,
+        createdAt: `2026-06-01T00:${String(index).padStart(2, '0')}:00.000Z`,
+        updatedAt: '2026-06-01T00:00:00.000Z',
+        rev: 1,
+        revBy: 'device-a',
+    });
+
+    const seedProjectTasks = (count: number) => {
+        const tasks = Array.from({ length: count }, (_, index) => makeTask(index));
+        useTaskStore.setState({
+            tasks,
+            projects: [project],
+            sections: [],
+            areas: [],
+            settings: { deviceId: 'device-a' },
+            isLoading: false,
+            error: null,
+            _allTasks: tasks,
+            _allProjects: [project],
+            _allSections: [],
+            _allAreas: [],
+            _tasksById: new Map(tasks.map((task) => [task.id, task])),
+            _projectsById: new Map([[project.id, project]]),
+            _sectionsById: new Map(),
+            _areasById: new Map(),
+            lastDataChangeAt: 0,
+        });
+        return tasks;
+    };
+
+    it('updates only the moved task when a sparse order slot exists', async () => {
+        const originalTasks = seedProjectTasks(100);
+        const orderedIds = originalTasks.map((task) => task.id);
+        const [movedId] = orderedIds.splice(50, 1);
+        orderedIds.splice(60, 0, movedId!);
+
+        await useTaskStore.getState().reorderProjectTasks(project.id, orderedIds);
+
+        const tasksById = new Map(useTaskStore.getState()._allTasks.map((task) => [task.id, task]));
+        const originalById = new Map(originalTasks.map((task) => [task.id, task]));
+        const changedTaskIds = useTaskStore.getState()._allTasks
+            .filter((task) => {
+                const original = originalById.get(task.id);
+                return original && (
+                    task.order !== original.order
+                    || task.orderNum !== original.orderNum
+                    || task.rev !== original.rev
+                    || task.updatedAt !== original.updatedAt
+                );
+            })
+            .map((task) => task.id);
+
+        expect(changedTaskIds).toEqual([movedId]);
+
+        const moved = tasksById.get(movedId!);
+        const previous = tasksById.get(orderedIds[59]!);
+        const next = tasksById.get(orderedIds[61]!);
+        expect(moved?.order).toBeGreaterThan(previous?.order ?? Number.NEGATIVE_INFINITY);
+        expect(moved?.order).toBeLessThan(next?.order ?? Number.POSITIVE_INFINITY);
+        expect(moved?.orderNum).toBe(moved?.order);
+        expect(moved?.rev).toBe(2);
+        expect(moved?.revBy).toBe('device-a');
+
+        const sortedIds = [...useTaskStore.getState()._allTasks]
+            .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+            .map((task) => task.id);
+        expect(sortedIds).toEqual(orderedIds);
+
+        await flushPendingSave();
+        const saved = saveData.mock.calls.at(-1)?.[0] as AppData | undefined;
+        expect(saved?.tasks.filter((task) => task.rev === 2).map((task) => task.id)).toEqual([movedId]);
+    });
+});
+
+describe('reorderProjects', () => {
+    let saveData: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+        saveData = vi.fn().mockResolvedValue(undefined);
+        const storage: StorageAdapter = {
+            getData: vi.fn().mockResolvedValue({ tasks: [], projects: [], sections: [], areas: [], settings: {} }),
+            saveData,
+        };
+        setStorageAdapter(storage);
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date(BASE_NOW));
+    });
+
+    afterEach(async () => {
+        await flushPendingSave();
+        resetForTests();
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
+    const makeProject = (index: number): Project => ({
+        id: `project-${index}`,
+        title: `Project ${index}`,
+        status: 'active',
+        color: '#2563eb',
+        order: index * 1024,
+        tagIds: [],
+        createdAt: `2026-06-01T00:${String(index).padStart(2, '0')}:00.000Z`,
+        updatedAt: '2026-06-01T00:00:00.000Z',
+        rev: 1,
+        revBy: 'device-a',
+    });
+
+    const seedProjects = (count: number) => {
+        const projects = Array.from({ length: count }, (_, index) => makeProject(index));
+        useTaskStore.setState({
+            tasks: [],
+            projects,
+            sections: [],
+            areas: [],
+            settings: { deviceId: 'device-a' },
+            isLoading: false,
+            error: null,
+            _allTasks: [],
+            _allProjects: projects,
+            _allSections: [],
+            _allAreas: [],
+            _tasksById: new Map(),
+            _projectsById: new Map(projects.map((project) => [project.id, project])),
+            _sectionsById: new Map(),
+            _areasById: new Map(),
+            lastDataChangeAt: 0,
+        });
+        return projects;
+    };
+
+    it('updates only the moved project when a sparse order slot exists', async () => {
+        const originalProjects = seedProjects(5);
+        const orderedIds = originalProjects.map((project) => project.id);
+        const [movedId] = orderedIds.splice(1, 1);
+        orderedIds.splice(3, 0, movedId!);
+
+        await useTaskStore.getState().reorderProjects(orderedIds);
+
+        const projectsById = new Map(useTaskStore.getState()._allProjects.map((project) => [project.id, project]));
+        const originalById = new Map(originalProjects.map((project) => [project.id, project]));
+        const changedProjectIds = useTaskStore.getState()._allProjects
+            .filter((project) => {
+                const original = originalById.get(project.id);
+                return original && (
+                    project.order !== original.order
+                    || project.rev !== original.rev
+                    || project.updatedAt !== original.updatedAt
+                );
+            })
+            .map((project) => project.id);
+
+        expect(changedProjectIds).toEqual([movedId]);
+
+        const moved = projectsById.get(movedId!);
+        const previous = projectsById.get(orderedIds[2]!);
+        const next = projectsById.get(orderedIds[4]!);
+        expect(moved?.order).toBeGreaterThan(previous?.order ?? Number.NEGATIVE_INFINITY);
+        expect(moved?.order).toBeLessThan(next?.order ?? Number.POSITIVE_INFINITY);
+
+        const sortedIds = [...useTaskStore.getState()._allProjects]
+            .sort((a, b) => a.order - b.order)
+            .map((project) => project.id);
+        expect(sortedIds).toEqual(orderedIds);
+
+        await flushPendingSave();
+        const saved = saveData.mock.calls.at(-1)?.[0] as AppData | undefined;
+        expect(saved?.projects.filter((project) => project.rev === 2).map((project) => project.id)).toEqual([movedId]);
+    });
+});
+
+describe('reorderSections', () => {
+    let saveData: ReturnType<typeof vi.fn>;
+
+    const project: Project = {
+        id: 'project-1',
+        title: 'Project 1',
+        status: 'active',
+        color: '#2563eb',
+        order: 0,
+        tagIds: [],
+        createdAt: '2026-06-01T00:00:00.000Z',
+        updatedAt: '2026-06-01T00:00:00.000Z',
+        rev: 1,
+        revBy: 'device-a',
+    };
+
+    beforeEach(() => {
+        saveData = vi.fn().mockResolvedValue(undefined);
+        const storage: StorageAdapter = {
+            getData: vi.fn().mockResolvedValue({ tasks: [], projects: [], sections: [], areas: [], settings: {} }),
+            saveData,
+        };
+        setStorageAdapter(storage);
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date(BASE_NOW));
+    });
+
+    afterEach(async () => {
+        await flushPendingSave();
+        resetForTests();
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
+    const makeSection = (index: number): Section => ({
+        id: `section-${index}`,
+        projectId: project.id,
+        title: `Section ${index}`,
+        order: index * 1024,
+        createdAt: `2026-06-01T00:${String(index).padStart(2, '0')}:00.000Z`,
+        updatedAt: '2026-06-01T00:00:00.000Z',
+        rev: 1,
+        revBy: 'device-a',
+    });
+
+    const seedSections = (count: number) => {
+        const sections = Array.from({ length: count }, (_, index) => makeSection(index));
+        useTaskStore.setState({
+            tasks: [],
+            projects: [project],
+            sections,
+            areas: [],
+            settings: { deviceId: 'device-a' },
+            isLoading: false,
+            error: null,
+            _allTasks: [],
+            _allProjects: [project],
+            _allSections: sections,
+            _allAreas: [],
+            _tasksById: new Map(),
+            _projectsById: new Map([[project.id, project]]),
+            _sectionsById: new Map(sections.map((section) => [section.id, section])),
+            _areasById: new Map(),
+            lastDataChangeAt: 0,
+        });
+        return sections;
+    };
+
+    it('updates only the moved section when a sparse order slot exists', async () => {
+        const originalSections = seedSections(5);
+        const orderedIds = originalSections.map((section) => section.id);
+        const [movedId] = orderedIds.splice(1, 1);
+        orderedIds.splice(3, 0, movedId!);
+
+        await useTaskStore.getState().reorderSections(project.id, orderedIds);
+
+        const sectionsById = new Map(useTaskStore.getState()._allSections.map((section) => [section.id, section]));
+        const originalById = new Map(originalSections.map((section) => [section.id, section]));
+        const changedSectionIds = useTaskStore.getState()._allSections
+            .filter((section) => {
+                const original = originalById.get(section.id);
+                return original && (
+                    section.order !== original.order
+                    || section.rev !== original.rev
+                    || section.updatedAt !== original.updatedAt
+                );
+            })
+            .map((section) => section.id);
+
+        expect(changedSectionIds).toEqual([movedId]);
+
+        const moved = sectionsById.get(movedId!);
+        const previous = sectionsById.get(orderedIds[2]!);
+        const next = sectionsById.get(orderedIds[4]!);
+        expect(moved?.order).toBeGreaterThan(previous?.order ?? Number.NEGATIVE_INFINITY);
+        expect(moved?.order).toBeLessThan(next?.order ?? Number.POSITIVE_INFINITY);
+
+        const sortedIds = [...useTaskStore.getState()._allSections]
+            .sort((a, b) => a.order - b.order)
+            .map((section) => section.id);
+        expect(sortedIds).toEqual(orderedIds);
+
+        await flushPendingSave();
+        const saved = saveData.mock.calls.at(-1)?.[0] as AppData | undefined;
+        expect(saved?.sections.filter((section) => section.rev === 2).map((section) => section.id)).toEqual([movedId]);
+    });
+});
+
+describe('reorderBoardTasks', () => {
+    let saveData: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+        saveData = vi.fn().mockResolvedValue(undefined);
+        const storage: StorageAdapter = {
+            getData: vi.fn().mockResolvedValue({ tasks: [], projects: [], sections: [], areas: [], settings: {} }),
+            saveData,
+        };
+        setStorageAdapter(storage);
+        useTaskStore.setState({
+            tasks: [],
+            projects: [],
+            sections: [],
+            areas: [],
+            settings: {},
+            isLoading: false,
+            error: null,
+            _allTasks: [],
+            _allProjects: [],
+            _allSections: [],
+            _allAreas: [],
+            _tasksById: new Map(),
+            _projectsById: new Map(),
+            _sectionsById: new Map(),
+            _areasById: new Map(),
+            lastDataChangeAt: 0,
+        });
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date(BASE_NOW));
+    });
+
+    afterEach(async () => {
+        await flushPendingSave();
+        resetForTests();
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+    });
+
+    const latestSavedData = (): AppData => {
+        const saved = saveData.mock.calls.at(-1)?.[0] as AppData | undefined;
+        expect(saved).toBeDefined();
+        return saved!;
+    };
+
+    const addStatusTask = async (title: string, status: 'next' | 'waiting') => {
+        const { addTask } = useTaskStore.getState();
+        await addTask(title, { status });
+        const task = useTaskStore.getState()._allTasks.find((item) => item.title === title);
+        expect(task).toBeDefined();
+        return task!;
+    };
+
+    const orderedNextIds = () => sortTasksByBoardOrder(
+        useTaskStore.getState().tasks.filter((task) => task.status === 'next'),
+    ).map((task) => task.id);
+
+    it('updates only the moved board task when a sparse order slot exists', async () => {
+        const q = await addStatusTask('Task Q', 'next');
+        const w = await addStatusTask('Task W', 'next');
+        const e = await addStatusTask('Task E', 'next');
+        const r = await addStatusTask('Task R', 'next');
+
+        await useTaskStore.getState().reorderBoardTasks('next', [e.id, q.id, w.id, r.id]);
+
+        const byId = new Map(useTaskStore.getState().tasks.map((task) => [task.id, task]));
+        expect(orderedNextIds()).toEqual([e.id, q.id, w.id, r.id]);
+        expect(byId.get(e.id)?.boardOrder).toBe(0);
+        expect(byId.get(q.id)?.boardOrder).toBeUndefined();
+        expect(byId.get(w.id)?.boardOrder).toBeUndefined();
+        expect(byId.get(r.id)?.boardOrder).toBeUndefined();
+        expect(byId.get(e.id)?.rev).toBe((e.rev ?? 0) + 1);
+        expect(byId.get(q.id)?.rev).toBe(q.rev);
+        expect(byId.get(w.id)?.rev).toBe(w.rev);
+        expect(byId.get(r.id)?.rev).toBe(r.rev);
+
+        await flushPendingSave();
+        const saved = latestSavedData();
+        expect(saved.tasks.filter((task) => task.rev === (e.rev ?? 0) + 1).map((task) => task.id)).toEqual([e.id]);
+        expect(saved.tasks.find((task) => task.id === e.id)?.boardOrder).toBe(0);
+    });
+
+    it('leaves tasks in other statuses untouched', async () => {
+        const next = await addStatusTask('Next Task', 'next');
+        const waiting = await addStatusTask('Waiting Task', 'waiting');
+
+        await useTaskStore.getState().reorderBoardTasks('next', [next.id]);
+
+        const state = useTaskStore.getState();
+        expect(state.tasks.find((task) => task.id === waiting.id)?.boardOrder).toBeUndefined();
+        expect(state.tasks.find((task) => task.id === waiting.id)?.rev).toBe(waiting.rev);
+    });
+
+    it('appends same-status tasks missing from orderedIds after the ordered ones', async () => {
+        const a = await addStatusTask('A', 'next');
+        const b = await addStatusTask('B', 'next');
+        const c = await addStatusTask('C', 'next');
+
+        await useTaskStore.getState().reorderBoardTasks('next', [c.id, a.id]);
+
+        const byId = new Map(useTaskStore.getState().tasks.map((task) => [task.id, task]));
+        expect(orderedNextIds()).toEqual([c.id, a.id, b.id]);
+        expect(byId.get(c.id)?.boardOrder).toBe(0);
+        expect(byId.get(a.id)?.boardOrder).toBeUndefined();
+        expect(byId.get(b.id)?.boardOrder).toBeUndefined();
+    });
+
+    it('ignores ids that are not tasks in the target status', async () => {
+        const a = await addStatusTask('A', 'next');
+        const waiting = await addStatusTask('W', 'waiting');
+
+        await useTaskStore.getState().reorderBoardTasks('next', [waiting.id, 'missing-id', a.id]);
+
+        const byId = new Map(useTaskStore.getState().tasks.map((task) => [task.id, task]));
+        expect(orderedNextIds()).toEqual([a.id]);
+        expect(byId.get(a.id)?.boardOrder).toBeUndefined();
+        expect(byId.get(waiting.id)?.boardOrder).toBeUndefined();
+    });
+
+    it('clears boardOrder when a task changes status', async () => {
+        const a = await addStatusTask('A', 'next');
+        const b = await addStatusTask('B', 'next');
+        await useTaskStore.getState().reorderBoardTasks('next', [b.id, a.id]);
+        expect(useTaskStore.getState().tasks.find((task) => task.id === b.id)?.boardOrder).toBe(0);
+
+        await useTaskStore.getState().moveTask(b.id, 'waiting');
+
+        const moved = useTaskStore.getState().tasks.find((task) => task.id === b.id);
+        expect(moved?.status).toBe('waiting');
+        expect(moved?.boardOrder).toBeUndefined();
+    });
+
+    it('keeps boardOrder when a task updates without a status change', async () => {
+        const a = await addStatusTask('A', 'next');
+        const b = await addStatusTask('B', 'next');
+        await useTaskStore.getState().reorderBoardTasks('next', [b.id, a.id]);
+
+        await useTaskStore.getState().updateTask(b.id, { title: 'B renamed' });
+
+        const updated = useTaskStore.getState().tasks.find((task) => task.id === b.id);
+        expect(updated?.boardOrder).toBe(0);
+        expect(orderedNextIds()).toEqual([b.id, a.id]);
+    });
+});

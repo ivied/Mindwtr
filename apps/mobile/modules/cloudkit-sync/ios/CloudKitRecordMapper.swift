@@ -13,9 +13,10 @@ enum CloudKitRecordMapper {
     static let projectType = "MindwtrProject"
     static let sectionType = "MindwtrSection"
     static let areaType = "MindwtrArea"
+    static let personType = "MindwtrPerson"
     static let settingsType = "MindwtrSettings"
 
-    static let allTypes = [taskType, projectType, sectionType, areaType, settingsType]
+    static let allTypes = [taskType, projectType, sectionType, areaType, personType, settingsType]
 
     // MARK: - JSON → CKRecord
 
@@ -98,6 +99,7 @@ enum CloudKitRecordMapper {
         case projectType: return projectFieldSpecs
         case sectionType: return sectionFieldSpecs
         case areaType: return areaFieldSpecs
+        case personType: return personFieldSpecs
         case settingsType: return settingsFieldSpecs
         default: return []
         }
@@ -113,8 +115,10 @@ enum CloudKitRecordMapper {
         FieldSpec(jsKey: "assignedTo", ckKey: "assignedTo", kind: .string),
         FieldSpec(jsKey: "taskMode", ckKey: "taskMode", kind: .string),
         FieldSpec(jsKey: "startTime", ckKey: "startTime", kind: .date),
+        FieldSpec(jsKey: "relativeStartOffset", ckKey: "relativeStartOffset", kind: .jsonString),
         FieldSpec(jsKey: "dueDate", ckKey: "dueDate", kind: .date),
         FieldSpec(jsKey: "recurrence", ckKey: "recurrence", kind: .jsonString),
+        FieldSpec(jsKey: "showFutureRecurrence", ckKey: "showFutureRecurrence", kind: .bool),
         FieldSpec(jsKey: "pushCount", ckKey: "pushCount", kind: .int),
         FieldSpec(jsKey: "tags", ckKey: "tags", kind: .stringArray),
         FieldSpec(jsKey: "contexts", ckKey: "contexts", kind: .stringArray),
@@ -128,8 +132,14 @@ enum CloudKitRecordMapper {
         FieldSpec(jsKey: "areaId", ckKey: "areaId", kind: .string),
         FieldSpec(jsKey: "isFocusedToday", ckKey: "isFocusedToday", kind: .bool),
         FieldSpec(jsKey: "timeEstimate", ckKey: "timeEstimate", kind: .string),
+        FieldSpec(jsKey: "suppressMindwtrReminders", ckKey: "suppressMindwtrReminders", kind: .bool),
+        FieldSpec(jsKey: "repeatReminderMinutes", ckKey: "repeatReminderMinutes", kind: .int),
         FieldSpec(jsKey: "reviewAt", ckKey: "reviewAt", kind: .date),
         FieldSpec(jsKey: "completedAt", ckKey: "completedAt", kind: .date),
+        FieldSpec(jsKey: "statusBeforeProjectArchive", ckKey: "statusBeforeProjectArchive", kind: .string),
+        FieldSpec(jsKey: "completedAtBeforeProjectArchive", ckKey: "completedAtBeforeProjectArchive", kind: .date),
+        FieldSpec(jsKey: "isFocusedTodayBeforeProjectArchive", ckKey: "isFocusedTodayBeforeProjectArchive", kind: .bool),
+        FieldSpec(jsKey: "projectArchivedAt", ckKey: "projectArchivedAt", kind: .date),
         FieldSpec(jsKey: "rev", ckKey: "rev", kind: .int),
         FieldSpec(jsKey: "revBy", ckKey: "revBy", kind: .string),
         FieldSpec(jsKey: "createdAt", ckKey: "createdAt", kind: .date),
@@ -149,6 +159,7 @@ enum CloudKitRecordMapper {
         FieldSpec(jsKey: "order", ckKey: "sortOrder", kind: .int),
         FieldSpec(jsKey: "tagIds", ckKey: "tagIds", kind: .stringArray),
         FieldSpec(jsKey: "isSequential", ckKey: "isSequential", kind: .bool),
+        FieldSpec(jsKey: "sequentialScope", ckKey: "sequentialScope", kind: .string),
         FieldSpec(jsKey: "isFocused", ckKey: "isFocused", kind: .bool),
         FieldSpec(jsKey: "supportNotes", ckKey: "supportNotes", kind: .string),
         FieldSpec(jsKey: "attachments", ckKey: "attachments", kind: .jsonString),
@@ -161,6 +172,7 @@ enum CloudKitRecordMapper {
         FieldSpec(jsKey: "createdAt", ckKey: "createdAt", kind: .date),
         FieldSpec(jsKey: "updatedAt", ckKey: "updatedAt", kind: .date),
         FieldSpec(jsKey: "deletedAt", ckKey: "deletedAt", kind: .date),
+        FieldSpec(jsKey: "purgedAt", ckKey: "purgedAt", kind: .date),
     ]
 
     // MARK: - Section Fields
@@ -176,6 +188,8 @@ enum CloudKitRecordMapper {
         FieldSpec(jsKey: "createdAt", ckKey: "createdAt", kind: .date),
         FieldSpec(jsKey: "updatedAt", ckKey: "updatedAt", kind: .date),
         FieldSpec(jsKey: "deletedAt", ckKey: "deletedAt", kind: .date),
+        FieldSpec(jsKey: "deletedAtBeforeProjectArchive", ckKey: "deletedAtBeforeProjectArchive", kind: .date),
+        FieldSpec(jsKey: "projectArchivedAt", ckKey: "projectArchivedAt", kind: .date),
     ]
 
     // MARK: - Area Fields
@@ -185,6 +199,19 @@ enum CloudKitRecordMapper {
         FieldSpec(jsKey: "color", ckKey: "color", kind: .string),
         FieldSpec(jsKey: "icon", ckKey: "icon", kind: .string),
         FieldSpec(jsKey: "order", ckKey: "sortOrder", kind: .int),
+        FieldSpec(jsKey: "rev", ckKey: "rev", kind: .int),
+        FieldSpec(jsKey: "revBy", ckKey: "revBy", kind: .string),
+        FieldSpec(jsKey: "createdAt", ckKey: "createdAt", kind: .date),
+        FieldSpec(jsKey: "updatedAt", ckKey: "updatedAt", kind: .date),
+        FieldSpec(jsKey: "deletedAt", ckKey: "deletedAt", kind: .date),
+    ]
+
+    // MARK: - Person Fields
+
+    private static let personFieldSpecs: [FieldSpec] = [
+        FieldSpec(jsKey: "name", ckKey: "name", kind: .string),
+        FieldSpec(jsKey: "note", ckKey: "note", kind: .string),
+        FieldSpec(jsKey: "referenceLink", ckKey: "referenceLink", kind: .string),
         FieldSpec(jsKey: "rev", ckKey: "rev", kind: .int),
         FieldSpec(jsKey: "revBy", ckKey: "revBy", kind: .string),
         FieldSpec(jsKey: "createdAt", ckKey: "createdAt", kind: .date),

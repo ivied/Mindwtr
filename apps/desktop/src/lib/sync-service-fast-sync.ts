@@ -1,23 +1,21 @@
 import {
-    computeStableValueFingerprint,
-    findPendingAttachmentUploads,
-    normalizeCloudUrl,
-    normalizeWebdavUrl,
-    type AppData,
+    buildFastSyncScope as buildCoreFastSyncScope,
+    parseFastSyncState,
+    serializeFastSyncState,
+    type AppSettings,
     type CloudProvider,
+    type FastSyncState,
 } from '@mindwtr/core';
 
 import type { CloudConfig, WebDavConfig } from './sync-attachment-backends';
 import type { SyncBackend } from './sync-service-utils';
 
-const FAST_SYNC_STATE_KEY = 'mindwtr-fast-sync-state-v1';
+export { hasPendingSyncSideEffects } from '@mindwtr/core';
+export type { FastSyncState } from '@mindwtr/core';
 
-export type FastSyncState = {
-    scope: string;
-    localFingerprint: string;
-    remoteFingerprint: string;
-    checkedAt: string;
-};
+const FAST_SYNC_STATE_KEY = 'mindwtr-fast-sync-state-v1';
+const LOCAL_SYNC_STATUS_KEY = 'mindwtr-local-sync-status-v1';
+type LocalSyncStatus = Pick<AppSettings, 'lastSyncAt' | 'lastSyncStatus' | 'lastSyncError' | 'lastSyncStats' | 'lastSyncHistory'>;
 
 type FastSyncScopeContext = {
     backend: SyncBackend;
@@ -31,16 +29,7 @@ export function readFastSyncState(scope: string): FastSyncState | null {
     if (typeof localStorage === 'undefined') return null;
     try {
         const raw = localStorage.getItem(FAST_SYNC_STATE_KEY);
-        if (!raw) return null;
-        const parsed = JSON.parse(raw) as Partial<FastSyncState>;
-        if (
-            parsed.scope !== scope
-            || typeof parsed.localFingerprint !== 'string'
-            || typeof parsed.remoteFingerprint !== 'string'
-        ) {
-            return null;
-        }
-        return parsed as FastSyncState;
+        return parseFastSyncState(raw, scope);
     } catch {
         return null;
     }
@@ -52,9 +41,65 @@ export function writeFastSyncState(
 ): void {
     if (typeof localStorage === 'undefined') return;
     try {
-        localStorage.setItem(FAST_SYNC_STATE_KEY, JSON.stringify(state));
+        localStorage.setItem(FAST_SYNC_STATE_KEY, serializeFastSyncState(state));
     } catch (error) {
         logWarning('Failed to cache sync fast-check state', error);
+    }
+}
+
+const sanitizeLocalSyncStatus = (value: Partial<LocalSyncStatus>): Partial<LocalSyncStatus> => {
+    const next: Partial<LocalSyncStatus> = {};
+    if (typeof value.lastSyncAt === 'string') next.lastSyncAt = value.lastSyncAt;
+    if (
+        value.lastSyncStatus === 'idle'
+        || value.lastSyncStatus === 'syncing'
+        || value.lastSyncStatus === 'success'
+        || value.lastSyncStatus === 'error'
+        || value.lastSyncStatus === 'conflict'
+    ) {
+        next.lastSyncStatus = value.lastSyncStatus;
+    }
+    if (typeof value.lastSyncError === 'string') next.lastSyncError = value.lastSyncError;
+    if (value.lastSyncStats && typeof value.lastSyncStats === 'object') next.lastSyncStats = value.lastSyncStats;
+    if (Array.isArray(value.lastSyncHistory)) next.lastSyncHistory = value.lastSyncHistory;
+    return next;
+};
+
+export function readLocalSyncStatus(): Partial<LocalSyncStatus> | null {
+    if (typeof localStorage === 'undefined') return null;
+    try {
+        const raw = localStorage.getItem(LOCAL_SYNC_STATUS_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw) as Partial<LocalSyncStatus>;
+        const status = sanitizeLocalSyncStatus(parsed);
+        return Object.keys(status).length > 0 ? status : null;
+    } catch {
+        return null;
+    }
+}
+
+export function writeLocalSyncStatus(
+    updates: Partial<LocalSyncStatus>,
+    logWarning: (message: string, error?: unknown) => void
+): void {
+    if (typeof localStorage === 'undefined') return;
+    try {
+        const next = sanitizeLocalSyncStatus({
+            ...(readLocalSyncStatus() ?? {}),
+            ...updates,
+        });
+        localStorage.setItem(LOCAL_SYNC_STATUS_KEY, JSON.stringify(next));
+    } catch (error) {
+        logWarning('Failed to cache local sync status', error);
+    }
+}
+
+export function clearLocalSyncStatus(): void {
+    if (typeof localStorage === 'undefined') return;
+    try {
+        localStorage.removeItem(LOCAL_SYNC_STATUS_KEY);
+    } catch {
+        // Best-effort local cache cleanup.
     }
 }
 
@@ -68,34 +113,5 @@ export function clearFastSyncState(): void {
 }
 
 export function buildFastSyncScope(context: FastSyncScopeContext): string | null {
-    if (context.backend === 'webdav' && context.webdavConfig?.url) {
-        return computeStableValueFingerprint({
-            backend: 'webdav',
-            url: normalizeWebdavUrl(context.webdavConfig.url),
-            username: context.webdavConfig.username || '',
-        });
-    }
-    if (context.backend === 'cloud' && context.cloudProvider === 'selfhosted' && context.cloudConfig?.url) {
-        return computeStableValueFingerprint({
-            backend: 'cloud',
-            provider: 'selfhosted',
-            url: normalizeCloudUrl(context.cloudConfig.url),
-            token: context.cloudConfig.token || '',
-        });
-    }
-    if (context.backend === 'cloud' && context.cloudProvider === 'dropbox' && context.dropboxAppKey) {
-        return computeStableValueFingerprint({
-            backend: 'cloud',
-            provider: 'dropbox',
-            appKey: context.dropboxAppKey,
-            path: '/data.json',
-        });
-    }
-    return null;
-}
-
-export function hasPendingSyncSideEffects(data: AppData): boolean {
-    return Boolean(data.settings.pendingRemoteWriteAt)
-        || findPendingAttachmentUploads(data).length > 0
-        || Boolean(data.settings.attachments?.pendingRemoteDeletes?.length);
+    return buildCoreFastSyncScope(context);
 }

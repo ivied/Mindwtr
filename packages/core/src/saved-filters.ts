@@ -10,13 +10,15 @@ import {
     startOfWeek,
 } from 'date-fns';
 
-import { timeEstimateToMinutes } from './calendar-scheduling';
+import { timeEstimateToFilterBucket, timeEstimateToMinutes } from './calendar-scheduling';
 import { safeParseDate, safeParseDueDate } from './date';
 import { matchesHierarchicalToken, normalizePrefixedToken } from './hierarchy-utils';
 import type {
     DateRange,
     FilterCriteria,
     FilterPriority,
+    FocusGroupBy,
+    MultiValueFilterMatchMode,
     Project,
     SavedFilter,
     SavedFilterView,
@@ -41,7 +43,9 @@ const TASK_STATUS_VALUES = new Set<TaskStatus>(['inbox', 'next', 'waiting', 'som
 const FILTER_PRIORITY_VALUES = new Set<FilterPriority>(['none', 'low', 'medium', 'high', 'urgent']);
 const TASK_ENERGY_VALUES = new Set<TaskEnergyLevel>(['low', 'medium', 'high']);
 const TIME_ESTIMATE_VALUES = new Set<TimeEstimate>(['5min', '10min', '15min', '30min', '1hr', '2hr', '3hr', '4hr', '4hr+']);
+const MULTI_VALUE_FILTER_MATCH_MODE_VALUES = new Set<MultiValueFilterMatchMode>(['any', 'all']);
 const SAVED_FILTER_VIEW_VALUES = new Set<SavedFilterView>(['focus', 'next', 'waiting', 'someday', 'contexts', 'all']);
+const FOCUS_GROUP_BY_VALUES = new Set<FocusGroupBy>(['none', 'context', 'project', 'area', 'energy', 'priority', 'person', 'tag']);
 const SORT_FIELD_VALUES = new Set<SortField>([
     'default',
     'due',
@@ -97,6 +101,12 @@ const normalizeEnumArray = <T extends string>(value: unknown, allowed: Set<T>): 
     return next.length > 0 ? next : undefined;
 };
 
+const normalizeMultiValueFilterMatchMode = (value: unknown): MultiValueFilterMatchMode | undefined => (
+    typeof value === 'string' && MULTI_VALUE_FILTER_MATCH_MODE_VALUES.has(value as MultiValueFilterMatchMode)
+        ? value as MultiValueFilterMatchMode
+        : undefined
+);
+
 export function normalizeDateRange(value: unknown): DateRange | undefined {
     if (!isRecord(value)) return undefined;
     if (typeof value.preset === 'string' && DATE_PRESET_VALUES.has(value.preset)) {
@@ -119,9 +129,12 @@ export function normalizeFilterCriteria(value: unknown): FilterCriteria {
     const priority = normalizeEnumArray(value.priority, FILTER_PRIORITY_VALUES);
     const statuses = normalizeEnumArray(value.statuses, TASK_STATUS_VALUES);
     const assignedTo = normalizeStringArray(value.assignedTo);
+    const locations = normalizeStringArray(value.locations);
     const timeEstimates = normalizeEnumArray(value.timeEstimates, TIME_ESTIMATE_VALUES);
 
     if (contexts) criteria.contexts = contexts;
+    const contextMatchMode = normalizeMultiValueFilterMatchMode(value.contextMatchMode);
+    if (contexts && contextMatchMode) criteria.contextMatchMode = contextMatchMode;
     if (areas) criteria.areas = areas;
     if (projects) criteria.projects = projects;
     if (tags) criteria.tags = tags;
@@ -129,6 +142,7 @@ export function normalizeFilterCriteria(value: unknown): FilterCriteria {
     if (priority) criteria.priority = priority;
     if (statuses) criteria.statuses = statuses;
     if (assignedTo) criteria.assignedTo = assignedTo;
+    if (locations) criteria.locations = locations;
     if (timeEstimates) criteria.timeEstimates = timeEstimates;
 
     const dueDateRange = normalizeDateRange(value.dueDateRange);
@@ -168,6 +182,7 @@ export function hasActiveFilterCriteria(criteria: FilterCriteria | undefined): b
         || normalized.startDateRange
         || normalized.statuses?.length
         || normalized.assignedTo?.length
+        || normalized.locations?.length
         || normalized.timeEstimateRange
         || normalized.timeEstimates?.length
         || normalized.hasDescription !== undefined
@@ -264,6 +279,13 @@ const matchesAssignedTo = (selected: readonly string[] | undefined, assignedTo: 
     return selected.some((item) => item.trim().toLowerCase() === normalized);
 };
 
+const matchesLocation = (selected: readonly string[] | undefined, location: string | undefined): boolean => {
+    if (!selected || selected.length === 0) return true;
+    const normalized = location?.trim().toLowerCase();
+    if (!normalized) return false;
+    return selected.some((item) => normalized.includes(item.trim().toLowerCase()));
+};
+
 const matchesPriority = (selected: readonly FilterPriority[] | undefined, priority: TaskPriority | undefined): boolean => {
     if (!selected || selected.length === 0) return true;
     return selected.some((item) => item === 'none' ? !priority : priority === item);
@@ -281,20 +303,40 @@ const matchesTimeEstimateRange = (
     return true;
 };
 
-export function taskMatchesFilterCriteria(
-    task: Task,
+type PreparedFilterContext = {
+    normalized: FilterCriteria;
+    projectById?: Map<string, Project>;
+    now: Date;
+    tokenMatchMode: 'any' | 'all';
+    contextMatchMode: 'any' | 'all';
+    weekStartsOn: 0 | 1 | 2 | 3 | 4 | 5 | 6;
+};
+
+const prepareFilterContext = (
     criteria: FilterCriteria | undefined,
     options: ApplyFilterOptions = {}
-): boolean {
-    if (task.deletedAt) return false;
+): PreparedFilterContext => {
     const normalized = normalizeFilterCriteria(criteria);
-    const projectById = options.projects ? new Map(options.projects.map((project) => [project.id, project])) : undefined;
-    const now = options.now ?? new Date();
     const tokenMatchMode = options.tokenMatchMode ?? 'any';
-    const weekStartsOn = options.weekStartsOn ?? 1;
+    return {
+        normalized,
+        projectById: options.projects ? new Map(options.projects.map((project) => [project.id, project])) : undefined,
+        now: options.now ?? new Date(),
+        tokenMatchMode,
+        contextMatchMode: normalized.contextMatchMode ?? tokenMatchMode,
+        weekStartsOn: options.weekStartsOn ?? 1,
+    };
+};
+
+const taskMatchesPreparedFilterCriteria = (
+    task: Task,
+    context: PreparedFilterContext
+): boolean => {
+    if (task.deletedAt) return false;
+    const { normalized, projectById, now, tokenMatchMode, contextMatchMode, weekStartsOn } = context;
 
     if (normalized.statuses?.length && !normalized.statuses.includes(task.status)) return false;
-    if (!matchesTokens(normalized.contexts, task.contexts, tokenMatchMode)) return false;
+    if (!matchesTokens(normalized.contexts, task.contexts, contextMatchMode)) return false;
     if (!matchesTokens(normalized.tags, task.tags, tokenMatchMode)) return false;
 
     if (normalized.areas?.length) {
@@ -315,7 +357,11 @@ export function taskMatchesFilterCriteria(
     if (!matchesDateRange(task.dueDate, normalized.dueDateRange, safeParseDueDate, { now, weekStartsOn })) return false;
     if (!matchesDateRange(task.startTime, normalized.startDateRange, safeParseDate, { now, weekStartsOn })) return false;
     if (!matchesAssignedTo(normalized.assignedTo, task.assignedTo)) return false;
-    if (normalized.timeEstimates?.length && (!task.timeEstimate || !normalized.timeEstimates.includes(task.timeEstimate))) return false;
+    if (!matchesLocation(normalized.locations, task.location)) return false;
+    if (normalized.timeEstimates?.length) {
+        const bucket = timeEstimateToFilterBucket(task.timeEstimate);
+        if (!bucket || !normalized.timeEstimates.includes(bucket)) return false;
+    }
     if (!matchesTimeEstimateRange(normalized.timeEstimateRange, task.timeEstimate)) return false;
     if (normalized.hasDescription !== undefined) {
         const hasDescription = Boolean(task.description?.trim());
@@ -324,6 +370,22 @@ export function taskMatchesFilterCriteria(
     if (normalized.isStarred !== undefined && Boolean(task.isFocusedToday) !== normalized.isStarred) return false;
 
     return true;
+};
+
+export function taskMatchesFilterCriteria(
+    task: Task,
+    criteria: FilterCriteria | undefined,
+    options: ApplyFilterOptions = {}
+): boolean {
+    return taskMatchesPreparedFilterCriteria(task, prepareFilterContext(criteria, options));
+}
+
+export function createTaskFilterPredicate(
+    criteria: FilterCriteria | undefined,
+    options: ApplyFilterOptions = {}
+): (task: Task) => boolean {
+    const context = prepareFilterContext(criteria, options);
+    return (task: Task) => taskMatchesPreparedFilterCriteria(task, context);
 }
 
 export function applyFilter<T extends Task>(
@@ -331,7 +393,7 @@ export function applyFilter<T extends Task>(
     criteria: FilterCriteria | undefined,
     options: ApplyFilterOptions = {}
 ): T[] {
-    return tasks.filter((task) => taskMatchesFilterCriteria(task, criteria, options));
+    return tasks.filter(createTaskFilterPredicate(criteria, options));
 }
 
 export function normalizeSavedFilter(value: unknown): SavedFilter | null {
@@ -347,6 +409,9 @@ export function normalizeSavedFilter(value: unknown): SavedFilter | null {
         ? value.sortBy as SortField
         : undefined;
     const sortOrder = value.sortOrder === 'asc' || value.sortOrder === 'desc' ? value.sortOrder : undefined;
+    const groupBy = typeof value.groupBy === 'string' && FOCUS_GROUP_BY_VALUES.has(value.groupBy as FocusGroupBy)
+        ? value.groupBy as FocusGroupBy
+        : undefined;
     const icon = typeof value.icon === 'string' && value.icon.trim() ? value.icon.trim() : undefined;
     const deletedAt = typeof value.deletedAt === 'string' && value.deletedAt.trim() ? value.deletedAt.trim() : undefined;
 
@@ -358,6 +423,7 @@ export function normalizeSavedFilter(value: unknown): SavedFilter | null {
         criteria: normalizeFilterCriteria(value.criteria),
         ...(sortBy ? { sortBy } : {}),
         ...(sortOrder ? { sortOrder } : {}),
+        ...(groupBy ? { groupBy } : {}),
         createdAt,
         updatedAt,
         ...(deletedAt ? { deletedAt } : {}),

@@ -1,9 +1,11 @@
 import { useId } from 'react';
 import { KeybindingStyle } from '../contexts/keybinding-context';
+import { ModalPortal } from './ModalPortal';
 import {
     type GlobalQuickAddShortcutSetting,
     formatGlobalQuickAddShortcutForDisplay,
 } from '../lib/global-quick-add-shortcut';
+import { MANUAL_SYNC_SHORTCUT_DISPLAY } from '../lib/manual-sync-shortcut';
 
 interface KeybindingHelpModalProps {
     style: KeybindingStyle;
@@ -30,7 +32,9 @@ export function KeybindingHelpModal({
     const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform);
     const quickAddShortcutDisplay = formatGlobalQuickAddShortcutForDisplay(quickAddShortcut, isMac);
     const sharedGlobal: HelpItem[] = [
-        { keys: quickAddShortcutDisplay, labelKey: 'keybindings.quickAdd' },
+        { keys: quickAddShortcutDisplay, labelKey: 'keybindings.globalQuickAdd', fallbackLabel: 'Global quick add' },
+        { keys: 'a', labelKey: 'keybindings.inAppQuickAdd', fallbackLabel: 'In-app quick add' },
+        { keys: MANUAL_SYNC_SHORTCUT_DISPLAY, labelKey: 'settings.syncNow', fallbackLabel: 'Sync now' },
         { keys: 'Ctrl+, / Cmd+,', labelKey: 'keybindings.openSettings' },
         { keys: 'Ctrl-b / Cmd-b', labelKey: 'keybindings.toggleSidebar' },
         { keys: 'Ctrl+\\ / Cmd+\\', labelKey: 'keybindings.toggleSidebar' },
@@ -58,8 +62,8 @@ export function KeybindingHelpModal({
         { keys: 'gb', labelKey: 'keybindings.goBoard' },
         { keys: 'gd', labelKey: 'keybindings.goDone' },
         { keys: 'ga', labelKey: 'keybindings.goArchived' },
-        { keys: 'a1-a9', labelKey: 'keybindings.switchArea', fallbackLabel: 'Switch to Area 1-9' },
-        { keys: 'a0', labelKey: 'keybindings.clearAreaFilter', fallbackLabel: 'Clear area filter' },
+        { keys: 'A1-A9', labelKey: 'keybindings.switchArea', fallbackLabel: 'Switch to Area 1-9' },
+        { keys: 'A0', labelKey: 'keybindings.clearAreaFilter', fallbackLabel: 'Clear area filter' },
     ];
 
     const vimList: HelpItem[] = [
@@ -71,7 +75,6 @@ export function KeybindingHelpModal({
         { keys: 'Esc', labelKey: 'keybindings.list.cancelEdit' },
         { keys: 'x', labelKey: 'keybindings.list.toggleDone' },
         { keys: 'dd', labelKey: 'keybindings.list.delete' },
-        { keys: 'o', labelKey: 'keybindings.list.newTask' },
     ];
 
     const emacsGlobal: HelpItem[] = [
@@ -101,7 +104,6 @@ export function KeybindingHelpModal({
         { keys: 'Esc', labelKey: 'keybindings.list.cancelEdit' },
         { keys: 'Ctrl-t', labelKey: 'keybindings.list.toggleDone' },
         { keys: 'Ctrl-d', labelKey: 'keybindings.list.delete' },
-        { keys: 'Ctrl-o', labelKey: 'keybindings.list.newTask' },
     ];
 
     const globalItems = style === 'emacs' ? emacsGlobal : vimGlobal;
@@ -113,6 +115,7 @@ export function KeybindingHelpModal({
     };
 
     return (
+        <ModalPortal>
         <div
             className="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
             onKeyDown={(event) => {
@@ -183,5 +186,6 @@ export function KeybindingHelpModal({
                 </div>
             </div>
         </div>
+        </ModalPortal>
     );
 }

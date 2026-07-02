@@ -15,6 +15,7 @@ import {
   buildCloudKey,
   clearWebdavDownloadBackoff,
   collectAttachments,
+  createAttachmentLocalMigrationLimiter,
   DEFAULT_CONTENT_TYPE,
   extractExtension,
   fileExists,
@@ -102,6 +103,7 @@ export const syncWebdavAttachments = async (
 
   let didMutate = false;
   const downloadQueue: Attachment[] = [];
+  const migrateAttachmentLocally = createAttachmentLocalMigrationLimiter();
   let abortedByRateLimit = false;
   let uploadCount = 0;
   let uploadLimitLogged = false;
@@ -110,6 +112,11 @@ export const syncWebdavAttachments = async (
     if (attachment.deletedAt) continue;
     if (abortedByRateLimit) break;
     assertAttachmentSyncNotAborted(signal);
+    const localMigration = await migrateAttachmentLocally(attachment);
+    if (localMigration.migrated) {
+      didMutate = true;
+    }
+    if (localMigration.skipped) continue;
 
     const uri = attachment.uri || '';
     const isHttp = isHttpAttachmentUri(uri);

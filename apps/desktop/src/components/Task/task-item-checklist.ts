@@ -35,10 +35,5 @@ export const mergeMarkdownChecklist = (
         });
     }
 
-    for (const item of current) {
-        if (!item?.id || usedIds.has(item.id)) continue;
-        merged.push(item);
-    }
-
     return merged;
 };

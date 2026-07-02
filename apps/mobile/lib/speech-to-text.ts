@@ -1,6 +1,6 @@
 import { Directory, File, Paths } from 'expo-file-system';
-import { Platform } from 'react-native';
-import type { AudioCaptureMode, AudioFieldStrategy } from '@mindwtr/core';
+import { NativeModules, Platform } from 'react-native';
+import type { AudioCaptureMode, AudioFieldStrategy, SpeechToTextSettings } from '@mindwtr/core';
 import { logInfo, logWarn } from './app-log';
 import {
   buildMultipartAudioPart,
@@ -8,7 +8,7 @@ import {
   normalizeAudioUriForFileRead,
 } from './speech-to-text.helpers';
 
-type SpeechProvider = 'openai' | 'gemini' | 'whisper';
+export type SpeechProvider = 'openai' | 'gemini' | 'whisper';
 
 export type SpeechToTextResult = {
   transcript: string;
@@ -22,6 +22,23 @@ export type SpeechToTextResult = {
   language?: string | null;
 };
 
+export type CapturedAudio = {
+  uri: string;
+  platform: 'ios' | 'android';
+  source: 'expo-recorder' | 'pcm-recorder';
+  extension?: string;
+};
+
+export type LocalWhisperAudio = {
+  uri: string;
+  format: 'wav-pcm';
+  sampleRate: number;
+  channels: number;
+  bitsPerSample: number;
+  bytes: number;
+  durationMs: number;
+};
+
 export type SpeechToTextConfig = {
   provider: SpeechProvider;
   apiKey?: string;
@@ -31,6 +48,7 @@ export type SpeechToTextConfig = {
   fieldStrategy?: AudioFieldStrategy;
   parseModel?: string;
   modelPath?: string;
+  isFossBuild?: boolean;
   now?: Date;
   timeZone?: string;
 };
@@ -53,9 +71,33 @@ const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 const WHISPER_ANDROID_MAX_THREADS = 1;
 const WHISPER_ANDROID_N_PROCESSORS = 1;
+const LOCAL_WHISPER_SAMPLE_RATE = 16000;
+const LOCAL_WHISPER_CHANNELS = 1;
+const LOCAL_WHISPER_BITS_PER_SAMPLE = 16;
+const LOCAL_WHISPER_MIN_DURATION_MS = 150;
+const LOCAL_WHISPER_UNSUPPORTED_AUDIO_ERROR =
+  'Local Whisper can only transcribe 16 kHz mono PCM WAV audio.';
+const DEFAULT_OPENAI_STT_MODEL = 'gpt-4o-transcribe';
+const DEFAULT_GEMINI_STT_MODEL = 'gemini-2.5-flash';
+const DEFAULT_WHISPER_STT_MODEL = 'whisper-tiny';
+const WHISPER_STT_MODEL_IDS = new Set([
+  'whisper-tiny',
+  'whisper-tiny.en',
+  'whisper-base',
+  'whisper-base.en',
+]);
+export const REMOTE_SPEECH_TO_TEXT_FOSS_ERROR =
+  'Remote speech-to-text is not available in FOSS builds.';
+
+type ExpoConstantsExtra = {
+  isFossBuild?: unknown;
+};
 
 type ExpoConstantsLike = {
   appOwnership?: string | null;
+  expoConfig?: {
+    extra?: ExpoConstantsExtra | null;
+  } | null;
 };
 
 type WhisperContextLike = {
@@ -111,25 +153,65 @@ let whisperRealtimeModuleCache:
 
 type RNFSModule = typeof import('react-native-fs');
 let rnfsModuleCache: RNFSModule | null | undefined;
+let rnfsModuleRequireFailed = false;
+let rnfsModuleImportFailed = false;
 
-const getRNFSModule = (): RNFSModule | null => {
-  if (rnfsModuleCache !== undefined) return rnfsModuleCache;
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const mod = require('react-native-fs') as RNFSModule;
+const isRNFSNativeModuleEvaluationError = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('RNFSFileTypeRegular') || message.includes('RNFSManager');
+};
+
+const hasRNFSNativeModule = (): boolean => Boolean(
+  (NativeModules as Record<string, unknown> | undefined)?.RNFSManager
+);
+
+const resolveRNFSModule = (value: unknown): RNFSModule | null => {
+  const candidates = [
+    value,
+    value && typeof value === 'object' ? (value as { default?: unknown }).default : undefined,
+  ];
+  for (const candidate of candidates) {
+    const mod = candidate as RNFSModule | undefined;
     const hasCoreFs = !!mod
       && typeof (mod as unknown as { writeFile?: unknown }).writeFile === 'function'
       && typeof (mod as unknown as { appendFile?: unknown }).appendFile === 'function'
       && typeof (mod as unknown as { readFile?: unknown }).readFile === 'function'
       && typeof (mod as unknown as { exists?: unknown }).exists === 'function'
       && typeof (mod as unknown as { unlink?: unknown }).unlink === 'function';
-    if (!hasCoreFs) {
-      rnfsModuleCache = null;
-      return null;
-    }
-    rnfsModuleCache = mod;
-    return mod;
+    if (hasCoreFs) return mod;
+  }
+  return null;
+};
+
+const getRNFSModule = (): RNFSModule | null => {
+  if (rnfsModuleCache !== undefined) return rnfsModuleCache;
+  if (!hasRNFSNativeModule()) {
+    rnfsModuleRequireFailed = true;
+    rnfsModuleImportFailed = true;
+    rnfsModuleCache = null;
+    return null;
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    rnfsModuleCache = resolveRNFSModule(require('react-native-fs'));
+    return rnfsModuleCache;
   } catch (error) {
+    rnfsModuleRequireFailed = isRNFSNativeModuleEvaluationError(error);
+    rnfsModuleCache = null;
+    return null;
+  }
+};
+
+const getRNFSModuleAsync = async (): Promise<RNFSModule | null> => {
+  const loaded = getRNFSModule();
+  if (loaded || rnfsModuleRequireFailed || rnfsModuleImportFailed) return loaded;
+  try {
+    const imported = await import('react-native-fs');
+    rnfsModuleCache = resolveRNFSModule(imported);
+    return rnfsModuleCache;
+  } catch (error) {
+    rnfsModuleImportFailed = true;
+    rnfsModuleRequireFailed = rnfsModuleRequireFailed || isRNFSNativeModuleEvaluationError(error);
     rnfsModuleCache = null;
     return null;
   }
@@ -140,13 +222,13 @@ const getWhisperModule = () => {
   try {
     // Use static fallback paths so Metro can bundle this file.
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const mod = require('whisper.rn/src/index') as WhisperModule;
       whisperModuleCache = mod;
       return mod;
     } catch (sourceError) {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
         const mod = require('whisper.rn') as WhisperModule;
         whisperModuleCache = mod;
         return mod;
@@ -167,9 +249,17 @@ const getExpoConstants = (): ExpoConstantsLike | null => {
   if (expoConstantsCache !== undefined) return expoConstantsCache;
   try {
     // Delay loading expo-constants so non-Expo test environments can import this module.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const mod = require('expo-constants') as { default?: ExpoConstantsLike } | undefined;
-    expoConstantsCache = mod?.default ?? null;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const mod = require('expo-constants') as {
+      default?: ExpoConstantsLike | { default?: ExpoConstantsLike };
+    } | ExpoConstantsLike | undefined;
+    const moduleDefault = (mod as { default?: ExpoConstantsLike | { default?: ExpoConstantsLike } } | undefined)?.default;
+    expoConstantsCache = (
+      (moduleDefault as { default?: ExpoConstantsLike } | undefined)?.default
+      ?? (moduleDefault as ExpoConstantsLike | undefined)
+      ?? (mod as ExpoConstantsLike | undefined)
+      ?? null
+    );
     return expoConstantsCache;
   } catch {
     expoConstantsCache = null;
@@ -177,24 +267,86 @@ const getExpoConstants = (): ExpoConstantsLike | null => {
   }
 };
 
+const parseExtraBool = (value: unknown): boolean => value === true || value === 'true' || value === '1';
+
 const isExpoGo = (): boolean => getExpoConstants()?.appOwnership === 'expo';
+
+export const isMobileFossBuild = (): boolean => parseExtraBool(
+  getExpoConstants()?.expoConfig?.extra?.isFossBuild
+);
+
+const getDefaultSpeechModel = (provider: SpeechProvider): string => {
+  if (provider === 'openai') return DEFAULT_OPENAI_STT_MODEL;
+  if (provider === 'gemini') return DEFAULT_GEMINI_STT_MODEL;
+  return DEFAULT_WHISPER_STT_MODEL;
+};
+
+const normalizeSpeechProviderForRuntime = (
+  provider: SpeechToTextSettings['provider'] | undefined,
+  fossBuild: boolean
+): { provider: SpeechProvider; enabledProvider: boolean } => {
+  if (fossBuild) return { provider: 'whisper', enabledProvider: true };
+  if (!provider) return { provider: 'gemini', enabledProvider: true };
+  if (provider === 'parakeet') return { provider: 'whisper', enabledProvider: false };
+  return { provider, enabledProvider: true };
+};
+
+const normalizeSpeechModelForRuntime = (model: string | undefined, provider: SpeechProvider): string => {
+  if (model && (provider !== 'whisper' || WHISPER_STT_MODEL_IDS.has(model))) return model;
+  return getDefaultSpeechModel(provider);
+};
+
+export type ResolvedSpeechToTextRuntimeSettings = {
+  provider: SpeechProvider;
+  enabled: boolean;
+  model: string;
+  modelPath?: string;
+  language?: string;
+  mode: AudioCaptureMode;
+  fieldStrategy: AudioFieldStrategy;
+  isFossBuild: boolean;
+};
+
+export const resolveSpeechToTextRuntimeSettings = (
+  speech: SpeechToTextSettings | undefined,
+  options?: { isFossBuild?: boolean }
+): ResolvedSpeechToTextRuntimeSettings => {
+  const fossBuild = options?.isFossBuild ?? isMobileFossBuild();
+  const normalized = normalizeSpeechProviderForRuntime(speech?.provider, fossBuild);
+  const model = normalizeSpeechModelForRuntime(speech?.model, normalized.provider);
+  return {
+    provider: normalized.provider,
+    enabled: speech?.enabled === true && normalized.enabledProvider,
+    model,
+    modelPath: normalized.provider === 'whisper' ? speech?.offlineModelPath : undefined,
+    language: speech?.language,
+    mode: speech?.mode ?? 'smart_parse',
+    fieldStrategy: speech?.fieldStrategy ?? 'smart',
+    isFossBuild: fossBuild,
+  };
+};
+
+const assertSpeechProviderAllowedForRuntime = (provider: SpeechProvider, fossBuild = isMobileFossBuild()): void => {
+  if (!fossBuild || provider === 'whisper') return;
+  void logWarn('Remote speech-to-text blocked in FOSS build', {
+    scope: 'speech',
+    force: true,
+    extra: { provider },
+  });
+  throw new Error(REMOTE_SPEECH_TO_TEXT_FOSS_ERROR);
+};
 
 const getWhisperRealtimeModule = () => {
   if (whisperRealtimeModuleCache !== undefined) return whisperRealtimeModuleCache;
   try {
-    const localRequire = typeof require === 'function' ? require : null;
-    if (!localRequire) {
-      whisperRealtimeModuleCache = null;
-      return null;
-    }
     // Delay loading Whisper realtime modules so generic task-edit tests can import this file
     // without a native audio stream implementation in the environment.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const adapterModule = localRequire(
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const adapterModule = require(
       'whisper.rn/realtime-transcription/adapters/AudioPcmStreamAdapter.js'
     ) as { AudioPcmStreamAdapter?: AudioPcmStreamAdapterConstructor } | undefined;
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const realtimeModule = localRequire(
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const realtimeModule = require(
       'whisper.rn/realtime-transcription/index.js'
     ) as { RealtimeTranscriber?: RealtimeTranscriberConstructor } | undefined;
     if (!adapterModule?.AudioPcmStreamAdapter || !realtimeModule?.RealtimeTranscriber) {
@@ -206,7 +358,12 @@ const getWhisperRealtimeModule = () => {
       RealtimeTranscriber: realtimeModule.RealtimeTranscriber,
     };
     return whisperRealtimeModuleCache;
-  } catch {
+  } catch (error) {
+    void logWarn('Whisper realtime module unavailable', {
+      scope: 'speech',
+      force: true,
+      extra: { error: error instanceof Error ? error.message : String(error) },
+    });
     whisperRealtimeModuleCache = null;
     return null;
   }
@@ -707,12 +864,21 @@ const MIN_WHISPER_MODEL_BYTES = 5 * 1024 * 1024;
 const WHISPER_REALTIME_SLICE_SEC = 30;
 const WHISPER_REALTIME_BUFFER_SIZE = 2048;
 const WHISPER_MODEL_DIR_NAME = 'whisper-models';
-const WHISPER_MODEL_KEEP_FILE = '.keep';
 const WHISPER_MODEL_FILES: Record<string, string> = {
   'whisper-tiny': 'ggml-tiny.bin',
   'whisper-tiny.en': 'ggml-tiny.en.bin',
   'whisper-base': 'ggml-base.bin',
   'whisper-base.en': 'ggml-base.en.bin',
+};
+
+const buildWhisperModelDirectoryUri = (rootUri: string): string => {
+  const normalized = rootUri.endsWith('/') ? rootUri : `${rootUri}/`;
+  return `${normalized}${WHISPER_MODEL_DIR_NAME}`;
+};
+
+const buildWhisperModelFileUri = (rootUri: string, fileName: string): string => {
+  const directoryUri = buildWhisperModelDirectoryUri(rootUri);
+  return `${directoryUri.endsWith('/') ? directoryUri : `${directoryUri}/`}${fileName}`;
 };
 
 type WhisperModelResolved = {
@@ -764,15 +930,42 @@ const checkFile = (uri: string) => {
   return { exists: false, size: 0 };
 };
 
+type NativeStatLike = {
+  size?: unknown;
+  path?: unknown;
+  originalFilepath?: unknown;
+  isFile?: () => boolean;
+  isDirectory?: () => boolean;
+};
+
+const checkNativeFile = async (normalized: ReturnType<typeof normalizeFilePath>) => {
+  const rnfs = await getRNFSModuleAsync() as (RNFSModule & { stat?: (path: string) => Promise<NativeStatLike> }) | null;
+  if (!rnfs || typeof rnfs.stat !== 'function') {
+    return { exists: false, size: 0 };
+  }
+  try {
+    const stat = await rnfs.stat(normalized.path);
+    const isDirectory = typeof stat.isDirectory === 'function' ? stat.isDirectory() : false;
+    const isFile = typeof stat.isFile === 'function' ? stat.isFile() : !isDirectory;
+    const size = typeof stat.size === 'number' && Number.isFinite(stat.size) ? stat.size : 0;
+    if (isFile && !isDirectory) {
+      return { exists: true, size };
+    }
+  } catch {
+  }
+  return { exists: false, size: 0 };
+};
+
 const checkPath = (uri?: string) => {
   if (!uri) return { exists: false, isDirectory: false, size: 0 };
+  let pathInfo: ReturnType<typeof Paths.info> | null = null;
   try {
-    const info = Paths.info(uri);
-    if (info?.exists) {
+    pathInfo = Paths.info(uri);
+    if (pathInfo?.exists && pathInfo.isDirectory) {
       return {
         exists: true,
-        isDirectory: Boolean(info.isDirectory),
-        size: getPathInfoSize(info),
+        isDirectory: true,
+        size: getPathInfoSize(pathInfo),
       };
     }
   } catch {
@@ -791,7 +984,63 @@ const checkPath = (uri?: string) => {
     }
   } catch {
   }
+  if (pathInfo?.exists) {
+    return {
+      exists: true,
+      isDirectory: Boolean(pathInfo.isDirectory),
+      size: getPathInfoSize(pathInfo),
+    };
+  }
   return { exists: false, isDirectory: false, size: 0 };
+};
+
+const normalizeWhisperDirectoryUri = (uri: string) => normalizeFilePath(uri).uri.replace(/\/+$/u, '');
+
+const isKnownWhisperModelDirectoryUri = (uri: string): boolean => {
+  const normalized = normalizeWhisperDirectoryUri(uri);
+  const roots: Array<Directory | undefined> = [];
+  try {
+    roots.push(Paths.document);
+  } catch {
+  }
+  try {
+    roots.push(Paths.cache);
+  } catch {
+  }
+  return roots.some((root) => {
+    if (!root?.uri) return false;
+    return normalizeWhisperDirectoryUri(buildWhisperModelDirectoryUri(root.uri)) === normalized;
+  });
+};
+
+const deleteWhisperDirectoryBlockingFile = (uri: string, reason: string): boolean => {
+  const normalized = normalizeFilePath(uri).uri;
+  if (!isKnownWhisperModelDirectoryUri(normalized)) {
+    void logWarn('Refusing to repair unsafe Whisper model directory target', {
+      scope: 'speech',
+      force: true,
+      extra: { uri: normalized, reason },
+    });
+    return false;
+  }
+  const before = checkPath(normalized);
+  if (!before.exists || before.isDirectory) return false;
+  try {
+    new File(normalized).delete();
+  } catch (error) {
+    void logWarn('Whisper model directory file cleanup failed', {
+      scope: 'speech',
+      force: true,
+      extra: {
+        uri: normalized,
+        reason,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    });
+    return false;
+  }
+  const after = checkPath(normalized);
+  return !after.exists || after.isDirectory;
 };
 
 const listDirectorySample = (uri?: string) => {
@@ -817,7 +1066,12 @@ const listDirectorySample = (uri?: string) => {
   }
 };
 
-const buildWhisperDiagnostics = (modelId?: string, modelPath?: string, resolved?: WhisperModelResolved) => {
+const buildWhisperDiagnostics = (
+  modelId?: string,
+  modelPath?: string,
+  resolved?: WhisperModelResolved,
+  candidates: string[] = []
+) => {
   const docUri = Paths.document?.uri ?? '';
   const cacheUri = Paths.cache?.uri ?? '';
   const normalizedDoc = docUri ? normalizeFilePath(docUri).uri : '';
@@ -827,11 +1081,20 @@ const buildWhisperDiagnostics = (modelId?: string, modelPath?: string, resolved?
   const whisperDirUri = normalizedDoc
     ? `${normalizedDoc.endsWith('/') ? normalizedDoc : `${normalizedDoc}/`}${WHISPER_MODEL_DIR_NAME}`
     : '';
+  const cacheWhisperDirUri = normalizedCache
+    ? `${normalizedCache.endsWith('/') ? normalizedCache : `${normalizedCache}/`}${WHISPER_MODEL_DIR_NAME}`
+    : '';
   const whisperDirInfo = checkPath(whisperDirUri);
+  const cacheWhisperDirInfo = checkPath(cacheWhisperDirUri);
   const resolvedInfo = resolved ? checkFile(resolved.uri) : { exists: false, size: 0 };
   const documentSample = listDirectorySample(normalizedDoc);
   const cacheSample = listDirectorySample(normalizedCache);
   const whisperDirSample = listDirectorySample(whisperDirUri);
+  const cacheWhisperDirSample = listDirectorySample(cacheWhisperDirUri);
+  const candidateUris = candidates
+    .map((candidate) => normalizeFilePath(candidate).uri)
+    .filter(Boolean)
+    .join(', ');
   return {
     modelId: modelId ?? '',
     modelPath: modelPath ?? '',
@@ -850,33 +1113,75 @@ const buildWhisperDiagnostics = (modelId?: string, modelPath?: string, resolved?
     whisperDirExists: String(Boolean(whisperDirInfo.exists)),
     whisperDirIsDir: String(Boolean(whisperDirInfo.isDirectory)),
     whisperDirSample,
+    cacheWhisperDirUri,
+    cacheWhisperDirExists: String(Boolean(cacheWhisperDirInfo.exists)),
+    cacheWhisperDirIsDir: String(Boolean(cacheWhisperDirInfo.isDirectory)),
+    cacheWhisperDirSample,
+    candidateUris,
   };
 };
 
 const ensureWhisperModelDirectory = (): string | null => {
   const roots: Directory[] = [];
   try {
-    roots.push(Paths.cache);
-  } catch {
-  }
-  try {
     roots.push(Paths.document);
   } catch {
   }
+  try {
+    roots.push(Paths.cache);
+  } catch {
+  }
   for (const root of roots) {
-    try {
-      const dir = new Directory(root, WHISPER_MODEL_DIR_NAME);
+    const dirUri = buildWhisperModelDirectoryUri(root.uri);
+    const createDirectory = () => {
+      const dir = new Directory(dirUri);
       dir.create({ intermediates: true, idempotent: true });
-      try {
-        const keepFile = new File(dir, WHISPER_MODEL_KEEP_FILE);
-        if (!keepFile.exists) {
-          keepFile.create({ intermediates: true, overwrite: true });
-        }
-      } catch {
-        // Ignore keep file errors; directory is the important part.
+      const after = checkPath(dirUri);
+      if (after.exists && !after.isDirectory) {
+        void logWarn('Whisper model directory blocked after create', {
+          scope: 'speech',
+          force: true,
+          extra: {
+            uri: dirUri,
+            exists: String(Boolean(after.exists)),
+            isDirectory: String(Boolean(after.isDirectory)),
+            size: String(after.size ?? 0),
+          },
+        });
+        throw new Error(`Whisper model directory is not a directory after create: ${dirUri}`);
       }
       return dir.uri;
-    } catch {
+    };
+    try {
+      const info = checkPath(dirUri);
+      if (info.exists && !info.isDirectory) {
+        deleteWhisperDirectoryBlockingFile(dirUri, 'pre-create');
+      }
+      return createDirectory();
+    } catch (error) {
+      if (deleteWhisperDirectoryBlockingFile(dirUri, 'create-failed')) {
+        try {
+          return createDirectory();
+        } catch (retryError) {
+          void logWarn('Whisper model directory recreate failed', {
+            scope: 'speech',
+            force: true,
+            extra: {
+              uri: dirUri,
+              error: retryError instanceof Error ? retryError.message : String(retryError),
+            },
+          });
+        }
+      } else {
+        void logWarn('Whisper model directory create failed', {
+          scope: 'speech',
+          force: true,
+          extra: {
+            uri: dirUri,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
+      }
     }
   }
   return null;
@@ -901,15 +1206,15 @@ const buildWhisperModelCandidates = (
     const appendCandidates = (base?: string | null) => {
       if (!base) return;
       const normalizedBase = base.endsWith('/') ? base : `${base}/`;
-      candidates.push(`${normalizedBase}${WHISPER_MODEL_DIR_NAME}/${fileName}`);
+      candidates.push(buildWhisperModelFileUri(normalizedBase, fileName));
       if (includeRoot) {
         candidates.push(`${normalizedBase}${fileName}`);
       }
     };
+    appendCandidates(Paths.document?.uri ?? null);
     if (includeCache) {
       appendCandidates(Paths.cache?.uri ?? null);
     }
-    appendCandidates(Paths.document?.uri ?? null);
   }
   return candidates;
 };
@@ -943,9 +1248,7 @@ export const ensureWhisperModelPathForConfig = (
   if (!fileName) return resolved;
 
   const preferredDir = ensureWhisperModelDirectory();
-  const preferredUri = preferredDir
-    ? `${preferredDir.endsWith('/') ? preferredDir : `${preferredDir}/`}${fileName}`
-    : null;
+  const preferredUri = preferredDir ? `${preferredDir.endsWith('/') ? preferredDir : `${preferredDir}/`}${fileName}` : null;
 
   if (preferredUri) {
     const preferredNormalized = normalizeFilePath(preferredUri);
@@ -993,8 +1296,84 @@ export const ensureWhisperModelPathForConfig = (
 
   void logWarn('Whisper model missing', {
     scope: 'speech',
-    extra: buildWhisperDiagnostics(modelId, modelPath, resolved),
+    force: true,
+    extra: buildWhisperDiagnostics(modelId, modelPath, resolved, candidates),
   });
+
+  if (preferredUri) {
+    const preferredNormalized = normalizeFilePath(preferredUri);
+    return { path: preferredNormalized.path, uri: preferredNormalized.uri, exists: false, size: 0 };
+  }
+
+  return resolved;
+};
+
+export const resolveWhisperModelPathForConfigAsync = async (
+  modelId: string | undefined,
+  modelPath?: string
+): Promise<WhisperModelResolved> => {
+  const resolved = resolveWhisperModelPathForConfig(modelId, modelPath);
+  if (resolved.exists) return resolved;
+
+  const candidates = buildWhisperModelCandidates(modelId, modelPath, true, true);
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const normalized = normalizeFilePath(candidate);
+    const nativeInfo = await checkNativeFile(normalized);
+    if (nativeInfo.exists) {
+      return { path: normalized.path, uri: normalized.uri, exists: true, size: nativeInfo.size };
+    }
+  }
+
+  return resolved;
+};
+
+export const ensureWhisperModelPathForConfigAsync = async (
+  modelId: string | undefined,
+  modelPath?: string
+): Promise<WhisperModelResolved> => {
+  const resolved = await resolveWhisperModelPathForConfigAsync(modelId, modelPath);
+  const fileName = modelId ? WHISPER_MODEL_FILES[modelId] : undefined;
+  if (!fileName) return resolved;
+
+  const preferredDir = ensureWhisperModelDirectory();
+  const preferredUri = preferredDir ? `${preferredDir.endsWith('/') ? preferredDir : `${preferredDir}/`}${fileName}` : null;
+
+  if (preferredUri) {
+    const preferredNormalized = normalizeFilePath(preferredUri);
+    const preferredInfo = checkFile(preferredNormalized.uri);
+    if (preferredInfo.exists) {
+      return {
+        path: preferredNormalized.path,
+        uri: preferredNormalized.uri,
+        exists: true,
+        size: preferredInfo.size,
+      };
+    }
+    const preferredNativeInfo = await checkNativeFile(preferredNormalized);
+    if (preferredNativeInfo.exists) {
+      return {
+        path: preferredNormalized.path,
+        uri: preferredNormalized.uri,
+        exists: true,
+        size: preferredNativeInfo.size,
+      };
+    }
+  }
+
+  if (resolved.exists) return resolved;
+
+  const candidates = buildWhisperModelCandidates(modelId, modelPath, true, true);
+  void logWarn('Whisper model missing', {
+    scope: 'speech',
+    force: true,
+    extra: buildWhisperDiagnostics(modelId, modelPath, resolved, candidates),
+  });
+
+  if (preferredUri) {
+    const preferredNormalized = normalizeFilePath(preferredUri);
+    return { path: preferredNormalized.path, uri: preferredNormalized.uri, exists: false, size: 0 };
+  }
 
   return resolved;
 };
@@ -1023,6 +1402,7 @@ const enableWhisperNativeLogging = async (): Promise<void> => {
   } catch (error) {
     void logWarn('Failed to enable Whisper native logs', {
       scope: 'speech',
+      force: true,
       extra: { error: error instanceof Error ? error.message : String(error) },
     });
   }
@@ -1030,7 +1410,7 @@ const enableWhisperNativeLogging = async (): Promise<void> => {
 
 const getWhisperContext = async (modelPath: string, modelId?: string) => {
   await enableWhisperNativeLogging();
-  const resolved = ensureWhisperModelPathForConfig(modelId, modelPath);
+  const resolved = await ensureWhisperModelPathForConfigAsync(modelId, modelPath);
   if (!resolved.exists) {
     throw new Error(`Offline model not found at ${resolved.path}`);
   }
@@ -1055,16 +1435,52 @@ const getWhisperContext = async (modelPath: string, modelId?: string) => {
   } catch (error) {
     const withScheme = resolved.uri;
     if (withScheme !== resolved.path) {
+      const primaryMessage = error instanceof Error ? error.message : String(error);
+      void logWarn('Whisper context init failed, retrying with file uri', {
+        scope: 'speech',
+        force: true,
+        extra: {
+          platform: Platform.OS,
+          modelId: modelId ?? '',
+          modelPath: resolved.path,
+          modelUri: withScheme,
+          modelSize: String(resolved.size),
+          error: primaryMessage,
+        },
+      });
       try {
         const context = await initWhisper({ ...initOptions, filePath: withScheme });
         whisperContextCache = { modelPath: withScheme, context };
         return context;
       } catch (retryError) {
         const message = retryError instanceof Error ? retryError.message : String(retryError);
+        void logWarn('Whisper context init failed', {
+          scope: 'speech',
+          force: true,
+          extra: {
+            platform: Platform.OS,
+            modelId: modelId ?? '',
+            modelPath: resolved.path,
+            modelUri: withScheme,
+            modelSize: String(resolved.size),
+            error: message,
+          },
+        });
         throw new Error(`Whisper init failed (${message}) at ${resolved.path} (${resolved.size} bytes)`);
       }
     }
     const message = error instanceof Error ? error.message : String(error);
+    void logWarn('Whisper context init failed', {
+      scope: 'speech',
+      force: true,
+      extra: {
+        platform: Platform.OS,
+        modelId: modelId ?? '',
+        modelPath: resolved.path,
+        modelSize: String(resolved.size),
+        error: message,
+      },
+    });
     throw new Error(`Whisper init failed (${message}) at ${resolved.path} (${resolved.size} bytes)`);
   }
 };
@@ -1089,6 +1505,181 @@ const extractWhisperText = (result: unknown): string => {
   return '';
 };
 
+type WavPcmMetadata = {
+  valid: boolean;
+  reason?: string;
+  sampleRate?: number;
+  channels?: number;
+  bitsPerSample?: number;
+  audioFormat?: number;
+  dataBytes?: number;
+  durationMs?: number;
+  headerRiffWave: boolean;
+};
+
+const getAudioFileExtensionFromUri = (uri: string): string => {
+  const withoutQuery = uri.split('?')[0]?.split('#')[0] ?? '';
+  const fileName = withoutQuery.split('/').pop() ?? '';
+  const dotIndex = fileName.lastIndexOf('.');
+  if (dotIndex < 0 || dotIndex === fileName.length - 1) return '';
+  return fileName.slice(dotIndex + 1).toLowerCase();
+};
+
+const getUriScheme = (uri: string): string => {
+  const index = uri.indexOf(':');
+  if (index > 0) return uri.slice(0, index);
+  if (uri.startsWith('/')) return 'file';
+  return 'unknown';
+};
+
+const readAscii = (bytes: Uint8Array, offset: number, length: number): string => {
+  let value = '';
+  for (let i = 0; i < length; i += 1) {
+    value += String.fromCharCode(bytes[offset + i] ?? 0);
+  }
+  return value;
+};
+
+const readUInt16LE = (bytes: Uint8Array, offset: number): number => (
+  (bytes[offset] ?? 0) | ((bytes[offset + 1] ?? 0) << 8)
+);
+
+const readUInt32LE = (bytes: Uint8Array, offset: number): number => (
+  ((bytes[offset] ?? 0)
+    | ((bytes[offset + 1] ?? 0) << 8)
+    | ((bytes[offset + 2] ?? 0) << 16)
+    | ((bytes[offset + 3] ?? 0) << 24)) >>> 0
+);
+
+const inspectWavPcm = (bytes: Uint8Array): WavPcmMetadata => {
+  if (bytes.byteLength < 44) {
+    return { valid: false, reason: 'too_short', headerRiffWave: false };
+  }
+
+  const headerRiffWave = readAscii(bytes, 0, 4) === 'RIFF' && readAscii(bytes, 8, 4) === 'WAVE';
+  if (!headerRiffWave) {
+    return { valid: false, reason: 'not_riff_wave', headerRiffWave };
+  }
+
+  let offset = 12;
+  let audioFormat: number | undefined;
+  let channels: number | undefined;
+  let sampleRate: number | undefined;
+  let bitsPerSample: number | undefined;
+  let dataBytes: number | undefined;
+
+  while (offset + 8 <= bytes.byteLength) {
+    const chunkId = readAscii(bytes, offset, 4);
+    const chunkSize = readUInt32LE(bytes, offset + 4);
+    const chunkDataOffset = offset + 8;
+    if (chunkDataOffset + chunkSize > bytes.byteLength) {
+      break;
+    }
+
+    if (chunkId === 'fmt ' && chunkSize >= 16) {
+      audioFormat = readUInt16LE(bytes, chunkDataOffset);
+      channels = readUInt16LE(bytes, chunkDataOffset + 2);
+      sampleRate = readUInt32LE(bytes, chunkDataOffset + 4);
+      bitsPerSample = readUInt16LE(bytes, chunkDataOffset + 14);
+    } else if (chunkId === 'data') {
+      dataBytes = chunkSize;
+    }
+
+    offset = chunkDataOffset + chunkSize + (chunkSize % 2);
+  }
+
+  const bytesPerSecond = sampleRate && channels && bitsPerSample
+    ? sampleRate * channels * (bitsPerSample / 8)
+    : 0;
+  const durationMs = dataBytes && bytesPerSecond > 0 ? Math.round((dataBytes / bytesPerSecond) * 1000) : 0;
+  const base = {
+    audioFormat,
+    bitsPerSample,
+    channels,
+    dataBytes,
+    durationMs,
+    headerRiffWave,
+    sampleRate,
+  };
+
+  if (audioFormat !== 1) return { ...base, valid: false, reason: 'not_pcm' };
+  if (channels !== LOCAL_WHISPER_CHANNELS) return { ...base, valid: false, reason: 'unsupported_channels' };
+  if (sampleRate !== LOCAL_WHISPER_SAMPLE_RATE) return { ...base, valid: false, reason: 'unsupported_sample_rate' };
+  if (bitsPerSample !== LOCAL_WHISPER_BITS_PER_SAMPLE) return { ...base, valid: false, reason: 'unsupported_bits_per_sample' };
+  if (!dataBytes || dataBytes <= 0) return { ...base, valid: false, reason: 'empty_data' };
+  if (durationMs < LOCAL_WHISPER_MIN_DURATION_MS) return { ...base, valid: false, reason: 'too_short_duration' };
+
+  return { ...base, valid: true };
+};
+
+const buildLocalAsrLogContext = (captured: CapturedAudio, metadata: WavPcmMetadata | null, bytes: number, fallbackReason?: string) => ({
+  bits_per_sample: String(metadata?.bitsPerSample ?? ''),
+  capture_mode: captured.source,
+  channels: String(metadata?.channels ?? ''),
+  duration_ms: String(metadata?.durationMs ?? 0),
+  extension: captured.extension ?? getAudioFileExtensionFromUri(captured.uri),
+  fallback_reason: fallbackReason ?? '',
+  file_size: String(bytes),
+  header_riff_wave: String(metadata?.headerRiffWave === true),
+  platform: captured.platform,
+  sample_rate: String(metadata?.sampleRate ?? ''),
+  sniffed_format: metadata?.headerRiffWave ? 'wav' : 'unknown',
+  uri_scheme: getUriScheme(captured.uri),
+});
+
+export const prepareAudioForLocalWhisper = async (captured: CapturedAudio): Promise<LocalWhisperAudio | null> => {
+  const normalizedUri = normalizeAudioUriForFileRead(captured.uri);
+  let bytes: Uint8Array;
+  try {
+    bytes = await new File(normalizedUri).bytes();
+  } catch (error) {
+    await logWarn('ASR_INPUT_REJECTED_UNSUPPORTED_FORMAT', {
+      scope: 'speech',
+      force: true,
+      extra: {
+        ...buildLocalAsrLogContext(captured, null, 0, 'read_failed'),
+        error: error instanceof Error ? error.message : String(error),
+        local_whisper_called: 'false',
+        reject_reason: 'read_failed',
+      },
+    });
+    return null;
+  }
+
+  const metadata = inspectWavPcm(bytes);
+  if (!metadata.valid) {
+    await logWarn('ASR_INPUT_REJECTED_UNSUPPORTED_FORMAT', {
+      scope: 'speech',
+      force: true,
+      extra: {
+        ...buildLocalAsrLogContext(captured, metadata, bytes.byteLength, metadata.reason),
+        local_whisper_called: 'false',
+        reject_reason: metadata.reason ?? 'unsupported_format',
+      },
+    });
+    return null;
+  }
+
+  await logInfo('ASR_INPUT_ACCEPTED_LOCAL_WHISPER', {
+    scope: 'speech',
+    force: true,
+    extra: {
+      ...buildLocalAsrLogContext(captured, metadata, bytes.byteLength),
+      local_whisper_called: 'false',
+    },
+  });
+
+  return {
+    uri: normalizeAudioUri(captured.uri),
+    format: 'wav-pcm',
+    sampleRate: metadata.sampleRate ?? LOCAL_WHISPER_SAMPLE_RATE,
+    channels: metadata.channels ?? LOCAL_WHISPER_CHANNELS,
+    bitsPerSample: metadata.bitsPerSample ?? LOCAL_WHISPER_BITS_PER_SAMPLE,
+    bytes: bytes.byteLength,
+    durationMs: metadata.durationMs ?? 0,
+  };
+};
+
 export const startWhisperRealtimeCapture = async (
   audioOutputPath: string,
   config: SpeechToTextConfig
@@ -1096,18 +1687,15 @@ export const startWhisperRealtimeCapture = async (
   if (isExpoGo()) {
     throw new Error('On-device Whisper requires a dev build or production build (not Expo Go).');
   }
-  if (Platform.OS === 'android') {
-    throw new Error('Whisper realtime capture is disabled on Android.');
-  }
   const whisperRealtime = getWhisperRealtimeModule();
   if (!whisperRealtime) {
     throw new Error('Whisper realtime transcription requires native audio stream modules.');
   }
-  const RNFS = getRNFSModule();
+  const RNFS = await getRNFSModuleAsync();
   if (!RNFS) {
     throw new Error('react-native-fs is unavailable. Use a dev build or production build with native modules.');
   }
-  const resolved = ensureWhisperModelPathForConfig(config.model, config.modelPath);
+  const resolved = await ensureWhisperModelPathForConfigAsync(config.model, config.modelPath);
   if (!resolved.exists) {
     throw new Error(`Offline model not found at ${resolved.path}`);
   }
@@ -1129,26 +1717,16 @@ export const startWhisperRealtimeCapture = async (
     promptPreviousSlices: false,
   };
 
-  void logInfo('Whisper transcription started', {
-    scope: 'speech',
-    extra: {
-      uri: audioOutputPath,
-      modelPath: resolved.path,
-      language: effectiveLanguage,
-    },
-  });
-
   const audioStream = new whisperRealtime.AudioPcmStreamAdapter();
-  const enableRealtimeTranscript = true;
+  // Android's file transcription path decodes WAV only. Use the realtime helper
+  // there as a PCM/WAV recorder, then transcribe the generated WAV after stop.
+  const enableRealtimeTranscript = Platform.OS !== 'android';
   const transcriptBySlice = new Map<number, string>();
   let completed = false;
   let hasActivated = false;
   let resolveResult: (value: SpeechToTextResult) => void = () => {};
-  let rejectResult: (error: Error) => void = () => {};
-
-  const result = new Promise<SpeechToTextResult>((resolve, reject) => {
+  const result = new Promise<SpeechToTextResult>((resolve) => {
     resolveResult = resolve;
-    rejectResult = reject;
   });
 
   const finalize = () => {
@@ -1166,17 +1744,10 @@ export const startWhisperRealtimeCapture = async (
     if (!text) {
       void logWarn('Whisper returned empty transcript', {
         scope: 'speech',
+        force: true,
         extra: {
           uri: audioOutputPath,
           modelPath: resolved.path,
-          language: effectiveLanguage,
-        },
-      });
-    } else {
-      void logInfo('Whisper transcription completed', {
-        scope: 'speech',
-        extra: {
-          length: String(text.length),
           language: effectiveLanguage,
         },
       });
@@ -1206,7 +1777,15 @@ export const startWhisperRealtimeCapture = async (
       onError: (error: string) => {
         if (completed) return;
         completed = true;
-        rejectResult(new Error(error));
+        void logWarn('Whisper realtime transcription failed', {
+          scope: 'speech',
+          force: true,
+          extra: {
+            platform: Platform.OS,
+            error,
+          },
+        });
+        resolveResult({ transcript: '' });
       },
       onStatusChange: (isActive: boolean) => {
         if (completed) return;
@@ -1259,16 +1838,16 @@ export const preloadWhisperContext = async (config: {
   modelPath?: string;
 }): Promise<void> => {
   if (isExpoGo()) return;
-  const resolved = ensureWhisperModelPathForConfig(config.model, config.modelPath);
+  const resolved = await ensureWhisperModelPathForConfigAsync(config.model, config.modelPath);
   if (!resolved.exists) return;
   await getWhisperContext(resolved.path, config.model);
 };
 
-const transcribeWhisper = async (audioUri: string, config: SpeechToTextConfig) => {
+export const transcribeLocalWhisper = async (input: LocalWhisperAudio, config: SpeechToTextConfig) => {
   if (isExpoGo()) {
     throw new Error('On-device Whisper requires a dev build or production build (not Expo Go).');
   }
-  const resolved = ensureWhisperModelPathForConfig(config.model, config.modelPath);
+  const resolved = await ensureWhisperModelPathForConfigAsync(config.model, config.modelPath);
   if (!resolved.exists) {
     throw new Error(`Offline model not found at ${resolved.path}`);
   }
@@ -1276,14 +1855,7 @@ const transcribeWhisper = async (audioUri: string, config: SpeechToTextConfig) =
   const language = resolveLanguage(config.language);
   const effectiveLanguage = config.model?.endsWith('.en') && language === 'auto' ? 'en' : language;
   const options = buildWhisperTranscribeOptions(effectiveLanguage);
-  void logInfo('Whisper transcription started', {
-    scope: 'speech',
-    extra: {
-      uri: audioUri,
-      modelPath: resolved.path,
-      language: effectiveLanguage,
-    },
-  });
+  const audioUri = input.uri;
   const normalizedUri = audioUri.startsWith('file://')
     ? audioUri.replace(/^file:\/\//, '')
     : audioUri.startsWith('file:/')
@@ -1294,8 +1866,45 @@ const transcribeWhisper = async (audioUri: string, config: SpeechToTextConfig) =
     result = await context.transcribe(normalizedUri, options).promise;
   } catch (error) {
     if (normalizedUri !== audioUri) {
-      result = await context.transcribe(audioUri, options).promise;
+      const primaryMessage = error instanceof Error ? error.message : String(error);
+      void logWarn('Whisper transcription path failed, retrying with file uri', {
+        scope: 'speech',
+        force: true,
+        extra: {
+          platform: Platform.OS,
+          modelPath: resolved.path,
+          language: effectiveLanguage,
+          error: primaryMessage,
+        },
+      });
+      try {
+        result = await context.transcribe(audioUri, options).promise;
+      } catch (retryError) {
+        const message = retryError instanceof Error ? retryError.message : String(retryError);
+        void logWarn('Whisper transcription failed', {
+          scope: 'speech',
+          force: true,
+          extra: {
+            platform: Platform.OS,
+            modelPath: resolved.path,
+            language: effectiveLanguage,
+            error: message,
+          },
+        });
+        throw retryError;
+      }
     } else {
+      const message = error instanceof Error ? error.message : String(error);
+      void logWarn('Whisper transcription failed', {
+        scope: 'speech',
+        force: true,
+        extra: {
+          platform: Platform.OS,
+          modelPath: resolved.path,
+          language: effectiveLanguage,
+          error: message,
+        },
+      });
       throw error;
     }
   }
@@ -1311,17 +1920,10 @@ const transcribeWhisper = async (audioUri: string, config: SpeechToTextConfig) =
   if (!text) {
     void logWarn('Whisper returned empty transcript', {
       scope: 'speech',
+      force: true,
       extra: {
         uri: audioUri,
         modelPath: resolved.path,
-        language: effectiveLanguage,
-      },
-    });
-  } else {
-    void logInfo('Whisper transcription completed', {
-      scope: 'speech',
-      extra: {
-        length: String(text.length),
         language: effectiveLanguage,
       },
     });
@@ -1333,9 +1935,19 @@ export async function processAudioCapture(
   audioUri: string,
   config: SpeechToTextConfig
 ): Promise<SpeechToTextResult> {
+  assertSpeechProviderAllowedForRuntime(config.provider, config.isFossBuild);
   const mode = config.mode ?? 'smart_parse';
   if (config.provider === 'whisper') {
-    const transcript = await transcribeWhisper(audioUri, config);
+    const localInput = await prepareAudioForLocalWhisper({
+      uri: audioUri,
+      platform: Platform.OS === 'ios' ? 'ios' : 'android',
+      source: 'expo-recorder',
+      extension: getAudioFileExtensionFromUri(audioUri),
+    });
+    if (!localInput) {
+      throw new Error(LOCAL_WHISPER_UNSUPPORTED_AUDIO_ERROR);
+    }
+    const transcript = await transcribeLocalWhisper(localInput, config);
     return { transcript };
   }
   if (config.provider === 'gemini') {

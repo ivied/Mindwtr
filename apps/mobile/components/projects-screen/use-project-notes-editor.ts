@@ -3,7 +3,9 @@ import { TextInput } from 'react-native';
 import {
   applyMarkdownToolbarAction,
   continueMarkdownOnTextChange,
+  isMarkdownEditorAssistEnabled,
   resolveAutoTextDirection,
+  useTaskStore,
   type MarkdownSelection,
   type MarkdownToolbarActionId,
   type MarkdownToolbarResult,
@@ -31,6 +33,7 @@ export function useProjectNotesEditor({
   const [showNotesPreview, setShowNotesPreview] = useState(false);
   const [notesFullscreen, setNotesFullscreen] = useState(false);
   const selectedProjectNotesRef = useRef('');
+  const committedProjectNotesRef = useRef('');
   const selectedProjectNotesInputRef = useRef<TextInput | null>(null);
   const selectedProjectNotesUndoRef = useRef<Array<{ value: string; selection: MarkdownSelection }>>([]);
   const [selectedProjectNotesUndoDepth, setSelectedProjectNotesUndoDepth] = useState(0);
@@ -48,15 +51,17 @@ export function useProjectNotesEditor({
   } as const;
 
   useEffect(() => {
-    selectedProjectNotesRef.current = selectedProject?.supportNotes || '';
-    const selectionEnd = (selectedProject?.supportNotes || '').length;
+    const initialNotes = selectedProject?.supportNotes || '';
+    selectedProjectNotesRef.current = initialNotes;
+    committedProjectNotesRef.current = initialNotes;
+    const selectionEnd = initialNotes.length;
     selectedProjectNotesUndoRef.current = [];
     setSelectedProjectNotesUndoDepth(0);
     setIsSelectedProjectNotesFocused(false);
     pendingSelectedProjectNotesSelectionRef.current = null;
     selectedProjectNotesSelectionRef.current = { start: selectionEnd, end: selectionEnd };
     setSelectedProjectNotesSelection({ start: selectionEnd, end: selectionEnd });
-  }, [selectedProject]);
+  }, [selectedProject?.id]);
 
   const pushSelectedProjectNotesUndoEntry = useCallback((value: string, selection: MarkdownSelection) => {
     const previousEntry = selectedProjectNotesUndoRef.current[selectedProjectNotesUndoRef.current.length - 1];
@@ -98,25 +103,42 @@ export function useProjectNotesEditor({
   const restoreSelectedProjectNotesSelection = useCallback((selection: MarkdownSelection) => {
     pendingSelectedProjectNotesSelectionRef.current = selection;
     const applySelection = () => {
+      selectedProjectNotesInputRef.current?.focus?.();
       selectedProjectNotesInputRef.current?.setNativeProps?.({ selection });
     };
-    requestAnimationFrame(applySelection);
-    setTimeout(() => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(applySelection);
+    } else {
+      setTimeout(applySelection, 0);
+    }
+    const applyDelayedSelection = (shouldClearPending: boolean) => {
       applySelection();
       if (
-        pendingSelectedProjectNotesSelectionRef.current
+        shouldClearPending
+        && pendingSelectedProjectNotesSelectionRef.current
         && selectionsEqual(pendingSelectedProjectNotesSelectionRef.current, selection)
       ) {
         pendingSelectedProjectNotesSelectionRef.current = null;
       }
+    };
+    setTimeout(() => {
+      applyDelayedSelection(false);
     }, 40);
+    setTimeout(() => {
+      applyDelayedSelection(false);
+    }, 140);
+    setTimeout(() => {
+      applyDelayedSelection(true);
+    }, 300);
   }, []);
 
   const handleSelectedProjectNotesChange = useCallback((text: string) => {
+    const assistEnabled = isMarkdownEditorAssistEnabled(useTaskStore.getState().settings);
     const continued = continueMarkdownOnTextChange(
       selectedProjectNotesRef.current,
       text,
       selectedProjectNotesSelectionRef.current,
+      { assist: assistEnabled },
     );
     if (continued) {
       applySelectedProjectNotesValue(continued.value, {
@@ -179,8 +201,11 @@ export function useProjectNotesEditor({
 
   const commitSelectedProjectNotes = useCallback(() => {
     if (!selectedProject) return;
-    updateProject(selectedProject.id, { supportNotes: selectedProjectNotesRef.current });
-  }, [selectedProject, updateProject]);
+    const nextNotes = selectedProjectNotesRef.current;
+    if (nextNotes === committedProjectNotesRef.current) return;
+    committedProjectNotesRef.current = nextNotes;
+    updateProject(selectedProject.id, { supportNotes: nextNotes });
+  }, [selectedProject?.id, updateProject]);
 
   const handleSelectedProjectNotesApplyAutocomplete = useCallback((next: { value: string; selection: MarkdownSelection }) => {
     applySelectedProjectNotesValue(next.value, {
@@ -189,6 +214,7 @@ export function useProjectNotesEditor({
     });
     selectedProjectNotesSelectionRef.current = next.selection;
     if (selectedProject) {
+      committedProjectNotesRef.current = next.value;
       updateProject(selectedProject.id, { supportNotes: next.value });
     }
   }, [applySelectedProjectNotesValue, selectedProject, updateProject]);

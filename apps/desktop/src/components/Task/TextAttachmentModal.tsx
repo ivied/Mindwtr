@@ -1,4 +1,5 @@
 import type { Attachment } from '@mindwtr/core';
+import { ModalPortal } from '../ModalPortal';
 
 type TextAttachmentModalProps = {
     attachment: Attachment | null;
@@ -21,8 +22,13 @@ export function TextAttachmentModal({
 }: TextAttachmentModalProps) {
     if (!attachment) return null;
     return (
+        <ModalPortal>
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="w-full max-w-3xl rounded-lg border border-border bg-card p-4 shadow-xl">
+            <div
+                className="w-full max-w-3xl rounded-lg border border-border bg-card p-4 shadow-xl"
+                role="dialog"
+                aria-modal="true"
+            >
                 <div className="flex items-center justify-between">
                     <div className="text-sm font-medium">{attachment.title || t('attachments.open')}</div>
                     <button
@@ -55,5 +61,6 @@ export function TextAttachmentModal({
                 </div>
             </div>
         </div>
+        </ModalPortal>
     );
 }

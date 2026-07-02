@@ -8,8 +8,12 @@ import {
     PomodoroAutoStartOptions,
     PomodoroDurations,
     PomodoroEvent,
+    PomodoroSessionHistory,
     PomodoroState,
+    recordPomodoroFocusSessions,
     resetPomodoroState,
+    sanitizePomodoroDurations,
+    sanitizePomodoroSessionHistory,
     Task,
     translateWithFallback,
     useTaskStore,
@@ -17,11 +21,13 @@ import {
 import { Play, Pause, RotateCcw, TimerReset, CheckCircle2 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useLanguage } from '../../contexts/language-context';
-import { sendDesktopImmediateNotification } from '../../lib/notification-service';
+import { sendDesktopPomodoroCompletionAlert } from '../../lib/pomodoro-alert';
 
 interface PomodoroPanelProps {
     tasks: Task[];
 }
+
+export const DESKTOP_POMODORO_SESSION_STORAGE_KEY = 'mindwtr:pomodoro:session:v1';
 
 type PomodoroSnapshot = {
     durations: PomodoroDurations;
@@ -29,14 +35,16 @@ type PomodoroSnapshot = {
     selectedTaskId?: string;
     lastEvent: PomodoroEvent | null;
     updatedAtMs: number;
+    sessionHistory: PomodoroSessionHistory;
 };
 
-const createInitialSnapshot = (): PomodoroSnapshot => ({
+const createInitialSnapshot = (nowMs = Date.now()): PomodoroSnapshot => ({
     durations: DEFAULT_POMODORO_DURATIONS,
     timerState: createPomodoroState(DEFAULT_POMODORO_DURATIONS),
     selectedTaskId: undefined,
     lastEvent: null,
-    updatedAtMs: Date.now(),
+    updatedAtMs: nowMs,
+    sessionHistory: sanitizePomodoroSessionHistory(),
 });
 
 const reconcileSnapshot = (
@@ -50,16 +58,117 @@ const reconcileSnapshot = (
     const elapsedSeconds = Math.floor((nowMs - snapshot.updatedAtMs) / 1000);
     if (elapsedSeconds <= 0) return snapshot;
     const advanced = advancePomodoroState(snapshot.timerState, snapshot.durations, elapsedSeconds, autoStartOptions);
+    const completedSessionDelta = advanced.state.completedFocusSessions - snapshot.timerState.completedFocusSessions;
+    const sessionHistory = completedSessionDelta > 0
+        ? recordPomodoroFocusSessions(snapshot.sessionHistory, snapshot.selectedTaskId, completedSessionDelta)
+        : snapshot.sessionHistory;
     const updatedAtMs = snapshot.updatedAtMs + elapsedSeconds * 1000;
     return {
         ...snapshot,
-        timerState: advanced.state,
+        timerState: {
+            ...advanced.state,
+            completedFocusSessions: Math.max(
+                advanced.state.completedFocusSessions,
+                sessionHistory.totalCompletedFocusSessions
+            ),
+        },
+        sessionHistory,
         lastEvent: advanced.lastEvent ?? snapshot.lastEvent,
         updatedAtMs,
     };
 };
 
-let persistedSnapshot: PomodoroSnapshot = createInitialSnapshot();
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+    !!value && typeof value === 'object' && !Array.isArray(value)
+);
+
+const sanitizeStoredPomodoroState = (
+    value: unknown,
+    durations: PomodoroDurations
+): PomodoroState => {
+    const record = isRecord(value) ? value : {};
+    const phase = record.phase === 'break' ? 'break' : 'focus';
+    const baseState = createPomodoroState(
+        durations,
+        phase,
+        typeof record.completedFocusSessions === 'number' ? record.completedFocusSessions : 0
+    );
+    const remainingSeconds = typeof record.remainingSeconds === 'number' && Number.isFinite(record.remainingSeconds)
+        ? Math.max(0, Math.min(baseState.remainingSeconds, Math.floor(record.remainingSeconds)))
+        : baseState.remainingSeconds;
+
+    return {
+        ...baseState,
+        remainingSeconds,
+        isRunning: record.isRunning === true,
+    };
+};
+
+const parseStoredPomodoroSnapshot = (
+    value: unknown,
+    nowMs: number,
+    autoStartOptions: PomodoroAutoStartOptions
+): PomodoroSnapshot => {
+    if (!isRecord(value)) return createInitialSnapshot(nowMs);
+
+    const durations = sanitizePomodoroDurations(isRecord(value.durations) ? value.durations : undefined);
+    const sanitizedTimerState = sanitizeStoredPomodoroState(value.timerState, durations);
+    const sessionHistory = sanitizePomodoroSessionHistory(
+        isRecord(value.sessionHistory) ? value.sessionHistory : undefined,
+        sanitizedTimerState.completedFocusSessions
+    );
+    const timerState = {
+        ...sanitizedTimerState,
+        completedFocusSessions: Math.max(
+            sanitizedTimerState.completedFocusSessions,
+            sessionHistory.totalCompletedFocusSessions
+        ),
+    };
+    const updatedAtMs = typeof value.updatedAtMs === 'number' && Number.isFinite(value.updatedAtMs)
+        ? value.updatedAtMs
+        : nowMs;
+    const selectedTaskId = typeof value.selectedTaskId === 'string' && value.selectedTaskId.trim().length > 0
+        ? value.selectedTaskId
+        : undefined;
+
+    return reconcileSnapshot({
+        durations,
+        timerState,
+        selectedTaskId,
+        lastEvent: null,
+        updatedAtMs,
+        sessionHistory,
+    }, nowMs, autoStartOptions);
+};
+
+const readStoredPomodoroSnapshot = (
+    nowMs: number,
+    autoStartOptions: PomodoroAutoStartOptions
+): PomodoroSnapshot => {
+    if (typeof window === 'undefined') return createInitialSnapshot(nowMs);
+    try {
+        const raw = window.localStorage.getItem(DESKTOP_POMODORO_SESSION_STORAGE_KEY);
+        if (!raw) return createInitialSnapshot(nowMs);
+        return parseStoredPomodoroSnapshot(JSON.parse(raw) as unknown, nowMs, autoStartOptions);
+    } catch {
+        return createInitialSnapshot(nowMs);
+    }
+};
+
+const saveStoredPomodoroSnapshot = (snapshot: PomodoroSnapshot) => {
+    if (typeof window === 'undefined') return;
+    try {
+        window.localStorage.setItem(DESKTOP_POMODORO_SESSION_STORAGE_KEY, JSON.stringify({
+            durations: snapshot.durations,
+            timerState: snapshot.timerState,
+            selectedTaskId: snapshot.selectedTaskId,
+            updatedAtMs: snapshot.updatedAtMs,
+            sessionHistory: snapshot.sessionHistory,
+        }));
+    } catch {
+        // Pomodoro state is device-local convenience data; storage failures should not block timer controls.
+    }
+};
 
 export function PomodoroPanel({ tasks }: PomodoroPanelProps) {
     const updateTask = useTaskStore((state) => state.updateTask);
@@ -76,16 +185,20 @@ export function PomodoroPanel({ tasks }: PomodoroPanelProps) {
     const resolveText = useCallback((key: string, fallback: string) => {
         return translateWithFallback(t, key, fallback);
     }, [t]);
-    const [snapshot, setSnapshot] = useState<PomodoroSnapshot>(() => {
-        persistedSnapshot = reconcileSnapshot(persistedSnapshot, Date.now(), autoStartOptions);
-        return persistedSnapshot;
-    });
+    const [snapshot, setSnapshot] = useState<PomodoroSnapshot>(() => (
+        readStoredPomodoroSnapshot(Date.now(), autoStartOptions)
+    ));
     const previousEventRef = useRef<PomodoroEvent | null>(snapshot.lastEvent);
+
+    useEffect(() => {
+        saveStoredPomodoroSnapshot(snapshot);
+    // Persist the reconciled startup snapshot once, including any session that completed while the app was closed.
+    }, []);
 
     const commitSnapshot = useCallback((updater: (prev: PomodoroSnapshot) => PomodoroSnapshot) => {
         setSnapshot((prev) => {
             const next = updater(prev);
-            persistedSnapshot = next;
+            saveStoredPomodoroSnapshot(next);
             return next;
         });
     }, []);
@@ -138,7 +251,7 @@ export function PomodoroPanel({ tasks }: PomodoroPanelProps) {
         const previous = previousEventRef.current;
         if (lastEvent && lastEvent !== previous && notificationsEnabled) {
             const message = lastEvent === 'focus-finished' ? focusDoneLabel : breakDoneLabel;
-            void sendDesktopImmediateNotification(cardTitle, message);
+            void sendDesktopPomodoroCompletionAlert(cardTitle, message);
         }
         previousEventRef.current = lastEvent;
     }, [breakDoneLabel, cardTitle, focusDoneLabel, lastEvent, notificationsEnabled]);

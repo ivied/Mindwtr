@@ -5,6 +5,7 @@ export type QuickCaptureOptions = {
   initialProps?: Partial<Task>;
   initialValue?: string;
   autoRecord?: boolean;
+  returnTo?: string;
 };
 
 type QuickCaptureContextValue = {

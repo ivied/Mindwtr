@@ -15,7 +15,8 @@ import { useLanguage } from '../contexts/language-context';
 import { useToast } from '../contexts/toast-context';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import { useMobileAreaFilter } from '@/hooks/use-mobile-area-filter';
-import { AREA_FILTER_ALL, AREA_FILTER_NONE } from '@/lib/area-filter';
+import { CompactText } from '@/components/compact-text';
+import { AREA_FILTER_ALL, AREA_FILTER_NONE } from '@mindwtr/core';
 
 export function MobileAreaSwitcher() {
   const { t } = useLanguage();
@@ -37,6 +38,11 @@ export function MobileAreaSwitcher() {
     if (resolvedAreaFilter === AREA_FILTER_NONE) return t('projects.noArea');
     return areaById.get(resolvedAreaFilter)?.name ?? t('projects.allAreas');
   }, [areaById, resolvedAreaFilter, t]);
+  const triggerLabel = useMemo(() => {
+    if (resolvedAreaFilter === AREA_FILTER_ALL) return t('common.all');
+    if (resolvedAreaFilter === AREA_FILTER_NONE) return t('common.none');
+    return currentLabel;
+  }, [currentLabel, resolvedAreaFilter, t]);
   const isDefaultScope = resolvedAreaFilter === AREA_FILTER_ALL;
 
   const options = useMemo(() => ([
@@ -76,15 +82,15 @@ export function MobileAreaSwitcher() {
           pressed ? styles.triggerPressed : null,
         ]}
       >
-        <Text
-          numberOfLines={1}
+        <CompactText
+          numberOfLines={2}
           style={[
             styles.triggerText,
             { color: isDefaultScope ? tc.secondaryText : tc.tint },
           ]}
         >
-          {currentLabel}
-        </Text>
+          {triggerLabel}
+        </CompactText>
         <ChevronDown color={isDefaultScope ? tc.secondaryText : tc.tint} size={13} strokeWidth={2.1} />
       </Pressable>
 
@@ -135,7 +141,7 @@ export function MobileAreaSwitcher() {
                     ]}
                   >
                     <Text
-                      numberOfLines={1}
+                      numberOfLines={2}
                       style={[
                         styles.optionText,
                         { color: isSelected ? tc.tint : tc.text },
@@ -159,8 +165,8 @@ const styles = StyleSheet.create({
   trigger: {
     maxWidth: 136,
     minHeight: 48,
-    paddingHorizontal: 8,
-    paddingVertical: 10,
+    paddingHorizontal: 6,
+    paddingVertical: 8,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
@@ -172,6 +178,8 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     fontSize: 12,
     fontWeight: '500',
+    lineHeight: 15,
+    minWidth: 0,
   },
   modalRoot: {
     flex: 1,

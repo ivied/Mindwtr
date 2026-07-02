@@ -42,6 +42,7 @@ Use these patterns to keep the system light:
 
 - **Desktop:** Type in the bottom input field or use keyboard shortcut `o`
 - **Mobile:** Tap the input field on the Inbox tab
+- **Mind Sweep:** Use guided prompts when you need to collect open loops across work, home, people, errands, and someday ideas.
 
 ### Quick-Add Syntax
 
@@ -110,8 +111,14 @@ flowchart TD
 | `next`     | Ready to do next   | Focus         |
 | `waiting`  | Delegated/blocked  | Waiting For   |
 | `someday`  | Future/maybe       | Someday/Maybe |
-| `done`     | Completed          | Done          |
-| `archived` | Finished and filed | Archived      |
+| `done`     | Recently completed | Done          |
+| `archived` | Completed and filed away | Archived      |
+
+Done and Archived are both closed states, but they serve different jobs:
+
+- **Done** is the recent completion log. Use it for tasks you may want to see during daily or weekly review.
+- **Archived** is filed history. Archived tasks are hidden from normal task lists, but stay available in the Archived view for search, restore, or permanent deletion.
+- **Auto-Archive** can move Done tasks to Archived after a set number of days. Set it to **Never** if you want Done to keep all completed tasks indefinitely.
 
 ### Contexts and Tags
 
@@ -127,6 +134,10 @@ Add contexts to filter by where you can do tasks:
 - `#creative` — Brainstorming
 - `#routine` — Repetitive tasks
 
+### People
+
+Use People for delegated or person-centered work. A task's assignee powers Waiting For lists, suggestions, and `assigned:` search; the People manager lets you keep reusable names, notes, and reference links without turning every person into a context tag. Deleting a person keeps their tasks and clears the assignee instead of deleting the work.
+
 ### Projects
 
 Create projects for multi-step outcomes:
@@ -139,11 +150,33 @@ Create projects for multi-step outcomes:
    - **Sequential:** Only first task shows in Focus view
    - **Parallel:** All tasks show in Focus view
 
+Deleting a project or area keeps its tasks. Mindwtr detaches that work to unassigned instead of cascading deletion.
+
+#### Project Sections
+
+Project Sections are subdivisions inside a single project. Use them when a project has natural phases, milestones, or workstreams and a flat task list would be hard to scan.
+
+Example: **Launch website** can have sections such as **Design**, **Development**, and **Content**. These are not separate projects and not subtasks. They are organizational headings inside one project outcome.
+
+The **Project Section** field on a task assigns that task to one of its project's sections. It is useful only after the task belongs to a project that has sections. For unassigned tasks, or projects without sections, leave the field blank.
+
+Sequential projects can use a project-wide scope or a section scope. Use section scope when a project has independent phases or workstreams: Mindwtr shows the first available task in each section instead of blocking the whole project behind one task.
+
 ### Due Dates and Reminders
 
 - Set **due date** for deadlines
 - Set **start date** for when to begin
 - Set **review date** (tickler) for periodic check-ins
+
+### Dates vs. Status
+
+Mindwtr keeps task status and task dates separate. Status is the GTD state you choose, such as `inbox`, `next`, `waiting`, or `someday`. Dates control when and why a task appears; they do not automatically promote a task to `next`.
+
+- **Start date** is a defer/availability gate. A future start hides the task from Focus by default. When the date arrives, the task appears again with whatever status it already had; it is not promoted.
+- **Review date** is a tickler. When the date arrives, Mindwtr surfaces the task where that view supports review-due items so you can reconsider it; nothing changes until you decide.
+- **Due date** is a deadline. As it approaches or passes, Mindwtr gives the task deadline emphasis through display, reminders, and sorting pressure; status stays unchanged.
+
+Some processing actions set status and dates together. For example, choosing **Later** while processing the Inbox moves the item to `next` and sets a start date. That action changes the status; the start date does not promote the task later on its own.
 
 ---
 
@@ -159,6 +192,7 @@ Create projects for multi-step outcomes:
 1. **Process Inbox**
    - Clear all inbox items
    - Goal: Inbox Zero
+   - Use the review's Process Inbox action to run the normal clarify workflow from inside Weekly Review
 
 2. **Review Calendar**
    - Look back 2 weeks for missed follow-ups
@@ -193,6 +227,23 @@ Use the **Focus** view to see:
 - Due today
 
 Focus is not a full inventory view. It hides future-start tasks and later tasks in sequential projects so the list reflects actions that are available now. Use **Contexts**, **Projects**, or **Search** when you need to inspect all next actions, including deferred or blocked items.
+
+### How Focus sorts available actions
+
+Focus first decides whether a task is available, then sorts the visible actions:
+
+1. **Today's Focus** shows tasks you explicitly focused for today.
+2. **Today / Schedule** shows available `next` tasks that are overdue, due today, or start today. These are ordered by the earliest due/start time, then priority when priorities are enabled, then oldest creation date.
+3. **Next Actions** shows the remaining available `next` tasks. The default order is:
+   - due soon first, earliest due date first (currently due within the next 30 days)
+   - undated actions next
+   - far-future due actions last, earliest due date first
+   - within the same bucket: priority when enabled, then start time, oldest creation date, title, and id
+4. **Review Due** shows tasks whose review date is due.
+
+Start date is Mindwtr's defer/planned-date field. Future-start tasks are hidden from Focus by default unless you enable future-start visibility. Sequential projects also limit Focus to the first available action for that project or section, so later actions stay out of Focus until the previous step is no longer blocking them.
+
+Time estimate and energy are Focus filters and grouping options, not default sort keys. Grouping by context, project, area, energy, or priority changes the visual groups; tasks inside those groups keep the same availability and next-action ordering.
 
 ### Context Filtering
 
@@ -232,14 +283,16 @@ Star tasks as today's priorities up to your configured Focus limit:
 
 ## Recurring Tasks
 
-Set up recurring tasks for habits:
+Set up recurring tasks for habits and repeating responsibilities:
 
 1. Edit a task
 2. Set recurrence (daily, weekly, monthly, yearly)
 3. Choose strategy:
-   - **Strict** for fixed schedules (e.g., every 5 days on a fixed cadence)
+   - **Strict** for fixed schedules, such as a monthly review that should stay on the planned day
    - **Repeat after completion** for habits based on when you actually finish
 4. When completed, a new instance is created automatically
+
+Mindwtr keeps one active instance of a recurring task. Future occurrences are not pre-populated in the Calendar; the next instance appears only after you complete the current one. This keeps overdue work visible instead of quietly creating a chain of future copies.
 
 **Example recurring tasks:**
 - Weekly: "Review project status"

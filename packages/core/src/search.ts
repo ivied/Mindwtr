@@ -24,6 +24,7 @@ export interface SearchQuery {
 
 const DATE_FIELDS = new Set(['due', 'start', 'review', 'created']);
 const ASSIGNEE_FIELDS = new Set(['assigned', 'assignee', 'assignedto']);
+const LOCATION_FIELDS = new Set(['location', 'where']);
 
 function tokenize(query: string): string[] {
     const tokens = query.match(/-?[^:\s]+:"[^"]+"|"[^"]+"|\S+/g) || [];
@@ -134,6 +135,10 @@ function matchesText(haystack: string | undefined, needle: string): boolean {
     return haystack.toLowerCase().includes(needle.toLowerCase());
 }
 
+function matchesChecklist(checklist: Task['checklist'], needle: string): boolean {
+    return (checklist || []).some((item) => matchesText(item.title, needle));
+}
+
 function normalizeTag(value: string): string {
     return normalizePrefixedToken(value, '#');
 }
@@ -190,7 +195,15 @@ export function matchesTask(term: SearchTerm, task: Task, projectById: Map<strin
     let result = false;
 
     if (!field) {
-        result = matchesText(task.title, value) || matchesText(task.description, value);
+        result = matchesText(task.title, value)
+            || matchesText(task.description, value)
+            || matchesChecklist(task.checklist, value)
+            || matchesText(task.location, value)
+            || matchesText(task.assignedTo, value);
+    } else if (field === 'checklist') {
+        result = value.trim().length > 0 && matchesChecklist(task.checklist, value);
+    } else if (field === 'id') {
+        result = value.trim().length > 0 && matchesText(task.id, value);
     } else if (field === 'status') {
         const normalized = normalizeTaskStatus(value);
         result = TASK_STATUS_SET.has(normalized) ? task.status === normalized : false;
@@ -208,6 +221,8 @@ export function matchesTask(term: SearchTerm, task: Task, projectById: Map<strin
         }
     } else if (ASSIGNEE_FIELDS.has(field)) {
         result = value.trim().length > 0 && matchesText(task.assignedTo, value);
+    } else if (LOCATION_FIELDS.has(field)) {
+        result = value.trim().length > 0 && matchesText(task.location, value);
     } else if (DATE_FIELDS.has(field)) {
         if (field === 'due') result = matchDueDateField(task.dueDate, term.comparator, value, now);
         else if (field === 'start') result = matchDateField(task.startTime, term.comparator, value, now);
@@ -215,7 +230,9 @@ export function matchesTask(term: SearchTerm, task: Task, projectById: Map<strin
         else if (field === 'created') result = matchDateField(task.createdAt, term.comparator, value, now);
     } else {
         // Unknown field: treat as text search against title/description.
-        result = matchesText(task.title, `${field}:${value}`) || matchesText(task.description, `${field}:${value}`);
+        result = matchesText(task.title, `${field}:${value}`)
+            || matchesText(task.description, `${field}:${value}`)
+            || matchesChecklist(task.checklist, `${field}:${value}`);
     }
 
     return term.negated ? !result : result;

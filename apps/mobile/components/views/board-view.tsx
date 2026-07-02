@@ -1,15 +1,16 @@
-import { View, Text, ScrollView, StyleSheet, Platform } from 'react-native';
-import { useTaskStore } from '@mindwtr/core';
-import type { Task, TaskStatus } from '@mindwtr/core';
+import { View, Text, ScrollView, StyleSheet, Platform, Pressable, TextInput } from 'react-native';
+import { isTaskInActiveProject, shallow, sortTasksByBoardOrder, useTaskStore, createTaskFilterPredicate, taskMatchesAreaFilter, hasActiveFilterCriteria, getUsedTaskTokens, tFallback, projectMatchesAreaFilter, SAVED_FILTER_NO_PROJECT_ID } from '@mindwtr/core';
+import type { Task, TaskStatus, FilterCriteria } from '@mindwtr/core';
 import { useMemo, useState, useCallback, useRef, useEffect } from 'react';
 import { useTheme } from '../../contexts/theme-context';
 import { useLanguage } from '../../contexts/language-context';
 import { useThemeColors } from '@/hooks/use-theme-colors';
 import { useMobileAreaFilter } from '@/hooks/use-mobile-area-filter';
-import { taskMatchesAreaFilter } from '@/lib/area-filter';
-import { openContextsScreen, openProjectScreen } from '@/lib/task-meta-navigation';
+import { openContextsScreen, openProjectScreen, openTaskScreen } from '@/lib/task-meta-navigation';
+import { useToast } from '@/contexts/toast-context';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GestureDetector, Gesture, Swipeable } from 'react-native-gesture-handler';
+import { Filter, X } from 'lucide-react-native';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -18,7 +19,7 @@ import Animated, {
   type SharedValue,
 } from 'react-native-reanimated';
 import { TaskEditModal } from '../task-edit-modal';
-import { resolveBoardDropColumnIndex, resolveBoardDropColumnIndexFromY } from './board-view.utils';
+import { BOARD_DUE_DATE_PRESETS, countActiveBoardFilters, resolveBoardColumnReorder, resolveBoardDropColumnIndex, resolveBoardDropColumnIndexFromY, toggleCriteriaDuePreset, toggleCriteriaToken, type BoardDuePreset } from './board-view.utils';
 
 const COLUMNS: { id: TaskStatus; label: string; labelKey: string; color: string }[] = [
   { id: 'inbox', label: 'Inbox', labelKey: 'status.inbox', color: '#6B7280' },
@@ -27,6 +28,7 @@ const COLUMNS: { id: TaskStatus; label: string; labelKey: string; color: string 
   { id: 'someday', label: 'Someday', labelKey: 'status.someday', color: '#8B5CF6' },
   { id: 'done', label: 'Done', labelKey: 'status.done', color: '#10B981' },
 ];
+const BOARD_FILTER_CHIP_MAX_FONT_SCALE = 1.2;
 
 type RelativeTaskLayout = {
   columnIndex: number;
@@ -342,14 +344,26 @@ function Column({
 }
 
 export function BoardView() {
-  const { tasks, projects, areas, updateTask, deleteTask, duplicateTask } = useTaskStore();
+  const { tasks, projects, areas, updateTask, deleteTask, duplicateTask, reorderBoardTasks, timeEstimatesEnabled } = useTaskStore((state) => ({
+    tasks: state.tasks,
+    projects: state.projects,
+    areas: state.areas,
+    updateTask: state.updateTask,
+    deleteTask: state.deleteTask,
+    duplicateTask: state.duplicateTask,
+    reorderBoardTasks: state.reorderBoardTasks,
+    timeEstimatesEnabled: state.settings?.features?.timeEstimates !== false,
+  }), shallow);
   const { isDark } = useTheme();
   const tc = useThemeColors();
   const { t } = useLanguage();
-  const timeEstimatesEnabled = useTaskStore((state) => state.settings?.features?.timeEstimates !== false);
+  const { showToast } = useToast();
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [dragSourceColumnIndex, setDragSourceColumnIndex] = useState<number | null>(null);
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [criteria, setCriteria] = useState<FilterCriteria>({});
   const insets = useSafeAreaInsets();
   const boardScrollRef = useRef<ScrollView | null>(null);
   const draggingTaskIdRef = useRef<string | null>(null);
@@ -375,6 +389,13 @@ export function BoardView() {
 
   const areaById = useMemo(() => new Map(areas.map((area) => [area.id, area])), [areas]);
   const { resolvedAreaFilter } = useMobileAreaFilter();
+  const projectMap = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
+  const sortedProjects = useMemo(() => (
+    projects
+      .filter((project) => !project.deletedAt)
+      .filter((project) => projectMatchesAreaFilter(project, resolvedAreaFilter, areaById))
+      .sort((a, b) => a.title.localeCompare(b.title))
+  ), [projects, resolvedAreaFilter, areaById]);
   const projectById = useMemo(() => {
     return projects.reduce((acc, project) => {
       const projectColor = project.areaId ? areaById.get(project.areaId)?.color : undefined;
@@ -383,20 +404,68 @@ export function BoardView() {
     }, {} as Record<string, { title: string; color?: string }>);
   }, [projects, areaById]);
 
-  // Filter active tasks and group by status
-  const tasksByStatus = useMemo(() => {
-    const projectMap = new Map(projects.map((project) => [project.id, project]));
-    const activeTasks = tasks.filter((task) => (
+  // Tasks visible after the global area filter, before the board-level filter bar.
+  const areaActiveTasks = useMemo(() => {
+    return tasks.filter((task) => (
       !task.deletedAt
       && task.status !== 'reference'
+      && isTaskInActiveProject(task, projectMap)
       && taskMatchesAreaFilter(task, resolvedAreaFilter, projectMap, areaById)
     ));
+  }, [tasks, projectMap, resolvedAreaFilter, areaById]);
+
+  const allTokens = useMemo(
+    () => getUsedTaskTokens(areaActiveTasks, (task) => [...(task.contexts || []), ...(task.tags || [])]),
+    [areaActiveTasks],
+  );
+
+  const filtersActive = hasActiveFilterCriteria(criteria);
+  const searchActive = searchQuery.trim().length > 0;
+  const boardFiltersActive = filtersActive || searchActive;
+  const activeFilterCount = countActiveBoardFilters(criteria);
+  const boardActiveFilterCount = activeFilterCount + (searchActive ? 1 : 0);
+  const selectedProjectIds = criteria.projects ?? [];
+
+  const criteriaFilteredTasks = useMemo(() => {
+    const now = new Date();
+    return filtersActive
+      ? areaActiveTasks.filter(createTaskFilterPredicate(criteria, { projects, now }))
+      : areaActiveTasks;
+  }, [areaActiveTasks, criteria, filtersActive, projects]);
+  const normalizedSearch = useMemo(() => searchQuery.trim().toLowerCase(), [searchQuery]);
+
+  // Apply the board filter bar (search / contexts / tags / dates / projects) and group by status.
+  const tasksByStatus = useMemo(() => {
+    const visibleTasks = normalizedSearch
+      ? criteriaFilteredTasks.filter((task) => task.title.toLowerCase().includes(normalizedSearch))
+      : criteriaFilteredTasks;
     const grouped: Record<string, Task[]> = {};
     COLUMNS.forEach(col => {
-      grouped[col.id] = activeTasks.filter(t => t.status === col.id);
+      grouped[col.id] = sortTasksByBoardOrder(visibleTasks.filter(t => t.status === col.id));
     });
     return grouped;
-  }, [tasks, projects, resolvedAreaFilter, areaById]);
+  }, [criteriaFilteredTasks, normalizedSearch]);
+
+  const handleToggleToken = useCallback((token: string) => {
+    setCriteria((prev) => toggleCriteriaToken(prev, token));
+  }, []);
+  const handleToggleDuePreset = useCallback((preset: BoardDuePreset) => {
+    setCriteria((prev) => toggleCriteriaDuePreset(prev, preset));
+  }, []);
+  const handleToggleProject = useCallback((projectId: string) => {
+    setCriteria((prev) => {
+      const current = prev.projects ?? [];
+      const next = current.includes(projectId)
+        ? current.filter((item) => item !== projectId)
+        : [...current, projectId];
+      return { ...prev, projects: next.length > 0 ? next : undefined };
+    });
+  }, []);
+  const clearFilters = useCallback(() => {
+    setCriteria({});
+    setSearchQuery('');
+  }, []);
+  const clearSearch = useCallback(() => setSearchQuery(''), []);
 
   const getTaskTopInContent = useCallback((taskId: string): number | null => {
     const taskLayout = taskLayoutsRef.current[taskId];
@@ -440,9 +509,10 @@ export function BoardView() {
     if (currentColumnIndex < 0) return;
 
     let newColumnIndex = currentColumnIndex;
+    let dragCenterY: number | null = null;
     const dragStartMetrics = dragStartMetricsRef.current;
     if (dragStartMetrics?.taskId === taskId) {
-      const dragCenterY = dragStartMetrics.topY + effectiveTranslationY + (dragStartMetrics.height / 2);
+      dragCenterY = dragStartMetrics.topY + effectiveTranslationY + (dragStartMetrics.height / 2);
       const columnBounds = getColumnBounds();
       if (columnBounds.length > 0) {
         newColumnIndex = resolveBoardDropColumnIndexFromY({
@@ -465,11 +535,32 @@ export function BoardView() {
       });
     }
 
-    if (newColumnIndex >= 0 && newColumnIndex < COLUMNS.length) {
-      const newStatus = COLUMNS[newColumnIndex].id;
-      updateTask(taskId, { status: newStatus });
+    if (newColumnIndex < 0 || newColumnIndex >= COLUMNS.length) return;
+
+    if (newColumnIndex === currentColumnIndex) {
+      if (dragCenterY === null || !currentStatus) return;
+      const columnTaskLayouts = (tasksByStatus[currentStatus] || [])
+        .map((columnTask) => {
+          const top = getTaskTopInContent(columnTask.id);
+          const height = taskLayoutsRef.current[columnTask.id]?.height;
+          if (top === null || typeof height !== 'number' || !Number.isFinite(height)) return null;
+          return { id: columnTask.id, top, height };
+        })
+        .filter((item): item is { id: string; top: number; height: number } => item !== null);
+      const orderedIds = resolveBoardColumnReorder({
+        taskId,
+        dragCenterY,
+        columnTasks: columnTaskLayouts,
+      });
+      if (orderedIds) {
+        void reorderBoardTasks(currentStatus, orderedIds);
+      }
+      return;
     }
-  }, [getColumnBounds, tasks, updateTask]);
+
+    const newStatus = COLUMNS[newColumnIndex].id;
+    updateTask(taskId, { status: newStatus });
+  }, [getColumnBounds, getTaskTopInContent, reorderBoardTasks, tasks, tasksByStatus, updateTask]);
 
   const handleTap = useCallback((task: Task) => {
     setEditingTask(task);
@@ -483,9 +574,26 @@ export function BoardView() {
     deleteTask(taskId);
   }, [deleteTask]);
 
-  const handleDuplicate = useCallback((task: Task) => {
-    duplicateTask(task.id, false);
-  }, [duplicateTask]);
+  const handleDuplicate = useCallback(async (task: Task) => {
+    try {
+      const result = await duplicateTask(task.id, false);
+      if (!result.success || !result.id) {
+        showToast({
+          title: tFallback(t, 'common.error', 'Error'),
+          message: result.error || t('task.duplicateFailed'),
+          tone: 'error',
+        });
+        return;
+      }
+      openTaskScreen(result.id, task.projectId, 'task');
+    } catch {
+      showToast({
+        title: tFallback(t, 'common.error', 'Error'),
+        message: t('task.duplicateFailed'),
+        tone: 'error',
+      });
+    }
+  }, [duplicateTask, showToast, t]);
 
   const stopAutoScroll = useCallback(() => {
     autoScrollDirectionRef.current = 0;
@@ -598,6 +706,192 @@ export function BoardView() {
 
   return (
     <View style={[styles.container, { backgroundColor: tc.bg }]}>
+      <View style={[styles.filterBar, { borderBottomColor: tc.border }]}>
+        <View style={styles.filterBarHeader}>
+          <Pressable
+            onPress={() => setFiltersOpen((open) => !open)}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: filtersOpen }}
+            style={[
+              styles.filterToggle,
+              {
+                backgroundColor: boardFiltersActive ? tc.tint : tc.filterBg,
+                borderColor: boardFiltersActive ? tc.tint : tc.border,
+              },
+            ]}
+          >
+            <Filter size={14} color={boardFiltersActive ? tc.onTint : tc.secondaryText} />
+            <Text style={[styles.filterToggleText, { color: boardFiltersActive ? tc.onTint : tc.text }]}>
+              {t('filters.label')}{boardActiveFilterCount > 0 ? ` (${boardActiveFilterCount})` : ''}
+            </Text>
+          </Pressable>
+          {boardFiltersActive && (
+            <Pressable onPress={clearFilters} accessibilityRole="button" hitSlop={8}>
+              <Text style={[styles.filterClearText, { color: tc.tint }]}>{t('filters.clear')}</Text>
+            </Pressable>
+          )}
+        </View>
+        <View style={styles.searchRow}>
+          <TextInput
+            value={searchQuery}
+            onChangeText={setSearchQuery}
+            placeholder={t('common.search')}
+            placeholderTextColor={tc.secondaryText}
+            accessibilityLabel={t('common.search')}
+            returnKeyType="search"
+            clearButtonMode="while-editing"
+            style={[
+              styles.searchInput,
+              searchActive ? styles.searchInputWithClear : null,
+              {
+                backgroundColor: searchActive ? tc.filterBg : tc.inputBg,
+                borderColor: searchActive ? tc.tint : tc.border,
+                color: tc.text,
+              },
+            ]}
+          />
+          {searchActive && (
+            <Pressable
+              onPress={clearSearch}
+              accessibilityRole="button"
+              accessibilityLabel={t('filters.clear')}
+              hitSlop={8}
+              style={[styles.searchClearButton, { backgroundColor: tc.cardBg }]}
+            >
+              <X size={16} color={tc.secondaryText} />
+            </Pressable>
+          )}
+        </View>
+        {filtersOpen && (
+          <View style={styles.filterPanel}>
+            {allTokens.length > 0 && (
+              <View style={styles.filterSection}>
+                <Text style={[styles.filterSectionTitle, { color: tc.secondaryText }]}>{t('filters.contexts')}</Text>
+                <View style={styles.filterChipRow}>
+                  {allTokens.map((token) => {
+                    const selected = token.trim().startsWith('#')
+                      ? (criteria.tags ?? []).includes(token)
+                      : (criteria.contexts ?? []).includes(token);
+                    return (
+                      <Pressable
+                        key={`token:${token}`}
+                        onPress={() => handleToggleToken(token)}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected }}
+                        style={[
+                          styles.filterChip,
+                          {
+                            backgroundColor: selected ? tc.tint : tc.filterBg,
+                            borderColor: selected ? tc.tint : tc.border,
+                          },
+                        ]}
+                      >
+                        <Text
+                          maxFontSizeMultiplier={BOARD_FILTER_CHIP_MAX_FONT_SCALE}
+                          style={[styles.filterChipText, { color: selected ? tc.onTint : tc.text }]}
+                        >
+                          {token}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+            )}
+            <View style={styles.filterSection}>
+              <Text style={[styles.filterSectionTitle, { color: tc.secondaryText }]}>{t('search.due.label')}</Text>
+              <View style={styles.filterChipRow}>
+                {BOARD_DUE_DATE_PRESETS.map((preset) => {
+                  const selected = !!criteria.dueDateRange
+                    && 'preset' in criteria.dueDateRange
+                    && criteria.dueDateRange.preset === preset;
+                  return (
+                    <Pressable
+                      key={`due:${preset}`}
+                      onPress={() => handleToggleDuePreset(preset)}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}
+                      style={[
+                        styles.filterChip,
+                        {
+                          backgroundColor: selected ? tc.tint : tc.filterBg,
+                          borderColor: selected ? tc.tint : tc.border,
+                        },
+                      ]}
+                    >
+                      <Text
+                        maxFontSizeMultiplier={BOARD_FILTER_CHIP_MAX_FONT_SCALE}
+                        style={[styles.filterChipText, { color: selected ? tc.onTint : tc.text }]}
+                      >
+                        {t(`filters.datePreset.${preset}`)}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+            <View style={styles.filterSection}>
+              <Text style={[styles.filterSectionTitle, { color: tc.secondaryText }]}>{t('filters.projects')}</Text>
+              <View style={styles.filterChipRow}>
+                {(() => {
+                  const selected = selectedProjectIds.includes(SAVED_FILTER_NO_PROJECT_ID);
+                  return (
+                    <Pressable
+                      key={`project:${SAVED_FILTER_NO_PROJECT_ID}`}
+                      onPress={() => handleToggleProject(SAVED_FILTER_NO_PROJECT_ID)}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}
+                      style={[
+                        styles.filterChip,
+                        {
+                          backgroundColor: selected ? tc.tint : tc.filterBg,
+                          borderColor: selected ? tc.tint : tc.border,
+                        },
+                      ]}
+                    >
+                      <Text
+                        maxFontSizeMultiplier={BOARD_FILTER_CHIP_MAX_FONT_SCALE}
+                        style={[styles.filterChipText, { color: selected ? tc.onTint : tc.text }]}
+                      >
+                        {t('taskEdit.noProjectOption')}
+                      </Text>
+                    </Pressable>
+                  );
+                })()}
+                {sortedProjects.map((project) => {
+                  const selected = selectedProjectIds.includes(project.id);
+                  const projectColor = project.areaId ? areaById.get(project.areaId)?.color : undefined;
+                  return (
+                    <Pressable
+                      key={`project:${project.id}`}
+                      onPress={() => handleToggleProject(project.id)}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected }}
+                      style={[
+                        styles.filterChip,
+                        styles.projectFilterChip,
+                        {
+                          backgroundColor: selected ? tc.tint : tc.filterBg,
+                          borderColor: selected ? tc.tint : tc.border,
+                        },
+                      ]}
+                    >
+                      <View style={[styles.projectFilterDot, { backgroundColor: projectColor || '#6B7280' }]} />
+                      <Text
+                        maxFontSizeMultiplier={BOARD_FILTER_CHIP_MAX_FONT_SCALE}
+                        style={[styles.filterChipText, styles.projectFilterText, { color: selected ? tc.onTint : tc.text }]}
+                        numberOfLines={1}
+                      >
+                        {project.title}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          </View>
+        )}
+      </View>
       <ScrollView
         ref={boardScrollRef}
         showsVerticalScrollIndicator={false}
@@ -669,6 +963,100 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F9FAFB',
+  },
+  filterBar: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    gap: 12,
+  },
+  filterBarHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  filterToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  filterToggleText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  filterClearText: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  filterPanel: {
+    gap: 12,
+  },
+  searchRow: {
+    position: 'relative',
+  },
+  searchInput: {
+    minHeight: 40,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    fontSize: 14,
+  },
+  searchInputWithClear: {
+    paddingRight: 44,
+  },
+  searchClearButton: {
+    position: 'absolute',
+    right: 8,
+    top: 6,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterSection: {
+    gap: 6,
+  },
+  filterSectionTitle: {
+    fontSize: 11,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  filterChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  filterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  filterChipText: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  projectFilterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    maxWidth: 180,
+  },
+  projectFilterDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  projectFilterText: {
+    flexShrink: 1,
   },
   boardScroll: {
     flex: 1,

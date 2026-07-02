@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppData, Attachment } from '@mindwtr/core';
 import { DropboxUnauthorizedError } from './dropbox-sync';
 import { fallbackHashString, getFileSyncDir, hashString, normalizeSyncBackend } from './sync-service-utils';
+import { CLOUD_REMEMBER_TOKEN_KEY, CLOUD_TOKEN_KEY } from './sync-service-config';
 import { useUiStore } from '../store/ui-store';
 
 const markLocalWriteMock = vi.hoisted(() => vi.fn());
+const markLocalSqliteWriteMock = vi.hoisted(() => vi.fn());
 
 import { SyncService, __syncServiceTestUtils } from './sync-service';
 
@@ -168,16 +170,103 @@ describe('SyncService testability hooks', () => {
             settings: {},
         };
         markLocalWriteMock.mockReset();
+        markLocalSqliteWriteMock.mockReset();
         __syncServiceTestUtils.setDependenciesForTests({
             isTauriRuntime: () => true,
             invoke: invoke as unknown as <T>(command: string, args?: Record<string, unknown>) => Promise<T>,
             markLocalWrite: markLocalWriteMock as unknown as (data?: AppData) => void,
+            markLocalSqliteWrite: markLocalSqliteWriteMock as unknown as () => void,
         });
 
         await __syncServiceTestUtils.persistLocalDataForTests(data);
 
         expect(markLocalWriteMock).toHaveBeenCalledWith(data);
+        expect(markLocalSqliteWriteMock).toHaveBeenCalledTimes(2);
         expect(invoke).toHaveBeenCalledWith('save_data', { data });
+    });
+
+    it('persists Tauri sync status outside the data snapshot', async () => {
+        const invoke = vi.fn(async (command: string, _args?: Record<string, unknown>) => {
+            throw new Error(`unexpected command: ${command}`);
+        });
+        const updateSettings = vi.fn(async () => undefined);
+        const flushPendingSave = vi.fn(async () => undefined);
+        markLocalWriteMock.mockReset();
+        markLocalSqliteWriteMock.mockReset();
+        __syncServiceTestUtils.setDependenciesForTests({
+            isTauriRuntime: () => true,
+            invoke: invoke as unknown as <T>(command: string, args?: Record<string, unknown>) => Promise<T>,
+            flushPendingSave,
+            getStoreState: () => ({
+                updateSettings,
+                lastDataChangeAt: 123,
+                settings: {},
+            }) as any,
+            markLocalWrite: markLocalWriteMock as unknown as (data?: AppData) => void,
+            markLocalSqliteWrite: markLocalSqliteWriteMock as unknown as () => void,
+        });
+
+        const result = await (SyncService as any).persistSuccessfulSyncStatus(
+            'success',
+            '2026-06-12T00:00:00.000Z',
+        );
+
+        expect(result).toBe(true);
+        expect(updateSettings).not.toHaveBeenCalled();
+        expect(flushPendingSave).not.toHaveBeenCalled();
+        expect(invoke).not.toHaveBeenCalled();
+        expect(JSON.parse(localStorage.getItem('mindwtr-local-sync-status-v1') ?? '{}')).toMatchObject({
+            lastSyncAt: '2026-06-12T00:00:00.000Z',
+            lastSyncStatus: 'success',
+        });
+        expect(markLocalWriteMock).not.toHaveBeenCalled();
+        expect(markLocalSqliteWriteMock).not.toHaveBeenCalled();
+    });
+
+    it('keeps browser self-hosted tokens session-only by default', async () => {
+        await SyncService.setCloudConfig({
+            url: 'https://sync.example.com',
+            token: 'session-secret',
+            allowInsecureHttp: false,
+        });
+
+        expect(sessionStorage.getItem(CLOUD_TOKEN_KEY)).toBe('session-secret');
+        expect(localStorage.getItem(CLOUD_TOKEN_KEY)).toBeNull();
+        expect(localStorage.getItem(CLOUD_REMEMBER_TOKEN_KEY)).toBeNull();
+        expect(await SyncService.getCloudConfig()).toMatchObject({
+            url: 'https://sync.example.com',
+            token: 'session-secret',
+            rememberToken: false,
+        });
+
+        sessionStorage.clear();
+
+        expect(await SyncService.getCloudConfig()).toMatchObject({
+            url: 'https://sync.example.com',
+            token: '',
+            rememberToken: false,
+        });
+    });
+
+    it('persists browser self-hosted tokens when remember token is enabled', async () => {
+        await SyncService.setCloudConfig({
+            url: 'https://sync.example.com',
+            token: 'persistent-secret',
+            rememberToken: true,
+            allowInsecureHttp: false,
+        });
+
+        expect(localStorage.getItem(CLOUD_TOKEN_KEY)).toBe('persistent-secret');
+        expect(localStorage.getItem(CLOUD_REMEMBER_TOKEN_KEY)).toBe('true');
+        expect(sessionStorage.getItem(CLOUD_TOKEN_KEY)).toBeNull();
+
+        sessionStorage.clear();
+
+        expect(await SyncService.getCloudConfig()).toMatchObject({
+            url: 'https://sync.example.com',
+            token: 'persistent-secret',
+            rememberToken: true,
+        });
     });
 
     it('defaults cloud provider to selfhosted and persists selection', async () => {
@@ -664,6 +753,24 @@ describe('SyncService orchestration', () => {
         expect((SyncService as any).lastSuccessfulSyncLocalChangeAt).toBe(0);
     });
 
+    it('reports pending local changes for desktop auto-sync only after local data changes', () => {
+        const storeState = {
+            lastDataChangeAt: 0,
+        };
+        __syncServiceTestUtils.setDependenciesForTests({
+            getStoreState: () => storeState as any,
+        });
+
+        expect(SyncService.hasPendingLocalChangesForAutoSync()).toBe(false);
+
+        (SyncService as any).lastSuccessfulSyncLocalChangeAt = 100;
+        storeState.lastDataChangeAt = 100;
+        expect(SyncService.hasPendingLocalChangesForAutoSync()).toBe(false);
+
+        storeState.lastDataChangeAt = 101;
+        expect(SyncService.hasPendingLocalChangesForAutoSync()).toBe(true);
+    });
+
     it('refreshes store data without overwriting synced settings after a successful sync', async () => {
         const callOrder: string[] = [];
         const storeState = {
@@ -679,7 +786,7 @@ describe('SyncService orchestration', () => {
         };
         const prepareSpy = vi.spyOn(SyncService as any, 'prepareSyncExecutionContext').mockImplementation(
             async (...args: unknown[]) => {
-                const context = args[0] as Record<string, unknown>;
+                const context = (args[0] as { context: Record<string, unknown> }).context;
                 context.backend = 'file';
                 context.fileBaseDir = '';
             }
@@ -693,6 +800,9 @@ describe('SyncService orchestration', () => {
             __syncServiceTestUtils.setDependenciesForTests({
                 flushPendingSave: vi.fn(async () => undefined),
                 getStoreState: () => storeState as any,
+                applySyncedDataToStore: vi.fn(() => {
+                    callOrder.push('applySyncedDataToStore');
+                }),
                 performSyncCycle: vi.fn(async () => ({
                     data: {
                         tasks: [],
@@ -714,12 +824,83 @@ describe('SyncService orchestration', () => {
             const result = await SyncService.performSync();
 
             expect(result.success).toBe(true);
-            expect(callOrder).toEqual(['fetchData']);
+            expect(callOrder).toEqual(['applySyncedDataToStore']);
+            expect(storeState.fetchData).not.toHaveBeenCalled();
             expect(storeState.updateSettings).not.toHaveBeenCalled();
         } finally {
             prepareSpy.mockRestore();
             preSyncSpy.mockRestore();
             postMergeSpy.mockRestore();
+        }
+    });
+
+    it('does not record fast-sync state after post-remote attachment phases change the sync payload', async () => {
+        const syncedData: AppData = {
+            tasks: [{
+                id: 'task-1',
+                title: 'Before cleanup',
+                status: 'next',
+                tags: [],
+                contexts: [],
+                createdAt: '2026-04-01T00:00:00.000Z',
+                updatedAt: '2026-04-01T00:00:00.000Z',
+            }],
+            projects: [],
+            sections: [],
+            areas: [],
+            settings: {},
+        };
+        const storeState = {
+            lastDataChangeAt: 0,
+            settings: {},
+            fetchData: vi.fn(async () => undefined),
+            updateSettings: vi.fn(async () => undefined),
+            setError: vi.fn(),
+        };
+        const prepareSpy = vi.spyOn(SyncService as any, 'prepareSyncExecutionContext').mockImplementation(
+            async (...args: unknown[]) => {
+                const context = (args[0] as { context: Record<string, unknown> }).context;
+                context.backend = 'file';
+                context.fileBaseDir = '';
+            }
+        );
+        const preSyncSpy = vi.spyOn(SyncService as any, 'runPreSyncAttachmentPhase').mockResolvedValue(undefined);
+        const postMergeSpy = vi.spyOn(SyncService as any, 'runPostMergeAttachmentPhase').mockImplementation(
+            async (...args: unknown[]) => ({
+                ...(args[1] as AppData),
+                tasks: [{
+                    ...(args[1] as AppData).tasks[0],
+                    title: 'After cleanup',
+                }],
+            })
+        );
+        const recordFastSyncSpy = vi.spyOn(SyncService as any, 'recordFastSyncState').mockResolvedValue(undefined);
+
+        try {
+            __syncServiceTestUtils.setDependenciesForTests({
+                flushPendingSave: vi.fn(async () => undefined),
+                getStoreState: () => storeState as any,
+                performSyncCycle: vi.fn(async () => ({
+                    data: syncedData,
+                    status: 'success' as const,
+                    stats: {
+                        tasks: {},
+                        projects: {},
+                        sections: {},
+                        areas: {},
+                    } as any,
+                })),
+            });
+
+            const result = await SyncService.performSync();
+
+            expect(result.success).toBe(true);
+            expect(recordFastSyncSpy).not.toHaveBeenCalled();
+        } finally {
+            prepareSpy.mockRestore();
+            preSyncSpy.mockRestore();
+            postMergeSpy.mockRestore();
+            recordFastSyncSpy.mockRestore();
         }
     });
 });

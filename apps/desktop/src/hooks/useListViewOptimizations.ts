@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { type Task, type TaskStatus, useTaskStore, isTaskInActiveProject } from '@mindwtr/core';
+import { type Task, type TaskStatus, useTaskStore, isTaskInActiveProject, getSequentialFirstTaskIds } from '@mindwtr/core';
 import { useConditionalMemo } from './useConditionalMemo';
 import { useProgressiveComputation } from './useProgressiveComputation';
 
@@ -25,6 +25,7 @@ export function useListViewOptimizations(
     const allTags = derived.allTags;
     const projectMap = derived.projectMap;
     const sequentialProjectIds = derived.sequentialProjectIds;
+    const sequentialWithinSectionProjectIds = derived.sequentialWithinSectionProjectIds;
     const tasksById = derived.tasksById;
 
     const sequentialProjectFirstTasks = useConditionalMemo(
@@ -34,46 +35,16 @@ export function useListViewOptimizations(
             perfApi?.trackUseMemo?.();
             const compute = () => {
                 if (sequentialProjectIds.size === 0) return new Set<string>();
-                const tasksByProject = new Map<string, Task[]>();
-
-                for (const task of baseTasks) {
-                    if (task.deletedAt || task.status !== 'next' || !task.projectId) continue;
-                    if (!sequentialProjectIds.has(task.projectId)) continue;
-                    const list = tasksByProject.get(task.projectId) ?? [];
-                    list.push(task);
-                    tasksByProject.set(task.projectId, list);
-                }
-
-                const firstTaskIds: string[] = [];
-                tasksByProject.forEach((tasksForProject: Task[]) => {
-                    const hasOrder = tasksForProject.some((task) =>
-                        Number.isFinite(task.order) || Number.isFinite(task.orderNum)
-                    );
-                    let firstTaskId: string | null = null;
-                    let bestKey = Number.POSITIVE_INFINITY;
-                    tasksForProject.forEach((task) => {
-                        const taskOrder = Number.isFinite(task.order)
-                            ? (task.order as number)
-                            : Number.isFinite(task.orderNum)
-                                ? (task.orderNum as number)
-                                : Number.POSITIVE_INFINITY;
-                        const key = hasOrder
-                            ? taskOrder
-                            : new Date(task.createdAt).getTime();
-                        if (!firstTaskId || key < bestKey) {
-                            firstTaskId = task.id;
-                            bestKey = key;
-                        }
-                    });
-                    if (firstTaskId) firstTaskIds.push(firstTaskId);
-                });
-
-                return new Set(firstTaskIds);
+                return getSequentialFirstTaskIds(
+                    baseTasks.filter((task) => !task.deletedAt && task.status === 'next'),
+                    sequentialProjectIds,
+                    { sectionScopedProjectIds: sequentialWithinSectionProjectIds },
+                );
             };
 
             return perfApi?.measure ? perfApi.measure('sequentialProjectFirstTasks', compute) : compute();
         },
-        [baseTasks, sequentialProjectIds],
+        [baseTasks, sequentialProjectIds, sequentialWithinSectionProjectIds],
         new Set<string>(),
     );
 

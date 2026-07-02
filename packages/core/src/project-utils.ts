@@ -2,6 +2,48 @@ import type { Project, Task, TaskStatus } from './types';
 
 const CLOSED_PROJECT_TASK_STATUSES = new Set<TaskStatus>(['done', 'archived', 'reference']);
 
+export function normalizeProjectSequentialScope(value: unknown): Project['sequentialScope'] {
+    if (value === 'section' || value === 'project') return value;
+    return undefined;
+}
+
+export type ProjectSequenceTaskCue = 'available' | 'later';
+
+export function getSequentialProjectTaskCues(
+    project: Pick<Project, 'isSequential' | 'sequentialScope'> | null | undefined,
+    tasks: Task[],
+    options: { sectionIds?: string[] } = {}
+): Map<string, ProjectSequenceTaskCue> {
+    const cues = new Map<string, ProjectSequenceTaskCue>();
+    if (!project?.isSequential) return cues;
+
+    const scope = normalizeProjectSequentialScope(project.sequentialScope) ?? 'project';
+    const validSectionIds = options.sectionIds ? new Set(options.sectionIds) : null;
+    let projectHasAvailableNext = false;
+    const sectionsWithAvailableNext = new Set<string>();
+
+    tasks.forEach((task) => {
+        if (task.deletedAt || task.status !== 'next') return;
+
+        if (scope === 'section') {
+            const sectionKey =
+                task.sectionId && (!validSectionIds || validSectionIds.has(task.sectionId))
+                    ? task.sectionId
+                    : '__unsectioned__';
+            const cue = sectionsWithAvailableNext.has(sectionKey) ? 'later' : 'available';
+            cues.set(task.id, cue);
+            sectionsWithAvailableNext.add(sectionKey);
+            return;
+        }
+
+        const cue = projectHasAvailableNext ? 'later' : 'available';
+        cues.set(task.id, cue);
+        projectHasAvailableNext = true;
+    });
+
+    return cues;
+}
+
 const getTaskProjectOrder = (task: Task): number => {
     if (Number.isFinite(task.order)) return task.order as number;
     if (Number.isFinite(task.orderNum)) return task.orderNum as number;
@@ -15,6 +57,22 @@ const isOpenProjectTask = (task: Task): boolean => {
 export function isSelectableProjectForTaskAssignment(project: Project): boolean {
     const status = String(project.status);
     return !project.deletedAt && status !== 'archived' && status !== 'completed';
+}
+
+export function findSelectableProjectByTitleAndArea(
+    projects: readonly Project[],
+    title: string,
+    areaId?: string
+): Project | undefined {
+    const normalizedTitle = title.trim().toLowerCase();
+    if (!normalizedTitle) return undefined;
+    const targetAreaId = areaId ?? undefined;
+    return projects.find((project) => (
+        isSelectableProjectForTaskAssignment(project)
+        && typeof project.title === 'string'
+        && project.title.trim().toLowerCase() === normalizedTitle
+        && (project.areaId ?? undefined) === targetAreaId
+    ));
 }
 
 export function isTaskInActiveProject(

@@ -232,6 +232,28 @@ describe('Sync Logic', () => {
             expect(attachment?.cloudKey).toBe('attachments/att-file-uri.txt');
         });
 
+        it('sanitizes attachment uris on one-sided incoming tasks', () => {
+            const incomingTask: Task = {
+                ...createMockTask('incoming-only', '2023-01-03'),
+                attachments: [{
+                    id: 'att-one-sided',
+                    kind: 'file',
+                    title: 'secret.txt',
+                    uri: 'file:///safe/%252e%252e/secret.txt',
+                    cloudKey: 'attachments/att-one-sided.txt',
+                    localStatus: 'available',
+                    createdAt: '2023-01-01T00:00:00.000Z',
+                    updatedAt: '2023-01-03T00:00:00.000Z',
+                }],
+            };
+
+            const merged = mergeAppData(mockAppData([]), mockAppData([incomingTask]));
+            const attachment = merged.tasks[0].attachments?.find((item) => item.id === 'att-one-sided');
+
+            expect(attachment?.uri).toBe('');
+            expect(attachment?.cloudKey).toBe('attachments/att-one-sided.txt');
+        });
+
         it('detaches live tasks and tombstones stale sections when their project is deleted', () => {
             vi.useFakeTimers();
             vi.setSystemTime(new Date('2026-02-01T00:00:00.000Z'));
@@ -1083,6 +1105,28 @@ describe('Sync Logic', () => {
             expect(result.stats.tasks.conflictIds).toHaveLength(0);
         });
 
+        it('does not count conflict when stale recurrence preview flag differs on non-recurring task', () => {
+            const localTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                rev: 7,
+                revBy: 'device-a',
+                showFutureRecurrence: true,
+            } satisfies Task;
+            const incomingTask = {
+                ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
+                rev: 7,
+                revBy: 'device-a',
+            } satisfies Task;
+
+            const result = mergeAppDataWithStats(mockAppData([localTask]), mockAppData([incomingTask]));
+
+            expect(result.data.tasks).toHaveLength(1);
+            expect(result.data.tasks[0].showFutureRecurrence).toBeUndefined();
+            expect(result.stats.tasks.conflicts).toBe(0);
+            expect(result.stats.tasks.conflictIds).toHaveLength(0);
+            expect(result.stats.tasks.conflictSamples).toHaveLength(0);
+        });
+
         it('does not count conflict when only revBy differs', () => {
             const localTask = {
                 ...createMockTask('1', '2023-01-02T00:05:00.000Z'),
@@ -1582,26 +1626,20 @@ describe('Sync Logic', () => {
         });
 
         it('clamps far-future timestamps during merge conflict evaluation', () => {
-            const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-01-01T00:00:00.000Z').getTime());
-            try {
-                const local = mockAppData([
-                    createMockTask('1', '2099-01-01T00:00:00.000Z'),
-                ]);
-                const incoming = mockAppData([
-                    createMockTask('1', '2026-01-01T00:00:00.000Z'),
-                ]);
+            const local = mockAppData([
+                createMockTask('1', '2099-01-01T00:00:00.000Z'),
+            ]);
+            const incoming = mockAppData([
+                createMockTask('1', '2026-01-01T00:00:00.000Z'),
+            ]);
 
-                const result = mergeAppDataWithStats(local, incoming);
-                expect(result.stats.tasks.maxClockSkewMs).toBeLessThanOrEqual(CLOCK_SKEW_THRESHOLD_MS);
-                expect(result.stats.tasks.futureTimestampClamps).toBe(1);
-                expect(result.stats.tasks.futureTimestampClampIds).toEqual(['1']);
-            } finally {
-                nowSpy.mockRestore();
-            }
+            const result = mergeAppDataWithStats(local, incoming, { nowIso: '2026-01-01T00:00:00.000Z' });
+            expect(result.stats.tasks.maxClockSkewMs).toBeLessThanOrEqual(CLOCK_SKEW_THRESHOLD_MS);
+            expect(result.stats.tasks.futureTimestampClamps).toBe(1);
+            expect(result.stats.tasks.futureTimestampClampIds).toEqual(['1']);
         });
 
         it('preserves relative ordering when both timestamps are clamped in the future', () => {
-            const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-01-01T00:00:00.000Z').getTime());
             const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
             try {
                 const localTask = {
@@ -1613,7 +1651,11 @@ describe('Sync Logic', () => {
                     title: 'aa newer future',
                 } satisfies Task;
 
-                const result = mergeAppDataWithStats(mockAppData([localTask]), mockAppData([incomingTask]));
+                const result = mergeAppDataWithStats(
+                    mockAppData([localTask]),
+                    mockAppData([incomingTask]),
+                    { nowIso: '2026-01-01T00:00:00.000Z' }
+                );
                 const merged = result.data;
 
                 expect(merged.tasks).toHaveLength(1);
@@ -1636,11 +1678,10 @@ describe('Sync Logic', () => {
                 });
             } finally {
                 warnSpy.mockRestore();
-                nowSpy.mockRestore();
             }
         });
 
-        it('captures merge time once per entity collection', () => {
+        it('does not use Date.now for entity clamping after normalizing the merge clock', () => {
             const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(new Date('2026-01-01T00:00:00.000Z').getTime());
             try {
                 const local = mockAppData([
@@ -1654,7 +1695,7 @@ describe('Sync Logic', () => {
 
                 mergeAppDataWithStats(local, incoming);
 
-                expect(nowSpy).toHaveBeenCalledTimes(4);
+                expect(nowSpy).not.toHaveBeenCalled();
             } finally {
                 nowSpy.mockRestore();
             }

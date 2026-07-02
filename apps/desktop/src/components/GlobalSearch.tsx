@@ -4,16 +4,23 @@ import {
     shallow,
     useTaskStore,
     Task,
+    Project,
     generateUUID,
     SavedSearch,
     SearchProjectResult,
     SearchResults,
     SearchTaskResult,
     getStorageAdapter,
+    normalizeWeekStartSetting,
     TaskStatus,
+    AREA_FILTER_ALL,
+    resolveAreaFilter,
+    taskMatchesAreaFilter,
+    projectMatchesAreaFilter,
 } from '@mindwtr/core';
 import { useLanguage } from '../contexts/language-context';
 import { cn } from '../lib/utils';
+import { ModalPortal } from './ModalPortal';
 import { PromptModal } from './PromptModal';
 import { useUiStore } from '../store/ui-store';
 import { computeGlobalSearchResults, type DuePreset, type GlobalSearchScope } from './global-search-filtering';
@@ -39,6 +46,7 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
     const [selectedStatuses, setSelectedStatuses] = useState<TaskStatus[]>([]);
     const [selectedArea, setSelectedArea] = useState<string>('all');
     const [selectedTokens, setSelectedTokens] = useState<string[]>([]);
+    const [locationQuery, setLocationQuery] = useState('');
     const [duePreset, setDuePreset] = useState<DuePreset>('any');
     const [scope, setScope] = useState<GlobalSearchScope>('all');
     const [ftsResults, setFtsResults] = useState<SearchResults | null>(null);
@@ -60,7 +68,14 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
         shallow
     );
     const { allContexts, allTags } = getDerivedState();
+    const areaById = useMemo(() => new Map(areas.map((area) => [area.id, area])), [areas]);
+    const projectMap = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
+    const activeAreaFilter = useMemo(
+        () => resolveAreaFilter(settings?.filters?.areaId, areas),
+        [settings?.filters?.areaId, areas]
+    );
     const setProjectView = useUiStore((state) => state.setProjectView);
+    const showToast = useUiStore((state) => state.showToast);
     const { t } = useLanguage();
 
     // Toggle search with Cmd+K / Ctrl+K
@@ -103,6 +118,7 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
             setSelectedStatuses([]);
             setSelectedArea('all');
             setSelectedTokens([]);
+            setLocationQuery('');
             setDuePreset('any');
             setScope('all');
         }
@@ -179,9 +195,10 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
         selectedStatuses,
         selectedArea,
         selectedTokens,
+        locationQuery,
         duePreset,
         scope,
-        weekStart: settings?.weekStart === 'monday' ? 'monday' : 'sunday',
+        weekStart: normalizeWeekStartSetting(settings?.weekStart),
         ftsResults,
     }), [
         query,
@@ -194,6 +211,7 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
         selectedStatuses,
         selectedArea,
         selectedTokens,
+        locationQuery,
         duePreset,
         scope,
         settings?.weekStart,
@@ -247,6 +265,16 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
 
     const handleSelect = (result: { type: 'project'; item: SearchProjectResult } | { type: 'task'; item: SearchTaskResult }) => {
         setIsOpen(false);
+        const shouldSwitchToAllAreas = activeAreaFilter !== AREA_FILTER_ALL && (
+            result.type === 'project'
+                ? !projectMatchesAreaFilter(result.item as Project, activeAreaFilter, areaById)
+                : !taskMatchesAreaFilter(result.item as Task, activeAreaFilter, projectMap, areaById)
+        );
+        if (shouldSwitchToAllAreas) {
+            void updateSettings({ filters: { ...(settings?.filters ?? {}), areaId: AREA_FILTER_ALL } })
+                .catch(() => showToast('Failed to update area filter.', 'error'));
+            showToast('Switched to All Areas so the selected item is visible.', 'info');
+        }
         if (result.type === 'project') {
             setProjectView({ selectedProjectId: result.item.id });
             onNavigate('projects', result.item.id);
@@ -316,6 +344,13 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
             onRemove: () => toggleToken(token),
         });
     });
+    if (locationQuery.trim()) {
+        activeChips.push({
+            key: 'location',
+            label: `${t('taskEdit.locationLabel') || 'Location'}: ${locationQuery.trim()}`,
+            onRemove: () => setLocationQuery(''),
+        });
+    }
     if (duePreset !== 'any') {
         const labels: Record<string, string> = {
             overdue: 'Overdue',
@@ -366,6 +401,7 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
     }
 
     return (
+        <ModalPortal>
         <div
             className="fixed inset-0 z-50 flex items-start justify-center pt-[20vh] bg-background/80 backdrop-blur-sm animate-in fade-in-0"
             role="dialog"
@@ -511,6 +547,18 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
                             </div>
                         </div>
                         <div className="space-y-2">
+                            <div className="text-[11px] uppercase tracking-wide text-muted-foreground/80">
+                                {t('taskEdit.locationLabel') || 'Location'}
+                            </div>
+                            <input
+                                type="text"
+                                value={locationQuery}
+                                onChange={(event) => setLocationQuery(event.target.value)}
+                                placeholder={t('taskEdit.locationPlaceholder') || 'e.g. Office'}
+                                className="w-full rounded border border-border bg-muted/40 px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground"
+                            />
+                        </div>
+                        <div className="space-y-2">
                             <div className="text-[11px] uppercase tracking-wide text-muted-foreground/80">Contexts & Tags</div>
                             <div className="flex flex-wrap gap-2 max-h-20 overflow-y-auto">
                                 {allTokens.map((token) => (
@@ -576,6 +624,7 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
                                     setSelectedStatuses([]);
                                     setSelectedArea('all');
                                     setSelectedTokens([]);
+                                    setLocationQuery('');
                                     setDuePreset('any');
                                     setScope('all');
                                     setIncludeCompleted(false);
@@ -698,5 +747,6 @@ export function GlobalSearch({ onNavigate }: GlobalSearchProps) {
                 onClick={() => setIsOpen(false)}
             />
         </div>
+        </ModalPortal>
     );
 }

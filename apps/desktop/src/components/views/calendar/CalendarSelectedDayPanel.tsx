@@ -1,9 +1,11 @@
 import { format } from 'date-fns';
+import type { DragEvent } from 'react';
 import { Check, Clock, MoreHorizontal, Plus, X } from 'lucide-react';
-import { safeFormatDate, safeParseDate } from '@mindwtr/core';
+import { getTaskCalendarOccurrenceDate, hasTimeComponent, isProjectedRecurringTask, safeFormatDate, safeParseDate, type Task } from '@mindwtr/core';
 
 import { cn } from '../../../lib/utils';
 import { reportError } from '../../../lib/report-error';
+import { setCalendarTaskDragData } from '../../../lib/calendar-task-drag';
 import type { DesktopCalendarController } from './useDesktopCalendarController';
 
 type CalendarSelectedDayPanelController = Pick<
@@ -12,6 +14,7 @@ type CalendarSelectedDayPanelController = Pick<
     | 'calendarNameById'
     | 'cancelEditScheduledTime'
     | 'commitEditScheduledTime'
+    | 'createTaskFromExternalEvent'
     | 'editingTimeTaskId'
     | 'editingTimeValue'
     | 'externalCalendarColor'
@@ -43,12 +46,23 @@ type CalendarSelectedDayPanelProps = {
     controller: CalendarSelectedDayPanelController;
 };
 
+const PROJECTED_RECURRENCE_LABEL_DATE_FORMAT = 'MMM d';
+
+function getProjectedRecurrenceDisplayLabel(task: Task, projectedLabel: string): string {
+    const occurrenceDateLabel = safeFormatDate(
+        getTaskCalendarOccurrenceDate(task),
+        PROJECTED_RECURRENCE_LABEL_DATE_FORMAT
+    );
+    return occurrenceDateLabel ? `${projectedLabel} · ${occurrenceDateLabel}` : projectedLabel;
+}
+
 export function CalendarSelectedDayPanel({ controller }: CalendarSelectedDayPanelProps) {
     const {
         beginEditScheduledTime,
         calendarNameById,
         cancelEditScheduledTime,
         commitEditScheduledTime,
+        createTaskFromExternalEvent,
         editingTimeTaskId,
         editingTimeValue,
         externalCalendarColor,
@@ -75,6 +89,10 @@ export function CalendarSelectedDayPanel({ controller }: CalendarSelectedDayPane
         timeEstimateToMinutes,
         updateTask,
     } = controller;
+    const handleTaskDragStart = (event: DragEvent<HTMLElement>, taskId: string, kind: 'scheduled' | 'deadline') => {
+        event.stopPropagation();
+        setCalendarTaskDragData(event.dataTransfer, taskId, { itemKind: kind });
+    };
 
     if (!selectedDate) return null;
 
@@ -127,6 +145,16 @@ export function CalendarSelectedDayPanel({ controller }: CalendarSelectedDayPane
                                         >
                                             <span className="min-w-0 flex-1 truncate">{event.title}</span>
                                             {sourceLabel && <span className="truncate text-xs text-muted-foreground">{sourceLabel}</span>}
+                                            <button
+                                                type="button"
+                                                className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md bg-primary/10 px-2 text-xs font-medium text-primary hover:bg-primary/15 focus:outline-none focus:ring-2 focus:ring-primary/40"
+                                                onClick={() => void createTaskFromExternalEvent(event)}
+                                                aria-label={`${resolveText('calendar.createTaskFromEvent', 'Create task')}: ${event.title}`}
+                                                title={resolveText('calendar.createTaskFromEvent', 'Create task')}
+                                            >
+                                                <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                                                {resolveText('calendar.createTaskFromEvent', 'Create task')}
+                                            </button>
                                         </div>
                                     );
                                 })}
@@ -158,6 +186,16 @@ export function CalendarSelectedDayPanel({ controller }: CalendarSelectedDayPane
                                         <span className="w-28 shrink-0 text-xs font-medium text-muted-foreground">{timeLabel}</span>
                                         <span className="min-w-0 flex-1 truncate">{event.title}</span>
                                         {sourceLabel && <span className="truncate text-xs text-muted-foreground">{sourceLabel}</span>}
+                                        <button
+                                            type="button"
+                                            className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md bg-primary/10 px-2 text-xs font-medium text-primary hover:bg-primary/15 focus:outline-none focus:ring-2 focus:ring-primary/40"
+                                            onClick={() => void createTaskFromExternalEvent(event)}
+                                            aria-label={`${resolveText('calendar.createTaskFromEvent', 'Create task')}: ${event.title}`}
+                                            title={resolveText('calendar.createTaskFromEvent', 'Create task')}
+                                        >
+                                            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                                            {resolveText('calendar.createTaskFromEvent', 'Create task')}
+                                        </button>
                                     </div>
                                 );
                             })}
@@ -173,11 +211,18 @@ export function CalendarSelectedDayPanel({ controller }: CalendarSelectedDayPane
                         <h3 className="text-xs font-semibold uppercase tracking-normal text-muted-foreground">{resolveText('calendar.tasks', 'Tasks')}</h3>
                         <div className="space-y-1">
                             {selectedTaskRows.map(({ id, kind, task, start }) => {
+                                const projected = isProjectedRecurringTask(task);
+                                const projectedLabel = projected
+                                    ? getProjectedRecurrenceDisplayLabel(task, resolveText('calendar.projectedRecurrence', 'Projected'))
+                                    : '';
                                 const durationMinutes = timeEstimateToMinutes(task.timeEstimate);
-                                const end = start && kind === 'scheduled'
+                                const isAllDayScheduled = kind === 'scheduled' && !hasTimeComponent(task.startTime);
+                                const end = start && kind === 'scheduled' && !isAllDayScheduled
                                     ? new Date(start.getTime() + durationMinutes * 60 * 1000)
                                     : null;
-                                const timeLabel = start && end
+                                const timeLabel = isAllDayScheduled
+                                    ? t('calendar.allDay')
+                                    : start && end
                                     ? `${safeFormatDate(start, 'p')}-${safeFormatDate(end, 'p')}`
                                     : kind === 'deadline'
                                         ? t('calendar.deadline')
@@ -188,15 +233,24 @@ export function CalendarSelectedDayPanel({ controller }: CalendarSelectedDayPane
                                     <div
                                         key={id}
                                         data-task-id={task.id}
+                                        draggable={!projected}
+                                        onDragStart={(event) => {
+                                            if (!projected) handleTaskDragStart(event, task.id, kind);
+                                        }}
                                         className={cn(
                                             "group flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors hover:bg-muted/50",
-                                            kind === 'scheduled' ? "bg-primary/5" : "border-l-[3px] border-destructive/70 bg-background/60"
+                                            projected
+                                                ? "border border-dashed border-primary/50 bg-primary/5"
+                                                : kind === 'scheduled' ? "bg-primary/5" : "border-l-[3px] border-destructive/70 bg-background/60"
                                         )}
                                     >
                                         <button
                                             type="button"
-                                            data-task-edit-trigger
-                                            onClick={() => openTaskFromCalendar(task)}
+                                            {...(!projected ? { 'data-task-edit-trigger': true } : {})}
+                                            disabled={projected}
+                                            onClick={() => {
+                                                if (!projected) openTaskFromCalendar(task);
+                                            }}
                                             className="min-w-0 flex-1 truncate text-left text-foreground focus:outline-none focus:underline"
                                         >
                                             <span className="mr-2 inline-flex w-28 items-center gap-1 text-xs font-medium text-muted-foreground">
@@ -205,7 +259,12 @@ export function CalendarSelectedDayPanel({ controller }: CalendarSelectedDayPane
                                             </span>
                                             {task.title}
                                         </button>
-                                        {isEditing ? (
+                                        {projected && (
+                                            <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                                                {projectedLabel}
+                                            </span>
+                                        )}
+                                        {!projected && isEditing ? (
                                             <div className="flex shrink-0 items-center gap-1">
                                                 <input
                                                     type="time"
@@ -228,7 +287,7 @@ export function CalendarSelectedDayPanel({ controller }: CalendarSelectedDayPane
                                                     {t('common.cancel')}
                                                 </button>
                                             </div>
-                                        ) : (
+                                        ) : !projected ? (
                                             <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
                                                 <button
                                                     type="button"
@@ -262,7 +321,7 @@ export function CalendarSelectedDayPanel({ controller }: CalendarSelectedDayPane
                                                     </button>
                                                 )}
                                             </div>
-                                        )}
+                                        ) : null}
                                     </div>
                                 );
                             })}

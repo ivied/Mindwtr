@@ -1,6 +1,7 @@
 import type { Project } from '@mindwtr/core';
 import { Calendar, CalendarClock, FolderOpenDot, ListOrdered, Plus, Settings2, Signal, Tags } from 'lucide-react';
 import { cn } from '../../../lib/utils';
+import { TokenAutocompleteInput } from '../../Task/TokenAutocompleteInput';
 
 type ProjectDetailsFieldsProps = {
     project: Project;
@@ -9,6 +10,7 @@ type ProjectDetailsFieldsProps = {
     noAreaId: string;
     t: (key: string) => string;
     tagDraft: string;
+    tagSuggestions?: readonly string[];
     onTagDraftChange: (value: string) => void;
     onCommitTags: () => void;
     onNewArea: () => void;
@@ -16,6 +18,8 @@ type ProjectDetailsFieldsProps = {
     onAreaChange: (value: string) => void;
     isSequential: boolean;
     onToggleSequential: () => void;
+    sequentialScope: Project['sequentialScope'];
+    onSequentialScopeChange: (value: Project['sequentialScope']) => void;
     status: Project['status'];
     onChangeStatus: (status: Project['status']) => void;
     dueDateValue: string;
@@ -31,6 +35,7 @@ export function ProjectDetailsFields({
     noAreaId,
     t,
     tagDraft,
+    tagSuggestions = [],
     onTagDraftChange,
     onCommitTags,
     onNewArea,
@@ -38,6 +43,8 @@ export function ProjectDetailsFields({
     onAreaChange,
     isSequential,
     onToggleSequential,
+    sequentialScope,
+    onSequentialScopeChange,
     status,
     onChangeStatus,
     dueDateValue,
@@ -45,8 +52,12 @@ export function ProjectDetailsFields({
     reviewAtValue,
     onReviewAtChange,
 }: ProjectDetailsFieldsProps) {
-    const sequenceModeLabel = t('projects.sequenceMode');
-    const resolvedSequenceModeLabel = sequenceModeLabel === 'projects.sequenceMode' ? 'Flow Mode' : sequenceModeLabel;
+    const resolveText = (key: string, fallback: string) => {
+        const value = t(key);
+        return value && value !== key ? value : fallback;
+    };
+    const resolvedSequenceModeLabel = resolveText('projects.sequenceMode', 'Flow Mode');
+    const resolvedSequentialScope = sequentialScope === 'section' ? 'section' : 'project';
 
     return (
         <section className="py-5 border-b border-border/50">
@@ -89,6 +100,27 @@ export function ProjectDetailsFields({
                         <span>{isSequential ? t('projects.sequential') : t('projects.parallel')}</span>
                     </button>
                 </div>
+
+                {isSequential && (
+                    <div className="space-y-2 min-w-0 2xl:col-span-2">
+                        <label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider flex items-center gap-1.5 truncate">
+                            <ListOrdered className="h-3.5 w-3.5" />
+                            {resolveText('projects.sequentialScope', 'Sequential Scope')}
+                        </label>
+                        <select
+                            value={resolvedSequentialScope}
+                            onChange={(e) => onSequentialScopeChange(e.target.value as Project['sequentialScope'])}
+                            className="h-9 w-full text-sm bg-background border border-border rounded-md px-2 text-foreground"
+                        >
+                            <option value="project">
+                                {resolveText('projects.sequentialAcrossSections', 'Across sections')}
+                            </option>
+                            <option value="section">
+                                {resolveText('projects.sequentialWithinSections', 'Within sections')}
+                            </option>
+                        </select>
+                    </div>
+                )}
 
                 <div className="space-y-2 min-w-0 md:col-span-2 2xl:col-span-4">
                     <label className="text-[10px] text-muted-foreground font-medium uppercase tracking-wider flex items-center gap-1.5 truncate">
@@ -135,11 +167,13 @@ export function ProjectDetailsFields({
                         <Tags className="h-3.5 w-3.5" />
                         {t('taskEdit.tagsLabel')}
                     </label>
-                    <input
+                    <TokenAutocompleteInput
                         key={`${project.id}-tags`}
-                        type="text"
                         value={tagDraft}
-                        onChange={(e) => onTagDraftChange(e.target.value)}
+                        onChange={onTagDraftChange}
+                        suggestions={tagSuggestions}
+                        prefix="#"
+                        ariaLabel={t('taskEdit.tagsLabel')}
                         onBlur={onCommitTags}
                         onKeyDown={(e) => {
                             if (e.key === 'Enter') {

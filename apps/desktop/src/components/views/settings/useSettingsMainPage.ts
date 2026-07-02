@@ -2,8 +2,11 @@ import { useCallback, useEffect, useState } from 'react';
 
 import {
     flushPendingSave,
+    canUseJalaliCalendar,
     normalizeDateFormatSetting,
     normalizeTimeFormatSetting,
+    normalizeWeekStartSetting,
+    resolveCalendarSystemSetting,
     type AppearanceSettings,
     type AppData,
     type NotificationSettings,
@@ -19,13 +22,15 @@ import {
 import { reportError } from '../../../lib/report-error';
 import {
     THEME_STORAGE_KEY,
+    applyNativeTheme,
     applyThemeMode,
-    coerceDesktopThemeMode,
-    mapSyncedThemeToDesktop,
+    resolveDesktopThemeMode,
     resolveNativeTheme,
+    resolveSystemThemeCommandPreference,
     type DesktopThemeMode,
 } from '../../../lib/theme';
 import { coerceDesktopTextSize } from '../../../lib/text-size';
+import { resolveCloseBehavior } from '../../../lib/window-behavior';
 import type { SettingsMainPageProps } from './SettingsMainPage';
 
 type MainPageProps = Omit<SettingsMainPageProps, 'languages' | 't'>;
@@ -64,7 +69,9 @@ export function useSettingsMainPage({
     const appearanceSettings: AppearanceSettings | undefined = settings?.appearance;
     const notificationSettings: NotificationSettings = settings ?? {};
     const windowSettings: WindowSettings | undefined = settings?.window;
-    const [themeMode, setThemeMode] = useState<DesktopThemeMode>('system');
+    const [themeMode, setThemeMode] = useState<DesktopThemeMode>(() => (
+        resolveDesktopThemeMode(settings?.theme, localStorage.getItem(THEME_STORAGE_KEY))
+    ));
     const [launchAtStartupEnabled, setLaunchAtStartupEnabledState] = useState(
         windowSettings?.launchAtStartup === true,
     );
@@ -78,35 +85,46 @@ export function useSettingsMainPage({
     const dateFormat = normalizeDateFormatSetting(settings?.dateFormat);
     const timeFormat = normalizeTimeFormatSetting(settings?.timeFormat);
     const undoNotificationsEnabled = notificationSettings.undoNotificationsEnabled !== false;
-    const weekStart = settings?.weekStart === 'monday' ? 'monday' : 'sunday';
+    const weekStart = normalizeWeekStartSetting(settings?.weekStart);
+    const systemLocale = typeof Intl !== 'undefined' && typeof Intl.DateTimeFormat === 'function'
+        ? Intl.DateTimeFormat().resolvedOptions().locale
+        : '';
+    const showCalendarSystem = canUseJalaliCalendar({ language, systemLocale });
+    const calendarSystem = resolveCalendarSystemSetting(settings?.calendarSystem, { language, systemLocale });
     const windowDecorationsEnabled = windowSettings?.decorations !== false;
-    const closeBehavior = windowSettings?.closeBehavior ?? 'ask';
+    const closeBehavior = resolveCloseBehavior(windowSettings?.closeBehavior, isFlatpak);
     const trayVisible = windowSettings?.showTray !== false;
 
     useEffect(() => {
-        const savedTheme = coerceDesktopThemeMode(
-            localStorage.getItem(THEME_STORAGE_KEY),
-        );
-        if (savedTheme) {
-            setThemeMode(savedTheme);
-        }
-    }, []);
-
-    useEffect(() => {
-        const syncedTheme = mapSyncedThemeToDesktop(settings?.theme);
-        if (!syncedTheme || syncedTheme === themeMode) return;
-        localStorage.setItem(THEME_STORAGE_KEY, syncedTheme);
-        setThemeMode(syncedTheme);
+        const resolvedTheme = resolveDesktopThemeMode(settings?.theme, localStorage.getItem(THEME_STORAGE_KEY));
+        if (resolvedTheme === themeMode) return;
+        localStorage.setItem(THEME_STORAGE_KEY, resolvedTheme);
+        setThemeMode(resolvedTheme);
     }, [settings?.theme, themeMode]);
 
     useEffect(() => {
+        let cancelled = false;
         applyThemeMode(themeMode);
+        if (isTauri && themeMode === 'system') {
+            void resolveSystemThemeCommandPreference(
+                () => import('@tauri-apps/api/core'),
+                (_step, error) => reportError('Failed to resolve system theme', error),
+            ).then((theme) => {
+                if (!cancelled && theme) applyThemeMode('system', theme);
+            });
+        }
 
         if (!isTauri) return;
         const tauriTheme = resolveNativeTheme(themeMode);
-        import('@tauri-apps/api/app')
-            .then(({ setTheme }) => setTheme(tauriTheme))
-            .catch((error) => reportError('Failed to set theme', error));
+        void applyNativeTheme(
+            tauriTheme,
+            () => import('@tauri-apps/api/app'),
+            () => import('@tauri-apps/api/window'),
+            (_step, error) => reportError('Failed to set theme', error),
+        );
+        return () => {
+            cancelled = true;
+        };
     }, [isTauri, themeMode]);
 
     useEffect(() => {
@@ -129,6 +147,11 @@ export function useSettingsMainPage({
             cancelled = true;
         };
     }, [isFlatpak, isTauri, settings?.window, updateSettings]);
+
+    useEffect(() => {
+        if (!isTauri || !isFlatpak) return;
+        setLaunchAtStartupEnabledState(settings?.window?.launchAtStartup === true);
+    }, [isFlatpak, isTauri, settings?.window?.launchAtStartup]);
 
     const onThemeChange = useCallback((mode: DesktopThemeMode) => {
         localStorage.setItem(THEME_STORAGE_KEY, mode);
@@ -178,7 +201,7 @@ export function useSettingsMainPage({
             .catch((error) => reportError('Failed to update language', error));
     }, [setLanguage, showSaved, updateSettings]);
 
-    const onWeekStartChange = useCallback((value: 'sunday' | 'monday') => {
+    const onWeekStartChange = useCallback((value: MainPageProps['weekStart']) => {
         updateSettings({ weekStart: value })
             .then(showSaved)
             .catch((error) => reportError('Failed to update week start', error));
@@ -188,6 +211,12 @@ export function useSettingsMainPage({
         updateSettings({ dateFormat: value })
             .then(showSaved)
             .catch((error) => reportError('Failed to update date format', error));
+    }, [showSaved, updateSettings]);
+
+    const onCalendarSystemChange = useCallback((value: MainPageProps['calendarSystem']) => {
+        updateSettings({ calendarSystem: value })
+            .then(showSaved)
+            .catch((error) => reportError('Failed to update calendar system', error));
     }, [showSaved, updateSettings]);
 
     const onTimeFormatChange = useCallback((value: MainPageProps['timeFormat']) => {
@@ -290,6 +319,7 @@ export function useSettingsMainPage({
 
     return {
         closeBehavior,
+        calendarSystem,
         dateFormat,
         densityMode,
         globalQuickAddShortcut,
@@ -299,6 +329,7 @@ export function useSettingsMainPage({
         launchAtStartupEnabled,
         launchAtStartupLoading,
         onCloseBehaviorChange,
+        onCalendarSystemChange,
         onDateFormatChange,
         onDensityChange,
         onGlobalQuickAddShortcutChange,
@@ -314,10 +345,11 @@ export function useSettingsMainPage({
         onUndoNotificationsChange,
         onWeekStartChange,
         onWindowDecorationsChange,
-        showCloseBehavior: isTauri && !isFlatpak,
-        showLaunchAtStartup: isTauri && !isFlatpak,
+        showCloseBehavior: isTauri,
+        showCalendarSystem,
+        showLaunchAtStartup: isTauri,
         showTaskAge,
-        showTrayToggle: isTauri && !isFlatpak,
+        showTrayToggle: isTauri,
         showWindowDecorations: isLinux,
         textSizeMode,
         themeMode,

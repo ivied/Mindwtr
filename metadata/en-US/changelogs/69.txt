@@ -1,0 +1,5 @@
+Location editing and location search make tasks easier to find.
+Markdown editing preserves blank lines and code-block copy uses the supported clipboard API.
+Calendar sync preserves task locations, removes old reference tasks, and handles date-only scheduling more consistently.
+Mobile sync avoids stale unchanged-skip checks and keeps idle status calmer.
+Android/FOSS build fixes keep local F-Droid builds aligned with required JVM targets.

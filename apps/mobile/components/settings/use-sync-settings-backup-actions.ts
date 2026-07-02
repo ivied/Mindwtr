@@ -10,8 +10,10 @@ import type {
     ParsedDgtImportData,
     Project,
     ParsedTodoistProject,
+    ParsedTickTickImportData,
     Section,
     Task,
+    TickTickImportParseResult,
     TodoistImportParseResult,
 } from '@mindwtr/core';
 
@@ -19,14 +21,17 @@ import {
     exportCurrentDataBackup,
     importDgtData,
     importOmniFocusData,
+    importTickTickData,
     importTodoistData,
     inspectBackupDocument,
     inspectDgtDocument,
     inspectOmniFocusDocument,
+    inspectTickTickDocument,
     inspectTodoistDocument,
     pickBackupDocument,
     pickDgtDocument,
     pickOmniFocusDocument,
+    pickTickTickDocument,
     pickTodoistDocument,
     restoreDataFromBackup,
     restoreLocalDataSnapshot,
@@ -108,6 +113,34 @@ export function useSyncSettingsBackupActions({
                 : null,
             preview.checklistItemCount > 0
                 ? tr('settings.backupMobile.subtasksWillBecomeChecklistItems', { subtaskCount: preview.checklistItemCount })
+                : null,
+            tr('settings.backupMobile.importedTasksStayInInboxSoYouCanProcessThem'),
+            ...(projectLines.length > 0 ? ['', ...projectLines] : []),
+            ...(preview.warnings.length > 0 ? ['', ...preview.warnings] : []),
+        ].filter(Boolean);
+        return details.join('\n');
+    }, [tr]);
+
+    const buildTickTickSummary = useCallback((preview: NonNullable<TickTickImportParseResult['preview']>) => {
+        const projectLines = preview.projects
+            .slice(0, 4)
+            .map((project) => `• ${project.areaName ? `${project.areaName} / ` : ''}${project.name}: ${project.taskCount}`);
+        if (preview.projects.length > 4) {
+            projectLines.push(tr('settings.backupMobile.moreProjects', { projectCount: preview.projects.length - 4 }));
+        }
+        const details = [
+            tr('settings.backupMobile.importTasksFromFile', { taskCount: preview.taskCount, fileName: preview.fileName }),
+            preview.areaCount > 0
+                ? tr('settings.backupMobile.ticktickAreasWillBeCreated', { areaCount: preview.areaCount })
+                : null,
+            preview.projectCount > 0
+                ? tr('settings.backupMobile.ticktickProjectsWillBeCreated', { projectCount: preview.projectCount })
+                : null,
+            preview.checklistItemCount > 0
+                ? tr('settings.backupMobile.checklistItemsWillBePreserved', { checklistItemCount: preview.checklistItemCount })
+                : null,
+            preview.recurringCount > 0
+                ? tr('settings.backupMobile.recurringTasksWillKeepSupportedRepeatRules', { taskCount: preview.recurringCount })
                 : null,
             tr('settings.backupMobile.importedTasksStayInInboxSoYouCanProcessThem'),
             ...(projectLines.length > 0 ? ['', ...projectLines] : []),
@@ -266,6 +299,33 @@ export function useSyncSettingsBackupActions({
         }
     }, [tr, refreshRecoverySnapshots, setBackupAction, showSettingsErrorToast, showToast]);
 
+    const confirmTickTickImport = useCallback(async (parsedData: ParsedTickTickImportData) => {
+        setBackupAction('import');
+        try {
+            const { snapshotName, result } = await importTickTickData(parsedData);
+            await refreshRecoverySnapshots();
+            const details = [
+                tr('settings.backupMobile.importedTaskProjectAreaCounts', { taskCount: result.importedTaskCount, projectCount: result.importedProjectCount, areaCount: result.importedAreaCount }),
+                result.importedChecklistItemCount > 0
+                    ? tr('settings.backupMobile.checklistItemsPreserved', { checklistItemCount: result.importedChecklistItemCount })
+                    : null,
+                tr('settings.backupMobile.recoverySnapshotSaved', { snapshotName }),
+                ...(result.warnings.length > 0 ? ['', ...result.warnings] : []),
+            ].filter(Boolean);
+            showToast({
+                title: tr('settings.backupMobile.importComplete'),
+                message: details.join('\n'),
+                tone: 'success',
+                durationMs: 6200,
+            });
+        } catch (error) {
+            logSettingsError(error);
+            showSettingsErrorToast(tr('settings.backupMobile.importFailed'), String(error), 5200);
+        } finally {
+            setBackupAction(null);
+        }
+    }, [tr, refreshRecoverySnapshots, setBackupAction, showSettingsErrorToast, showToast]);
+
     const confirmDgtImport = useCallback(async (parsedData: ParsedDgtImportData) => {
         setBackupAction('import');
         try {
@@ -357,6 +417,39 @@ export function useSyncSettingsBackupActions({
             setBackupAction(null);
         }
     }, [buildTodoistSummary, confirmTodoistImport, tr, setBackupAction, showSettingsErrorToast, showSettingsWarning]);
+
+    const handleImportTickTick = useCallback(async () => {
+        setBackupAction('import');
+        try {
+            const document = await pickTickTickDocument();
+            if (!document) return;
+            const parseResult = await inspectTickTickDocument(document);
+            if (!parseResult.valid || !parseResult.preview || !parseResult.parsedData) {
+                showSettingsWarning(
+                    tr('settings.backupMobile.importFailed'),
+                    parseResult.errors[0] || tr('settings.backupMobile.theSelectedFileIsNotASupportedTicktickBackup')
+                );
+                return;
+            }
+            const parsedData = parseResult.parsedData;
+            Alert.alert(
+                tr('settings.backupMobile.importTicktickData'),
+                buildTickTickSummary(parseResult.preview),
+                [
+                    { text: tr('common.cancel'), style: 'cancel' },
+                    {
+                        text: tr('settings.backupMobile.import'),
+                        onPress: () => void confirmTickTickImport(parsedData),
+                    },
+                ]
+            );
+        } catch (error) {
+            logSettingsError(error);
+            showSettingsErrorToast(tr('settings.backupMobile.importFailed'), String(error), 5200);
+        } finally {
+            setBackupAction(null);
+        }
+    }, [buildTickTickSummary, confirmTickTickImport, tr, setBackupAction, showSettingsErrorToast, showSettingsWarning]);
 
     const handleImportDgt = useCallback(async () => {
         setBackupAction('import');
@@ -481,17 +574,26 @@ export function useSyncSettingsBackupActions({
             });
             return;
         }
-        const Sharing = await import('expo-sharing');
-        const canShare = await Sharing.isAvailableAsync();
-        if (!canShare) {
+        try {
+            const Sharing = await import('expo-sharing');
+            const canShare = await Sharing.isAvailableAsync();
+            if (!canShare) {
+                showToast({
+                    title: t('settings.debugLogging'),
+                    message: t('settings.shareUnavailable'),
+                    tone: 'warning',
+                });
+                return;
+            }
+            await Sharing.shareAsync(path, { mimeType: 'text/plain' });
+        } catch (error) {
+            logSettingsError(error);
             showToast({
                 title: t('settings.debugLogging'),
                 message: t('settings.shareUnavailable'),
                 tone: 'warning',
             });
-            return;
         }
-        await Sharing.shareAsync(path, { mimeType: 'text/plain' });
     }, [showToast, t]);
 
     const handleClearLog = useCallback(async () => {
@@ -509,6 +611,7 @@ export function useSyncSettingsBackupActions({
         handleClearLog,
         handleImportDgt,
         handleImportOmniFocus,
+        handleImportTickTick,
         handleImportTodoist,
         handleRestoreBackup,
         handleRestoreRecoverySnapshot,

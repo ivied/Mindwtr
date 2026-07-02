@@ -12,6 +12,9 @@ import { webStorage } from './storage-adapter-web';
 
 const ANALYTICS_DISTINCT_ID_KEY = 'mindwtr-analytics-distinct-id';
 const ANALYTICS_HEARTBEAT_URL = String(import.meta.env.VITE_ANALYTICS_HEARTBEAT_URL || '').trim();
+const ANALYTICS_RELEASE_VERSION = String(
+    import.meta.env.VITE_ANALYTICS_RELEASE_VERSION || import.meta.env.VITE_RELEASE_VERSION || ''
+).trim();
 
 const parseBool = (value: string | undefined): boolean => {
     const normalized = String(value || '').trim().toLowerCase();
@@ -83,13 +86,24 @@ export const getDesktopChannel = async (): Promise<string> => {
     }
 };
 
+export const resolveDesktopAnalyticsVersion = (
+    baseVersion: string,
+    releaseVersion: string | null | undefined = ANALYTICS_RELEASE_VERSION
+): string => {
+    const base = String(baseVersion || '').trim() || '0.0.0';
+    const release = String(releaseVersion || '').trim().replace(/^v/i, '');
+    if (!release || release === base) return base;
+    if (release.startsWith(`${base}-`)) return release;
+    return base;
+};
+
 export const getDesktopVersion = async (): Promise<string> => {
     if (!isTauriRuntime()) return 'web';
     try {
         const { getVersion } = await import('@tauri-apps/api/app');
-        return await getVersion();
+        return resolveDesktopAnalyticsVersion(await getVersion());
     } catch {
-        return '0.0.0';
+        return resolveDesktopAnalyticsVersion('0.0.0');
     }
 };
 
@@ -144,10 +158,6 @@ export const resetDesktopAnalyticsOptOutMarker = async (): Promise<void> => {
 export const sendDesktopDailyHeartbeat = async (): Promise<void> => {
     if (!canSendDesktopAnalyticsHeartbeat()) return;
     const heartbeatEnabled = await getStartupAnalyticsHeartbeatEnabled();
-    const options = await buildDesktopHeartbeatOptions();
-    if (!heartbeatEnabled) {
-        await sendHeartbeatOptOut(options);
-        return;
-    }
-    await sendDailyHeartbeat(options);
+    if (!heartbeatEnabled) return;
+    await sendDailyHeartbeat(await buildDesktopHeartbeatOptions());
 };

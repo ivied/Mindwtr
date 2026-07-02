@@ -1,0 +1,5 @@
+Aufgabenorte lassen sich bearbeiten, filtern und per Suche finden.
+Markdown-Bearbeitung bewahrt Leerzeilen und kopiert Codebloecke ueber die unterstuetzte Clipboard-API.
+Kalender-Sync uebernimmt Aufgabenorte, entfernt alte Referenzaufgaben und behandelt reine Datumsplanung konsistenter.
+Mobile Sync vermeidet veraltete Unchanged-Skip-Pruefungen und zeigt Idle-Status ruhiger.
+Android/FOSS-Build-Fixes halten lokale F-Droid-Builds bei den benoetigten JVM-Targets.

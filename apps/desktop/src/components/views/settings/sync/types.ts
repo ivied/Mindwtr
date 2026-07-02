@@ -9,6 +9,8 @@ export type SettingsSyncLabels = {
     restoreBackupDesc: string;
     importTodoist: string;
     importTodoistDesc: string;
+    importTickTick: string;
+    importTickTickDesc: string;
     importDgt: string;
     importDgtDesc: string;
     importOmniFocus: string;
@@ -33,6 +35,13 @@ export type SettingsSyncLabels = {
     syncBackendWebdav: string;
     syncBackendCloud: string;
     syncBackendCloudkit: string;
+    syncBackendChoiceHint: string;
+    syncBackendGroupCloud: string;
+    syncBackendGroupCloudDesc: string;
+    syncBackendGroupFile: string;
+    syncBackendGroupFileDesc: string;
+    syncBackendGroupAdvanced: string;
+    syncBackendGroupAdvancedDesc: string;
     syncPreferences: string;
     syncPreferencesDesc: string;
     syncPreferenceAppearance: string;
@@ -61,6 +70,8 @@ export type SettingsSyncLabels = {
     cloudUrl: string;
     cloudHint: string;
     cloudToken: string;
+    cloudRememberToken: string;
+    cloudRememberTokenHint: string;
     cloudSave: string;
     cloudProvider: string;
     cloudProviderSelfHosted: string;
@@ -148,6 +159,7 @@ export type SettingsSyncPageProps = {
     onTestWebDavConnection: () => Promise<void> | void;
     cloudUrl: string;
     cloudToken: string;
+    cloudRememberToken: boolean;
     cloudAllowInsecureHttp: boolean;
     cloudProvider: CloudProvider;
     dropboxAppKey: string;
@@ -159,6 +171,7 @@ export type SettingsSyncPageProps = {
     dropboxTestState: DropboxTestState;
     onCloudUrlChange: (value: string) => void;
     onCloudTokenChange: (value: string) => void;
+    onCloudRememberTokenChange: (value: boolean) => void;
     onCloudAllowInsecureHttpChange: (value: boolean) => void;
     onCloudProviderChange: (provider: CloudProvider) => void;
     onSaveCloud: () => Promise<void> | void;
@@ -190,6 +203,7 @@ export type SettingsSyncPageProps = {
     onExportBackup: () => Promise<void> | void;
     onRestoreBackup: () => Promise<void> | void;
     onImportTodoist: () => Promise<void> | void;
+    onImportTickTick: () => Promise<void> | void;
     onImportDgt: () => Promise<void> | void;
     onImportOmniFocus: () => Promise<void> | void;
 };

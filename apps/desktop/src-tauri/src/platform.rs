@@ -21,7 +21,9 @@ fn strip_file_scheme(raw: &str) -> Result<String, String> {
 }
 
 fn canonical_existing_dir(path: PathBuf) -> Option<PathBuf> {
-    path.canonicalize().ok().filter(|candidate| candidate.is_dir())
+    path.canonicalize()
+        .ok()
+        .filter(|candidate| candidate.is_dir())
 }
 
 fn configured_obsidian_vault_path(config: &AppConfigToml) -> Option<PathBuf> {
@@ -60,15 +62,20 @@ fn allowed_open_roots(app: &tauri::AppHandle) -> Vec<PathBuf> {
         roots.push(vault_path);
     }
 
-    roots
-        .into_iter()
-        .filter_map(canonical_existing_dir)
-        .fold(Vec::<PathBuf>::new(), |mut unique_roots, root| {
+    #[cfg(target_os = "linux")]
+    if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        roots.push(PathBuf::from(runtime_dir).join("doc"));
+    }
+
+    roots.into_iter().filter_map(canonical_existing_dir).fold(
+        Vec::<PathBuf>::new(),
+        |mut unique_roots, root| {
             if !unique_roots.iter().any(|existing| existing == &root) {
                 unique_roots.push(root);
             }
             unique_roots
-        })
+        },
+    )
 }
 
 fn normalize_open_path(raw: &str) -> Result<PathBuf, String> {
@@ -87,7 +94,13 @@ fn normalize_open_path(raw: &str) -> Result<PathBuf, String> {
 }
 
 fn path_is_under_allowed_root(path: &Path, allowed_roots: &[PathBuf]) -> bool {
-    allowed_roots.iter().any(|root| path == root || path.starts_with(root))
+    allowed_roots
+        .iter()
+        .any(|root| path == root || path.starts_with(root))
+}
+
+fn path_is_openable(path: &Path, allowed_roots: &[PathBuf]) -> bool {
+    path_is_under_allowed_root(path, allowed_roots) || path.is_file()
 }
 
 #[cfg(target_os = "macos")]
@@ -171,6 +184,135 @@ pub(crate) fn get_macos_calendar_events(
             permission: "unsupported".to_string(),
             calendars: Vec::new(),
             events: Vec::new(),
+        })
+    }
+}
+
+#[tauri::command]
+pub(crate) fn get_macos_writable_calendars() -> Result<Vec<MacOsCalendarPushTarget>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let value = parse_macos_eventkit_json(unsafe { mindwtr_macos_writable_calendars_json() })?;
+        let parsed = serde_json::from_value::<Vec<MacOsCalendarPushTarget>>(value)
+            .map_err(|error| format!("Failed to decode writable EventKit calendars: {error}"))?;
+        return Ok(parsed);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(Vec::new())
+    }
+}
+
+#[tauri::command]
+pub(crate) fn ensure_macos_mindwtr_calendar(
+    stored_calendar_id: Option<String>,
+) -> Result<Option<MacOsCalendarPushTarget>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let stored = CString::new(stored_calendar_id.unwrap_or_default())
+            .map_err(|error| format!("Invalid stored calendar ID: {error}"))?;
+        let value = parse_macos_eventkit_json(unsafe {
+            mindwtr_macos_ensure_mindwtr_calendar_json(stored.as_ptr())
+        })?;
+        if value.is_null() {
+            return Ok(None);
+        }
+        let parsed = serde_json::from_value::<MacOsCalendarPushTarget>(value)
+            .map_err(|error| format!("Failed to decode Mindwtr EventKit calendar: {error}"))?;
+        return Ok(Some(parsed));
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = stored_calendar_id;
+        Ok(None)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn encode_macos_calendar_event_payload(
+    details: &MacOsCalendarEventPayload,
+) -> Result<CString, String> {
+    let raw = serde_json::to_string(details)
+        .map_err(|error| format!("Failed to encode EventKit event payload: {error}"))?;
+    CString::new(raw).map_err(|error| format!("Invalid EventKit event payload: {error}"))
+}
+
+#[tauri::command]
+pub(crate) fn create_macos_calendar_event(
+    details: MacOsCalendarEventPayload,
+) -> Result<MacOsCalendarEventWriteResult, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let event_json = encode_macos_calendar_event_payload(&details)?;
+        let value = parse_macos_eventkit_json(unsafe {
+            mindwtr_macos_create_calendar_event_json(event_json.as_ptr())
+        })?;
+        let parsed = serde_json::from_value::<MacOsCalendarEventWriteResult>(value)
+            .map_err(|error| format!("Failed to decode EventKit create result: {error}"))?;
+        return Ok(parsed);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = details;
+        Ok(MacOsCalendarEventWriteResult {
+            ok: false,
+            event_id: None,
+            error: Some("unsupported".to_string()),
+        })
+    }
+}
+
+#[tauri::command]
+pub(crate) fn update_macos_calendar_event(
+    event_id: String,
+    details: MacOsCalendarEventPayload,
+) -> Result<MacOsCalendarEventWriteResult, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let event_id = CString::new(event_id.as_str())
+            .map_err(|error| format!("Invalid EventKit event ID: {error}"))?;
+        let event_json = encode_macos_calendar_event_payload(&details)?;
+        let value = parse_macos_eventkit_json(unsafe {
+            mindwtr_macos_update_calendar_event_json(event_id.as_ptr(), event_json.as_ptr())
+        })?;
+        let parsed = serde_json::from_value::<MacOsCalendarEventWriteResult>(value)
+            .map_err(|error| format!("Failed to decode EventKit update result: {error}"))?;
+        return Ok(parsed);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = event_id;
+        let _ = details;
+        Ok(MacOsCalendarEventWriteResult {
+            ok: false,
+            event_id: None,
+            error: Some("unsupported".to_string()),
+        })
+    }
+}
+
+#[tauri::command]
+pub(crate) fn delete_macos_calendar_event(
+    event_id: String,
+) -> Result<MacOsCalendarEventWriteResult, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let event_id = CString::new(event_id.as_str())
+            .map_err(|error| format!("Invalid EventKit event ID: {error}"))?;
+        let value = parse_macos_eventkit_json(unsafe {
+            mindwtr_macos_delete_calendar_event_json(event_id.as_ptr())
+        })?;
+        let parsed = serde_json::from_value::<MacOsCalendarEventWriteResult>(value)
+            .map_err(|error| format!("Failed to decode EventKit delete result: {error}"))?;
+        return Ok(parsed);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = event_id;
+        Ok(MacOsCalendarEventWriteResult {
+            ok: false,
+            event_id: None,
+            error: Some("unsupported".to_string()),
         })
     }
 }
@@ -318,6 +460,72 @@ pub(crate) async fn cloudkit_save_records(
 }
 
 #[tauri::command]
+pub(crate) async fn cloudkit_save_attachment_asset(
+    record_name: String,
+    file_path: String,
+    metadata_json: String,
+) -> Result<Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let value = tauri::async_runtime::spawn_blocking(move || {
+            let c_record_name = CString::new(record_name.as_str())
+                .map_err(|e| format!("Invalid attachment record name: {e}"))?;
+            let c_file_path = CString::new(file_path.as_str())
+                .map_err(|e| format!("Invalid attachment file path: {e}"))?;
+            let c_metadata = CString::new(metadata_json.as_str())
+                .map_err(|e| format!("Invalid attachment metadata JSON: {e}"))?;
+            parse_cloudkit_json(unsafe {
+                mindwtr_cloudkit_save_attachment_asset(
+                    c_record_name.as_ptr(),
+                    c_file_path.as_ptr(),
+                    c_metadata.as_ptr(),
+                )
+            })
+        })
+        .await
+        .map_err(|error| format!("CloudKit save attachment task failed: {error}"))??;
+        return Ok(value);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (record_name, file_path, metadata_json);
+        Err("CloudKit is not available on this platform".to_string())
+    }
+}
+
+#[tauri::command]
+pub(crate) async fn cloudkit_fetch_attachment_asset(
+    record_name: String,
+    target_path: String,
+) -> Result<Value, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let value = tauri::async_runtime::spawn_blocking(move || {
+            let c_record_name = CString::new(record_name.as_str())
+                .map_err(|e| format!("Invalid attachment record name: {e}"))?;
+            let c_target_path = CString::new(target_path.as_str())
+                .map_err(|e| format!("Invalid attachment target path: {e}"))?;
+            parse_cloudkit_json(unsafe {
+                mindwtr_cloudkit_fetch_attachment_asset(
+                    c_record_name.as_ptr(),
+                    c_target_path.as_ptr(),
+                )
+            })
+        })
+        .await
+        .map_err(|error| format!("CloudKit fetch attachment task failed: {error}"))??;
+        return Ok(value);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (record_name, target_path);
+        Err("CloudKit is not available on this platform".to_string())
+    }
+}
+
+#[tauri::command]
 pub(crate) async fn cloudkit_delete_records(
     record_type: String,
     record_ids: Vec<String>,
@@ -377,7 +585,7 @@ pub(crate) fn cloudkit_register_for_notifications() -> Result<bool, String> {
 pub(crate) fn open_path(app: tauri::AppHandle, path: String) -> Result<bool, String> {
     let normalized = normalize_open_path(&path)?;
     let allowed_roots = allowed_open_roots(&app);
-    if !path_is_under_allowed_root(&normalized, &allowed_roots) {
+    if !path_is_openable(&normalized, &allowed_roots) {
         return Err("Path is outside Mindwtr-managed locations.".to_string());
     }
     open::that(normalized).map_err(|e| e.to_string())?;
@@ -397,8 +605,39 @@ mod tests {
     #[test]
     fn path_is_under_allowed_root_respects_boundaries() {
         let root = PathBuf::from("/tmp/mindwtr");
-        assert!(path_is_under_allowed_root(Path::new("/tmp/mindwtr/attachments/a.pdf"), &[root.clone()]));
-        assert!(!path_is_under_allowed_root(Path::new("/tmp/mindwtr-other/a.pdf"), &[root]));
+        assert!(path_is_under_allowed_root(
+            Path::new("/tmp/mindwtr/attachments/a.pdf"),
+            &[root.clone()]
+        ));
+        assert!(!path_is_under_allowed_root(
+            Path::new("/tmp/mindwtr-other/a.pdf"),
+            &[root]
+        ));
+    }
+
+    #[test]
+    fn path_is_under_allowed_root_allows_flatpak_document_portal_paths() {
+        let portal_root = PathBuf::from("/run/user/1000/doc");
+        assert!(path_is_under_allowed_root(
+            Path::new("/run/user/1000/doc/abc123/notes.pdf"),
+            &[portal_root]
+        ));
+    }
+
+    #[test]
+    fn path_is_openable_allows_existing_user_selected_files() {
+        let temp = tempfile::tempdir().expect("should create temp dir");
+        let attachment_path = temp.path().join("notes.md");
+        fs::write(&attachment_path, "notes").expect("should write attachment");
+
+        assert!(path_is_openable(&attachment_path, &[]));
+    }
+
+    #[test]
+    fn path_is_openable_rejects_unmanaged_directories() {
+        let temp = tempfile::tempdir().expect("should create temp dir");
+
+        assert!(!path_is_openable(temp.path(), &[]));
     }
 }
 

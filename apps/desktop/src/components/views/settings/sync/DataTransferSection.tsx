@@ -1,4 +1,4 @@
-import { RefreshCw } from 'lucide-react';
+import { ExternalLink, RefreshCw } from 'lucide-react';
 import type { SettingsSyncPageProps } from './types';
 
 type DataTransferSectionProps = Pick<
@@ -8,9 +8,12 @@ type DataTransferSectionProps = Pick<
     | 'onExportBackup'
     | 'onRestoreBackup'
     | 'onImportTodoist'
+    | 'onImportTickTick'
     | 'onImportDgt'
     | 'onImportOmniFocus'
->;
+> & {
+    onAddGettingStartedContent: () => Promise<void> | void;
+};
 
 function TransferActionButton({
     description,
@@ -45,8 +48,10 @@ export function DataTransferSection({
     onExportBackup,
     onImportDgt,
     onImportOmniFocus,
+    onImportTickTick,
     onImportTodoist,
     onRestoreBackup,
+    onAddGettingStartedContent,
     t,
     transferAction,
 }: DataTransferSectionProps) {
@@ -59,6 +64,15 @@ export function DataTransferSection({
                 {t.dataTransfer}
             </h2>
             <div className="bg-card border border-border rounded-lg p-6 space-y-3">
+                <a
+                    href="https://docs.mindwtr.app/import/"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+                >
+                    Import guide
+                    <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                </a>
                 <p className="text-sm text-muted-foreground">{t.dataTransferDesc}</p>
                 <div className="space-y-2">
                     <TransferActionButton
@@ -77,10 +91,24 @@ export function DataTransferSection({
                     />
                     <TransferActionButton
                         disabled={disabled}
+                        label="Add Getting Started content"
+                        description="Create or restore the guided setup project and sample inbox items."
+                        statusText={null}
+                        onClick={() => void onAddGettingStartedContent()}
+                    />
+                    <TransferActionButton
+                        disabled={disabled}
                         label={t.importTodoist}
                         description={t.importTodoistDesc}
                         statusText={transferAction === 'import' ? t.syncing : null}
                         onClick={() => void onImportTodoist()}
+                    />
+                    <TransferActionButton
+                        disabled={disabled}
+                        label={t.importTickTick}
+                        description={t.importTickTickDesc}
+                        statusText={transferAction === 'import' ? t.syncing : null}
+                        onClick={() => void onImportTickTick()}
                     />
                     <TransferActionButton
                         disabled={disabled}

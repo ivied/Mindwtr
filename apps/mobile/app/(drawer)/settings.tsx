@@ -40,7 +40,10 @@ export default function SettingsPage() {
     const tc = useThemeColors();
     const { t } = useSettingsLocalization();
     const scrollContentStyle = useSettingsScrollContent();
-    const { settingsScreen } = useLocalSearchParams<{ settingsScreen?: string | string[] }>();
+    const { onboardingHandoff, settingsScreen } = useLocalSearchParams<{
+        onboardingHandoff?: string | string[];
+        settingsScreen?: string | string[];
+    }>();
     const { syncBadgeAccessibilityLabel, syncBadgeColor } = useMobileSyncBadge();
     const [hasUpdateBadge, setHasUpdateBadge] = useState(false);
 
@@ -55,6 +58,10 @@ export default function SettingsPage() {
         if (!rawScreen) return 'main';
         return SETTINGS_SCREEN_SET[rawScreen as SettingsScreen] ? (rawScreen as SettingsScreen) : 'main';
     }, [settingsScreen]);
+    const showOnboardingHandoff = useMemo(() => {
+        const rawHandoff = Array.isArray(onboardingHandoff) ? onboardingHandoff[0] : onboardingHandoff;
+        return rawHandoff === '1';
+    }, [onboardingHandoff]);
     const dataLabel = t('settings.data');
     const menuDescriptions = useMemo(
         () => ({
@@ -114,11 +121,11 @@ export default function SettingsPage() {
     }
 
     if (currentScreen === 'sync') {
-        return <SyncSettingsScreen />;
+        return <SyncSettingsScreen onboardingHandoff={showOnboardingHandoff} />;
     }
 
     if (currentScreen === 'data') {
-        return <DataSettingsScreen />;
+        return <DataSettingsScreen onboardingHandoff={showOnboardingHandoff} />;
     }
 
     if (currentScreen === 'about') {

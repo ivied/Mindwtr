@@ -1,0 +1,15 @@
+<en-US>
+Mindwtr 0.9.8 adds optional mobile app lock with device authentication and captures shared text into task notes. Quick capture, project rows, task counts, keyboard handling, reminder channels, scheduled times, checklist sync, and large-library performance are steadier. Search now finds checklist item text.
+</en-US>
+<de-DE>
+Mindwtr 0.9.8 bringt eine optionale App-Sperre mit Geraeteauthentifizierung und uebernimmt geteilten Text in Aufgabennotizen. Schnellerfassung, Projektzeilen, Aufgabenzaehler, Tastaturverhalten, Erinnerungskanaele, geplante Zeiten, Checklisten-Sync und grosse Datenbanken sind stabiler. Suche findet jetzt Checklistenpunkte.
+</de-DE>
+<es-ES>
+Mindwtr 0.9.8 agrega bloqueo opcional de la app con autenticacion del dispositivo y guarda texto compartido como notas de tareas. Captura rapida, filas de proyectos, contadores, teclado, canales de recordatorio, horas programadas, sync de listas y bibliotecas grandes son mas estables. La busqueda ahora encuentra elementos de listas.
+</es-ES>
+<fr-FR>
+Mindwtr 0.9.8 ajoute un verrouillage optionnel de l'application avec authentification de l'appareil et capture le texte partagé dans les notes de tâche. La capture rapide, les lignes de projets, les compteurs de tâches, le clavier, les canaux de rappel, les heures planifiées, la synchro des listes et les grandes bibliothèques sont plus stables. La recherche trouve maintenant les éléments des listes.
+</fr-FR>
+<zh-CN>
+Mindwtr 0.9.8 新增可选的设备认证应用锁，并可把分享来的文本保存为任务备注。快速捕获、项目列表、任务数量、键盘处理、提醒频道、计划时间、清单同步和大型数据库更稳定。搜索现在也能找到清单项目文字。
+</zh-CN>

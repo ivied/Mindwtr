@@ -8,6 +8,7 @@ import {
     CLOUD_URL_KEY,
     SYNC_BACKEND_KEY,
     SYNC_PATH_KEY,
+    WEBDAV_ALLOW_INSECURE_HTTP_KEY,
     WEBDAV_PASSWORD_KEY,
     WEBDAV_URL_KEY,
     WEBDAV_USERNAME_KEY,
@@ -22,6 +23,7 @@ const mocked = vi.hoisted(() => ({
         removeItem: vi.fn(),
         setItem: vi.fn(),
     },
+    clearMobileSyncConfigCache: vi.fn(),
     cloudGetJson: vi.fn(),
     isConnectionAllowed: vi.fn((url: string, options?: { allowInsecureHttp?: boolean }) => {
         if (options?.allowInsecureHttp) return true;
@@ -40,6 +42,7 @@ const mocked = vi.hoisted(() => ({
             : `${trimmed}/data.json`;
     }),
     resetSyncStatusForBackendSwitch: vi.fn(),
+    performMobileSync: vi.fn(),
     syncMobileBackgroundSyncRegistration: vi.fn(),
     showSettingsErrorToast: vi.fn(),
     showSettingsWarning: vi.fn(),
@@ -83,7 +86,8 @@ vi.mock('@/lib/dropbox-auth', () => ({
 }));
 
 vi.mock('@/lib/sync-service', () => ({
-    performMobileSync: vi.fn(),
+    clearMobileSyncConfigCache: mocked.clearMobileSyncConfigCache,
+    performMobileSync: mocked.performMobileSync,
 }));
 
 vi.mock('@/lib/background-sync-task', () => ({
@@ -169,7 +173,10 @@ beforeEach(() => {
     mocked.asyncStorage.removeItem.mockResolvedValue(undefined);
     mocked.asyncStorage.setItem.mockResolvedValue(undefined);
     mocked.addBreadcrumb.mockReset();
+    mocked.clearMobileSyncConfigCache.mockReset();
     mocked.cloudGetJson.mockReset();
+    mocked.performMobileSync.mockReset();
+    mocked.performMobileSync.mockResolvedValue({ success: true });
     mocked.normalizeWebdavUrl.mockClear();
     mocked.resetSyncStatusForBackendSwitch.mockReset();
     mocked.syncMobileBackgroundSyncRegistration.mockReset();
@@ -245,6 +252,38 @@ describe('useSyncSettingsTransportActions', () => {
         expect(mocked.resetSyncStatusForBackendSwitch).toHaveBeenCalledTimes(2);
     });
 
+    it('stores Dropbox as the cloud backend with a Dropbox provider for first-level UI selection', async () => {
+        await renderHarness({ dropboxConfigured: true });
+
+        mocked.asyncStorage.multiSet.mockClear();
+        mocked.resetSyncStatusForBackendSwitch.mockClear();
+
+        await act(async () => {
+            latestHookResult?.handleSelectCloudProvider('dropbox');
+        });
+
+        expect(latestHookResult?.cloudProvider).toBe('dropbox');
+        expect(latestHookResult?.syncBackend).toBe('cloud');
+        expect(mocked.asyncStorage.multiSet).toHaveBeenCalledWith([
+            [CLOUD_PROVIDER_KEY, 'dropbox'],
+            [SYNC_BACKEND_KEY, 'cloud'],
+        ]);
+        expect(mocked.resetSyncStatusForBackendSwitch).toHaveBeenCalledTimes(1);
+    });
+
+    it('loads the legacy cloud backend plus Dropbox provider as top-level Dropbox', async () => {
+        mocked.asyncStorage.multiGet.mockResolvedValue([
+            [SYNC_BACKEND_KEY, 'cloud'],
+            [CLOUD_PROVIDER_KEY, 'dropbox'],
+        ]);
+
+        await renderHarness({ dropboxConfigured: true });
+
+        expect(latestHookResult?.syncBackend).toBe('cloud');
+        expect(latestHookResult?.cloudProvider).toBe('dropbox');
+        expect(mocked.asyncStorage.setItem).not.toHaveBeenCalledWith(CLOUD_PROVIDER_KEY, 'selfhosted');
+    });
+
     it('normalizes the WebDAV url before testing the mobile connection', async () => {
         mocked.webdavGetJson.mockResolvedValue(null);
         await renderHarness();
@@ -275,5 +314,34 @@ describe('useSyncSettingsTransportActions', () => {
             title: 'Connection OK',
             tone: 'success',
         }));
+    });
+
+    it('clears cached sync config before syncing with freshly saved WebDAV credentials', async () => {
+        await renderHarness();
+
+        await act(async () => {
+            await latestHookResult?.handleSync({
+                backend: 'webdav',
+                webdav: {
+                    allowInsecureHttp: false,
+                    password: 'new-secret',
+                    url: 'https://dav.example.com/mindwtr/',
+                    username: 'alice',
+                },
+            });
+        });
+
+        expect(mocked.asyncStorage.multiSet).toHaveBeenCalledWith([
+            [SYNC_BACKEND_KEY, 'webdav'],
+            [WEBDAV_URL_KEY, 'https://dav.example.com/mindwtr/'],
+            [WEBDAV_USERNAME_KEY, 'alice'],
+            [WEBDAV_PASSWORD_KEY, 'new-secret'],
+            [WEBDAV_ALLOW_INSECURE_HTTP_KEY, 'false'],
+        ]);
+        expect(mocked.clearMobileSyncConfigCache).toHaveBeenCalledTimes(1);
+        expect(mocked.performMobileSync).toHaveBeenCalledTimes(1);
+        expect(mocked.clearMobileSyncConfigCache.mock.invocationCallOrder[0]).toBeLessThan(
+            mocked.performMobileSync.mock.invocationCallOrder[0]
+        );
     });
 });

@@ -2,8 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import { NotFoundError } from './errors.js';
-import { parseArgs, parseBooleanFlag, registerMindwtrTools, resolveServerModeFlags } from './index.js';
-import type { Area, Project, Task } from './queries.js';
+import { parseArgs, parseBooleanFlag, registerMindwtrTools, resolveServerConfig, resolveServerModeFlags } from './index.js';
+import type { Area, Person, Project, Section, Task } from './queries.js';
 import type { MindwtrService } from './service.js';
 
 type RegisteredTool = {
@@ -46,6 +46,16 @@ const mockProject = (overrides: Partial<Project> = {}): Project => ({
   ...overrides,
 });
 
+const mockSection = (overrides: Partial<Section> = {}): Section => ({
+  id: 's1',
+  projectId: 'p1',
+  title: 'Section 1',
+  order: 0,
+  createdAt: iso,
+  updatedAt: iso,
+  ...overrides,
+});
+
 const mockArea = (overrides: Partial<Area> = {}): Area => ({
   id: 'a1',
   name: 'Area 1',
@@ -55,12 +65,24 @@ const mockArea = (overrides: Partial<Area> = {}): Area => ({
   ...overrides,
 });
 
+const mockPerson = (overrides: Partial<Person> = {}): Person => ({
+  id: 'person1',
+  name: 'Alex',
+  createdAt: iso,
+  updatedAt: iso,
+  ...overrides,
+});
+
 const createMockService = (): MindwtrService => ({
   listTasks: async () => [mockTask()],
   listProjects: async () => [mockProject()],
+  listSections: async () => [mockSection()],
   listAreas: async () => [mockArea()],
+  listPeople: async () => [mockPerson()],
   getTask: async () => mockTask(),
   getProject: async () => mockProject(),
+  getSection: async () => mockSection(),
+  getPerson: async () => mockPerson(),
   addTask: async () => mockTask(),
   updateTask: async () => mockTask(),
   completeTask: async () => mockTask(),
@@ -69,9 +91,16 @@ const createMockService = (): MindwtrService => ({
   addProject: async () => mockProject(),
   updateProject: async () => mockProject(),
   deleteProject: async () => mockProject(),
+  addSection: async () => mockSection(),
+  updateSection: async () => mockSection(),
+  deleteSection: async () => mockSection({ deletedAt: iso }),
   addArea: async () => mockArea(),
   updateArea: async () => mockArea(),
   deleteArea: async () => mockArea(),
+  addPerson: async () => mockPerson(),
+  updatePerson: async () => mockPerson(),
+  renamePerson: async () => mockPerson(),
+  deletePerson: async () => mockPerson({ deletedAt: iso }),
   close: async () => undefined,
 });
 
@@ -116,17 +145,160 @@ describe('mcp server index', () => {
     });
   });
 
+  test('resolves self-hosted Cloud backend as read-only', () => {
+    expect(resolveServerConfig(
+      parseArgs(['--cloud-url', 'https://mindwtr.example.com', '--cloud-token', 'secret', '--cloud-allow-insecure-http=false']),
+      {}
+    )).toEqual({
+      backend: 'cloud',
+      cloudUrl: 'https://mindwtr.example.com',
+      cloudToken: 'secret',
+      allowInsecureHttp: false,
+      keepAlive: true,
+      readonly: true,
+    });
+    expect(() => resolveServerConfig(
+      parseArgs(['--cloud-url', 'https://mindwtr.example.com', '--write']),
+      { MINDWTR_MCP_CLOUD_TOKEN: 'secret' }
+    )).toThrow('Cloud MCP mode is read-only');
+  });
+
   test('registers all mindwtr tools', () => {
     const { server, tools } = createMockServer();
     registerMindwtrTools(server, createMockService(), false);
-    expect(tools.size).toBe(16);
+    expect(tools.size).toBe(27);
     expect(tools.has('mindwtr_list_tasks')).toBe(true);
     expect(tools.has('mindwtr_add_task')).toBe(true);
     expect(tools.has('mindwtr_restore_task')).toBe(true);
     expect(tools.has('mindwtr_get_project')).toBe(true);
+    expect(tools.has('mindwtr_list_sections')).toBe(true);
+    expect(tools.has('mindwtr_get_section')).toBe(true);
+    expect(tools.has('mindwtr_add_section')).toBe(true);
+    expect(tools.has('mindwtr_update_section')).toBe(true);
+    expect(tools.has('mindwtr_delete_section')).toBe(true);
     expect(tools.has('mindwtr_list_areas')).toBe(true);
+    expect(tools.has('mindwtr_list_people')).toBe(true);
+    expect(tools.has('mindwtr_get_person')).toBe(true);
     expect(tools.has('mindwtr_add_project')).toBe(true);
     expect(tools.has('mindwtr_delete_area')).toBe(true);
+    expect(tools.has('mindwtr_add_person')).toBe(true);
+    expect(tools.has('mindwtr_update_person')).toBe(true);
+    expect(tools.has('mindwtr_rename_person')).toBe(true);
+    expect(tools.has('mindwtr_delete_person')).toBe(true);
+  });
+
+  test('delegates section tools to the service', async () => {
+    const { server, tools } = createMockServer();
+    let listInput: unknown;
+    let addInput: unknown;
+    let updateInput: unknown;
+    let deletedId = '';
+    registerMindwtrTools(
+      server,
+      {
+        ...createMockService(),
+        listSections: async (input) => {
+          listInput = input;
+          return [mockSection()];
+        },
+        addSection: async (input) => {
+          addInput = input;
+          return mockSection({ projectId: input.projectId, title: input.title });
+        },
+        updateSection: async (input) => {
+          updateInput = input;
+          return mockSection({ id: input.id, title: input.title ?? 'Section 1' });
+        },
+        deleteSection: async (id) => {
+          deletedId = id;
+          return mockSection({ id, deletedAt: iso });
+        },
+      },
+      false
+    );
+
+    await tools.get('mindwtr_list_sections')?.handler({ projectId: 'p1' });
+    expect(listInput as Record<string, unknown>).toMatchObject({ projectId: 'p1' });
+
+    const addResult = await tools.get('mindwtr_add_section')?.handler({ projectId: 'p1', title: 'Phase A' });
+    expect(addInput as Record<string, unknown>).toMatchObject({ projectId: 'p1', title: 'Phase A' });
+    const addPayload = JSON.parse(addResult?.content[0]?.text || '{}');
+    expect(addPayload.section).toMatchObject({ projectId: 'p1', title: 'Phase A' });
+
+    await tools.get('mindwtr_update_section')?.handler({ id: 's1', title: 'Phase B' });
+    expect(updateInput as Record<string, unknown>).toMatchObject({ id: 's1', title: 'Phase B' });
+
+    await tools.get('mindwtr_delete_section')?.handler({ id: 's1' });
+    expect(deletedId).toBe('s1');
+  });
+
+  test('delegates people tools to the service', async () => {
+    const { server, tools } = createMockServer();
+    let listInput: unknown;
+    let getInput: unknown;
+    let addInput: unknown;
+    let updateInput: unknown;
+    let renameInput: unknown;
+    let deletedId = '';
+    registerMindwtrTools(
+      server,
+      {
+        ...createMockService(),
+        listPeople: async (input) => {
+          listInput = input;
+          return [mockPerson()];
+        },
+        getPerson: async (input) => {
+          getInput = input;
+          return mockPerson({ id: input.id });
+        },
+        addPerson: async (input) => {
+          addInput = input;
+          return mockPerson({ name: input.name, note: input.note ?? undefined });
+        },
+        updatePerson: async (input) => {
+          updateInput = input;
+          return mockPerson({ id: input.id, note: input.note ?? undefined });
+        },
+        renamePerson: async (input) => {
+          renameInput = input;
+          return mockPerson({ id: input.id, name: input.name });
+        },
+        deletePerson: async (id) => {
+          deletedId = id;
+          return mockPerson({ id, deletedAt: iso });
+        },
+      },
+      false
+    );
+
+    await tools.get('mindwtr_list_people')?.handler({ includeDeleted: true });
+    expect(listInput as Record<string, unknown>).toMatchObject({ includeDeleted: true });
+
+    await tools.get('mindwtr_get_person')?.handler({ id: 'person1', includeDeleted: true });
+    expect(getInput as Record<string, unknown>).toMatchObject({ id: 'person1', includeDeleted: true });
+
+    const addResult = await tools.get('mindwtr_add_person')?.handler({ name: 'Alex', note: 'Design lead' });
+    expect(addInput as Record<string, unknown>).toMatchObject({ name: 'Alex', note: 'Design lead' });
+    const addPayload = JSON.parse(addResult?.content[0]?.text || '{}');
+    expect(addPayload.person).toMatchObject({ name: 'Alex', note: 'Design lead' });
+
+    await tools.get('mindwtr_update_person')?.handler({ id: 'person1', note: null, referenceLink: 'https://example.com/alex' });
+    expect(updateInput as Record<string, unknown>).toMatchObject({
+      id: 'person1',
+      note: null,
+      referenceLink: 'https://example.com/alex',
+    });
+
+    await tools.get('mindwtr_rename_person')?.handler({ id: 'person1', name: 'Alexandra', updateTasks: false });
+    expect(renameInput as Record<string, unknown>).toMatchObject({
+      id: 'person1',
+      name: 'Alexandra',
+      updateTasks: false,
+    });
+
+    await tools.get('mindwtr_delete_person')?.handler({ id: 'person1' });
+    expect(deletedId).toBe('person1');
   });
 
   test('blocks write tools when readonly', async () => {
@@ -232,17 +404,39 @@ describe('mcp server index', () => {
     expect(addHandler).toBeTruthy();
     expect(updateHandler).toBeTruthy();
 
-    await addHandler?.({ title: 'Task', contexts: [' @home '], tags: [' #urgent '] });
+    await addHandler?.({
+      title: 'Task',
+      projectId: 'p1',
+      sectionId: 's1',
+      contexts: [' @home '],
+      tags: [' #urgent '],
+      energyLevel: 'high',
+      assignedTo: 'Dana',
+    });
     expect(receivedInput).toMatchObject({
+      projectId: 'p1',
+      sectionId: 's1',
       contexts: ['@home'],
       tags: ['#urgent'],
+      energyLevel: 'high',
+      assignedTo: 'Dana',
     });
 
-    await updateHandler?.({ id: 't1', contexts: [' @desk '], tags: [' #ops '] });
+    await updateHandler?.({
+      id: 't1',
+      sectionId: null,
+      contexts: [' @desk '],
+      tags: [' #ops '],
+      energyLevel: 'low',
+      assignedTo: null,
+    });
     expect(receivedInput).toMatchObject({
       id: 't1',
+      sectionId: null,
       contexts: ['@desk'],
       tags: ['#ops'],
+      energyLevel: 'low',
+      assignedTo: null,
     });
   });
 

@@ -1,0 +1,14 @@
+Mindwtr ist ein datenschutzorientierter, lokaler Aufgabenmanager fuer Getting Things Done (GTD). Er hilft dir, Inbox, Projekte und Kontexte zu pflegen, ohne deine persoenlichen Daten an einen Cloud-Dienst zu binden.
+
+Im Unterschied zu vielen Produktivitaets-Apps speichert Mindwtr deine Aufgaben, Projekte und Notizen auf deinem Geraet. Du entscheidest selbst, ob und wohin Daten synchronisiert oder exportiert werden.
+
+WICHTIGE FUNKTIONEN:
+
+- Schnelles Erfassen: Gedanken sofort in die Inbox bringen.
+- GTD-Workflow: Aufgaben klaeren, organisieren und regelmaessig durchsehen.
+- Projekte und Bereiche: Groessere Ziele mit Projekten, Areas, Abschnitten, Tags und Kontexten strukturieren.
+- Visuelle Planung: Listen, Boards und Kalender helfen beim Ueberblick.
+- Offline zuerst: Mindwtr funktioniert ohne Konto und ohne dauerhafte Internetverbindung.
+- Offen und transparent: Der Quellcode ist pruefbar und community-getrieben.
+
+Mindwtr bleibt einfach fuer schnelle Erfassung und wird leistungsfaehiger, wenn Projekte, Reviews, Notizen, Erinnerungen und Synchronisation dazukommen.

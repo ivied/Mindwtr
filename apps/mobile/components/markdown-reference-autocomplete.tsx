@@ -3,6 +3,7 @@ import { Keyboard, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, Vi
 import {
     getActiveMarkdownReferenceQuery,
     insertMarkdownReferenceAtQuery,
+    isMarkdownEditorAssistEnabled,
     searchMarkdownReferences,
     shallow,
     tFallback,
@@ -50,9 +51,10 @@ export function MarkdownReferenceAutocomplete({
         tasks: state._allTasks,
         projects: state.projects,
     }), shallow);
+    const markdownEditorAssist = useTaskStore((state) => isMarkdownEditorAssistEnabled(state.settings));
     const activeQuery = React.useMemo(
-        () => getActiveMarkdownReferenceQuery(value, selection),
-        [selection.end, selection.start, value],
+        () => getActiveMarkdownReferenceQuery(value, selection, { assist: markdownEditorAssist }),
+        [markdownEditorAssist, selection.end, selection.start, value],
     );
     const suggestions = React.useMemo(
         () => (activeQuery

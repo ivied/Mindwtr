@@ -1,4 +1,5 @@
 import { forwardRef, useLayoutEffect, useRef, useState, type TextareaHTMLAttributes } from 'react';
+import { captureScrollSnapshot, restoreScrollSnapshot } from '../../lib/scroll-preservation';
 
 type AutosizeTextareaProps = TextareaHTMLAttributes<HTMLTextAreaElement> & {
     minHeight?: number;
@@ -36,11 +37,13 @@ export const AutosizeTextarea = forwardRef<HTMLTextAreaElement, AutosizeTextarea
         const node = internalRef.current;
         if (!node) return;
 
+        const scrollSnapshot = captureScrollSnapshot(node);
         const nextMinHeight = isFocused ? (focusedMinHeight ?? minHeight) : minHeight;
-        node.style.height = '0px';
+        node.style.height = 'auto';
         const nextHeight = Math.max(nextMinHeight, Math.min(node.scrollHeight, maxHeight));
         node.style.height = `${nextHeight}px`;
         node.style.overflowY = node.scrollHeight > maxHeight ? 'auto' : 'hidden';
+        restoreScrollSnapshot(scrollSnapshot);
     }, [focusedMinHeight, isFocused, maxHeight, minHeight, props.value]);
 
     return (

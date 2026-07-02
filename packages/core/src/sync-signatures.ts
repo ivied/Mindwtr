@@ -1,4 +1,5 @@
-import type { Area, Attachment, Project, Section, Task } from './types';
+import type { Area, Attachment, Person, Project, Section, Task } from './types';
+import { normalizeProjectSequentialScope } from './project-utils';
 
 type StableSignatureCacheEntry = {
     validation: string;
@@ -28,6 +29,7 @@ const CONTENT_DIFF_IGNORED_KEYS = new Set([
     'purgedAt',
     'order',
     'orderNum',
+    'boardOrder',
 ]);
 
 const SIGNATURE_OPAQUE_KEYS = new Set([
@@ -72,20 +74,43 @@ const normalizeAttachmentsForContentComparison = (
 };
 
 export const normalizeTaskForContentComparison = (task: Task): Record<string, unknown> => {
+    const hasRecurrence = task.recurrence !== undefined && task.recurrence !== null;
     const comparable: Record<string, unknown> = {
-        ...task,
+        id: task.id,
+        title: task.title,
+        status: task.status === 'inbox' ? undefined : task.status,
+        priority: task.priority,
+        energyLevel: task.energyLevel,
+        assignedTo: task.assignedTo,
+        taskMode: task.taskMode,
+        startTime: task.startTime,
+        relativeStartOffset: task.relativeStartOffset,
+        dueDate: task.dueDate,
+        recurrence: task.recurrence,
         tags: normalizeOptionalArrayForComparison(task.tags),
         contexts: normalizeOptionalArrayForComparison(task.contexts),
         checklist: normalizeOptionalArrayForComparison(task.checklist),
+        description: task.description,
+        textDirection: task.textDirection,
         // Attachment entities merge independently. Ignore file transport/runtime fields here
         // so task conflicts only reflect meaningful task-level attachment changes. Once
         // the parent task is deleted, attachment tombstone cleanup should not keep
         // surfacing as a user-visible task conflict.
         attachments: task.deletedAt ? undefined : normalizeAttachmentsForContentComparison(task.attachments),
+        location: task.location,
+        projectId: task.projectId,
+        sectionId: task.sectionId,
+        areaId: task.areaId,
         isFocusedToday: task.isFocusedToday ? true : undefined,
+        timeEstimate: task.timeEstimate,
+        showFutureRecurrence: hasRecurrence && task.showFutureRecurrence ? true : undefined,
+        suppressMindwtrReminders: task.suppressMindwtrReminders ? true : undefined,
         pushCount: task.pushCount === 0 ? undefined : task.pushCount,
+        repeatReminderMinutes: task.repeatReminderMinutes ? task.repeatReminderMinutes : undefined,
+        reviewAt: task.reviewAt,
+        completedAt: task.completedAt,
+        deletedAt: task.deletedAt,
     };
-    if (task.status === 'inbox') delete comparable.status;
     return comparable;
 };
 
@@ -95,6 +120,9 @@ export const normalizeProjectForContentComparison = (project: Project): Record<s
         tagIds: normalizeOptionalArrayForComparison(project.tagIds),
         attachments: project.deletedAt ? undefined : normalizeAttachmentsForContentComparison(project.attachments),
         isSequential: project.isSequential ? true : undefined,
+        sequentialScope: project.isSequential && normalizeProjectSequentialScope(project.sequentialScope) === 'section'
+            ? 'section'
+            : undefined,
         isFocused: project.isFocused ? true : undefined,
     };
     if (project.status === 'active') delete comparable.status;
@@ -115,6 +143,12 @@ export const normalizeAreaForContentComparison = (area: AreaContentComparisonInp
     ...area,
     color: area.color === '#6B7280' ? undefined : area.color,
     order: undefined,
+});
+
+export const normalizePersonForContentComparison = (person: Person): Record<string, unknown> => ({
+    ...person,
+    note: person.note?.trim() || undefined,
+    referenceLink: person.referenceLink?.trim() || undefined,
 });
 
 const STABLE_SIGNATURE_CACHE_LIMIT = 5000;

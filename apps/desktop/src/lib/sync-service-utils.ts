@@ -3,6 +3,8 @@ import {
     isSyncFilePath,
     normalizePath,
     normalizeSyncBackend,
+    sleep,
+    toStableJson,
     type Attachment,
     type SyncBackend,
 } from '@mindwtr/core';
@@ -12,26 +14,6 @@ export const ATTACHMENTS_DIR_NAME = 'attachments';
 const importNodeCrypto = async (): Promise<typeof import('node:crypto')> => {
     const specifier = 'node:crypto';
     return import(/* @vite-ignore */ specifier) as Promise<typeof import('node:crypto')>;
-};
-
-export const toStableJson = (value: unknown): string => {
-    const normalize = (input: any): any => {
-        if (Array.isArray(input)) {
-            return input.map(normalize);
-        }
-        if (input && typeof input === 'object') {
-            const entries = Object.keys(input)
-                .sort()
-                .map((key) => [key, normalize(input[key])]);
-            const result: Record<string, any> = {};
-            for (const [key, val] of entries) {
-                result[key] = val;
-            }
-            return result;
-        }
-        return input;
-    };
-    return JSON.stringify(normalize(value));
 };
 
 export const hashString = async (value: string): Promise<string> => {
@@ -64,13 +46,6 @@ export const fallbackHashString = (value: string): string => {
     return (hash >>> 0).toString(16);
 };
 
-export const sleep = (ms: number) => new Promise<void>((resolve) => {
-    const timerHost = typeof window !== 'undefined' && typeof window.setTimeout === 'function'
-        ? window
-        : globalThis;
-    timerHost.setTimeout(resolve, ms);
-});
-
 export const yieldToRenderer = async (): Promise<void> => {
     if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
         await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
@@ -93,6 +68,8 @@ export {
     isSyncFilePath,
     normalizePath,
     normalizeSyncBackend,
+    sleep,
+    toStableJson,
     type SyncBackend,
 };
 

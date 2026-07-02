@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { normalizeDateInputValue } from './task-item-helpers';
+import { getRecurrenceRRuleValue, normalizeDateInputValue } from './task-item-helpers';
 
 describe('normalizeDateInputValue', () => {
     const referenceNow = new Date('2026-02-24T12:00:00.000Z');
@@ -20,5 +20,15 @@ describe('normalizeDateInputValue', () => {
 
     it('returns non-date input unchanged', () => {
         expect(normalizeDateInputValue('not-a-date', referenceNow)).toBe('not-a-date');
+    });
+});
+
+describe('getRecurrenceRRuleValue', () => {
+    it('builds monthly BYMONTHDAY rules from explicit recurrence metadata', () => {
+        expect(getRecurrenceRRuleValue({
+            rule: 'monthly',
+            strategy: 'strict',
+            byMonthDay: [9],
+        })).toBe('FREQ=MONTHLY;BYMONTHDAY=9');
     });
 });

@@ -7,12 +7,18 @@ if (!newVersion) {
     process.exit(1);
 }
 
+if (!/^\d+\.\d+\.\d+$/.test(newVersion)) {
+    console.error('Error: App/package version must be a stable x.y.z version. For RC releases, pass the RC tag to scripts/bump-version.sh so it can derive the stable base version.');
+    process.exit(1);
+}
+
 const jsonFiles = [
     'package.json',
     'apps/desktop/package.json',
     'apps/mobile/package.json',
     'apps/cloud/package.json',
     'apps/mcp-server/package.json',
+    'apps/mcp-server/server.json',
     'packages/core/package.json',
     'apps/mobile/app.json',
     'apps/desktop/src-tauri/tauri.conf.json'
@@ -42,6 +48,18 @@ jsonFiles.forEach(file => {
                 console.log(`Updating ${file} version from ${json.version} to ${newVersion}`);
                 json.version = newVersion;
                 updated = true;
+            }
+
+            // Handle MCP Registry package metadata
+            if (Array.isArray(json.packages)) {
+                json.packages.forEach((pkg, index) => {
+                    if (pkg && pkg.version) {
+                        const label = pkg.identifier || pkg.name || `package ${index + 1}`;
+                        console.log(`Updating ${file} ${label} version from ${pkg.version} to ${newVersion}`);
+                        pkg.version = newVersion;
+                        updated = true;
+                    }
+                });
             }
 
             // Handle app.json (Expo)

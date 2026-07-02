@@ -1,0 +1,42 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.dongdongbh/mindwtr",
+  "title": "Mindwtr",
+  "description": "Task and project automation for local Mindwtr data, with read-only self-hosted Cloud access.",
+  "version": "1.0.5",
+  "websiteUrl": "https://docs.mindwtr.app/power-users/mcp",
+  "repository": {
+    "url": "https://github.com/dongdongbh/Mindwtr",
+    "source": "github",
+    "id": "1111978380",
+    "subfolder": "apps/mcp-server"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "mindwtr-mcp",
+      "version": "1.0.5",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "MINDWTR_DB_PATH",
+          "description": "Optional path to the local Mindwtr SQLite database.",
+          "format": "filepath",
+          "isRequired": false
+        },
+        {
+          "name": "MINDWTR_MCP_CLOUD_URL",
+          "description": "Optional self-hosted Mindwtr Cloud base URL for read-only Cloud mode.",
+          "isRequired": false
+        },
+        {
+          "name": "MINDWTR_MCP_CLOUD_TOKEN",
+          "description": "Bearer token for read-only self-hosted Mindwtr Cloud mode.",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}

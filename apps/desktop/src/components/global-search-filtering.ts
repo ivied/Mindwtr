@@ -1,8 +1,10 @@
 import {
     matchesHierarchicalToken,
+    parseSearchQuery,
     safeParseDueDate,
     searchAll,
     shouldShowTaskForStart,
+    getWeekStartsOnIndex,
     type Project,
     type SearchProjectResult,
     type SearchResults,
@@ -25,9 +27,10 @@ type ComputeGlobalSearchResultsInput = {
     selectedStatuses: TaskStatus[];
     selectedArea: string;
     selectedTokens: string[];
+    locationQuery?: string;
     duePreset: DuePreset;
     scope: GlobalSearchScope;
-    weekStart: 'sunday' | 'monday';
+    weekStart: 'sunday' | 'monday' | 'saturday';
     ftsResults?: SearchResults | null;
 };
 
@@ -36,7 +39,7 @@ const buildDueMatcher = (duePreset: DuePreset, weekStart: number) => {
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const startOfWeek = new Date(startOfToday);
     const weekday = startOfWeek.getDay();
-    const diffToWeekStart = weekStart === 1 ? (weekday + 6) % 7 : weekday;
+    const diffToWeekStart = (weekday - weekStart + 7) % 7;
     startOfWeek.setDate(startOfWeek.getDate() - diffToWeekStart);
     const endOfWeek = new Date(startOfWeek);
     endOfWeek.setDate(endOfWeek.getDate() + 7);
@@ -63,6 +66,13 @@ const buildDueMatcher = (duePreset: DuePreset, weekStart: number) => {
     };
 };
 
+const hasPositiveTaskIdLookup = (query: string) => {
+    const ast = parseSearchQuery(query);
+    return ast.clauses.some((clause) =>
+        clause.terms.some((term) => term.field === 'id' && !term.negated && term.value.trim().length > 0)
+    );
+};
+
 export const computeGlobalSearchResults = ({
     query,
     tasks,
@@ -74,6 +84,7 @@ export const computeGlobalSearchResults = ({
     selectedStatuses,
     selectedArea,
     selectedTokens,
+    locationQuery = '',
     duePreset,
     scope,
     weekStart,
@@ -88,6 +99,8 @@ export const computeGlobalSearchResults = ({
         : fallbackResults;
 
     const hasStatusFilter = selectedStatuses.length > 0;
+    const shouldBypassDefaultStatusHiding = hasPositiveTaskIdLookup(trimmedQuery);
+    const normalizedLocationQuery = locationQuery.trim().toLowerCase();
     const projectById = new Map(projects.map((project) => [project.id, project]));
     const areaById = new Map(areas.map((area) => [area.id, area]));
 
@@ -112,25 +125,31 @@ export const computeGlobalSearchResults = ({
             taskTokens.some((taskToken) => matchesHierarchicalToken(token, taskToken))
         );
     };
+    const matchesLocation = (task: SearchTaskResult) => {
+        if (!normalizedLocationQuery) return true;
+        return String(task.location ?? '').toLowerCase().includes(normalizedLocationQuery);
+    };
 
-    const matchesDue = buildDueMatcher(duePreset, weekStart === 'monday' ? 1 : 0);
+    const matchesDue = buildDueMatcher(duePreset, getWeekStartsOnIndex(weekStart));
 
     const filteredTasks = effectiveResults.tasks.filter((task) => {
         if (hasStatusFilter) {
             if (!selectedStatuses.includes(task.status)) return false;
         } else {
-            if (!includeCompleted && ['done', 'archived'].includes(task.status)) return false;
-            if (!includeReference && task.status === 'reference') return false;
+            if (!shouldBypassDefaultStatusHiding && !includeCompleted && ['done', 'archived'].includes(task.status)) return false;
+            if (!shouldBypassDefaultStatusHiding && !includeReference && task.status === 'reference') return false;
         }
         if (!shouldShowTaskForStart(task, { showFutureStarts: !hideFutureTasks })) return false;
         if (scope === 'project_tasks' && !task.projectId) return false;
         if (!matchesTaskArea(task)) return false;
         if (!matchesTokens(task)) return false;
+        if (!matchesLocation(task)) return false;
         if (!matchesDue(task)) return false;
         return true;
     });
 
     const filteredProjects = effectiveResults.projects.filter((project: SearchProjectResult) => {
+        if (normalizedLocationQuery) return false;
         if (!includeCompleted && project.status === 'archived') return false;
         if (!matchesArea(project.areaId ?? null)) return false;
         return true;
