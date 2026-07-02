@@ -9,6 +9,7 @@ import {
     writeFileSync,
 } from 'fs';
 import { basename, dirname, join, relative, resolve, sep } from 'path';
+import { gunzipSync } from 'node:zlib';
 import type { AppData } from '@mindwtr/core';
 import {
     ATTACHMENT_PATH_ALLOWLIST,
@@ -506,7 +507,18 @@ export async function readJsonBody(req: Request, maxBodyBytes: number, signal?: 
     if (isBodyReadError(bytes)) {
         return bytes;
     }
-    const text = new TextDecoder().decode(bytes);
+    let decoded = bytes;
+    if ((req.headers.get('content-encoding') || '').toLowerCase().includes('gzip')) {
+        try {
+            decoded = gunzipSync(bytes);
+        } catch {
+            return createBodyReadError('Invalid gzip body', 400);
+        }
+        if (decoded.length > maxBodyBytes) {
+            return createBodyReadError('Payload too large', 413);
+        }
+    }
+    const text = new TextDecoder().decode(decoded);
     if (!text.trim()) return null;
     try {
         return JSON.parse(text);

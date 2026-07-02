@@ -75,6 +75,21 @@ describe('cloud sync http helpers', () => {
         expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
     });
 
+    it('gzip-encodes the put body when CompressionStream is available', async () => {
+        if (typeof (globalThis as { CompressionStream?: unknown }).CompressionStream === 'undefined') return;
+        const fetcher = vi.fn(async () => okResponse(''));
+        const payload = { hello: 'world', items: Array.from({ length: 50 }, (_, i) => ({ i })) };
+        await cloudPutJson('https://example.com/v1/data', payload, { fetcher, token: 'abc123' });
+        const [, init] = fetcher.mock.calls[0] as [string, RequestInit];
+        expect((init.headers as Record<string, string>)['Content-Encoding']).toBe('gzip');
+        const body = init.body as Uint8Array;
+        expect(body).toBeInstanceOf(Uint8Array);
+        expect(body[0]).toBe(0x1f);
+        expect(body[1]).toBe(0x8b);
+        const { gunzipSync } = await import('node:zlib');
+        expect(JSON.parse(gunzipSync(body).toString('utf8'))).toEqual(payload);
+    });
+
     it('reads HEAD metadata for fast sync checks', async () => {
         const fetcher = vi.fn(async () => headResponse({
             etag: '"sha256-abc"',

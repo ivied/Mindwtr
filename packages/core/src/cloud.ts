@@ -28,6 +28,19 @@ function buildHeaders(options: CloudOptions): Record<string, string> {
     return headers;
 }
 
+async function gzipText(text: string): Promise<Uint8Array | undefined> {
+    const CompressionStreamCtor = (globalThis as { CompressionStream?: typeof CompressionStream }).CompressionStream;
+    if (!CompressionStreamCtor) return undefined;
+    try {
+        const stream = new Response(text).body?.pipeThrough(new CompressionStreamCtor('gzip'));
+        if (!stream) return undefined;
+        const buffer = await new Response(stream).arrayBuffer();
+        return new Uint8Array(buffer);
+    } catch {
+        return undefined;
+    }
+}
+
 const CLOUD_HTTPS_ERROR = 'Cloud sync requires HTTPS for public URLs (HTTP allowed for localhost, private IPs, and local hostnames).';
 const CLOUD_TIMEOUT_ERROR = 'Cloud request timed out';
 
@@ -123,12 +136,20 @@ export async function cloudPutJson(
     const headers = buildHeaders(options);
     headers['Content-Type'] = headers['Content-Type'] || 'application/json';
 
+    const json = JSON.stringify(data, null, 2);
+    let body: BodyInit = json;
+    const gzipped = await gzipText(json);
+    if (gzipped) {
+        body = new Uint8Array(gzipped);
+        headers['Content-Encoding'] = 'gzip';
+    }
+
     const res = await fetchWithTimeout(
         url,
         {
             method: 'PUT',
             headers,
-            body: JSON.stringify(data, null, 2),
+            body,
             signal: options.signal,
         },
         options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
