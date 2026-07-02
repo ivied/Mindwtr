@@ -131,7 +131,7 @@ const createInternalServerErrorResponse = (message: string, requestId: string): 
 const emptyCorsResponse = (status: number): Response => {
     const headers = new Headers({
         'Access-Control-Allow-Origin': resolveAllowedOrigin(),
-        'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+        'Access-Control-Allow-Headers': 'Authorization, Content-Type, Content-Encoding',
         'Access-Control-Allow-Methods': 'GET,HEAD,PUT,POST,PATCH,DELETE,OPTIONS',
     });
     return new Response(null, { status, headers });

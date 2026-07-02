@@ -205,7 +205,7 @@ describe('cloud server utils', () => {
         expect(response.status).toBe(401);
         expect(response.headers.get('Content-Type')).toBe('application/json; charset=utf-8');
         expect(response.headers.get('Access-Control-Allow-Origin')).toBe(corsOrigin);
-        expect(response.headers.get('Access-Control-Allow-Headers')).toBe('Authorization, Content-Type');
+        expect(response.headers.get('Access-Control-Allow-Headers')).toBe('Authorization, Content-Type, Content-Encoding');
         expect(response.headers.get('Access-Control-Allow-Methods')).toBe('GET,HEAD,PUT,POST,PATCH,DELETE,OPTIONS');
     });
 
@@ -214,7 +214,7 @@ describe('cloud server utils', () => {
 
         expect(response.status).toBe(204);
         expect(response.headers.get('Access-Control-Allow-Origin')).toBe(corsOrigin);
-        expect(response.headers.get('Access-Control-Allow-Headers')).toBe('Authorization, Content-Type');
+        expect(response.headers.get('Access-Control-Allow-Headers')).toBe('Authorization, Content-Type, Content-Encoding');
         expect(response.headers.get('Access-Control-Allow-Methods')).toBe('GET,HEAD,PUT,POST,PATCH,DELETE,OPTIONS');
         expect(await response.text()).toBe('');
     });
@@ -944,7 +944,7 @@ describe('cloud server api', () => {
 
         expect(response.status).toBe(204);
         expect(response.headers.get('Access-Control-Allow-Origin')).toBe(corsOrigin);
-        expect(response.headers.get('Access-Control-Allow-Headers')).toBe('Authorization, Content-Type');
+        expect(response.headers.get('Access-Control-Allow-Headers')).toBe('Authorization, Content-Type, Content-Encoding');
         expect(response.headers.get('Access-Control-Allow-Methods')).toBe('GET,HEAD,PUT,POST,PATCH,DELETE,OPTIONS');
         expect(await response.text()).toBe('');
     });

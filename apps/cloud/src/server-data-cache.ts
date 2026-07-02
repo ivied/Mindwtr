@@ -197,7 +197,7 @@ export const dataMetadataResponse = (filePath: string): Response => {
     const headers = new Headers({
         'Access-Control-Allow-Origin': resolveAllowedOrigin(),
         'Vary': 'Origin',
-        'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+        'Access-Control-Allow-Headers': 'Authorization, Content-Type, Content-Encoding',
         'Access-Control-Allow-Methods': 'GET,HEAD,PUT,POST,PATCH,DELETE,OPTIONS',
         'Content-Length': String(metadata.size),
         'ETag': metadata.etag,
@@ -216,7 +216,7 @@ export const jsonFileResponse = (body: string | Uint8Array): Response => {
     const headers = new Headers({
         'Access-Control-Allow-Origin': resolveAllowedOrigin(),
         'Vary': 'Origin',
-        'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+        'Access-Control-Allow-Headers': 'Authorization, Content-Type, Content-Encoding',
         'Access-Control-Allow-Methods': 'GET,HEAD,PUT,POST,PATCH,DELETE,OPTIONS',
         'Content-Length': String(contentLength),
         'Content-Type': 'application/json; charset=utf-8',
