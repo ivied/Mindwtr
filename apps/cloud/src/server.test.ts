@@ -464,6 +464,30 @@ describe('cloud server utils', () => {
         expect(parsed.__mindwtrError.status).toBe(413);
     });
 
+    test('decodes a gzip-encoded JSON body', async () => {
+        const { gzipSync } = await import('node:zlib');
+        const payload = { tasks: [{ id: 'a', title: 'hi' }], projects: [], sections: [], areas: [], settings: {} };
+        const gz = gzipSync(Buffer.from(JSON.stringify(payload)));
+        const req = new Request('http://localhost/v1/data', {
+            method: 'PUT',
+            headers: { 'content-encoding': 'gzip' },
+            body: gz,
+        });
+        const parsed = await __cloudTestUtils.readJsonBody(req, 1024 * 1024);
+        expect(parsed).toEqual(payload);
+    });
+
+    test('rejects an invalid gzip body', async () => {
+        const req = new Request('http://localhost/v1/data', {
+            method: 'PUT',
+            headers: { 'content-encoding': 'gzip' },
+            body: new Uint8Array([1, 2, 3, 4]),
+        });
+        const parsed = await __cloudTestUtils.readJsonBody(req, 1024 * 1024);
+        expect(parsed.__mindwtrError.message).toBe('Invalid gzip body');
+        expect(parsed.__mindwtrError.status).toBe(400);
+    });
+
     test('returns request timeout when body read is aborted', async () => {
         const controller = new AbortController();
         const req = new Request('http://localhost/v1/data', {
