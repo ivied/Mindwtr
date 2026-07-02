@@ -208,6 +208,34 @@ describe('SuggestionRefresher', () => {
     expect(flags.length).toBe(1) // only one nudge total
   })
 
+  it('flagCompletion posts the done-nudge directly without a Reviser call', () => {
+    const id = seedPending(createPayload('Reply to katja about the Littlehub cost proposal'))
+    const reviser = reviserReturning({ kind: 'clarify', agentMessage: 'unused' })
+    const refresher = new SuggestionRefresher({ store, reviser, contextStore })
+
+    const result = refresher.flagCompletion('Reply to katja about the Littlehub cost proposal')
+
+    expect(result).toEqual({ kind: 'flagged', proposalId: id })
+    expect((reviser.revise as ReturnType<typeof mock>).mock.calls.length).toBe(0)
+    const detail = store.getDetail(id)!
+    expect(detail.status).toBe('pending') // never auto-resolves
+    expect(detail.messages.some((m) => m.text.startsWith('🟡 Похоже, это уже выполнено.'))).toBe(true)
+  })
+
+  it('flagCompletion dedupes and reports no-match correctly', () => {
+    const id = seedPending(createPayload('Pay Acme invoice'))
+    const reviser = reviserReturning({ kind: 'clarify', agentMessage: 'unused' })
+    const refresher = new SuggestionRefresher({ store, reviser, contextStore })
+
+    expect(refresher.flagCompletion('Pay Acme invoice')).toEqual({ kind: 'flagged', proposalId: id })
+    expect(refresher.flagCompletion('Pay Acme invoice')).toEqual({ kind: 'already-flagged', proposalId: id })
+    expect(refresher.flagCompletion('Book flight to Berlin')).toEqual({ kind: 'no-match' })
+
+    const detail = store.getDetail(id)!
+    const flags = detail.messages.filter((m) => m.text.startsWith('🟡 Похоже, это уже выполнено.'))
+    expect(flags.length).toBe(1)
+  })
+
   it('withdraw + evidenceShowsDone flags completion but leaves the proposal pending', async () => {
     const id = seedPending(createPayload('Pay Acme invoice'))
     const reviser = reviserReturning({

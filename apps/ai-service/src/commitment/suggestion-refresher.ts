@@ -36,6 +36,11 @@ export type RefreshResult =
   | { kind: 'clarified'; proposalId: string; doneSuspected?: boolean }
   | { kind: 'skipped'; proposalId: string; reason: string; doneSuspected?: boolean }
 
+export type FlagCompletionResult =
+  | { kind: 'no-match' }
+  | { kind: 'flagged'; proposalId: string }
+  | { kind: 'already-flagged'; proposalId: string }
+
 /**
  * Stable prefix on the agent's "looks already done" nudge. Used to dedup —
  * we never post a second done-flag if the latest agent message already is one,
@@ -47,21 +52,7 @@ export class SuggestionRefresher {
   constructor(private deps: SuggestionRefresherDeps) {}
 
   async refresh(input: RefreshInput): Promise<RefreshResult> {
-    const wanted = buildSignature(input.existingTitle, null, null)
-    const pending = this.deps.store.listPending({
-      sourceAgent: SOURCE_AGENT_COMMITMENT_DETECTOR,
-      type: 'create',
-      limit: 50,
-    })
-    // signatureForRecord includes who_to/by_when from payload metadata; the
-    // Proposer's duplicate_of_title only carries a title, so compare on the
-    // title component alone (first segment of the pipe-joined signature).
-    const titleOf = (sig: string | null) => (sig === null ? null : sig.split('|')[0])
-    const wantedTitle = titleOf(wanted)
-    const match = pending.find((p) => titleOf(signatureForRecord(p)) === wantedTitle)
-    if (!match) return { kind: 'no-match' }
-
-    const detail = this.deps.store.getDetail(match.id)
+    const detail = this.findPendingByTitle(input.existingTitle)
     if (!detail) return { kind: 'no-match' }
 
     const contextSnippets = await this.retrieveContext(detail, input.captureText)
@@ -73,6 +64,37 @@ export class SuggestionRefresher {
     })
 
     return this.dispatch(detail, outcome)
+  }
+
+  /**
+   * Direct completion flag — used when the Proposer itself says the capture
+   * REPORTS the matched item as already done (completes_title). No Reviser
+   * call: the completion verdict was already made, just post the done-nudge.
+   */
+  flagCompletion(existingTitle: string): FlagCompletionResult {
+    const detail = this.findPendingByTitle(existingTitle)
+    if (!detail) return { kind: 'no-match' }
+    const flagged = this.maybeFlagDone(detail, true)
+    return flagged
+      ? { kind: 'flagged', proposalId: detail.id }
+      : { kind: 'already-flagged', proposalId: detail.id }
+  }
+
+  private findPendingByTitle(existingTitle: string): ProposalDetail | null {
+    const wanted = buildSignature(existingTitle, null, null)
+    const pending = this.deps.store.listPending({
+      sourceAgent: SOURCE_AGENT_COMMITMENT_DETECTOR,
+      type: 'create',
+      limit: 300,
+    })
+    // signatureForRecord includes who_to/by_when from payload metadata; the
+    // Proposer's duplicate_of_title only carries a title, so compare on the
+    // title component alone (first segment of the pipe-joined signature).
+    const titleOf = (sig: string | null) => (sig === null ? null : sig.split('|')[0])
+    const wantedTitle = titleOf(wanted)
+    const match = pending.find((p) => titleOf(signatureForRecord(p)) === wantedTitle)
+    if (!match) return null
+    return this.deps.store.getDetail(match.id)
   }
 
   private dispatch(detail: ProposalDetail, outcome: ReviseOutcome): RefreshResult {

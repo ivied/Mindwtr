@@ -315,6 +315,20 @@ if (LLM_BASE_URL && LLM_API_KEY) {
   commitmentPipeline.setDuplicateOfExistingHook((info) => {
     void (async () => {
       try {
+        // Proposer said the capture REPORTS this item as already done
+        // (completes_title). Post the done-nudge directly on the matched
+        // pending suggestion — no Reviser round-trip needed. When no pending
+        // proposal matches (real task or stale title), fall through to the
+        // normal evidence-folding path so the signal still lands somewhere.
+        if (info.completion) {
+          const flag = suggestionRefresher.flagCompletion(info.existingTitle)
+          if (flag.kind !== 'no-match') {
+            console.log(
+              `[completes] pending suggestion ${flag.proposalId.slice(0, 8)} ${flag.kind} for "${info.existingTitle.slice(0, 50)}"`
+            )
+            return
+          }
+        }
         const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim()
         const wanted = norm(info.existingTitle)
         let match: Awaited<ReturnType<typeof mindwtr.listTasks>>[number] | undefined
@@ -380,7 +394,7 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     const wantedTitle = norm(info.existingTitle)
     const enricherPending = proposalStore.listPending({
       sourceAgent: SOURCE_AGENT_ENRICHER,
-      limit: 50,
+      limit: 300,
     })
     const enricherMatch = enricherPending.find((p) => {
       const snap = p.originSnapshot as { title?: unknown } | null

@@ -94,13 +94,15 @@ export class LLMClient {
     request: Omit<ChatCompletionRequest, 'model'> & { model?: string },
     model: string
   ): Promise<ChatCompletionResponse> {
+    // Claude Sonnet 5+ rejects `temperature` as deprecated (400). All our
+    // callers used ≤0.3 anyway; drop the knob entirely rather than branch by
+    // model family.
     const body: ChatCompletionRequest = {
       model,
       messages: request.messages,
       tools: request.tools,
       tool_choice: request.tool_choice,
       max_tokens: request.max_tokens ?? 2000,
-      temperature: request.temperature ?? 0.2,
       stream: false,
     }
 

@@ -20,6 +20,7 @@ export type LlmVerdictKind =
   | 'created'              // Proposer → confident actionable → Writer stored proposal
   | 'duplicate'            // Writer found existing proposal/inbox match
   | 'duplicate-of-existing'// Proposer flagged duplicate inline
+  | 'completes-existing'   // Proposer says capture reports an existing item as done
   | 'not-actionable'
   | 'low-confidence'
   | 'wrong-role'
@@ -143,6 +144,8 @@ export function sourceChannelToVerdict(source: string | null | undefined): LlmVe
     case 'screen_capture': return 'screen'
     case 'audio_capture': return 'audio'
     case 'telegram': return 'telegram'
+    case 'telegram_user_dm': return 'telegram'
+    case 'telegram_group': return 'telegram'
     default: return 'unknown'
   }
 }

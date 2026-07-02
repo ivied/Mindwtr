@@ -59,6 +59,13 @@ export interface Proposal {
    */
   duplicate_of_title: string
   /**
+   * Title of an existing RECENT_USER_ITEMS entry that this capture reports as
+   * ALREADY COMPLETED (past-tense completion statement about that item's
+   * action). Empty when no completion signal. When set, is_actionable MUST be
+   * false; the pipeline routes this to the done-nudge instead of dropping it.
+   */
+  completes_title: string
+  /**
    * Exact verbatim quote from the source text that triggered the decision.
    * Empty when nothing was clearly quotable (e.g. the cue was structural,
    * not a sentence). Used by the writer to build a smart excerpt window.
@@ -155,6 +162,11 @@ const PROPOSER_TOOL = {
           description:
             'When the proposed task is semantically the same as an entry in RECENT_USER_ITEMS (same intent / target / deadline as one of those, possibly worded differently), set this to the EXACT title of that entry AND set is_actionable=false. Read the [label] on each item to choose the right reasoning: [in inbox] / [pending AI review] / [user accepted N ago] / [user rejected N ago] / [user already done N ago] / [no longer applicable N ago]. Empty string when no match (genuinely new commitment, or item is old enough that a fresh recurrence is plausible).',
         },
+        completes_title: {
+          type: 'string',
+          description:
+            'When the capture STATES that the action of a RECENT_USER_ITEMS entry has already been DONE (past-tense completion: "отправил", "оплачено", "sent", "shipped", a status report saying the deliverable went out), set this to the EXACT title of that entry AND set is_actionable=false. This is different from duplicate_of_title (same task mentioned again) — here the capture says the task is FINISHED. Only for [in inbox] / [pending AI review] items; only when the completed action clearly matches that item\'s action (same deliverable, same counterparty). Empty string otherwise.',
+        },
         suggested_category: {
           type: 'string',
           enum: ['next', 'waiting', 'someday', 'reference', 'two_minute'],
@@ -177,6 +189,7 @@ const PROPOSER_TOOL = {
         'cues_detected',
         'reasoning_steps',
         'duplicate_of_title',
+        'completes_title',
         'suggested_category',
       ],
     },
@@ -373,6 +386,37 @@ NOT a match (DON'T suppress):
 - Different timeframe (this Friday vs next Friday)
 - Different scope (one-off task vs an open recurring project)
 
+COMPLETION SIGNALS (completes_title):
+While scanning RECENT_USER_ITEMS, ALSO watch for the opposite of a duplicate: the
+capture REPORTS that the action of an [in inbox] or [pending AI review] item has
+already been DONE. Status reports, standup messages, and past-tense statements are
+prime sources — they are not actionable themselves (correctly so), but they often
+carry completion evidence about open items.
+
+When the capture contains a past-tense completion statement whose action matches a
+RECENT_USER_ITEMS entry (same deliverable, same counterparty), set:
+- completes_title = the EXACT title of that entry
+- is_actionable = false (a "was done" report is never a new task)
+- reasoning mentions the completion, e.g. "Status report says the cost proposal was
+  already sent — flags pending item as likely done"
+
+Examples (DO set completes_title):
+- Capture: "Littlehub — ответы и стоимость отправлены, фаза 1 сдана"
+  + item "Reply to katja about the Littlehub cost proposal" [pending AI review]
+  → completes_title = "Reply to katja about the Littlehub cost proposal"
+- Capture: "invoice #0459 paid this morning"
+  + item "Pay invoice #0459" [in inbox] → completes_title = "Pay invoice #0459"
+- Capture: "Сделал свой VPN, теперь все работает" + item "Set up VPN for Health
+  Metrics" [pending AI review] → completes_title = that item's title
+
+DON'T set completes_title:
+- The completion is about a DIFFERENT deliverable or counterparty than the item.
+- The statement is about partial progress ("almost done", "working on it").
+- Someone OTHER than the item's owner did something similar (their work, not this task).
+- The wording is ambiguous future/conditional ("отправлю", "will send").
+completes_title and duplicate_of_title are independent — set whichever applies
+(usually only one; both empty is the common case).
+
 KNOWN_PLAYBOOK (long-term operational rules from the user's procedural memory):
 The user message MAY include a KNOWN_PLAYBOOK block — sectioned excerpts from
 the user's own playbook covering channel rules, communication preferences,
@@ -449,7 +493,7 @@ export class Proposer {
     const normalizedItems = normalizeRecentItems(recentItems)
     if (normalizedItems.length > 0) {
       const lines = normalizedItems
-        .slice(0, 50)
+        .slice(0, 300)
         .map((it) => `- "${it.title}" ${formatRecentItemLabel(it)}`)
         .join('\n')
       parts.push(
@@ -509,6 +553,10 @@ export class Proposer {
       typeof (parsed as { duplicate_of_title?: unknown }).duplicate_of_title === 'string'
         ? ((parsed as { duplicate_of_title: string }).duplicate_of_title || '').slice(0, 240)
         : ''
+    const completesOf =
+      typeof (parsed as { completes_title?: unknown }).completes_title === 'string'
+        ? ((parsed as { completes_title: string }).completes_title || '').slice(0, 240)
+        : ''
     const recipientRaw = (parsed as { recipient?: unknown }).recipient
     const recipient: Recipient = ['user', 'other', 'unclear'].includes(recipientRaw as string)
       ? (recipientRaw as Recipient)
@@ -540,6 +588,7 @@ export class Proposer {
       cues_detected: cues,
       reasoning_steps: steps,
       duplicate_of_title: duplicateOf,
+      completes_title: completesOf,
       suggested_category: suggestedCategory,
     }
   }

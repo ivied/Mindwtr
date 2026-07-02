@@ -37,6 +37,7 @@ function makeProposal(overrides: Partial<Proposal> = {}): Proposal {
       'Named recipient and deadline make it actionable.',
     ],
     duplicate_of_title: '',
+    completes_title: '',
     suggested_category: 'next',
     who_to_slug: '',
     ...overrides,
@@ -261,6 +262,57 @@ describe('CommitmentPipeline', () => {
     expect(info.existingTitle).toBe('Send Q4 report — final draft')
     expect(info.captureText).toBe('делегировал отчёт Насте')
     expect(info.reasoning).toBe('Already in inbox')
+  })
+
+  it('returns completes-existing and fires the hook with completion=true', async () => {
+    const proposer = {
+      propose: mock(async () =>
+        makeProposal({
+          is_actionable: false,
+          completes_title: 'Reply to katja about the Littlehub cost proposal',
+          reasoning: 'Status report says the cost proposal was already sent',
+        })
+      ),
+    } as unknown as Proposer
+    const writer = { write: mock() } as unknown as ProposalWriter
+    const p = new CommitmentPipeline(
+      proposer,
+      writer,
+      { minConfidence: 0.7, useL0: false },
+      silent()
+    )
+    const hook = mock(() => {})
+    p.setDuplicateOfExistingHook(hook)
+
+    const out = await p.run(record({ text: 'стоимость отправлены, фаза 1 сдана' }))
+    expect(out.kind).toBe('completes-existing')
+    if (out.kind === 'completes-existing') {
+      expect(out.existingTitle).toBe('Reply to katja about the Littlehub cost proposal')
+    }
+    expect(writer.write).not.toHaveBeenCalled()
+    expect(hook).toHaveBeenCalledTimes(1)
+    const info = (hook as unknown as { mock: { calls: [{ completion: boolean; existingTitle: string }][] } }).mock.calls[0][0]
+    expect(info.completion).toBe(true)
+    expect(info.existingTitle).toBe('Reply to katja about the Littlehub cost proposal')
+  })
+
+  it('duplicate-of-existing hook receives completion=false on plain duplicates', async () => {
+    const proposer = {
+      propose: mock(async () =>
+        makeProposal({
+          is_actionable: false,
+          duplicate_of_title: 'Pay rent',
+          reasoning: 'dup',
+        })
+      ),
+    } as unknown as Proposer
+    const writer = { write: mock() } as unknown as ProposalWriter
+    const p = new CommitmentPipeline(proposer, writer, undefined, silent())
+    const hook = mock(() => {})
+    p.setDuplicateOfExistingHook(hook)
+    await p.run(record())
+    const info = (hook as unknown as { mock: { calls: [{ completion: boolean }][] } }).mock.calls[0][0]
+    expect(info.completion).toBe(false)
   })
 
   it('a throwing duplicate-of-existing hook does not break the outcome', async () => {

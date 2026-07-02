@@ -145,7 +145,7 @@ export class MindwtrInboxTitles implements RecentItemsProvider, InboxTitlesProvi
     const proposals = this.options.proposalStore.listPending({
       type: 'create',
       sourceAgent: 'commitment-detector',
-      limit: 100,
+      limit: 300,
     })
     return proposals.flatMap((p) => {
       const title = extractCreateProposalTitle(p)

@@ -26,6 +26,7 @@ function makeProposal(overrides: Partial<Proposal> = {}): Proposal {
       'Concrete money + deadline → personal commitment.',
     ],
     duplicate_of_title: '',
+    completes_title: '',
     suggested_category: 'next',
     who_to_slug: '',
     ...overrides,

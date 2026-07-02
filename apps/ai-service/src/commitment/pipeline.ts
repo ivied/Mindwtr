@@ -47,6 +47,10 @@ export type DuplicateOfExistingHook = (info: {
   sourceMeta: Record<string, unknown> | null
   sourceCaptureId: string
   reasoning: string
+  /** True when the Proposer says the capture REPORTS this item as already
+   *  completed (completes_title), not merely mentions it again. The wiring
+   *  layer posts a done-nudge instead of folding evidence in. */
+  completion: boolean
 }) => void
 import { l0Filter } from './l0-filter'
 import { LlmPublisher, sourceChannelToVerdict } from '../status/llm-publisher'
@@ -86,6 +90,7 @@ export type PipelineOutcome =
   | { kind: 'proposed'; proposalId: string; title: string; confidence: number }
   | { kind: 'duplicate'; existingProposalId: string }
   | { kind: 'duplicate-of-existing'; existingTitle: string; reasoning: string }
+  | { kind: 'completes-existing'; existingTitle: string; reasoning: string }
   | { kind: 'error'; error: Error }
 
 export class CommitmentPipeline {
@@ -220,9 +225,9 @@ export class CommitmentPipeline {
     if (this.recentItemsProvider) {
       try {
         if (hasRecentItems(this.recentItemsProvider)) {
-          recentItems = await this.recentItemsProvider.recentItems(50)
+          recentItems = await this.recentItemsProvider.recentItems(300)
         } else {
-          recentItems = await this.recentItemsProvider.recentTitles(50)
+          recentItems = await this.recentItemsProvider.recentTitles(300)
         }
       } catch (err) {
         this.log(
@@ -318,6 +323,44 @@ export class CommitmentPipeline {
 
     const verdictChannel = sourceChannelToVerdict(capture.sourceChannel)
 
+    // Completion signal beats dedup: the capture REPORTS an existing item as
+    // already done (status report, past-tense statement). Route to the same
+    // hook with completion=true so the wiring layer posts a done-nudge on the
+    // matched pending proposal / task instead of folding evidence in.
+    if (proposal.completes_title) {
+      this.log(
+        `[commitment] completes-existing (${capture.id}): "${proposal.completes_title}"`
+      )
+      this.llmPublisher?.record({
+        channel: verdictChannel,
+        kind: 'completes-existing',
+        title: proposal.completes_title,
+        reasoning: proposal.reasoning,
+      })
+      if (this.duplicateOfExistingHook) {
+        try {
+          this.duplicateOfExistingHook({
+            existingTitle: proposal.completes_title,
+            captureText: capture.text,
+            sourceChannel: capture.sourceChannel,
+            sourceMeta: capture.sourceMeta ?? null,
+            sourceCaptureId: capture.id,
+            reasoning: proposal.reasoning,
+            completion: true,
+          })
+        } catch (err) {
+          this.log(
+            `[commitment] completes-existing hook threw (${capture.id}): ${(err as Error).message}`
+          )
+        }
+      }
+      return {
+        kind: 'completes-existing',
+        existingTitle: proposal.completes_title,
+        reasoning: proposal.reasoning,
+      }
+    }
+
     // Semantic dedup against existing inbox items. Proposer sets is_actionable
     // false AND duplicate_of_title together — treat as a distinct outcome so
     // telemetry can tell "agent was wrong" from "user already has this card".
@@ -342,6 +385,7 @@ export class CommitmentPipeline {
             sourceMeta: capture.sourceMeta ?? null,
             sourceCaptureId: capture.id,
             reasoning: proposal.reasoning,
+            completion: false,
           })
         } catch (err) {
           this.log(
