@@ -91,7 +91,12 @@ const PROPOSER_TOOL = {
           description:
             'True ONLY when the user has a concrete obligation, decision, or commitment that they need to act on. False for: code/UI/chats unrelated to user, observations about other people, ambient browsing, ads, news, things already done.',
         },
-        title: {
+        // NOT named `title`: the LLM router's OpenAI→Gemini schema conversion
+        // silently swallows tool properties whose name collides with a Gemini
+        // Schema field (`title`, `format`, `default`) — the property never
+        // reaches the model, so it can never fill it and every card came back
+        // titleless. Keep provider-neutral names here.
+        task_title: {
           type: 'string',
           description:
             'Short imperative title (≤120 chars). Empty string if is_actionable=false. Should look like a normal GTD next action: "Pay Acme invoice", "Reply to Alice about Q4 plan", "Send weekly report".',
@@ -176,7 +181,7 @@ const PROPOSER_TOOL = {
       },
       required: [
         'is_actionable',
-        'title',
+        'task_title',
         'who_owes',
         'recipient',
         'who_to',
@@ -568,9 +573,14 @@ export class Proposer {
       ? (categoryRaw as SuggestedCategory)
       : 'next'
 
+    // `task_title` is the schema name; `title` is accepted as a fallback for
+    // providers/fixtures that still emit the old key.
+    const titleRaw =
+      (parsed as { task_title?: unknown }).task_title ?? (parsed as { title?: unknown }).title
+
     return {
       is_actionable: Boolean(parsed.is_actionable),
-      title: typeof parsed.title === 'string' ? parsed.title.slice(0, 120) : '',
+      title: typeof titleRaw === 'string' ? titleRaw.slice(0, 120) : '',
       who_owes: ['user', 'other', 'unclear'].includes(parsed.who_owes as string)
         ? (parsed.who_owes as WhoOwes)
         : 'unclear',

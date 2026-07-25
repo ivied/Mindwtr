@@ -110,6 +110,30 @@ describe('ProposalWriter', () => {
     expect(result.title).toBe('Already prefixed')
   })
 
+  it('falls back to what / reasoning when the Proposer returned no title', async () => {
+    const writer = new ProposalWriter(store)
+    const fromWhat = await writer.write({
+      proposal: makeProposal({ title: '', what: 'Study the project plan in more detail' }),
+      captureText: 'x',
+      sourceCaptureId: 'cap-default',
+      sourceChannel: 'screen_capture',
+    })
+    expect(fromWhat.title).toBe('Study the project plan in more detail')
+
+    const fromReasoning = await writer.write({
+      proposal: makeProposal({
+        title: '',
+        what: '',
+        who_to: 'Bob',
+        reasoning: 'User committed to reviewing the deck',
+      }),
+      captureText: 'x',
+      sourceCaptureId: 'cap-default',
+      sourceChannel: 'screen_capture',
+    })
+    expect(fromReasoning.title).toBe('User committed to reviewing the deck')
+  })
+
   it('builds description from what/by_when/who_to (no [AI] / proposal-ai mentions)', async () => {
     const writer = new ProposalWriter(store)
     const result = await writer.write({

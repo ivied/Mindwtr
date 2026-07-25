@@ -235,7 +235,10 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
             reasoningSteps?: string[];
         };
     } & Record<string, unknown>;
-    const title = payload?.task?.title ?? '(no title)';
+    // `||`, not `??`: an empty-string title is the case that actually happens
+    // (LLM returned nothing) and it must still render the fallback, not a
+    // blank header row.
+    const title = payload?.task?.title?.trim() || '(no title)';
     const sourceChannel = payload?.traceback?.sourceChannel ?? '';
     const evidenceQuote = payload?.traceback?.evidenceQuote ?? '';
     const cues = payload?.traceback?.cuesDetected ?? [];

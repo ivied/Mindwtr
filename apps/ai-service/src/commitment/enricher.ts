@@ -143,7 +143,10 @@ const ENRICHER_TOOL = {
           items: {
             type: 'object',
             properties: {
-              title: {
+              // NOT named `title` — see the note in proposer.ts: the router's
+              // Gemini schema conversion eats properties called `title`, which
+              // silently emptied every sub-action here.
+              action_title: {
                 type: 'string',
                 description: 'Imperative-form title for the next-action (≤120 chars).',
               },
@@ -153,7 +156,7 @@ const ENRICHER_TOOL = {
                 description: 'Category for this sub-action. Usually "next" or "two_minute".',
               },
             },
-            required: ['title', 'suggested_category'],
+            required: ['action_title', 'suggested_category'],
           },
           description:
             'When is_project=true, propose 1-3 concrete first next-actions for the project. Ordered: first item is what to do first. Return [] when is_project=false.',
@@ -302,7 +305,7 @@ Job:
 Quality bar:
 - Title ≤ 120 chars. Imperative. No hashtags. No emojis.
 - "позвать няню на субботу" → proposed_title "Написать няне про субботу", category "two_minute", specific "Няня подтвердила субботу", time_bound "Saturday", is_ai_routable=FALSE (private message to a specific person).
-- "renovate bathroom" → is_project=true, project_name "Bathroom renovation", sub_actions: [{title:"Measure bathroom and list required works", suggested_category:"next"}, {title:"Get 3 contractor quotes", suggested_category:"next"}], is_ai_routable=FALSE (physical work).
+- "renovate bathroom" → is_project=true, project_name "Bathroom renovation", sub_actions: [{action_title:"Measure bathroom and list required works", suggested_category:"next"}, {action_title:"Get 3 contractor quotes", suggested_category:"next"}], is_ai_routable=FALSE (physical work).
 - "summarise the BLE protocol spec PDF from Gady" → is_ai_routable=TRUE, ai_task_type="summarize", routing_reasoning="agent can read the PDF and produce a structured summary".
 - "Write a draft reply to Allison Walker about Custom Tracking App estimate" → is_ai_routable=TRUE, ai_task_type="draft" (user will review and send).
 - Mixed-language input is fine — keep titles in the source language.
@@ -474,8 +477,8 @@ function normalize(parsed: Partial<EnrichedProposal>): EnrichedProposal {
   const subActionsRaw = Array.isArray(parsed.sub_actions) ? parsed.sub_actions : []
   const sub_actions: SubAction[] = subActionsRaw
     .map((sa) => {
-      const obj = (sa ?? {}) as Partial<SubAction>
-      const title = asString(obj.title).slice(0, 120)
+      const obj = (sa ?? {}) as Partial<SubAction> & { action_title?: unknown }
+      const title = asString(obj.action_title ?? obj.title).slice(0, 120)
       if (!title) return null
       const sc = obj.suggested_category as GtdCategory | undefined
       const suggested_category: GtdCategory = VALID_CATEGORIES.includes(sc as GtdCategory)

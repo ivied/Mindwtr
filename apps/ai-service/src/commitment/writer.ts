@@ -57,7 +57,7 @@ export class ProposalWriter {
   constructor(private store: ProposalStore) {}
 
   async write(input: WriteProposalInput): Promise<WriteProposalResult> {
-    const title = cleanTitle(input.proposal.title)
+    const title = pickTitle(input.proposal)
     // For waiting cards, Mindwtr's native assignedTo field is the right place
     // for the person we're waiting on — Organize > Waiting groups by it.
     const assignedTo =
@@ -146,6 +146,20 @@ function cleanTitle(proposedTitle: string): string {
     .trim()
     .replace(/^\[AI\]\s*/i, '')
     .slice(0, 200)
+}
+
+/**
+ * A card must never be titleless: the title is the only thing the user sees in
+ * the suggestions list, and an empty one also collapses the dedup signature so
+ * unrelated proposals swallow each other. When the Proposer gives us nothing,
+ * fall back to the plain-language commitment (`what`), then to the one-line
+ * reasoning.
+ */
+function pickTitle(proposal: Proposal): string {
+  const title = cleanTitle(proposal.title)
+  if (title) return title
+  const fallback = cleanTitle(proposal.what) || cleanTitle(proposal.reasoning)
+  return fallback.slice(0, 120)
 }
 
 function buildDescription(input: WriteProposalInput): string {

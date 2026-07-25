@@ -305,6 +305,51 @@ describe('Proposer', () => {
   })
 })
 
+describe('Proposer tool schema — router-safe property names', () => {
+  // The LLM router's OpenAI→Gemini schema conversion silently swallows tool
+  // properties named after a Gemini Schema field. A property called `title`
+  // never reached the model, so every suggestion was written titleless.
+  const BANNED = ['title', 'format', 'default']
+
+  function bannedPropertyNames(schema: unknown, path = 'parameters'): string[] {
+    if (!schema || typeof schema !== 'object') return []
+    const node = schema as Record<string, unknown>
+    const hits: string[] = []
+    const props = node.properties as Record<string, unknown> | undefined
+    if (props) {
+      for (const [key, child] of Object.entries(props)) {
+        if (BANNED.includes(key)) hits.push(`${path}.${key}`)
+        hits.push(...bannedPropertyNames(child, `${path}.${key}`))
+      }
+    }
+    if (node.items) hits.push(...bannedPropertyNames(node.items, `${path}[]`))
+    return hits
+  }
+
+  it('sends no property named title/format/default at any depth', async () => {
+    const llm = mockLLM({ is_actionable: false, reasoning: 'nope' })
+    await new Proposer(llm).propose('anything')
+    const callArgs = (
+      llm.chatCompletion as unknown as {
+        mock: { calls: Array<Array<{ tools: Array<{ function: { parameters: unknown } }> }>> }
+      }
+    ).mock.calls[0][0]
+    expect(bannedPropertyNames(callArgs.tools[0].function.parameters)).toEqual([])
+  })
+
+  it('reads the title from task_title, and still accepts a legacy title key', async () => {
+    const viaNewKey = await new Proposer(
+      mockLLM({ is_actionable: true, task_title: 'Pay Acme invoice', confidence: 0.9 })
+    ).propose('x')
+    expect(viaNewKey.title).toBe('Pay Acme invoice')
+
+    const viaLegacyKey = await new Proposer(
+      mockLLM({ is_actionable: true, title: 'Pay Acme invoice', confidence: 0.9 })
+    ).propose('x')
+    expect(viaLegacyKey.title).toBe('Pay Acme invoice')
+  })
+})
+
 describe('renderGlossaryBlock', () => {
   it('returns null for empty / undefined input', () => {
     expect(renderGlossaryBlock(undefined)).toBeNull()
