@@ -26,13 +26,15 @@ function isPull(item: CapturedItem): boolean {
   return PULL_CHANNELS.has(item.sourceChannel)
 }
 
-// Slack arrives in high volume across many workspaces — route it through the
-// time-windowed batcher so the LLM runs on a cadence instead of per message.
-// Screen/audio stay on the immediate path (they're low-rate and want
-// reactivity, e.g. recording sessions).
+// Slack and the Telegram user-account feed arrive in high volume — route them
+// through the time-windowed batcher so the LLM runs on a cadence instead of
+// per message. Screen/audio stay on the immediate path (they're low-rate and
+// want reactivity, e.g. recording sessions).
 const BATCHED_CHANNELS = new Set<CapturedItem['sourceChannel']>([
   'slack_dm',
   'slack_channel',
+  'telegram_user_dm',
+  'telegram_group',
 ])
 
 /**

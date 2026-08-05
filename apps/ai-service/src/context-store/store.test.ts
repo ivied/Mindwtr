@@ -94,11 +94,16 @@ describe('ContextStore', () => {
     const pull = await store.insert(makeItem({ sourceChannel: 'screen_capture' }))
     const slackDm = await store.insert(makeItem({ sourceChannel: 'slack_dm' }))
     const slackCh = await store.insert(makeItem({ sourceChannel: 'slack_channel' }))
+    const tgUserDm = await store.insert(makeItem({ sourceChannel: 'telegram_user_dm' }))
+    const tgGroup = await store.insert(makeItem({ sourceChannel: 'telegram_group' }))
     expect(push.capture.isPull).toBe(false)
     expect(pull.capture.isPull).toBe(true)
-    // Slack is pull — it must reach the inbox via Commitment, not on arrival.
+    // Slack and the TG user feed are pull — they must reach the inbox via
+    // Commitment, not on arrival.
     expect(slackDm.capture.isPull).toBe(true)
     expect(slackCh.capture.isPull).toBe(true)
+    expect(tgUserDm.capture.isPull).toBe(true)
+    expect(tgGroup.capture.isPull).toBe(true)
     store.close()
   })
 

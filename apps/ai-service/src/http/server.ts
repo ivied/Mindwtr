@@ -222,20 +222,28 @@ export function createHttpServer(config: HttpServerConfig) {
     if (mem) {
       const since = new Date(Date.now() - 10 * 60 * 1000).toISOString()
       const rows = mem.recentCountsBySource(since)
-      const bucket = (s: string): 'screen' | 'audio' | 'chat' | 'notes' | null => {
+      const bucket = (s: string): 'screen' | 'audio' | 'chat' | 'telegram' | 'notes' | null => {
         if (s === 'screen') return 'screen'
         if (s === 'audio') return 'audio'
-        if (s.startsWith('slack') || s.startsWith('telegram')) return 'chat'
+        if (s.startsWith('slack')) return 'chat'
+        if (s.startsWith('telegram')) return 'telegram'
         if (s.startsWith('notion')) return 'notes'
         return null
       }
       const agg: Record<string, { recent: number; lastAt: string | null }> = {
         screen: { recent: 0, lastAt: null }, audio: { recent: 0, lastAt: null },
-        chat: { recent: 0, lastAt: null }, notes: { recent: 0, lastAt: null },
+        chat: { recent: 0, lastAt: null }, telegram: { recent: 0, lastAt: null },
+        notes: { recent: 0, lastAt: null },
       }
       for (const r of rows) {
         const b = bucket(r.source); if (!b) continue
         agg[b].recent += r.count
+        if (!agg[b].lastAt || r.lastAt > agg[b].lastAt!) agg[b].lastAt = r.lastAt
+      }
+      // quiet sources: fall back to the all-time last arrival so the UI can
+      // show "3 ч назад" instead of the misleading "нет данных"
+      for (const r of mem.lastIngestedBySource()) {
+        const b = bucket(r.source); if (!b) continue
         if (!agg[b].lastAt || r.lastAt > agg[b].lastAt!) agg[b].lastAt = r.lastAt
       }
       sources = agg
@@ -260,8 +268,8 @@ export function createHttpServer(config: HttpServerConfig) {
   app.get('/v1/status/source-pulse', (c) => {
     const now = new Date().toISOString()
     const since = c.req.query('since')
-    const buckets: Record<'screen' | 'audio' | 'chat' | 'notes', number> = {
-      screen: 0, audio: 0, chat: 0, notes: 0,
+    const buckets: Record<'screen' | 'audio' | 'chat' | 'telegram' | 'notes', number> = {
+      screen: 0, audio: 0, chat: 0, telegram: 0, notes: 0,
     }
     const mem = config.memory?.store ?? null
     if (mem && since) {
@@ -269,7 +277,8 @@ export function createHttpServer(config: HttpServerConfig) {
         const s = r.source
         if (s === 'screen') buckets.screen += r.count
         else if (s === 'audio') buckets.audio += r.count
-        else if (s.startsWith('slack') || s.startsWith('telegram')) buckets.chat += r.count
+        else if (s.startsWith('slack')) buckets.chat += r.count
+        else if (s.startsWith('telegram')) buckets.telegram += r.count
         else if (s.startsWith('notion')) buckets.notes += r.count
       }
     }

@@ -34,10 +34,11 @@ interface Src {
 }
 
 const SOURCES: Src[] = [
-  { key: 'screen', name: 'Экран', shortName: 'Экран', asset: 'source-screen-t.png', x: 0.07, y: 0.12, configured: true },
-  { key: 'audio', name: 'Звук', shortName: 'Звук', asset: 'source-audio-t.png', x: 0.04, y: 0.42, configured: true },
-  { key: 'chat', name: 'Мессенджеры', shortName: 'Чаты', asset: 'source-chat-t.png', x: 0.08, y: 0.70, configured: true },
-  { key: 'notes', name: 'Заметки', shortName: 'Заметки', asset: 'source-notes-t.png', x: 0.18, y: 0.88, configured: false },
+  { key: 'screen', name: 'Экран', shortName: 'Экран', asset: 'source-screen-t.png', x: 0.07, y: 0.10, configured: true },
+  { key: 'audio', name: 'Звук', shortName: 'Звук', asset: 'source-audio-t.png', x: 0.03, y: 0.34, configured: true },
+  { key: 'chat', name: 'Slack', shortName: 'Slack', asset: 'source-chat-t.png', x: 0.05, y: 0.58, configured: true },
+  { key: 'telegram', name: 'Telegram', shortName: 'Telegram', asset: 'source-chat-t.png', x: 0.10, y: 0.78, configured: true },
+  { key: 'notes', name: 'Заметки', shortName: 'Заметки', asset: 'source-notes-t.png', x: 0.26, y: 0.87, configured: false },
 ];
 
 function relTime(iso: string | null): string | null {
@@ -62,9 +63,9 @@ export function ControlCenterView() {
   const sceneRef = useRef<HTMLDivElement | null>(null);
   const pausedRef = useRef(false);
   // per-source recent counts (last 10m) — drives thread brightness/dim only
-  const ratesRef = useRef<Record<SourceKey, number>>({ screen: 0, audio: 0, chat: 0, notes: 0 });
+  const ratesRef = useRef<Record<SourceKey, number>>({ screen: 0, audio: 0, chat: 0, telegram: 0, notes: 0 });
   // particles queued to emit, one per real arrival (drained by the canvas)
-  const pendingRef = useRef<Record<SourceKey, number>>({ screen: 0, audio: 0, chat: 0, notes: 0 });
+  const pendingRef = useRef<Record<SourceKey, number>>({ screen: 0, audio: 0, chat: 0, telegram: 0, notes: 0 });
 
   // ── live dashboard data (Phase 2) ──
   const [live, setLive] = useState<DashboardStatus | null>(null);
@@ -77,6 +78,7 @@ export function ControlCenterView() {
         screen: live.sources.screen?.recent ?? 0,
         audio: live.sources.audio?.recent ?? 0,
         chat: live.sources.chat?.recent ?? 0,
+        telegram: live.sources.telegram?.recent ?? 0,
         notes: live.sources.notes?.recent ?? 0,
       };
     }
@@ -346,7 +348,8 @@ export function ControlCenterView() {
           <Group title="Источники" desc="Откуда ассистент получает информацию. Выключенный источник не наблюдается вовсе.">
             <Cap img="source-screen-t.png" h4="Экран" by="наблюдение за окнами" use="741 наблюдение сегодня" foot={<span className="cc-tl">каждые 30 сек</span>} toggle soon />
             <Cap img="source-audio-t.png" h4="Звук" by="микрофон · расшифровка" use="3 ч 12 мин записано" foot={<span className="cc-tl">когда есть речь</span>} toggle soon />
-            <Cap img="source-chat-t.png" h4="Мессенджеры" by="Slack · Telegram" use="204 сообщения сегодня" foot={<span className="cc-tl">3 простр.</span>} toggle soon />
+            <Cap img="source-chat-t.png" h4="Slack" by="рабочие пространства" use="204 сообщения сегодня" foot={<span className="cc-tl">3 простр.</span>} toggle soon />
+            <Cap img="source-chat-t.png" h4="Telegram" by="личка · группы" use="подключён" foot={<span className="cc-tl">MTProto</span>} toggle soon />
             <Cap img="source-notes-t.png" h4="Заметки" by="Notion" use="выключен · 3 дня назад" off foot={<span className="cc-tl">—</span>} toggle soon />
             <AddCard label="+ Подключить источник" />
           </Group>
@@ -492,7 +495,7 @@ const CSS = `
 .cc-ent{position:absolute;z-index:3;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;transition:transform .4s}
 .cc-ent:hover{transform:scale(1.07)}
 .cc-ent img{width:84px;height:84px;object-fit:contain;transition:filter .6s;animation:ccfloat 11s ease-in-out infinite}
-.cc-ent:nth-of-type(2) img{animation-delay:-3s}.cc-ent:nth-of-type(3) img{animation-delay:-6s}.cc-ent:nth-of-type(4) img{animation-delay:-9s}
+.cc-ent:nth-of-type(2) img{animation-delay:-2s}.cc-ent:nth-of-type(3) img{animation-delay:-4s}.cc-ent:nth-of-type(4) img{animation-delay:-7s}.cc-ent:nth-of-type(5) img{animation-delay:-9s}
 @keyframes ccfloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
 .cc-ent .cc-lbl{font-family:ui-monospace,monospace;font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-dim)}
 .cc-ent .cc-rate{font-size:10.5px;color:var(--ink-faint)}

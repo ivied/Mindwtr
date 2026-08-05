@@ -14,6 +14,7 @@
     "backfill:reasoning-trace": "bun run scripts/backfill-reasoning-trace.ts"
   },
   "dependencies": {
+    "@mtcute/bun": "^0.30.1",
     "@notionhq/client": "^2.2.16",
     "@slack/socket-mode": "^2.0.3",
     "@slack/web-api": "^7.10.0",

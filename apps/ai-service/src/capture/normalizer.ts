@@ -11,6 +11,8 @@ export interface CapturedItem {
     | 'telegram_dm'
     | 'telegram_forward'
     | 'telegram_voice'
+    | 'telegram_user_dm'
+    | 'telegram_group'
     | 'slack_dm'
     | 'slack_channel'
     | 'notion_page'
@@ -36,6 +38,8 @@ export const PULL_CHANNELS = new Set<CapturedItem['sourceChannel']>([
   'audio_capture',
   'slack_dm',
   'slack_channel',
+  'telegram_user_dm',
+  'telegram_group',
 ])
 
 export interface TaskSuggestion {

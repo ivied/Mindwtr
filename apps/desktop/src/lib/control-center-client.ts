@@ -16,7 +16,7 @@ export function isControlCenterAvailable(): boolean {
 
 export interface HealthComponent { ok: boolean; detail?: string }
 
-export type SourceKey = 'screen' | 'audio' | 'chat' | 'notes';
+export type SourceKey = 'screen' | 'audio' | 'chat' | 'telegram' | 'notes';
 export interface SourceActivity { recent: number; lastAt: string | null }
 
 export interface DashboardStatus {

@@ -7,6 +7,7 @@ import { createCaptureSink } from './capture/sink'
 import type { Channel } from './channels/types'
 import { SlackChannel } from './channels/slack'
 import { NotionChannel } from './channels/notion'
+import { TelegramUserChannel } from './channels/telegram-user'
 import { FileStateStore, channelStateFile } from './channels/state-store'
 import { SlackSessionStore, slackSessionFile } from './channels/slack-session-store'
 import { ContextStore } from './context-store/store'
@@ -101,6 +102,12 @@ const SLACK_TEAM_ALLOWLIST = new Set(
     .map((s) => s.trim())
     .filter(Boolean)
 )
+
+// Telegram user-account feed (MTProto, "see what I see" — DMs + groups).
+// Both empty = disabled. Session comes from a one-time interactive login
+// (scripts/telegram-login.ts) persisted under DATA_DIR.
+const TELEGRAM_API_ID = Number(process.env.TELEGRAM_API_ID ?? 0)
+const TELEGRAM_API_HASH = process.env.TELEGRAM_API_HASH ?? ''
 
 const NOTION_API_KEY = process.env.NOTION_API_KEY ?? ''
 const NOTION_DATABASE_ID = process.env.NOTION_DATABASE_ID ?? ''
@@ -734,6 +741,20 @@ function buildChannels(): { channels: Channel[]; slack: SlackChannel | null } {
     console.log(
       `💬 Slack channel enabled (${SLACK_USER_TOKENS.length} oauth + ${SLACK_SESSION_TOKENS.length} session env, ${allowDesc}, poll every ${SLACK_POLL_INTERVAL_MS}ms; extension push ${HTTP_AUTH_TOKEN ? 'on' : 'off'})`
     )
+  }
+
+  if (TELEGRAM_API_ID && TELEGRAM_API_HASH) {
+    channels.push(
+      new TelegramUserChannel(
+        {
+          apiId: TELEGRAM_API_ID,
+          apiHash: TELEGRAM_API_HASH,
+          sessionPath: join(DATA_DIR, 'telegram-user-session'),
+        },
+        (item) => capture(item)
+      )
+    )
+    console.log('📨 Telegram user channel enabled (MTProto, DMs + groups)')
   }
 
   if (NOTION_API_KEY && NOTION_DATABASE_ID) {

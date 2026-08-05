@@ -190,6 +190,15 @@ export class MemoryStore {
       .all(sinceIso)
   }
 
+  /** All-time last ingestion per source — a quiet source still shows "N ч назад" instead of "нет данных". */
+  lastIngestedBySource(): Array<{ source: string; lastAt: string }> {
+    return this.db
+      .query<{ source: string; lastAt: string }, []>(
+        'SELECT source, MAX(ingested_at) AS lastAt FROM events GROUP BY source'
+      )
+      .all()
+  }
+
   /** Date range scan, ts-ascending. */
   eventsBetween(startIso: string, endIso: string, limit = 5000): Event[] {
     const rows = this.db
