@@ -54,25 +54,46 @@ interface ChatCompletionResponse {
 
 export class LLMClient {
   private readonly defaultModel: string
-  /** Maps a model to the model used when its request fails. */
-  private readonly fallbackOf: Map<string, string>
+  /** Maps a model to the ordered list of models to try (itself first). */
+  private readonly chainOf: Map<string, string[]>
 
   constructor(
     private baseUrl: string,
     private apiKey: string,
-    models: string | { opus: string; sonnet: string }
+    models:
+      | string
+      | {
+          opus: string
+          sonnet: string
+          fallbackOpus?: string
+          fallbackSonnet?: string
+        }
   ) {
     this.baseUrl = baseUrl.replace(/\/$/, '')
     if (typeof models === 'string') {
       this.defaultModel = models
-      this.fallbackOf = new Map()
+      this.chainOf = new Map()
     } else {
       // opus-tier requests fall back to sonnet and vice versa, so a single
       // model being down on the proxy degrades quality rather than failing.
+      // The optional fallback pair sits behind both: when the whole primary
+      // provider is out (shared quota pool), requests cross over to it.
       this.defaultModel = models.opus
-      this.fallbackOf = new Map([
-        [models.opus, models.sonnet],
-        [models.sonnet, models.opus],
+      const chain = (...tries: Array<string | undefined>) => {
+        const seen = new Set<string>()
+        return tries.filter(
+          (m): m is string => !!m && !seen.has(m) && !!seen.add(m)
+        )
+      }
+      this.chainOf = new Map([
+        [
+          models.opus,
+          chain(models.opus, models.sonnet, models.fallbackOpus, models.fallbackSonnet),
+        ],
+        [
+          models.sonnet,
+          chain(models.sonnet, models.opus, models.fallbackSonnet, models.fallbackOpus),
+        ],
       ])
     }
   }
@@ -81,13 +102,16 @@ export class LLMClient {
     request: Omit<ChatCompletionRequest, 'model'> & { model?: string }
   ): Promise<ChatCompletionResponse> {
     const primary = request.model ?? this.defaultModel
-    try {
-      return await this.send(request, primary)
-    } catch (err) {
-      const fallback = this.fallbackOf.get(primary)
-      if (!fallback) throw err
-      return this.send(request, fallback)
+    const chain = this.chainOf.get(primary) ?? [primary]
+    let lastErr: unknown
+    for (const model of chain) {
+      try {
+        return await this.send(request, model)
+      } catch (err) {
+        lastErr = err
+      }
     }
+    throw lastErr
   }
 
   private async send(

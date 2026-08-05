@@ -78,6 +78,47 @@ describe('LLMClient model tiers + fallback', () => {
     expect(calls).toEqual(['cx/gpt-5.4-mini', 'cx/gpt-5.5'])
   })
 
+  it('crosses over to the fallback provider when both primary tiers fail', async () => {
+    const calls = mockFetch((model) =>
+      model.startsWith('ag/')
+        ? { status: 429, body: 'quota exhausted' }
+        : { status: 200, body: OK_RESPONSE }
+    )
+    const client = new LLMClient('http://proxy/v1', 'k', {
+      opus: 'ag/gemini-3-flash-agent',
+      sonnet: 'ag/gemini-3.5-flash-low',
+      fallbackOpus: 'cx/gpt-5.5',
+      fallbackSonnet: 'cx/gpt-5.4-mini',
+    })
+
+    const opusRes = await client.chatCompletion(baseReq)
+    expect(calls).toEqual(['ag/gemini-3-flash-agent', 'ag/gemini-3.5-flash-low', 'cx/gpt-5.5'])
+    expect(opusRes.choices[0]?.message?.content).toBe('ok')
+
+    calls.length = 0
+    await client.chatCompletion({ ...baseReq, model: 'ag/gemini-3.5-flash-low' })
+    expect(calls).toEqual([
+      'ag/gemini-3.5-flash-low',
+      'ag/gemini-3-flash-agent',
+      'cx/gpt-5.4-mini',
+    ])
+  })
+
+  it('throws the last error when the whole chain fails', async () => {
+    mockFetch((model) =>
+      model.startsWith('ag/')
+        ? { status: 429, body: 'quota exhausted' }
+        : { status: 503, body: 'fallback down' }
+    )
+    const client = new LLMClient('http://proxy/v1', 'k', {
+      opus: 'ag/gemini-3-flash-agent',
+      sonnet: 'ag/gemini-3.5-flash-low',
+      fallbackOpus: 'cx/gpt-5.5',
+    })
+
+    await expect(client.chatCompletion(baseReq)).rejects.toThrow('LLM request failed: 503')
+  })
+
   it('throws when both tiers fail', async () => {
     mockFetch(() => ({ status: 503, body: 'down' }))
     const client = new LLMClient('http://proxy/v1', 'k', {

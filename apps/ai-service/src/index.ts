@@ -77,6 +77,10 @@ const LLM_API_KEY = process.env.LLM_API_KEY ?? ''
 // back to the other when its primary model errors on the proxy.
 const LLM_MODEL_OPUS = process.env.LLM_MODEL_OPUS ?? process.env.LLM_MODEL ?? 'cx/gpt-5.5'
 const LLM_MODEL_SONNET = process.env.LLM_MODEL_SONNET ?? 'cx/gpt-5.4-mini'
+// Cross-provider safety net: tried after both primary tiers fail (e.g. the
+// primary provider's shared quota pool is exhausted). Empty = disabled.
+const LLM_MODEL_OPUS_FALLBACK = process.env.LLM_MODEL_OPUS_FALLBACK ?? ''
+const LLM_MODEL_SONNET_FALLBACK = process.env.LLM_MODEL_SONNET_FALLBACK ?? ''
 
 // Comma-separated xoxp- user tokens, one per workspace. "See what I see"
 // across workspaces the user doesn't own (bot tokens can't do this).
@@ -282,6 +286,8 @@ if (LLM_BASE_URL && LLM_API_KEY) {
   const llm = new LLMClient(LLM_BASE_URL, LLM_API_KEY, {
     opus: LLM_MODEL_OPUS,
     sonnet: LLM_MODEL_SONNET,
+    fallbackOpus: LLM_MODEL_OPUS_FALLBACK || undefined,
+    fallbackSonnet: LLM_MODEL_SONNET_FALLBACK || undefined,
   })
   const retriever = new ContextRetriever(contextStore)
 
