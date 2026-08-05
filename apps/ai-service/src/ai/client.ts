@@ -112,7 +112,12 @@ export class LLMClient {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${this.apiKey}`,
       },
-      body: JSON.stringify(body),
+      // lone surrogates from truncated OCR text make Anthropic reject the body (400).
+      // Well-formed JSON.stringify escapes them as literal \udXXX (valid pairs stay raw),
+      // so strip the escaped form.
+      body: JSON.stringify(body).replace(/(?<!\\)\\u[dD][89a-fA-F][0-9a-fA-F]{2}/g, ''),
+      // the router can silently hold a dead connection open forever
+      signal: AbortSignal.timeout(180_000),
     })
 
     if (!res.ok) {
