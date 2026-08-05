@@ -23,11 +23,14 @@ import {
   CardStore,
   WindowExtractor,
   AboutSynthesizer,
+  TaskRevisor,
   addFacts,
   addQuestions,
   factsFor,
   factCount,
   timelineTail,
+  taskLines,
+  topTasks,
 } from './_sim_data_layer2'
 
 function envOr(name: string, fb?: string): string {
@@ -54,12 +57,12 @@ async function withRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
       const retriable =
         msg.includes('429') ||
         /usage limit/i.test(msg) ||
-        (msg.includes('403') && /reset after/i.test(msg)) ||
+        (/40[13]/.test(msg) && /reset after/i.test(msg)) ||
         /50[0-9]/.test(msg) ||
         /timeout|timed out|ECONNRESET|ECONNREFUSED|ConnectionRefused|Unable to connect|fetch failed/i.test(msg)
       if (!retriable || a > 200) throw e
       const w = parseRetryAfterMs(msg, 60_000)
-      console.log(`   429 on ${label} (try ${a}) wait ${Math.round(w / 1000)}s`)
+      console.log(`   429 on ${label} (try ${a}) wait ${Math.round(w / 1000)}s :: ${msg.slice(0, 160).replace(/\n/g, ' ')}`)
       await sleep(w)
     }
   }
@@ -70,8 +73,11 @@ async function main() {
   const windowHours = Number(process.env.SIM_WINDOW_HOURS ?? '4')
   const pauseMs = Number(process.env.SIM_PAUSE_MS ?? '1000')
   const minEvents = Number(process.env.SIM_MIN_EVENTS ?? '20')
+  const chunkEvents = Number(process.env.SIM_CHUNK_EVENTS ?? '150')
   const limit = process.env.SIM_LIMIT_WINDOWS ? Number(process.env.SIM_LIMIT_WINDOWS) : undefined
   const aboutEvery = Number(process.env.ABOUT_EVERY ?? '4') // re-synth About after +N facts
+  const reviseEvery = Number(process.env.REVISE_EVERY ?? '10') // task revision cadence (windows)
+  const reviseMinTasks = Number(process.env.REVISE_MIN_TASKS ?? '15')
 
   const { db, vecAvailable } = openDb(dbPath)
   const memory = new MemoryStore({ db, vecAvailable })
@@ -91,6 +97,7 @@ async function main() {
   const cards = new CardStore(db)
   const extractor = new WindowExtractor(llm, model)
   const aboutSynth = new AboutSynthesizer(llm, model)
+  const revisor = new TaskRevisor(llm, model)
 
   const b = db
     .query<{ lo: string; hi: string; n: number }, []>('SELECT MIN(ts) lo, MAX(ts) hi, COUNT(*) n FROM events')
@@ -100,7 +107,7 @@ async function main() {
 
   console.log(`Data-layer simulation v2 (empty start, fact-derived About)`)
   console.log(`  db ${dbPath}  events ${b.n} [${b.lo}..${b.hi}]`)
-  console.log(`  range ${from}..${to}  window ${windowHours}h  pause ${pauseMs}ms  limit ${limit ?? 'inf'}  aboutEvery ${aboutEvery}`)
+  console.log(`  range ${from}..${to}  window ${windowHours}h  chunk ${chunkEvents}ev  pause ${pauseMs}ms  limit ${limit ?? 'inf'}  aboutEvery ${aboutEvery}`)
   console.log(`  model ${model}\n`)
 
   const stepMs = windowHours * 3_600_000
@@ -119,35 +126,76 @@ async function main() {
     }
     wi++
 
-    // 1) entity pass
-    const entRes = await withRetry(`entity ${wStart.slice(5, 16)}`, () => registrar.runWindow(wStart, wEnd))
-    const touched = [...new Set(entRes.decisions.map((d) => d.slug))]
+    // split oversized windows into sub-ranges of <= chunkEvents events so a
+    // single LLM request stays under the router's per-minute token limit
+    const subRanges: Array<[string, string]> = []
+    if (events.length <= chunkEvents) {
+      subRanges.push([wStart, wEnd])
+    } else {
+      const n = Math.ceil(events.length / chunkEvents)
+      for (let c = 0; c < n; c++) {
+        const lo = c === 0 ? wStart : events[c * chunkEvents]!.ts
+        const hi = c === n - 1 ? wEnd : events[(c + 1) * chunkEvents]!.ts
+        if (Date.parse(hi) > Date.parse(lo)) subRanges.push([lo, hi])
+      }
+    }
 
+    const touchedAll = new Set<string>()
+    const touchedForAbout = new Set<string>()
+    let appliedTotal = 0
     let aboutN = 0
-    if (touched.length > 0) {
-      // 2) accumulate window signal
+
+    for (const [sLo, sHi] of subRanges) {
+      // 1) entity pass
+      const entRes = await withRetry(`entity ${sLo.slice(5, 16)}`, () => registrar.runWindow(sLo, sHi))
+      appliedTotal += entRes.applied
+      const touched = [...new Set(entRes.decisions.map((d) => d.slug))]
+      touched.forEach((s) => touchedAll.add(s))
+      if (touched.length === 0) continue
+
+      // 2) accumulate chunk signal
+      const subEvents = memory.eventsBetween(sLo, sHi, 5000)
+      const hiddenTails = new Map<string, string>()
       const active = touched.map((slug) => {
         const reg = registry.get(slug)
         const card = cards.get(slug)
+        const shown = card ? topTasks(card.open_tasks) : ''
+        if (card && shown !== card.open_tasks) {
+          const shownLines = taskLines(shown) - 1 // minus the "... more" marker
+          hiddenTails.set(
+            slug,
+            card.open_tasks
+              .split('\n')
+              .filter((l) => l.trim())
+              .slice(shownLines)
+              .join('\n')
+          )
+        }
         return {
           slug,
           type: reg?.type ?? card?.type ?? 'topic',
-          timelineTail: card ? timelineTail(card.timeline) : '',
-          openTasks: card?.open_tasks ?? '',
+          timelineTail: card ? timelineTail(card.timeline, 5) : '',
+          openTasks: shown,
         }
       })
-      const ex = await withRetry(`extract ${wStart.slice(5, 16)}`, () => extractor.extract(events, active, wEnd, OWNER_SLUG))
+      const ex = await withRetry(`extract ${sLo.slice(5, 16)}`, () => extractor.extract(subEvents, active, wEnd, OWNER_SLUG))
       for (const e of ex.entities) {
         const type = registry.get(e.slug)?.type ?? e.type
         const tasksAllowed = (type === 'project' || type === 'person') && e.slug !== OWNER_SLUG
+        // extractor only saw the top of a truncated list; re-append the hidden tail so its replace doesn't drop it
+        const tail = hiddenTails.get(e.slug)
+        const newTasks = e.open_tasks && tail ? e.open_tasks + '\n' + tail : e.open_tasks
         // omitted field (empty) keeps prior list for allowed types; disallowed types are force-cleared
-        cards.applyWindow(e.slug, type, e.timeline_additions, tasksAllowed ? e.open_tasks || null : '', wEnd)
+        cards.applyWindow(e.slug, type, e.timeline_additions, tasksAllowed ? newTasks || null : '', wEnd)
       }
       addFacts(db, ex.facts, wEnd)
       addQuestions(db, ex.questions, wEnd)
+      ex.entities.forEach((e) => touchedForAbout.add(e.slug))
+      ex.facts.forEach((f) => touchedForAbout.add(f.slug))
+    }
 
+    {
       // 3) cadenced About re-synthesis for entities whose facts grew enough
-      const touchedForAbout = new Set([...ex.entities.map((e) => e.slug), ...ex.facts.map((f) => f.slug)])
       for (const slug of touchedForAbout) {
         const card = cards.get(slug)
         if (!card) continue
@@ -165,10 +213,32 @@ async function main() {
       }
     }
 
+    let revisedN = 0
+    if (wi % reviseEvery === 0) {
+      const bloated = db
+        .query<{ slug: string }, [number]>(
+          `SELECT slug FROM entity_cards
+           WHERE type IN ('project','person') AND open_tasks != ''
+             AND (LENGTH(open_tasks) - LENGTH(REPLACE(open_tasks, char(10), '')) + 1) >= ?`
+        )
+        .all(reviseMinTasks)
+      for (const { slug } of bloated) {
+        const card = cards.get(slug)!
+        const r = await withRetry(`revise ${slug}`, () =>
+          revisor.revise(slug, card.type, card.open_tasks, timelineTail(card.timeline, 15))
+        )
+        if (r) {
+          cards.setTasks(slug, r.open_tasks, r.closed_tasks, wEnd)
+          revisedN++
+          console.log(`   revised ${slug}: ${taskLines(card.open_tasks)} -> ${taskLines(r.open_tasks)} open (+${taskLines(r.closed_tasks)} closed)`)
+        }
+      }
+    }
+
     console.log(
-      `[w${pad(wi)}] ${wStart.slice(5, 16)}-${wEnd.slice(11, 16)}  ev=${String(events.length).padStart(4)}  ` +
-        `ent=${String(entRes.applied).padStart(2)} about=${String(aboutN).padStart(2)}  ` +
-        `[reg=${registry.count()} cards=${cards.count()}]  ${touched.slice(0, 10).join(' ')}`
+      `[w${pad(wi)}] ${wStart.slice(5, 16)}-${wEnd.slice(11, 16)}  ev=${String(events.length).padStart(4)}${subRanges.length > 1 ? `/${subRanges.length}ch` : ''}  ` +
+        `ent=${String(appliedTotal).padStart(2)} about=${String(aboutN).padStart(2)}${revisedN ? ` rev=${revisedN}` : ''}  ` +
+        `[reg=${registry.count()} cards=${cards.count()}]  ${[...touchedAll].slice(0, 10).join(' ')}`
     )
 
     if (limit && wi >= limit) {

@@ -10,7 +10,7 @@ import { dirname } from 'node:path'
 
 export type DB = Database
 
-const SCHEMA_VERSION = 8
+const SCHEMA_VERSION = 10
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS captures (
@@ -300,6 +300,72 @@ CREATE TABLE IF NOT EXISTS glossary (
   updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_glossary_status ON glossary(status);
+
+-- v9: entity_registry — clean LLM-curated entity list (handoff-entity-registry).
+-- A shadow registry separate from the noisy event_entities/wiki: the
+-- EntityRegistrar dedups by meaning (not string heuristics) and assigns type +
+-- optional parent for hierarchy. Does NOT replace event_entities (raw mention
+-- log stays); this is the canonical "who/what is real" view.
+CREATE TABLE IF NOT EXISTS entity_registry (
+  slug TEXT PRIMARY KEY,                 -- canonical kebab id
+  name TEXT NOT NULL,                    -- display form
+  type TEXT NOT NULL,                    -- project|person|organization|technology|topic|hobby
+  aliases TEXT NOT NULL DEFAULT '[]',    -- JSON array of alt spellings/slugs folded in
+  parent_slug TEXT,                      -- hierarchy: sub-entity → parent (NULL = top-level)
+  description TEXT NOT NULL DEFAULT '',  -- one-line discriminator (helps LLM tell entities apart)
+  mention_count INTEGER NOT NULL DEFAULT 0,
+  first_seen TEXT NOT NULL,
+  last_seen TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_entity_registry_parent ON entity_registry(parent_slug);
+CREATE INDEX IF NOT EXISTS idx_entity_registry_mentions ON entity_registry(mention_count);
+
+-- v10: entity cards + typed facts + glossary questions (data layer v2, validated
+-- by the May-July full-history simulation — see handoff-entity-registry.md).
+-- Cards accumulate raw signal per window (timeline/open_tasks); About+relations
+-- are re-synthesized from the entity's accumulated facts on a cadence.
+CREATE TABLE IF NOT EXISTS entity_cards (
+  slug TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  about TEXT NOT NULL DEFAULT '',
+  open_tasks TEXT NOT NULL DEFAULT '',
+  closed_tasks TEXT NOT NULL DEFAULT '',
+  timeline TEXT NOT NULL DEFAULT '',
+  relations TEXT NOT NULL DEFAULT '',
+  facts_at_last_about INTEGER NOT NULL DEFAULT 0,
+  version INTEGER NOT NULL DEFAULT 0,
+  first_seen TEXT NOT NULL,
+  last_seen TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS entity_facts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  slug TEXT NOT NULL,
+  statement TEXT NOT NULL,
+  fact_type TEXT NOT NULL,
+  confidence REAL,
+  window_end TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_entity_facts_slug ON entity_facts(slug);
+
+CREATE TABLE IF NOT EXISTS glossary_questions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  question TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  slugs TEXT NOT NULL DEFAULT '[]',
+  window_end TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'open'
+);
+CREATE INDEX IF NOT EXISTS idx_glossary_questions_status ON glossary_questions(status);
+
+-- Cursor for the entity pipeline background job (single row per job name).
+CREATE TABLE IF NOT EXISTS job_cursors (
+  job TEXT PRIMARY KEY,
+  cursor TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 `
 
 const VEC_SCHEMA_SQL = `
@@ -464,4 +530,24 @@ function applyAdditiveMigrations(db: DB): void {
      )`
   )
   db.run('CREATE INDEX IF NOT EXISTS idx_glossary_status ON glossary(status)')
+
+  // v9: entity_registry — clean LLM-curated entity list. CREATE TABLE IF NOT
+  // EXISTS in SCHEMA_SQL only fires on fresh DBs; run it here too so existing
+  // v8 databases get it.
+  db.run(
+    `CREATE TABLE IF NOT EXISTS entity_registry (
+       slug TEXT PRIMARY KEY,
+       name TEXT NOT NULL,
+       type TEXT NOT NULL,
+       aliases TEXT NOT NULL DEFAULT '[]',
+       parent_slug TEXT,
+       description TEXT NOT NULL DEFAULT '',
+       mention_count INTEGER NOT NULL DEFAULT 0,
+       first_seen TEXT NOT NULL,
+       last_seen TEXT NOT NULL,
+       updated_at TEXT NOT NULL
+     )`
+  )
+  db.run('CREATE INDEX IF NOT EXISTS idx_entity_registry_parent ON entity_registry(parent_slug)')
+  db.run('CREATE INDEX IF NOT EXISTS idx_entity_registry_mentions ON entity_registry(mention_count)')
 }

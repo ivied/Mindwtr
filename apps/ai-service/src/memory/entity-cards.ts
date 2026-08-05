@@ -1,63 +1,19 @@
 /**
- * TEMP data-layer simulation primitives v2 (throwaway, container, copy DB).
+ * Entity cards data layer (schema v10) — production port of the data-layer v2
+ * validated by the May–July full-history simulation (handoff-entity-registry.md).
  *
- * Fixes the About-drift found in v1: a dry window no longer rewrites About from
- * scratch. Instead:
- *   - each window only ACCUMULATES raw signal: facts (dedup), timeline (dedup),
+ * Design (anti-drift):
+ *   - each window only ACCUMULATES raw signal: facts, timeline additions,
  *     open_tasks (live list). It never rewrites About/relations.
- *   - About + relations are RE-SYNTHESIZED separately from the entity's
- *     accumulated facts, on a cadence (every N touches / fact growth), so they
- *     reflect the whole history, not the latest dry window.
+ *   - About + relations are RE-SYNTHESIZED from the entity's accumulated facts
+ *     on a cadence, so they reflect the whole history, not the latest window.
+ *   - open_tasks live ONLY on projects and persons (delegated work); a periodic
+ *     TaskRevisor compacts bloated lists into open + closed_tasks.
  */
 
-import type { Database } from 'bun:sqlite'
+import type { DB } from '../context-store/db'
 import type { LLMClient } from '../ai/client'
 import type { Event } from './types'
-
-// ---------------- schema ----------------
-
-export function ensureSimTables(db: Database): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS entity_cards (
-      slug TEXT PRIMARY KEY,
-      type TEXT NOT NULL,
-      about TEXT NOT NULL DEFAULT '',
-      open_tasks TEXT NOT NULL DEFAULT '',
-      timeline TEXT NOT NULL DEFAULT '',
-      relations TEXT NOT NULL DEFAULT '',
-      facts_at_last_about INTEGER NOT NULL DEFAULT 0,
-      version INTEGER NOT NULL DEFAULT 0,
-      first_seen TEXT NOT NULL,
-      last_seen TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS sim_facts (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      slug TEXT NOT NULL,
-      statement TEXT NOT NULL,
-      fact_type TEXT NOT NULL,
-      confidence REAL,
-      window_end TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_sim_facts_slug ON sim_facts(slug);
-    CREATE TABLE IF NOT EXISTS glossary_questions (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      question TEXT NOT NULL,
-      kind TEXT NOT NULL,
-      slugs TEXT NOT NULL DEFAULT '[]',
-      window_end TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'open'
-    );
-  `)
-  const cols = db.query<{ name: string }, []>(`PRAGMA table_info(entity_cards)`).all()
-  if (!cols.some((c) => c.name === 'closed_tasks')) {
-    db.exec(`ALTER TABLE entity_cards ADD COLUMN closed_tasks TEXT NOT NULL DEFAULT ''`)
-  }
-}
-
-export function resetSimTables(db: Database): void {
-  db.exec('DELETE FROM entity_cards; DELETE FROM sim_facts; DELETE FROM glossary_questions;')
-}
 
 // ---------------- card store ----------------
 
@@ -77,7 +33,7 @@ export interface Card {
 }
 
 export class CardStore {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: DB) {}
 
   get(slug: string): Card | null {
     return this.db.query<Card, [string]>('SELECT * FROM entity_cards WHERE slug = ?').get(slug) ?? null
@@ -88,8 +44,8 @@ export class CardStore {
     if (ex) return ex
     this.db
       .query(
-        `INSERT INTO entity_cards (slug,type,about,open_tasks,timeline,relations,facts_at_last_about,version,first_seen,last_seen,updated_at)
-         VALUES (?,?,'','','','',0,0,?,?,?)`
+        `INSERT INTO entity_cards (slug,type,about,open_tasks,closed_tasks,timeline,relations,facts_at_last_about,version,first_seen,last_seen,updated_at)
+         VALUES (?,?,'','','','','',0,0,?,?,?)`
       )
       .run(slug, type, seenAt, seenAt, seenAt)
     return this.get(slug)!
@@ -127,34 +83,47 @@ export class CardStore {
       .run(openTasks, closed, seenAt, slug)
   }
 
+  /** Cards with task lists at least `minLines` long, for the revisor. */
+  bloatedTaskCards(minLines: number): Card[] {
+    return this.db
+      .query<Card, [number]>(
+        `SELECT * FROM entity_cards
+         WHERE type IN ('project','person') AND open_tasks != ''
+           AND (LENGTH(open_tasks) - LENGTH(REPLACE(open_tasks, char(10), '')) + 1) >= ?`
+      )
+      .all(minLines)
+  }
+
   count(): number {
     return this.db.query<{ c: number }, []>('SELECT COUNT(*) c FROM entity_cards').get()?.c ?? 0
   }
 }
 
-export function factsFor(db: Database, slug: string, limit = 80): { statement: string; fact_type: string }[] {
+// ---------------- facts / questions ----------------
+
+export function factsFor(db: DB, slug: string, limit = 80): { statement: string; fact_type: string }[] {
   return db
     .query<{ statement: string; fact_type: string }, [string, number]>(
-      'SELECT statement, fact_type FROM sim_facts WHERE slug = ? ORDER BY id DESC LIMIT ?'
+      'SELECT statement, fact_type FROM entity_facts WHERE slug = ? ORDER BY id DESC LIMIT ?'
     )
     .all(slug, limit)
 }
 
-export function factCount(db: Database, slug: string): number {
-  return db.query<{ c: number }, [string]>('SELECT COUNT(*) c FROM sim_facts WHERE slug = ?').get(slug)?.c ?? 0
+export function factCount(db: DB, slug: string): number {
+  return db.query<{ c: number }, [string]>('SELECT COUNT(*) c FROM entity_facts WHERE slug = ?').get(slug)?.c ?? 0
 }
 
 export function addFacts(
-  db: Database,
+  db: DB,
   facts: { slug: string; statement: string; fact_type: string; confidence?: number }[],
   windowEnd: string
 ): void {
-  const ins = db.prepare('INSERT INTO sim_facts (slug,statement,fact_type,confidence,window_end) VALUES (?,?,?,?,?)')
+  const ins = db.prepare('INSERT INTO entity_facts (slug,statement,fact_type,confidence,window_end) VALUES (?,?,?,?,?)')
   for (const f of facts) ins.run(f.slug, f.statement, f.fact_type, f.confidence ?? null, windowEnd)
 }
 
 export function addQuestions(
-  db: Database,
+  db: DB,
   qs: { question: string; kind: string; slugs: string[] }[],
   windowEnd: string
 ): void {
@@ -237,7 +206,7 @@ const EXTRACT_TOOL = {
   },
 }
 
-const EXTRACT_SYSTEM = `You record raw signal for a developer's personal knowledge base from one 4-hour activity window. You do NOT write entity descriptions here (that is done elsewhere from accumulated facts).
+const EXTRACT_SYSTEM = `You record raw signal for a developer's personal knowledge base from one activity window. You do NOT write entity descriptions here (that is done elsewhere from accumulated facts).
 
 For each active entity, output:
 - timeline_additions: ONLY new dated events from THIS window where something actually HAPPENED: a decision, conversation, commit, fix, agreement, delivery, meeting. NOT passive presence — "tab stayed open", "context remained visible", "sidebar showed an unread badge", "app was in the background" are NOT events; leave empty instead. If the prior timeline (shown) already covers it, leave empty. Never restate old events.
@@ -263,7 +232,7 @@ export class WindowExtractor {
     events: Event[],
     active: { slug: string; type: string; timelineTail: string; openTasks: string }[],
     windowEnd: string,
-    ownerSlug = 'sergey-kurdyuk',
+    ownerSlug: string,
     maxEventLines = 200,
     maxBodyPerEvent = 320
   ): Promise<ExtractResult> {
@@ -294,7 +263,8 @@ Call record_window.`
       ],
       tools: [EXTRACT_TOOL],
       tool_choice: 'required',
-      // 6000 hit Cloudflare's ~100s idle limit on the router (524) — Sonnet can't stream tool args fast enough
+      // >3500 makes Sonnet stream tool args longer than Cloudflare's ~100s
+      // idle limit on the router (524s under load)
       max_tokens: 3500,
       model: this.model,
     })
@@ -305,39 +275,40 @@ Call record_window.`
 }
 
 export function parseExtract(args: string): ExtractResult {
-  let p: any
+  let p: unknown
   try {
     p = JSON.parse(args)
   } catch {
     return { entities: [], facts: [], questions: [] }
   }
-  const entities: WindowEntityOut[] = Array.isArray(p.entities)
-    ? p.entities
-        .filter((e: any) => e && typeof e.slug === 'string')
-        .map((e: any) => ({
+  const o = (typeof p === 'object' && p !== null ? p : {}) as Record<string, unknown>
+  const entities: WindowEntityOut[] = Array.isArray(o.entities)
+    ? (o.entities as Record<string, unknown>[])
+        .filter((e) => e && typeof e.slug === 'string')
+        .map((e) => ({
           slug: String(e.slug),
           type: typeof e.type === 'string' ? e.type : 'topic',
           timeline_additions: str(e.timeline_additions),
           open_tasks: str(e.open_tasks),
         }))
     : []
-  const facts = Array.isArray(p.facts)
-    ? p.facts
-        .filter((f: any) => f && typeof f.slug === 'string' && typeof f.statement === 'string')
-        .map((f: any) => ({
+  const facts = Array.isArray(o.facts)
+    ? (o.facts as Record<string, unknown>[])
+        .filter((f) => f && typeof f.slug === 'string' && typeof f.statement === 'string')
+        .map((f) => ({
           slug: String(f.slug),
           statement: String(f.statement),
           fact_type: typeof f.fact_type === 'string' ? f.fact_type : 'other',
           confidence: typeof f.confidence === 'number' ? f.confidence : undefined,
         }))
     : []
-  const questions = Array.isArray(p.questions)
-    ? p.questions
-        .filter((q: any) => q && typeof q.question === 'string')
-        .map((q: any) => ({
+  const questions = Array.isArray(o.questions)
+    ? (o.questions as Record<string, unknown>[])
+        .filter((q) => q && typeof q.question === 'string')
+        .map((q) => ({
           question: String(q.question),
           kind: typeof q.kind === 'string' ? q.kind : 'other',
-          slugs: Array.isArray(q.slugs) ? q.slugs.filter((s: any) => typeof s === 'string') : [],
+          slugs: Array.isArray(q.slugs) ? (q.slugs as unknown[]).filter((s): s is string => typeof s === 'string') : [],
         }))
     : []
   return { entities, facts, questions }
@@ -369,7 +340,7 @@ const ABOUT_TOOL = {
   },
 }
 
-const ABOUT_SYSTEM = `You write the stable description of ONE entity in a developer's knowledge base, synthesized from its accumulated facts (collected over weeks). 
+const ABOUT_SYSTEM = `You write the stable description of ONE entity in a developer's knowledge base, synthesized from its accumulated facts (collected over weeks).
 
 Rules:
 - Use the WHOLE fact set; weight durable/repeated facts over one-off ones. A single dry time-tracking line must not override an earlier rich definition.
@@ -404,7 +375,7 @@ export class AboutSynthesizer {
     const call = res.choices[0]?.message?.tool_calls?.[0]
     if (!call) return { about: '', relations: '' }
     try {
-      const o = JSON.parse(call.function.arguments)
+      const o = JSON.parse(call.function.arguments) as Record<string, unknown>
       return { about: str(o.about), relations: str(o.relations) }
     } catch {
       return { about: '', relations: '' }
@@ -480,7 +451,7 @@ Call revise_tasks.`
     const call = res.choices[0]?.message?.tool_calls?.[0]
     if (!call) return null
     try {
-      const o = JSON.parse(call.function.arguments)
+      const o = JSON.parse(call.function.arguments) as Record<string, unknown>
       return { open_tasks: str(o.open_tasks), closed_tasks: str(o.closed_tasks) }
     } catch {
       return null
@@ -504,7 +475,7 @@ export function topTasks(s: string, n = 10): string {
   return lines.slice(0, n).join('\n') + `\n... (${lines.length - n} more open tasks not shown)`
 }
 
-export function timelineTail(s: string, n = 8): string {
+export function timelineTail(s: string, n = 5): string {
   return s
     .split('\n')
     .filter((l) => l.trim())
@@ -523,4 +494,3 @@ function renderEvents(events: Event[], maxLines: number, maxBody: number): strin
   if (tail > 0) lines.push(`... (${tail} more events not shown)`)
   return lines.join('\n')
 }
-

@@ -48,6 +48,9 @@ import {
   ProactiveRunner,
 } from './memory'
 import { SlugCanonicalizer } from './memory/slug-canonicalizer'
+import { EntityRegistryStore } from './memory/entity-registry-store'
+import { EntityRegistrar } from './memory/entity-registrar'
+import { EntityPipeline } from './memory/entity-pipeline'
 import { LlmPublisher } from './status/llm-publisher'
 import { HealthMonitor, HealthAlerter } from './status/health'
 import { startAgentWatchdog, DEFAULT_AGENT_WATCHDOG_CONFIG } from './agent-watchdog'
@@ -156,6 +159,13 @@ const SHARED_MEMORY_REINDEX_INTERVAL_MS = Number(
   process.env.SHARED_MEMORY_REINDEX_INTERVAL_MS ?? 60_000
 )
 
+// Entity layer (registry + cards + facts). Shadow mode: accumulates knowledge
+// from events on a cadence; nothing reads the tables yet. Set
+// ENTITY_PIPELINE=false to disable (e.g. worktrees sharing an LLM budget).
+const ENTITY_PIPELINE_ENABLED = process.env.ENTITY_PIPELINE !== 'false'
+const ENTITY_PIPELINE_INTERVAL_MS = Number(process.env.ENTITY_PIPELINE_INTERVAL_MS ?? 15 * 60 * 1000)
+const ENTITY_OWNER_SLUG = process.env.ENTITY_OWNER_SLUG ?? 'sergey-kurdyuk'
+
 if (!TELEGRAM_BOT_TOKEN) {
   console.error('TELEGRAM_BOT_TOKEN is required')
   process.exit(1)
@@ -254,6 +264,7 @@ let memoryIngest: IngestService | null = new IngestService({
 let memoryFocusContext: FocusContextAssembler | null = null
 let dailySummaryJob: DailySummaryJob | null = null
 let proactiveRunner: ProactiveRunner | null = null
+let entityPipeline: EntityPipeline | null = null
 // Hoisted so the HTTP server (FR88 review API) can reference it; assigned
 // inside the SHARED_MEMORY_DIR block below when procedural memory is on.
 let proceduralStore: ProceduralStore | null = null
@@ -594,6 +605,33 @@ if (LLM_BASE_URL && LLM_API_KEY) {
   console.log(
     `🧠 Memory module enabled (${memoryStore.vecAvailable ? 'vec+FTS' : 'FTS only'}, ${memoryStore.countEvents()} events, ${memoryStore.countFacts()} facts)`
   )
+
+  // Entity layer (shadow mode) — registry + cards + facts + About + glossary
+  // questions, caught up window-by-window from the events table. Nothing
+  // consumes these tables yet; this runs to accumulate knowledge and let us
+  // audit quality before wiring it into the Proposer.
+  if (ENTITY_PIPELINE_ENABLED) {
+    const entityRegistry = new EntityRegistryStore(contextStore.rawDb)
+    const entityRegistrar = new EntityRegistrar({
+      registry: entityRegistry,
+      memory: memoryStore,
+      llm,
+      model: LLM_MODEL_OPUS,
+    })
+    entityPipeline = new EntityPipeline({
+      db: contextStore.rawDb,
+      memory: memoryStore,
+      registry: entityRegistry,
+      registrar: entityRegistrar,
+      llm,
+      model: LLM_MODEL_OPUS,
+      ownerSlug: ENTITY_OWNER_SLUG,
+      log: (msg) => console.log(msg),
+    })
+    console.log(
+      `🗂 Entity pipeline enabled (shadow mode, owner=${ENTITY_OWNER_SLUG}, tick every ${Math.round(ENTITY_PIPELINE_INTERVAL_MS / 60000)}m, registry=${entityRegistry.count()}, cards=${entityPipeline.cardStore().count()})`
+    )
+  }
 
   // Two-stage pull pattern: after a Proposer create-proposal lands a task in
   // Mindwtr inbox, kick the Enricher pipeline on it so the user gets a
@@ -1053,6 +1091,27 @@ async function main() {
       )
     : null
 
+  // Entity pipeline — catches the entity layer up with the events table.
+  // Tick is serialized internally; each tick processes at most a few windows
+  // so a long backlog drains gradually without hogging the LLM budget.
+  const entityPipelineTimer = entityPipeline
+    ? setInterval(
+        () => {
+          if (!entityPipeline) return
+          entityPipeline
+            .tick()
+            .catch((err) => console.error('[entity-pipeline] tick failed:', (err as Error).message))
+        },
+        ENTITY_PIPELINE_INTERVAL_MS
+      )
+    : null
+  if (entityPipeline) {
+    // Kick one tick at boot so a fresh deploy starts catching up immediately.
+    void entityPipeline
+      .tick()
+      .catch((err) => console.error('[entity-pipeline] initial tick failed:', (err as Error).message))
+  }
+
   const shutdown = async () => {
     console.log('🛑 Shutting down...')
     clearInterval(purgeTimer)
@@ -1060,6 +1119,7 @@ async function main() {
     if (healthAlerter) healthAlerter.stop()
     if (dailySummaryTimer) clearInterval(dailySummaryTimer)
     if (proactiveTimer) clearInterval(proactiveTimer)
+    if (entityPipelineTimer) clearInterval(entityPipelineTimer)
     if (http) http.stop()
     for (const ch of channels) {
       try {
