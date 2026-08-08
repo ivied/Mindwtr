@@ -31,6 +31,7 @@ import { TaskItemFieldRenderer } from './Task/TaskItemFieldRenderer';
 import { TaskItemOverlays } from './Task/TaskItemOverlays';
 import { ProjectNextActionPrompt } from './Task/ProjectNextActionPrompt';
 import { TaskQuickActionMenu } from './Task/TaskQuickActionMenu';
+import { TaskProposalsInline } from './TaskProposalsInline';
 import {
     getRecurrenceRuleValue,
     getRecurrenceRRuleValue,
@@ -1367,6 +1368,7 @@ export const TaskItem = memo(function TaskItem({
                     isHighlighted && "ring-2 ring-inset ring-primary/70 bg-primary/5"
                 )}
             >
+                <TaskProposalsInline taskId={task.id} />
                 <div className={cn("flex items-start", isCompact ? "gap-2" : "gap-3")}>
                     {selectionMode && (
                         <input
