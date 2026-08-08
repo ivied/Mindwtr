@@ -930,6 +930,15 @@ async function main() {
       contextStore,
       healthMonitor,
       corsOrigins: HTTP_CORS_ORIGINS,
+      backfill:
+        contextStore && commitmentBatcher
+          ? {
+              listUnproposed: (fromIso, toIso) =>
+                contextStore.listUnproposedPullCaptures(fromIso, toIso),
+              enqueue: (record) => commitmentBatcher.enqueueLow(record),
+              pending: () => commitmentBatcher.pending,
+            }
+          : null,
       slackSession: slackChannel
         ? {
             upsert: async (token, cookie) => {

@@ -29,6 +29,8 @@ export const DEFAULT_BATCHER_CONFIG: CommitmentBatcherConfig = {
 
 export class CommitmentBatcher {
   private queue: CaptureRecord[] = []
+  /** Backfill/recovery records — drained only with spare capacity after `queue`. */
+  private lowQueue: CaptureRecord[] = []
   private timer: ReturnType<typeof setInterval> | null = null
   private draining = false
 
@@ -54,8 +56,14 @@ export class CommitmentBatcher {
     this.queue.push(record)
   }
 
+  /** Enqueue at low priority: live traffic always drains first, so a large
+   *  backfill can't delay proposals for fresh captures. */
+  enqueueLow(record: CaptureRecord): void {
+    this.lowQueue.push(record)
+  }
+
   get pending(): number {
-    return this.queue.length
+    return this.queue.length + this.lowQueue.length
   }
 
   /**
@@ -64,12 +72,13 @@ export class CommitmentBatcher {
    * Re-entrancy guarded: a slow drain won't overlap the next tick.
    */
   async drain(): Promise<void> {
-    if (this.draining || this.queue.length === 0) return
+    if (this.draining || this.pending === 0) return
     this.draining = true
     try {
       const batch = this.queue.splice(0, this.config.maxPerFlush)
+      batch.push(...this.lowQueue.splice(0, this.config.maxPerFlush - batch.length))
       console.log(
-        `[commitment-batch] draining ${batch.length}/${batch.length + this.queue.length} queued`
+        `[commitment-batch] draining ${batch.length}/${batch.length + this.pending} queued`
       )
       for (const record of batch) {
         try {

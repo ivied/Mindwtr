@@ -267,6 +267,32 @@ export class ContextStore {
   }
 
   /**
+   * Pull captures in [fromIso, toIso) that never produced a proposal.
+   * Backfill source for outage recovery: the commitment pipeline is
+   * fire-and-forget, so captures whose LLM call failed leave no trace
+   * except the absence of a proposals row referencing them.
+   */
+  listUnproposedPullCaptures(
+    fromIso: string,
+    toIso: string,
+    opts: { limit?: number } = {}
+  ): CaptureRecord[] {
+    const rows = this.db
+      .query<CaptureRow, [string, string, number]>(
+        `SELECT id, text, source_channel, source_meta, captured_at, received_at, content_hash, ttl_at, is_pull
+         FROM captures
+         WHERE is_pull = 1 AND received_at >= ? AND received_at < ?
+           AND id NOT IN (
+             SELECT source_capture_id FROM proposals WHERE source_capture_id IS NOT NULL
+           )
+         ORDER BY received_at ASC
+         LIMIT ?`
+      )
+      .all(fromIso, toIso, opts.limit ?? 20000)
+    return rows.map(rowToRecord)
+  }
+
+  /**
    * Drop expired captures (ttl_at < now). Returns deleted count.
    * Uses count-before/after because db.run().changes includes cascaded
    * trigger changes (FTS5), inflating the number.

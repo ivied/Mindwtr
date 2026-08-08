@@ -128,6 +128,37 @@ describe('ContextStore', () => {
     store.close()
   })
 
+  it('listUnproposedPullCaptures returns window pull captures lacking a proposal', async () => {
+    const store = ContextStore.open({ dbPath: join(dir, 'test.db') })
+    const inWindow = await store.insert(
+      makeItem({ text: 'a', sourceChannel: 'telegram_group', timestamp: '2026-04-24T10:00:00Z' })
+    )
+    const proposed = await store.insert(
+      makeItem({ text: 'b', sourceChannel: 'slack_channel', timestamp: '2026-04-24T11:00:00Z' })
+    )
+    // push capture in window — must be excluded (enricher path, not commitment)
+    await store.insert(
+      makeItem({ text: 'c', sourceChannel: 'telegram_dm', timestamp: '2026-04-24T12:00:00Z' })
+    )
+    // proposal row for `proposed` — must be excluded as already handled
+    const db = (store as unknown as { db: { run(sql: string, params: unknown[]): void } }).db
+    db.run(
+      `INSERT INTO proposals (id, type, target_task_ids, source_capture_id, source_agent, status, current_payload, created_at)
+       VALUES ('p1', 'create', '[]', ?, 'test', 'pending', '{}', '2026-04-24T11:01:00Z')`,
+      [proposed.capture.id]
+    )
+
+    const now = new Date()
+    const from = new Date(now.getTime() - 60 * 60 * 1000).toISOString()
+    const to = new Date(now.getTime() + 60 * 60 * 1000).toISOString()
+    const records = store.listUnproposedPullCaptures(from, to)
+    expect(records.map((r) => r.id)).toEqual([inWindow.capture.id])
+
+    // window excludes everything → empty
+    expect(store.listUnproposedPullCaptures('2020-01-01T00:00:00Z', '2020-01-02T00:00:00Z')).toEqual([])
+    store.close()
+  })
+
   it('purgeExpired drops captures past TTL', async () => {
     const store = ContextStore.open({ dbPath: join(dir, 'test.db'), ttlMs: -1000 })
     await store.insert(makeItem())

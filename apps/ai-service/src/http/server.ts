@@ -19,6 +19,7 @@ import { cors } from 'hono/cors'
 import type { CaptureFn } from '../capture/sink'
 import type { CapturedItem } from '../capture/normalizer'
 import type { ContextStore } from '../context-store/store'
+import type { CaptureRecord } from '../context-store/types'
 import type { ProposalStore } from '../proposal-store/store'
 import type { ProposalApplier } from '../proposal-store/apply'
 import type { CommentHandler } from '../proposal-store/comment-handler'
@@ -151,6 +152,14 @@ export interface HttpServerConfig {
   agentConfig?: {
     get(): { capturePaused: boolean; updatedAt: string | null }
     setCapturePaused(paused: boolean): { capturePaused: boolean; updatedAt: string | null }
+  } | null
+  /** Optional proposal backfill (outage recovery) — when set, exposes
+   *  POST/GET /v1/backfill/proposals to re-run stored captures that never
+   *  got a proposal through the commitment batcher. */
+  backfill?: {
+    listUnproposed(fromIso: string, toIso: string): CaptureRecord[]
+    enqueue(record: CaptureRecord): void
+    pending(): number
   } | null
 }
 
@@ -331,6 +340,46 @@ export function createHttpServer(config: HttpServerConfig) {
       return c.json({ error: 'Capture failed' }, 500)
     }
   })
+
+  // Outage recovery: enqueue stored captures that never got a proposal into
+  // the commitment batcher, which paces them like normal traffic. Idempotent:
+  // re-invoking skips captures that gained a proposal since the last run
+  // (not-actionable verdicts leave no trace and will be re-judged).
+  if (config.backfill) {
+    const backfill = config.backfill
+    app.post('/v1/backfill/proposals', async (c) => {
+      let body: { from?: string; to?: string; dryRun?: boolean; limit?: number }
+      try {
+        body = await c.req.json()
+      } catch {
+        return c.json({ error: 'Invalid JSON' }, 400)
+      }
+      const from = Date.parse(body.from ?? '')
+      const to = Date.parse(body.to ?? '')
+      if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) {
+        return c.json({ error: 'from/to (ISO timestamps, from < to) required' }, 400)
+      }
+      let records = backfill.listUnproposed(
+        new Date(from).toISOString(),
+        new Date(to).toISOString()
+      )
+      if (body.limit && body.limit > 0) records = records.slice(0, body.limit)
+      if (!body.dryRun) {
+        for (const record of records) backfill.enqueue(record)
+        console.log(`[backfill] queued ${records.length} unproposed captures (${body.from} → ${body.to})`)
+      }
+      return c.json({
+        matched: records.length,
+        queued: body.dryRun ? 0 : records.length,
+        pending: backfill.pending(),
+        byChannel: records.reduce<Record<string, number>>((acc, r) => {
+          acc[r.sourceChannel] = (acc[r.sourceChannel] ?? 0) + 1
+          return acc
+        }, {}),
+      })
+    })
+    app.get('/v1/backfill/proposals', (c) => c.json({ pending: backfill.pending() }))
+  }
 
   app.get('/v1/context/search', async (c) => {
     if (!config.contextStore) {

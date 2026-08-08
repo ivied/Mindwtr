@@ -43,6 +43,27 @@ describe('CommitmentBatcher', () => {
     expect(b.pending).toBe(1)
   })
 
+  it('drains low-priority records only with capacity left after live ones', async () => {
+    const { pipeline, runs } = fakePipeline()
+    const b = new CommitmentBatcher(pipeline, { flushIntervalMs: 10_000, maxPerFlush: 3 })
+    for (const id of ['bf1', 'bf2', 'bf3', 'bf4']) b.enqueueLow(fakeRecord(id))
+    b.enqueue(fakeRecord('live1'))
+    b.enqueue(fakeRecord('live2'))
+    expect(b.pending).toBe(6)
+
+    await b.drain()
+    // live first, one spare slot goes to backfill
+    expect(runs).toEqual(['live1', 'live2', 'bf1'])
+
+    b.enqueue(fakeRecord('live3'))
+    await b.drain()
+    expect(runs).toEqual(['live1', 'live2', 'bf1', 'live3', 'bf2', 'bf3'])
+
+    await b.drain()
+    expect(runs).toContain('bf4')
+    expect(b.pending).toBe(0)
+  })
+
   it('keeps going when one record throws', async () => {
     const runs: string[] = []
     const pipeline = {
