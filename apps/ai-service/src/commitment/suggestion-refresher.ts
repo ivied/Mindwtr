@@ -14,6 +14,7 @@ import type { ProposalStore } from '../proposal-store/store'
 import type { ProposalDetail } from '../proposal-store/types'
 import type { ProposalPayload } from '../proposal-store/payloads'
 import type { Reviser, ReviseOutcome } from './reviser'
+import { DONE_FLAG_PREFIX } from '../proposal-store/types'
 import { buildSignature, signatureForRecord } from './title-signature'
 import { SOURCE_AGENT_COMMITMENT_DETECTOR } from './writer'
 
@@ -40,13 +41,6 @@ export type FlagCompletionResult =
   | { kind: 'no-match' }
   | { kind: 'flagged'; proposalId: string }
   | { kind: 'already-flagged'; proposalId: string }
-
-/**
- * Stable prefix on the agent's "looks already done" nudge. Used to dedup —
- * we never post a second done-flag if the latest agent message already is one,
- * so repeated captures about a finished task don't spam the thread.
- */
-const DONE_FLAG_PREFIX = '🟡 Похоже, это уже выполнено.'
 
 export class SuggestionRefresher {
   constructor(private deps: SuggestionRefresherDeps) {}

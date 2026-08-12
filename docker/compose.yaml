@@ -84,6 +84,9 @@ services:
       # comes from a one-time `bun run scripts/telegram-login.ts` on the host.
       - TELEGRAM_API_ID=${TELEGRAM_API_ID:-}
       - TELEGRAM_API_HASH=${TELEGRAM_API_HASH:-}
+      # Capture the user's OWN outgoing Slack/Telegram messages (completion
+      # evidence + first-person commitments). Default on.
+      - CAPTURE_OUTGOING_MESSAGES=${CAPTURE_OUTGOING_MESSAGES:-true}
       - NOTION_API_KEY=${NOTION_API_KEY:-}
       - NOTION_DATABASE_ID=${NOTION_DATABASE_ID:-}
       - NOTION_POLL_INTERVAL_MS=${NOTION_POLL_INTERVAL_MS:-300000}

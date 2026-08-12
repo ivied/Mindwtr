@@ -14,8 +14,8 @@
  * proposals. URL `?id=<proposal_id>` auto-expands the matching card.
  */
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { Sparkles, Check, X, MessageSquare, ChevronDown, ChevronUp, Loader2, RefreshCw } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Sparkles, Check, CheckCheck, X, MessageSquare, ChevronDown, ChevronUp, Loader2, RefreshCw } from 'lucide-react';
 import { useTaskStore, type Task } from '@mindwtr/core';
 import {
     isProposalsAvailable,
@@ -24,6 +24,9 @@ import {
     approveProposal,
     rejectProposal,
     commentOnProposal,
+    startDoneAudit,
+    getDoneAuditStatus,
+    type DoneAuditStatus,
     type ProposalSummary,
     type ProposalDetail,
 } from '../lib/proposals-client';
@@ -68,6 +71,39 @@ export function InboxProposalsZone() {
 
     const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
 
+    // On-demand "which of these look already done" sweep. The server judges
+    // every pending card against captures recorded after it appeared and
+    // posts the 🟡 nudge on done-verdicts; the list picks the badges up on
+    // refresh. Replaces a cron: the user runs it right before processing.
+    const [audit, setAudit] = useState<DoneAuditStatus | null>(null);
+    const [auditBusy, setAuditBusy] = useState(false);
+    const mountedRef = useRef(true);
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+        };
+    }, []);
+
+    const onCheckDone = useCallback(async () => {
+        setAuditBusy(true);
+        try {
+            await startDoneAudit();
+            for (;;) {
+                await new Promise((r) => setTimeout(r, 2000));
+                const s = await getDoneAuditStatus();
+                if (!mountedRef.current) return;
+                setAudit(s);
+                if (!s.running) break;
+            }
+            refresh();
+        } catch (err) {
+            if (mountedRef.current) setError((err as Error).message);
+        } finally {
+            if (mountedRef.current) setAuditBusy(false);
+        }
+    }, [refresh]);
+
     if (!available) return null;
 
     // Quiet when nothing to show — zero visual footprint.
@@ -80,14 +116,37 @@ export function InboxProposalsZone() {
                     <Sparkles className="h-4 w-4" />
                     AI suggestions {proposals ? `(${proposals.length})` : ''}
                 </div>
-                <button
-                    type="button"
-                    onClick={refresh}
-                    className="rounded p-1 text-violet-700 hover:bg-violet-500/10 dark:text-violet-300"
-                    title="Refresh"
-                >
-                    <RefreshCw className="h-3.5 w-3.5" />
-                </button>
+                <div className="flex items-center gap-1.5">
+                    {audit ? (
+                        <span className="text-[10px] text-muted-foreground">
+                            {audit.running
+                                ? `checking ${audit.processed}/${audit.total}…`
+                                : `${audit.done} look done · ${audit.flagged} newly flagged`}
+                        </span>
+                    ) : null}
+                    <button
+                        type="button"
+                        onClick={onCheckDone}
+                        disabled={auditBusy}
+                        className="inline-flex items-center gap-1 rounded border border-yellow-500/40 bg-yellow-500/5 px-1.5 py-0.5 text-[11px] text-yellow-700 hover:bg-yellow-500/10 disabled:opacity-50 dark:text-yellow-300"
+                        title="Check every pending suggestion against captures recorded after it appeared; ones that look already done get a 🟡 badge"
+                    >
+                        {auditBusy ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                            <CheckCheck className="h-3 w-3" />
+                        )}
+                        Check done
+                    </button>
+                    <button
+                        type="button"
+                        onClick={refresh}
+                        className="rounded p-1 text-violet-700 hover:bg-violet-500/10 dark:text-violet-300"
+                        title="Refresh"
+                    >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                    </button>
+                </div>
             </header>
 
             {error ? (
@@ -98,17 +157,20 @@ export function InboxProposalsZone() {
                 </div>
             ) : (
                 <div className="divide-y divide-violet-500/15">
-                    {proposals.map((p) => (
-                        <ProposalCard
-                            key={p.id}
-                            summary={p}
-                            startExpanded={expandedId === p.id}
-                            onResolved={() => {
-                                if (expandedId === p.id) setExpandedId(null);
-                                refresh();
-                            }}
-                        />
-                    ))}
+                    {/* Flagged-as-done cards float to the top — they take one click to clear. Sort is stable, so the rest keep server order (newest first). */}
+                    {[...proposals]
+                        .sort((a, b) => Number(b.doneFlagged ?? false) - Number(a.doneFlagged ?? false))
+                        .map((p) => (
+                            <ProposalCard
+                                key={p.id}
+                                summary={p}
+                                startExpanded={expandedId === p.id}
+                                onResolved={() => {
+                                    if (expandedId === p.id) setExpandedId(null);
+                                    refresh();
+                                }}
+                            />
+                        ))}
                 </div>
             )}
         </div>
@@ -355,6 +417,14 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
                 <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5 font-medium">
                         <span className="truncate">{title}</span>
+                        {summary.doneFlagged ? (
+                            <span
+                                className="shrink-0 rounded-full bg-yellow-500/20 px-1.5 py-0.5 text-[10px] font-medium text-yellow-700 dark:text-yellow-300"
+                                title="AI saw evidence this is already done — expand the card for the quote, then 'Already done' closes it"
+                            >
+                                🟡 looks done
+                            </span>
+                        ) : null}
                         {suggestedCategory && suggestedCategory !== 'next' ? (
                             <SuggestedCategoryBadge category={suggestedCategory} />
                         ) : null}

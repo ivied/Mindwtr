@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDb, type DB } from '../context-store/db'
 import { ProposalStore } from './store'
+import { DONE_FLAG_PREFIX } from './types'
 
 let dir: string
 let db: DB
@@ -230,6 +231,48 @@ describe('ProposalStore.listPending', () => {
 
     const byType = store.listPending({ type: 'modify' })
     expect(byType.map((p) => p.id)).toEqual([p2.id])
+  })
+
+  it('sets doneFlagged only when the LATEST agent message is the 🟡 nudge', () => {
+    const store = new ProposalStore(db)
+    const flagged = store.create({
+      type: 'create',
+      targetTaskIds: [],
+      sourceAgent: 'commitment-detector',
+      payload: {},
+    })
+    const unflagged = store.create({
+      type: 'create',
+      targetTaskIds: [],
+      sourceAgent: 'commitment-detector',
+      payload: {},
+    })
+    const flagBuried = store.create({
+      type: 'create',
+      targetTaskIds: [],
+      sourceAgent: 'commitment-detector',
+      payload: {},
+    })
+    store.addMessage({
+      proposalId: flagged.id,
+      role: 'agent',
+      text: `${DONE_FLAG_PREFIX} Если так — отметь Done.`,
+    })
+    // User messages after the flag must not clear it — only a newer AGENT message does.
+    store.addMessage({ proposalId: flagged.id, role: 'user', text: 'хм, проверю' })
+    store.addMessage({
+      proposalId: flagBuried.id,
+      role: 'agent',
+      text: `${DONE_FLAG_PREFIX} Если так — отметь Done.`,
+    })
+    store.addMessage({ proposalId: flagBuried.id, role: 'agent', text: 'обновил на новых данных' })
+
+    const byId = new Map(store.listPending().map((p) => [p.id, p]))
+    expect(byId.get(flagged.id)?.doneFlagged).toBe(true)
+    expect(byId.get(unflagged.id)?.doneFlagged).toBe(false)
+    expect(byId.get(flagBuried.id)?.doneFlagged).toBe(false)
+    // Single-record reads don't select the column — the field stays absent.
+    expect(store.get(flagged.id)?.doneFlagged).toBeUndefined()
   })
 })
 

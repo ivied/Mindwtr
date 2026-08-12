@@ -8,13 +8,14 @@ interface StubOpts {
   isService?: boolean
   isMention?: boolean
   senderIsBot?: boolean
+  chatIsBot?: boolean
   chatType?: 'user' | 'group' | 'supergroup' | 'channel'
 }
 
 function stubMessage(opts: StubOpts = {}): Message {
   const chatIsUser = (opts.chatType ?? 'user') === 'user'
   const chat = chatIsUser
-    ? { type: 'user', id: 111, displayName: 'Alice' }
+    ? { type: 'user', id: 111, displayName: 'Alice', isBot: opts.chatIsBot ?? false }
     : { type: 'chat', id: 222, chatType: opts.chatType, title: 'Work Group' }
   return {
     id: 42,
@@ -56,10 +57,35 @@ describe('toCapturedItem (telegram-user)', () => {
     expect(toCapturedItem(stubMessage({ chatType: 'channel' }))).toBeNull()
   })
 
-  it('skips own outgoing, service, bot and empty messages', () => {
-    expect(toCapturedItem(stubMessage({ isOutgoing: true }))).toBeNull()
+  it('skips service, bot and empty messages', () => {
     expect(toCapturedItem(stubMessage({ isService: true }))).toBeNull()
     expect(toCapturedItem(stubMessage({ senderIsBot: true }))).toBeNull()
     expect(toCapturedItem(stubMessage({ text: '   ' }))).toBeNull()
+  })
+
+  it('captures own outgoing DM as fromSelf with the peer as recipient', () => {
+    const item = toCapturedItem(
+      stubMessage({ isOutgoing: true, text: 'отправил договор, посмотри' })
+    )
+    expect(item).not.toBeNull()
+    expect(item!.sourceMeta).toMatchObject({
+      fromSelf: true,
+      mentionsSelf: false,
+      isDm: true,
+      recipientName: 'Alice',
+    })
+  })
+
+  it('outgoing group message gets fromSelf but no recipientName', () => {
+    const item = toCapturedItem(stubMessage({ isOutgoing: true, chatType: 'supergroup' }))
+    expect(item!.sourceMeta!.fromSelf).toBe(true)
+    expect(item!.sourceMeta!.recipientName).toBeUndefined()
+  })
+
+  it('skips outgoing when captureOutgoing=false and always skips outgoing DMs to bots', () => {
+    expect(toCapturedItem(stubMessage({ isOutgoing: true }), false)).toBeNull()
+    expect(toCapturedItem(stubMessage({ isOutgoing: true, chatIsBot: true }))).toBeNull()
+    // Incoming from a human still passes regardless of the toggle.
+    expect(toCapturedItem(stubMessage(), false)).not.toBeNull()
   })
 })

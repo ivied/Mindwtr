@@ -85,6 +85,15 @@ export interface ProposalsHttpDeps {
       signal: 'positive' | 'negative'
     ): number
   }
+  /**
+   * Optional on-demand "which pending suggestions look already done" sweep
+   * (DoneSweeper). POST /v1/proposals/audit-done starts it, GET polls
+   * progress. Absent when the LLM client is not configured.
+   */
+  doneAudit?: {
+    start(): { started: boolean; total: number }
+    status(): unknown
+  }
 }
 
 export interface MemoryHttpDeps {
@@ -480,6 +489,19 @@ export function createHttpServer(config: HttpServerConfig) {
 }
 
 function mountProposalRoutes(app: Hono, deps: ProposalsHttpDeps): void {
+  // Static audit-done routes are registered BEFORE /v1/proposals/:id so the
+  // param route can never shadow them, whatever router Hono picks.
+  app.post('/v1/proposals/audit-done', (c) => {
+    if (!deps.doneAudit) return c.json({ error: 'done-audit unavailable (LLM not configured)' }, 503)
+    const result = deps.doneAudit.start()
+    return c.json({ ok: true, ...result }, result.started ? 202 : 200)
+  })
+
+  app.get('/v1/proposals/audit-done', (c) => {
+    if (!deps.doneAudit) return c.json({ error: 'done-audit unavailable (LLM not configured)' }, 503)
+    return c.json(deps.doneAudit.status() as Record<string, unknown>)
+  })
+
   app.get('/v1/proposals', (c) => {
     const type = c.req.query('type') as ProposalType | undefined
     const sourceAgent = c.req.query('sourceAgent') ?? undefined

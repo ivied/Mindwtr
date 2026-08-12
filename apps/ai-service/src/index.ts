@@ -17,6 +17,7 @@ import { ProposalApplier } from './proposal-store/apply'
 import { CommentHandler } from './proposal-store/comment-handler'
 import { TaskChangeProcessor } from './proposal-store/task-change-processor'
 import { ProposalExpiryJob } from './proposal-store/expiry'
+import { DoneSweeper } from './proposal-store/done-audit'
 import { Proposer } from './commitment/proposer'
 import { Enricher } from './commitment/enricher'
 import { EnricherPipeline } from './commitment/enricher-pipeline'
@@ -282,6 +283,7 @@ let enricherPipeline: EnricherPipeline | null = null
 let commitmentPipeline: CommitmentPipeline | null = null
 let commentHandler: CommentHandler | null = null
 let onboardingExtractor: OnboardingExtractor | null = null
+let doneSweeper: DoneSweeper | null = null
 if (LLM_BASE_URL && LLM_API_KEY) {
   const llm = new LLMClient(LLM_BASE_URL, LLM_API_KEY, {
     opus: LLM_MODEL_OPUS,
@@ -336,6 +338,11 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     reviser,
     contextStore,
   })
+  // On-demand "which pending suggestions look already done" sweep, behind
+  // POST /v1/proposals/audit-done. The live completes_title nudge only fires
+  // when a fresh capture happens to match a card by title — this lets the
+  // user re-check the whole backlog with one click instead.
+  doneSweeper = new DoneSweeper({ store: proposalStore, contextStore, llm })
   commitmentPipeline.setDuplicateOfExistingHook((info) => {
     void (async () => {
       try {
@@ -762,6 +769,11 @@ function buildChannels(): { channels: Channel[]; slack: SlackChannel | null } {
   const channels: Channel[] = []
   let slack: SlackChannel | null = null
 
+  // Own outgoing messages are completion evidence ("отправил", the reply
+  // itself) and first-person commitments. Kill-switch in case the doubled
+  // capture volume or self-capture noise becomes a problem.
+  const captureOutgoing = process.env.CAPTURE_OUTGOING_MESSAGES !== 'false'
+
   const slackWorkspaces = [
     ...SLACK_USER_TOKENS.map((token) => ({ token })),
     ...SLACK_SESSION_TOKENS,
@@ -776,6 +788,7 @@ function buildChannels(): { channels: Channel[]; slack: SlackChannel | null } {
         workspaces: slackWorkspaces,
         pollIntervalMs: SLACK_POLL_INTERVAL_MS,
         teamAllowlist: SLACK_TEAM_ALLOWLIST,
+        captureOutgoing,
       },
       (item) => capture(item),
       state
@@ -783,7 +796,7 @@ function buildChannels(): { channels: Channel[]; slack: SlackChannel | null } {
     channels.push(slack)
     const allowDesc = SLACK_TEAM_ALLOWLIST.size > 0 ? `${SLACK_TEAM_ALLOWLIST.size} allowlisted` : 'all teams'
     console.log(
-      `💬 Slack channel enabled (${SLACK_USER_TOKENS.length} oauth + ${SLACK_SESSION_TOKENS.length} session env, ${allowDesc}, poll every ${SLACK_POLL_INTERVAL_MS}ms; extension push ${HTTP_AUTH_TOKEN ? 'on' : 'off'})`
+      `💬 Slack channel enabled (${SLACK_USER_TOKENS.length} oauth + ${SLACK_SESSION_TOKENS.length} session env, ${allowDesc}, poll every ${SLACK_POLL_INTERVAL_MS}ms; extension push ${HTTP_AUTH_TOKEN ? 'on' : 'off'}; outgoing ${captureOutgoing ? 'on' : 'off'})`
     )
   }
 
@@ -794,11 +807,14 @@ function buildChannels(): { channels: Channel[]; slack: SlackChannel | null } {
           apiId: TELEGRAM_API_ID,
           apiHash: TELEGRAM_API_HASH,
           sessionPath: join(DATA_DIR, 'telegram-user-session'),
+          captureOutgoing,
         },
         (item) => capture(item)
       )
     )
-    console.log('📨 Telegram user channel enabled (MTProto, DMs + groups)')
+    console.log(
+      `📨 Telegram user channel enabled (MTProto, DMs + groups; outgoing ${captureOutgoing ? 'on' : 'off'})`
+    )
   }
 
   if (NOTION_API_KEY && NOTION_DATABASE_ID) {
@@ -993,6 +1009,7 @@ async function main() {
             // FR89: approve/reject routes push reliability signal to the
             // cited playbook chunks. null when procedural memory is off.
             proceduralFeedback: proceduralStore ?? undefined,
+            doneAudit: doneSweeper ?? undefined,
           }
         : null,
       persons: personsProvider,

@@ -26,6 +26,8 @@ export interface ProposalSummary {
     currentPayload: unknown;
     createdAt: string;
     resolvedAt: string | null;
+    /** True when the latest agent message is the 🟡 "looks already done" nudge. */
+    doneFlagged?: boolean;
 }
 
 export interface ProposalVersion {
@@ -181,6 +183,36 @@ export async function rejectProposal(
         method: 'POST',
         body: JSON.stringify(body),
     });
+}
+
+export interface DoneAuditStatus {
+    running: boolean;
+    startedAt: string | null;
+    finishedAt: string | null;
+    processed: number;
+    total: number;
+    flagged: number;
+    done: number;
+    notDone: number;
+    unclear: number;
+    noEvidence: number;
+    error: string | null;
+}
+
+/**
+ * Kick off the server-side "which pending suggestions look already done"
+ * sweep. Returns 202 with started=true, or started=false when a sweep is
+ * already running. Cards judged done get the 🟡 nudge → `doneFlagged` on the
+ * next list poll.
+ */
+export async function startDoneAudit(): Promise<{ ok: boolean; started: boolean; total: number }> {
+    return apiFetch<{ ok: boolean; started: boolean; total: number }>(`/v1/proposals/audit-done`, {
+        method: 'POST',
+    });
+}
+
+export async function getDoneAuditStatus(): Promise<DoneAuditStatus> {
+    return apiFetch<DoneAuditStatus>(`/v1/proposals/audit-done`);
 }
 
 export interface KnownPerson {
