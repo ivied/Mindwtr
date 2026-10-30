@@ -213,9 +213,14 @@ export class ContextStore {
       )
       .all(...rows.map((r) => r.rowid))
 
+    // IN (...) does not preserve the FTS rank order — iterate in the ranked
+    // rowid sequence, or the "top K" silently becomes "oldest K that matched"
+    // (rowid order ≈ chronological), starving consumers of the best hits.
+    const byRowid = new Map(captureRows.map((r) => [r.rowid!, r]))
     const hits: SearchHit[] = []
-    for (const row of captureRows) {
-      if (!matchesFilters(row, opts)) continue
+    for (const { rowid } of rows) {
+      const row = byRowid.get(rowid)
+      if (!row || !matchesFilters(row, opts)) continue
       hits.push({ capture: rowToRecord(row), score: null, via: 'fts' })
       if (hits.length >= topK) break
     }
@@ -224,11 +229,23 @@ export class ContextStore {
 
   /**
    * High-level retrieval: vec when available, FTS otherwise.
+   *
+   * Vec errors (e.g. embeddings API down/deactivated) degrade to FTS instead
+   * of throwing — a dead embeddings key must not take down every consumer
+   * (done-audit, refresher, proposer context). Seen live 2026-10-26 when the
+   * OpenAI account was deactivated and retrieve() crashed the whole audit.
    */
   async retrieve(query: string, opts: SearchOptions = {}): Promise<SearchHit[]> {
     if (this.hasVectorSearch) {
-      const vec = await this.searchVec(query, opts)
-      if (vec.length > 0) return vec
+      try {
+        const vec = await this.searchVec(query, opts)
+        if (vec.length > 0) return vec
+      } catch (err) {
+        console.warn(
+          '[context-store] vec search failed, falling back to FTS:',
+          (err as Error).message.slice(0, 200)
+        )
+      }
     }
     return this.searchFts(query, opts)
   }

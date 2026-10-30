@@ -96,7 +96,20 @@ async function main(): Promise<void> {
   const results: CardVerdict[] = []
 
   for (const p of pending) {
-    const verdict = await judgeProposalDone({ contextStore, llm }, p, flags.topK)
+    // One retry after a short backoff (router 429s say "reset after 2s"), then
+    // skip the card — a single rate-limit must not kill a 70-card sweep.
+    let verdict: CardVerdict | null
+    try {
+      verdict = await judgeProposalDone({ contextStore, llm }, p, flags.topK)
+    } catch {
+      await new Promise((r) => setTimeout(r, 3000))
+      try {
+        verdict = await judgeProposalDone({ contextStore, llm }, p, flags.topK)
+      } catch (err) {
+        console.error(`[audit-done] skip ${p.id.slice(0, 8)}: ${(err as Error).message.slice(0, 120)}`)
+        continue
+      }
+    }
     if (!verdict) continue
     results.push(verdict)
 
