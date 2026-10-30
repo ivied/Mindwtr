@@ -62,6 +62,18 @@ import {
   DEFAULT_DENY_WINDOW_TITLE_PATTERNS,
 } from './source-deny'
 
+/**
+ * Structural view of MuteRuleStore (proposal-store/mute-rules.ts) — kept as a
+ * local interface so commitment doesn't import from proposal-store (same
+ * dependency-direction rule as the DoneSweeper's sourceAgent literal).
+ */
+export interface MuteRuleMatcher {
+  findMatch(
+    title: string,
+    sourceChannel: string | null | undefined
+  ): { id: string; sampleTitle: string } | null
+}
+
 export interface CommitmentPipelineConfig {
   /** Min Proposer confidence to write proposal (0..1). Default 0.7 */
   minConfidence: number
@@ -88,6 +100,7 @@ export type PipelineOutcome =
   | { kind: 'low-confidence'; confidence: number; reasoning: string }
   | { kind: 'wrong-role'; whoOwes: string; reasoning: string }
   | { kind: 'proposed'; proposalId: string; title: string; confidence: number }
+  | { kind: 'muted'; ruleId: string; sampleTitle: string }
   | { kind: 'duplicate'; existingProposalId: string }
   | { kind: 'duplicate-of-existing'; existingTitle: string; reasoning: string }
   | { kind: 'completes-existing'; existingTitle: string; reasoning: string }
@@ -107,6 +120,7 @@ export class CommitmentPipeline {
   private proceduralFeedback: ProceduralFeedbackSink | null = null
   private llmPublisher: LlmPublisher | null = null
   private duplicateOfExistingHook: DuplicateOfExistingHook | null = null
+  private muteRules: MuteRuleMatcher | null = null
 
   setLlmPublisher(publisher: LlmPublisher | null): void {
     this.llmPublisher = publisher
@@ -122,6 +136,11 @@ export class CommitmentPipeline {
   /** Late-binding for the notifier so wiring code can resolve the bot→pipeline→notifier cycle. */
   setNotifier(notifier: ProposalNotifier | null): void {
     this.notifier = notifier
+  }
+
+  /** Optional: user "не предлагай такое" rules — matching proposals are skipped. */
+  setMuteRules(matcher: MuteRuleMatcher | null): void {
+    this.muteRules = matcher
   }
 
   /** Optional: when set, recent inbox titles are passed to the Proposer for
@@ -441,6 +460,19 @@ export class CommitmentPipeline {
         reasoning: proposal.reasoning,
       })
       return { kind: 'low-confidence', confidence: proposal.confidence, reasoning: proposal.reasoning }
+    }
+
+    // User mute rules ("не предлагай такое"): silently skip proposals that
+    // match a rejected-with-mute card's keyword signature. Checked last so
+    // only would-have-been-written proposals hit the rule scan.
+    if (this.muteRules) {
+      const muted = this.muteRules.findMatch(proposal.title, capture.sourceChannel)
+      if (muted) {
+        this.log(
+          `[commitment] muted (${capture.id} ~ rule ${muted.id} "${muted.sampleTitle}"): "${proposal.title}"`
+        )
+        return { kind: 'muted', ruleId: muted.id, sampleTitle: muted.sampleTitle }
+      }
     }
 
     try {

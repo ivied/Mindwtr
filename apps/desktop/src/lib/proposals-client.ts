@@ -147,15 +147,24 @@ export async function getProposal(id: string): Promise<ProposalDetail> {
 
 export async function approveProposal(
     id: string,
-    options: { includeFields?: string[] } = {}
+    options: {
+        includeFields?: string[];
+        /**
+         * Create-proposal overrides applied as a user version before apply:
+         * status 'done' = "did it just now" (cloud stamps completedAt),
+         * title = edit-then-approve.
+         */
+        overrides?: { status?: 'inbox' | 'next' | 'waiting' | 'someday' | 'reference' | 'done'; title?: string };
+    } = {}
 ): Promise<ApproveResult> {
-    const body =
-        options.includeFields && options.includeFields.length > 0
-            ? JSON.stringify({ includeFields: options.includeFields })
-            : undefined;
+    const payload: Record<string, unknown> = {};
+    if (options.includeFields && options.includeFields.length > 0) {
+        payload.includeFields = options.includeFields;
+    }
+    if (options.overrides) payload.overrides = options.overrides;
     return apiFetch<ApproveResult>(`/v1/proposals/${id}/approve`, {
         method: 'POST',
-        body,
+        body: Object.keys(payload).length > 0 ? JSON.stringify(payload) : undefined,
     });
 }
 
@@ -175,14 +184,62 @@ export async function approveProposal(
 export async function rejectProposal(
     id: string,
     reason?: string,
-    kind: 'rejected' | 'already-done' | 'not-applicable' = 'rejected'
-): Promise<{ ok: boolean }> {
+    kind: 'rejected' | 'already-done' | 'not-applicable' = 'rejected',
+    options: {
+        /** "Не предлагай такое": also create a mute rule from this card. */
+        mute?: boolean;
+    } = {}
+): Promise<{ ok: boolean; muteRule?: MuteRule }> {
     const body: Record<string, unknown> = { kind };
     if (reason) body.reason = reason;
-    return apiFetch<{ ok: boolean }>(`/v1/proposals/${id}/reject`, {
+    if (options.mute) body.mute = true;
+    return apiFetch<{ ok: boolean; muteRule?: MuteRule }>(`/v1/proposals/${id}/reject`, {
         method: 'POST',
         body: JSON.stringify(body),
     });
+}
+
+export interface MuteRule {
+    id: string;
+    sourceChannel: string | null;
+    keywords: string[];
+    sampleTitle: string;
+    createdAt: string;
+}
+
+export async function listMuteRules(): Promise<MuteRule[]> {
+    const data = await apiFetch<{ items: MuteRule[] }>(`/v1/proposals/mute-rules`);
+    return data.items;
+}
+
+export async function deleteMuteRule(id: string): Promise<{ ok: boolean }> {
+    return apiFetch<{ ok: boolean }>(`/v1/proposals/mute-rules/${id}`, { method: 'DELETE' });
+}
+
+export interface DoneCheckVerdict {
+    id: string;
+    title: string;
+    createdAt: string;
+    verdict: 'done' | 'not_done' | 'unclear' | 'no-evidence';
+    confidence: number;
+    evidence: string;
+    reasoning: string;
+}
+
+/**
+ * Per-card "did I already do this?" check. Synchronous (one LLM call,
+ * 5–15s). `hint` is a user nudge about where/how to look ("оплатил через
+ * сайт час назад"). Read-only — resolving stays a user decision.
+ */
+export async function checkProposalDone(id: string, hint?: string): Promise<DoneCheckVerdict> {
+    const data = await apiFetch<{ ok: boolean; verdict: DoneCheckVerdict }>(
+        `/v1/proposals/${id}/check-done`,
+        {
+            method: 'POST',
+            body: hint ? JSON.stringify({ hint }) : undefined,
+        }
+    );
+    return data.verdict;
 }
 
 export interface DoneAuditStatus {

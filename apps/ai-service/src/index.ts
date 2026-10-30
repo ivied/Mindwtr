@@ -17,7 +17,9 @@ import { ProposalApplier } from './proposal-store/apply'
 import { CommentHandler } from './proposal-store/comment-handler'
 import { TaskChangeProcessor } from './proposal-store/task-change-processor'
 import { ProposalExpiryJob } from './proposal-store/expiry'
-import { DoneSweeper } from './proposal-store/done-audit'
+import { DoneSweeper, judgeProposalDone, type CardVerdict } from './proposal-store/done-audit'
+import { MuteRuleStore } from './proposal-store/mute-rules'
+import type { ProposalRecord } from './proposal-store/types'
 import { Proposer } from './commitment/proposer'
 import { Enricher } from './commitment/enricher'
 import { EnricherPipeline } from './commitment/enricher-pipeline'
@@ -76,8 +78,8 @@ const LLM_API_KEY = process.env.LLM_API_KEY ?? ''
 // classify/select/extract/summarize nodes use SONNET. LLM_MODEL stays as the
 // opus alias for backward-compatible deployments. The LLMClient falls one tier
 // back to the other when its primary model errors on the proxy.
-const LLM_MODEL_OPUS = process.env.LLM_MODEL_OPUS ?? process.env.LLM_MODEL ?? 'cx/gpt-5.5'
-const LLM_MODEL_SONNET = process.env.LLM_MODEL_SONNET ?? 'cx/gpt-5.4-mini'
+const LLM_MODEL_OPUS = process.env.LLM_MODEL_OPUS ?? process.env.LLM_MODEL ?? 'cx/gpt-5.6-sol'
+const LLM_MODEL_SONNET = process.env.LLM_MODEL_SONNET ?? 'cx/gpt-5.6-luna'
 // Cross-provider safety net: tried after both primary tiers fail (e.g. the
 // primary provider's shared quota pool is exhausted). Empty = disabled.
 const LLM_MODEL_OPUS_FALLBACK = process.env.LLM_MODEL_OPUS_FALLBACK ?? ''
@@ -214,6 +216,9 @@ console.log(
 const proposalStore = new ProposalStore(contextStore.rawDb)
 const proposalApplier = new ProposalApplier(proposalStore, mindwtr)
 const taskChangeProcessor = new TaskChangeProcessor(proposalStore)
+// "Не предлагай такое" rules: written via reject {mute:true}, consulted by
+// the commitment pipeline before creating proposals.
+const muteRuleStore = new MuteRuleStore(contextStore.rawDb)
 
 // Persons registry — single shared instance: Proposer pipeline reads it
 // for who_to canonicalization, HTTP server exposes it at GET /v1/persons
@@ -284,6 +289,7 @@ let commitmentPipeline: CommitmentPipeline | null = null
 let commentHandler: CommentHandler | null = null
 let onboardingExtractor: OnboardingExtractor | null = null
 let doneSweeper: DoneSweeper | null = null
+let doneJudge: ((p: ProposalRecord, hint?: string) => Promise<CardVerdict | null>) | null = null
 if (LLM_BASE_URL && LLM_API_KEY) {
   const llm = new LLMClient(LLM_BASE_URL, LLM_API_KEY, {
     opus: LLM_MODEL_OPUS,
@@ -343,6 +349,10 @@ if (LLM_BASE_URL && LLM_API_KEY) {
   // when a fresh capture happens to match a card by title — this lets the
   // user re-check the whole backlog with one click instead.
   doneSweeper = new DoneSweeper({ store: proposalStore, contextStore, llm })
+  // Per-card synchronous variant of the same judge, for the UI's "проверь сам"
+  // button (POST /v1/proposals/:id/check-done, optional user hint).
+  doneJudge = (p, hint) => judgeProposalDone({ contextStore, llm }, p, 8, hint)
+  commitmentPipeline.setMuteRules(muteRuleStore)
   commitmentPipeline.setDuplicateOfExistingHook((info) => {
     void (async () => {
       try {
@@ -1010,6 +1020,8 @@ async function main() {
             // cited playbook chunks. null when procedural memory is off.
             proceduralFeedback: proceduralStore ?? undefined,
             doneAudit: doneSweeper ?? undefined,
+            doneJudge: doneJudge ?? undefined,
+            muteRules: muteRuleStore,
           }
         : null,
       persons: personsProvider,

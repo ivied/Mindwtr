@@ -7,7 +7,11 @@
 
 export interface MindwtrTaskBlueprint {
   title: string
-  status: 'inbox' | 'next' | 'someday' | 'reference' | 'waiting' | 'scheduled'
+  /**
+   * `done` never comes from the Proposer — it exists for the user-side
+   * "did it just now" approve override (create the task already completed).
+   */
+  status: 'inbox' | 'next' | 'someday' | 'reference' | 'waiting' | 'scheduled' | 'done'
   tags: string[]
   description: string
   /**

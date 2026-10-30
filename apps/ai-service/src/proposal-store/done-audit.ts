@@ -89,11 +89,15 @@ export interface DoneJudgeDeps {
 /**
  * Judge one pending create-card against captures recorded after it was
  * created. Returns null when the payload is not a create payload. Read-only.
+ *
+ * `hint` is an optional user nudge ("я оплатил через сайт час назад") — it
+ * sharpens retrieval and is passed to the judge as user-provided context.
  */
 export async function judgeProposalDone(
   deps: DoneJudgeDeps,
   proposal: ProposalRecord,
-  topK = 8
+  topK = 8,
+  hint?: string
 ): Promise<CardVerdict | null> {
   const payload = proposal.currentPayload as CreatePayload | null
   if (!payload || payload.kind !== 'create') return null
@@ -101,9 +105,14 @@ export async function judgeProposalDone(
   const title = payload.task.title || String(meta.ai_what ?? '')
   const what = typeof meta.ai_what === 'string' ? meta.ai_what : ''
 
-  const hits = await deps.contextStore.retrieve(`${title}\n${what}`, { topK })
+  const query = hint ? `${title}\n${what}\n${hint}` : `${title}\n${what}`
+  // Over-fetch then time-filter: retrieval ranks over the whole TTL window,
+  // so asking for exactly topK lets week-old captures crowd out the only ones
+  // that matter (recorded AFTER the card). 54/78 cards came back no-evidence
+  // on 2026-10-27 before this over-fetch.
+  const hits = await deps.contextStore.retrieve(query, { topK: topK * 5 })
   // Only evidence recorded after the card appeared can report it as finished.
-  const after = hits.filter((h) => h.capture.capturedAt > proposal.createdAt)
+  const after = hits.filter((h) => h.capture.capturedAt > proposal.createdAt).slice(0, topK)
 
   if (after.length === 0) {
     return {
@@ -129,7 +138,9 @@ export async function judgeProposalDone(
       { role: 'system', content: SYSTEM_PROMPT },
       {
         role: 'user',
-        content: `TASK (noticed ${proposal.createdAt}):\n${title}\n${what}\n\nEVIDENCE captured afterwards:\n${evidenceBlock}`,
+        content: `TASK (noticed ${proposal.createdAt}):\n${title}\n${what}${
+          hint ? `\n\nUSER HINT (where/how to look — not completion evidence by itself):\n${hint}` : ''
+        }\n\nEVIDENCE captured afterwards:\n${evidenceBlock}`,
       },
     ],
     tools: [AUDIT_TOOL],

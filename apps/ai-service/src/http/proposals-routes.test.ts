@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createHttpServer } from './server'
+import { createHttpServer, type ProposalsHttpDeps } from './server'
+import { MuteRuleStore } from '../proposal-store/mute-rules'
+import type { CardVerdict } from '../proposal-store/done-audit'
 import { ContextStore } from '../context-store/store'
 import { ProposalStore } from '../proposal-store/store'
 import { ProposalApplier } from '../proposal-store/apply'
@@ -51,7 +53,10 @@ function reviserReturning(outcome: ReviseOutcome): Reviser {
   return { revise: mock(async () => outcome) } as unknown as Reviser
 }
 
-function setupServer(reviser: Reviser = reviserReturning({ kind: 'clarify', agentMessage: 'ok' })) {
+function setupServer(
+  reviser: Reviser = reviserReturning({ kind: 'clarify', agentMessage: 'ok' }),
+  extraProposalDeps: Partial<ProposalsHttpDeps> = {}
+) {
   const applier = new ProposalApplier(store, mindwtr)
   const commentHandler = new CommentHandler({
     store,
@@ -65,7 +70,7 @@ function setupServer(reviser: Reviser = reviserReturning({ kind: 'clarify', agen
     authToken: TOKEN,
     capture: async () => {},
     contextStore: null,
-    proposals: { store, applier, commentHandler, taskChangeProcessor },
+    proposals: { store, applier, commentHandler, taskChangeProcessor, ...extraProposalDeps },
     persons: null,
   })
   return server.handler
@@ -545,5 +550,231 @@ describe('POST /v1/proposals/task-changes (webhook)', () => {
       })
     )
     expect(res.status).toBe(400)
+  })
+})
+
+describe('POST /v1/proposals/:id/approve with overrides', () => {
+  it('status override "done" creates the task completed (⚡ Сделал)', async () => {
+    const handler = setupServer()
+    const p = store.create({
+      type: 'create',
+      targetTaskIds: [],
+      sourceAgent: 'a',
+      payload: baseCreatePayload,
+    })
+    const res = await handler(
+      new Request(`http://x/v1/proposals/${p.id}/approve`, {
+        method: 'POST',
+        headers: AUTH,
+        body: JSON.stringify({ overrides: { status: 'done' } }),
+      })
+    )
+    expect(res.status).toBe(200)
+    expect(store.get(p.id)!.status).toBe('approved')
+
+    const createCalls = (mindwtr.createTask as unknown as { mock: { calls: [Record<string, unknown>][] } }).mock.calls
+    expect(createCalls[0]![0]).toHaveProperty('status', 'done')
+
+    const detail = store.getDetail(p.id)!
+    expect(detail.versions.length).toBe(2)
+    expect(detail.versions[1]!.author).toBe('user')
+    expect(detail.versions[1]!.summary).toContain('status → done')
+  })
+
+  it('title override edits the blueprint before apply (✏️ edit-then-approve)', async () => {
+    const handler = setupServer()
+    const p = store.create({
+      type: 'create',
+      targetTaskIds: [],
+      sourceAgent: 'a',
+      payload: baseCreatePayload,
+    })
+    const res = await handler(
+      new Request(`http://x/v1/proposals/${p.id}/approve`, {
+        method: 'POST',
+        headers: AUTH,
+        body: JSON.stringify({ overrides: { title: 'Pay October invoice to ACME' } }),
+      })
+    )
+    expect(res.status).toBe(200)
+    const createCalls = (mindwtr.createTask as unknown as { mock: { calls: [Record<string, unknown>][] } }).mock.calls
+    expect(createCalls[0]![0]).toHaveProperty('title', 'Pay October invoice to ACME')
+  })
+
+  it('400 on invalid status override', async () => {
+    const handler = setupServer()
+    const p = store.create({
+      type: 'create',
+      targetTaskIds: [],
+      sourceAgent: 'a',
+      payload: baseCreatePayload,
+    })
+    const res = await handler(
+      new Request(`http://x/v1/proposals/${p.id}/approve`, {
+        method: 'POST',
+        headers: AUTH,
+        body: JSON.stringify({ overrides: { status: 'bogus' } }),
+      })
+    )
+    expect(res.status).toBe(400)
+    expect(store.get(p.id)!.status).toBe('pending')
+  })
+
+  it('400 when overrides target a non-create proposal', async () => {
+    const handler = setupServer()
+    const p = store.create({
+      type: 'modify',
+      targetTaskIds: ['t'],
+      sourceAgent: 'enricher',
+      payload: { kind: 'modify', taskId: 't', diff: [{ field: 'title', from: 'a', to: 'b' }] },
+    })
+    const res = await handler(
+      new Request(`http://x/v1/proposals/${p.id}/approve`, {
+        method: 'POST',
+        headers: AUTH,
+        body: JSON.stringify({ overrides: { status: 'done' } }),
+      })
+    )
+    expect(res.status).toBe(400)
+  })
+})
+
+describe('reject with mute + mute-rule routes', () => {
+  it('reject { mute: true } creates a rule and GET/DELETE manage it', async () => {
+    const muteRules = new MuteRuleStore(contextStore.rawDb)
+    const handler = setupServer(undefined, { muteRules })
+    const p = store.create({
+      type: 'create',
+      targetTaskIds: [],
+      sourceAgent: 'a',
+      payload: {
+        ...baseCreatePayload,
+        task: {
+          ...baseCreatePayload.task,
+          title: 'Confirm delivery at door seven',
+          metadata: { source_channel: 'screen_capture' },
+        },
+      },
+    })
+    const rejectRes = await handler(
+      new Request(`http://x/v1/proposals/${p.id}/reject`, {
+        method: 'POST',
+        headers: AUTH,
+        body: JSON.stringify({ mute: true }),
+      })
+    )
+    expect(rejectRes.status).toBe(200)
+    const rejectBody = (await rejectRes.json()) as { ok: boolean; muteRule?: { id: string } }
+    expect(rejectBody.muteRule).toBeDefined()
+    expect(store.get(p.id)!.status).toBe('rejected')
+
+    // Rule matches a paraphrase of the same suggestion.
+    expect(muteRules.findMatch('Confirm the delivery at door 7', 'screen_capture')).not.toBeNull()
+
+    const listRes = await handler(
+      new Request('http://x/v1/proposals/mute-rules', { headers: AUTH })
+    )
+    expect(listRes.status).toBe(200)
+    const list = (await listRes.json()) as { items: { id: string }[] }
+    expect(list.items).toHaveLength(1)
+
+    const delRes = await handler(
+      new Request(`http://x/v1/proposals/mute-rules/${list.items[0]!.id}`, {
+        method: 'DELETE',
+        headers: AUTH,
+      })
+    )
+    expect(delRes.status).toBe(200)
+    expect(muteRules.list()).toHaveLength(0)
+  })
+
+  it('plain reject does not create a rule', async () => {
+    const muteRules = new MuteRuleStore(contextStore.rawDb)
+    const handler = setupServer(undefined, { muteRules })
+    const p = store.create({
+      type: 'create',
+      targetTaskIds: [],
+      sourceAgent: 'a',
+      payload: baseCreatePayload,
+    })
+    const res = await handler(
+      new Request(`http://x/v1/proposals/${p.id}/reject`, {
+        method: 'POST',
+        headers: AUTH,
+        body: JSON.stringify({ kind: 'already-done' }),
+      })
+    )
+    expect(res.status).toBe(200)
+    expect(muteRules.list()).toHaveLength(0)
+  })
+})
+
+describe('POST /v1/proposals/:id/check-done', () => {
+  const verdictOf = (over: Partial<CardVerdict> = {}): CardVerdict => ({
+    id: 'x',
+    title: 'Pay invoice',
+    createdAt: '2026-04-01T00:00:00Z',
+    verdict: 'done',
+    confidence: 0.9,
+    evidence: 'оплатил инвойс',
+    reasoning: 'past-tense completion',
+    ...over,
+  })
+
+  it('returns the judge verdict and passes the user hint through', async () => {
+    const judge = mock(async (_proposal: unknown, hint?: string) => {
+      void hint
+      return verdictOf()
+    })
+    const handler = setupServer(undefined, { doneJudge: judge })
+    const p = store.create({
+      type: 'create',
+      targetTaskIds: [],
+      sourceAgent: 'a',
+      payload: baseCreatePayload,
+    })
+    const res = await handler(
+      new Request(`http://x/v1/proposals/${p.id}/check-done`, {
+        method: 'POST',
+        headers: AUTH,
+        body: JSON.stringify({ hint: 'оплатил через сайт час назад' }),
+      })
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean; verdict: CardVerdict }
+    expect(body.verdict.verdict).toBe('done')
+    expect(judge.mock.calls[0]![1]).toBe('оплатил через сайт час назад')
+    // Read-only: the card stays pending.
+    expect(store.get(p.id)!.status).toBe('pending')
+  })
+
+  it('503 when LLM judge is not configured', async () => {
+    const handler = setupServer()
+    const p = store.create({
+      type: 'create',
+      targetTaskIds: [],
+      sourceAgent: 'a',
+      payload: baseCreatePayload,
+    })
+    const res = await handler(
+      new Request(`http://x/v1/proposals/${p.id}/check-done`, { method: 'POST', headers: AUTH })
+    )
+    expect(res.status).toBe(503)
+  })
+
+  it('409 when the card is not pending', async () => {
+    const judge = mock(async () => verdictOf())
+    const handler = setupServer(undefined, { doneJudge: judge })
+    const p = store.create({
+      type: 'create',
+      targetTaskIds: [],
+      sourceAgent: 'a',
+      payload: baseCreatePayload,
+    })
+    store.transition(p.id, 'rejected', 'user', {})
+    const res = await handler(
+      new Request(`http://x/v1/proposals/${p.id}/check-done`, { method: 'POST', headers: AUTH })
+    )
+    expect(res.status).toBe(409)
   })
 })

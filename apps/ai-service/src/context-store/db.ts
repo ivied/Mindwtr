@@ -10,7 +10,7 @@ import { dirname } from 'node:path'
 
 export type DB = Database
 
-const SCHEMA_VERSION = 10
+const SCHEMA_VERSION = 11
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS captures (
@@ -366,6 +366,19 @@ CREATE TABLE IF NOT EXISTS job_cursors (
   cursor TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+-- v11: user "не предлагай такое" mute rules. Created from a rejected card;
+-- the commitment pipeline checks new proposals against these before writing.
+-- keywords = JSON array of normalized title words; a proposal is muted when
+-- source_channel matches (or rule channel is NULL = any) and enough rule
+-- keywords appear in its title (see mute-rules.ts for the match logic).
+CREATE TABLE IF NOT EXISTS proposal_mute_rules (
+  id TEXT PRIMARY KEY,
+  source_channel TEXT,
+  keywords TEXT NOT NULL,
+  sample_title TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 `
 
 const VEC_SCHEMA_SQL = `
@@ -550,4 +563,16 @@ function applyAdditiveMigrations(db: DB): void {
   )
   db.run('CREATE INDEX IF NOT EXISTS idx_entity_registry_parent ON entity_registry(parent_slug)')
   db.run('CREATE INDEX IF NOT EXISTS idx_entity_registry_mentions ON entity_registry(mention_count)')
+
+  // v11: proposal mute rules ("не предлагай такое"). Run here too so existing
+  // v10 databases get the table.
+  db.run(
+    `CREATE TABLE IF NOT EXISTS proposal_mute_rules (
+       id TEXT PRIMARY KEY,
+       source_channel TEXT,
+       keywords TEXT NOT NULL,
+       sample_title TEXT NOT NULL,
+       created_at TEXT NOT NULL
+     )`
+  )
 }

@@ -29,7 +29,14 @@ import type {
   TaskFieldsSnapshot,
 } from '../proposal-store/task-change-processor'
 import type { ProposalRecord, ProposalType } from '../proposal-store/types'
-import type { FieldDiff, ModifyPayload } from '../proposal-store/payloads'
+import type { CardVerdict } from '../proposal-store/done-audit'
+import type { MuteRule, MuteRuleStore } from '../proposal-store/mute-rules'
+import type {
+  CreatePayload,
+  FieldDiff,
+  MindwtrTaskBlueprint,
+  ModifyPayload,
+} from '../proposal-store/payloads'
 import type { PersonsProvider } from '../wiki/persons-reader'
 import type { GlossaryStore } from '../wiki/glossary-store'
 import type { GlossaryKind } from '../wiki/glossary-reader'
@@ -94,6 +101,19 @@ export interface ProposalsHttpDeps {
     start(): { started: boolean; total: number }
     status(): unknown
   }
+  /**
+   * Optional per-card "did I already do this?" judge behind
+   * POST /v1/proposals/:id/check-done. Same core as doneAudit but for one
+   * card, synchronous response, with an optional user hint. Absent when the
+   * LLM client is not configured.
+   */
+  doneJudge?: (proposal: ProposalRecord, hint?: string) => Promise<CardVerdict | null>
+  /**
+   * Optional "не предлагай такое" rules. Reject with { mute: true } creates a
+   * rule from the card; GET/DELETE /v1/proposals/mute-rules manage them. The
+   * commitment pipeline consults the same store before writing new proposals.
+   */
+  muteRules?: MuteRuleStore
 }
 
 export interface MemoryHttpDeps {
@@ -502,6 +522,20 @@ function mountProposalRoutes(app: Hono, deps: ProposalsHttpDeps): void {
     return c.json(deps.doneAudit.status() as Record<string, unknown>)
   })
 
+  // Mute-rule management ("не предлагай такое"). Registered before
+  // /v1/proposals/:id so the param route can't shadow the static path.
+  app.get('/v1/proposals/mute-rules', (c) => {
+    if (!deps.muteRules) return c.json({ error: 'mute-rules unavailable' }, 503)
+    return c.json({ items: deps.muteRules.list() })
+  })
+
+  app.delete('/v1/proposals/mute-rules/:ruleId', (c) => {
+    if (!deps.muteRules) return c.json({ error: 'mute-rules unavailable' }, 503)
+    const deleted = deps.muteRules.delete(c.req.param('ruleId'))
+    if (!deleted) return c.json({ error: 'not found' }, 404)
+    return c.json({ ok: true })
+  })
+
   app.get('/v1/proposals', (c) => {
     const type = c.req.query('type') as ProposalType | undefined
     const sourceAgent = c.req.query('sourceAgent') ?? undefined
@@ -527,13 +561,28 @@ function mountProposalRoutes(app: Hono, deps: ProposalsHttpDeps): void {
     // Body: { includeFields?: string[] }. When present and non-empty, we
     // synthesize a filtered version (author=user, summary='partial approval')
     // and the applier then reads that filtered payload from the store.
+    //
+    // Optional create overrides: { overrides: { status?: 'done', title?: string } }.
+    // Same version-synthesis mechanism — used by the "did it just now" button
+    // (status='done') and edit-then-approve (title). type=create only.
     let includeFields: string[] | undefined
+    let overrides: { status?: string; title?: string } | undefined
     try {
-      const body = (await c.req.json()) as { includeFields?: unknown }
+      const body = (await c.req.json()) as {
+        includeFields?: unknown
+        overrides?: { status?: unknown; title?: unknown }
+      }
       if (Array.isArray(body?.includeFields)) {
         includeFields = body.includeFields.filter(
           (f): f is string => typeof f === 'string' && f.length > 0
         )
+      }
+      if (body?.overrides && typeof body.overrides === 'object') {
+        const status =
+          typeof body.overrides.status === 'string' ? body.overrides.status.trim() : undefined
+        const title =
+          typeof body.overrides.title === 'string' ? body.overrides.title.trim() : undefined
+        if (status || title) overrides = { status, title }
       }
     } catch {
       // No body / not JSON — fine, treated as full approval.
@@ -542,6 +591,11 @@ function mountProposalRoutes(app: Hono, deps: ProposalsHttpDeps): void {
     if (includeFields && includeFields.length > 0) {
       const partialErr = applyPartialFilter(deps.store, proposal, includeFields)
       if (partialErr) return c.json({ error: partialErr }, 400)
+    }
+
+    if (overrides) {
+      const overrideErr = applyCreateOverrides(deps.store, proposal, overrides)
+      if (overrideErr) return c.json({ error: overrideErr }, 400)
     }
 
     const result = await deps.applier.apply(id)
@@ -577,6 +631,36 @@ function mountProposalRoutes(app: Hono, deps: ProposalsHttpDeps): void {
     })
   })
 
+  // Per-card "did I already do this?" check — synchronous (one LLM call),
+  // unlike the whole-backlog audit-done sweep. Body: { hint?: string } where
+  // hint is a user nudge about where/how to look. Read-only: returns the
+  // verdict, does NOT flag or resolve the card — that stays a user decision.
+  app.post('/v1/proposals/:id/check-done', async (c) => {
+    if (!deps.doneJudge) {
+      return c.json({ error: 'done-check unavailable (LLM not configured)' }, 503)
+    }
+    const id = c.req.param('id')
+    const proposal = deps.store.get(id)
+    if (!proposal) return c.json({ error: 'not found' }, 404)
+    if (proposal.status !== 'pending') {
+      return c.json({ error: `proposal is ${proposal.status}, nothing to check` }, 409)
+    }
+    let hint: string | undefined
+    try {
+      const body = (await c.req.json()) as { hint?: unknown }
+      if (typeof body?.hint === 'string' && body.hint.trim()) hint = body.hint.trim().slice(0, 500)
+    } catch {
+      // No body — plain check.
+    }
+    try {
+      const verdict = await deps.doneJudge(proposal, hint)
+      if (!verdict) return c.json({ error: 'only create proposals can be checked' }, 400)
+      return c.json({ ok: true, verdict })
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 502)
+    }
+  })
+
   app.post('/v1/proposals/:id/reject', async (c) => {
     const id = c.req.param('id')
     const proposal = deps.store.get(id)
@@ -595,15 +679,18 @@ function mountProposalRoutes(app: Hono, deps: ProposalsHttpDeps): void {
     // delayed-action breakdown.
     let reason: string | undefined
     let kind: 'rejected' | 'already-done' | 'not-applicable' = 'rejected'
+    let mute = false
     try {
       const body = (await c.req.json()) as {
         reason?: string
         kind?: string
+        mute?: unknown
       }
       reason = typeof body?.reason === 'string' ? body.reason.trim() : undefined
       if (body?.kind === 'already-done' || body?.kind === 'not-applicable') {
         kind = body.kind
       }
+      mute = body?.mute === true
     } catch {
       // No body — that's fine, reject without reason.
     }
@@ -612,6 +699,21 @@ function mountProposalRoutes(app: Hono, deps: ProposalsHttpDeps): void {
     }
     const meta: Record<string, unknown> = { kind }
     if (reason) meta.reason = reason
+    // "Не предлагай такое": derive a mute rule from the card before rejecting,
+    // so similar future proposals are skipped by the pipeline.
+    let muteRule: MuteRule | null = null
+    if (mute && deps.muteRules) {
+      const payload = proposal.currentPayload as CreatePayload | null
+      if (payload?.kind === 'create') {
+        const muteMeta = (payload.task.metadata ?? {}) as Record<string, unknown>
+        muteRule = deps.muteRules.create({
+          title: payload.task.title,
+          sourceChannel:
+            typeof muteMeta.source_channel === 'string' ? muteMeta.source_channel : null,
+        })
+        if (muteRule) meta.muteRuleId = muteRule.id
+      }
+    }
     deps.store.transition(id, 'rejected', 'user', meta)
     // FR89: 'rejected' = AI was wrong → negative for cited chunks.
     // 'already-done' = AI was right (true positive) → positive.
@@ -625,7 +727,11 @@ function mountProposalRoutes(app: Hono, deps: ProposalsHttpDeps): void {
     } catch (err) {
       console.warn('[http] procedural feedback (reject) failed:', (err as Error).message)
     }
-    return c.json({ ok: true, proposal: deps.store.get(id) })
+    return c.json({
+      ok: true,
+      proposal: deps.store.get(id),
+      ...(muteRule ? { muteRule } : {}),
+    })
   })
 
   app.post('/v1/proposals/:id/comments', async (c) => {
@@ -726,6 +832,59 @@ function applyPartialFilter(
     payload: filteredPayload,
     author: 'user',
     summary: `partial approval: ${filtered.map((d) => d.field).join(', ')}`,
+  })
+  return null
+}
+
+/** Statuses a user may force on approval. Matches Mindwtr cloud's accepted set. */
+const APPROVE_STATUS_OVERRIDES = new Set([
+  'inbox',
+  'next',
+  'waiting',
+  'someday',
+  'reference',
+  'done',
+])
+
+/**
+ * Apply user overrides (status and/or title) to a pending create proposal by
+ * appending a new version (author=user), mirroring applyPartialFilter. The
+ * applier then creates the Mindwtr task from the overridden blueprint —
+ * status='done' is the "did it just now" path (cloud stamps completedAt).
+ */
+function applyCreateOverrides(
+  store: ProposalStore,
+  proposal: ProposalRecord,
+  overrides: { status?: string; title?: string }
+): string | null {
+  const payload = proposal.currentPayload as { kind?: string } | null
+  if (!payload || payload.kind !== 'create') {
+    return 'overrides only supported for type=create'
+  }
+  if (overrides.status && !APPROVE_STATUS_OVERRIDES.has(overrides.status)) {
+    return `invalid status override: ${overrides.status}`
+  }
+  const create = payload as unknown as CreatePayload
+  const nextTask: MindwtrTaskBlueprint = {
+    ...create.task,
+    ...(overrides.status ? { status: overrides.status as MindwtrTaskBlueprint['status'] } : {}),
+    ...(overrides.title ? { title: overrides.title.slice(0, 200) } : {}),
+  }
+  if (nextTask.status === create.task.status && nextTask.title === create.task.title) {
+    return null // no-op — avoid a pointless extra version
+  }
+  const parts: string[] = []
+  if (overrides.status && overrides.status !== create.task.status) {
+    parts.push(`status → ${overrides.status}`)
+  }
+  if (overrides.title && overrides.title !== create.task.title) {
+    parts.push('title edited')
+  }
+  store.addVersion({
+    proposalId: proposal.id,
+    payload: { ...create, task: nextTask },
+    author: 'user',
+    summary: `approve overrides: ${parts.join(', ')}`,
   })
   return null
 }

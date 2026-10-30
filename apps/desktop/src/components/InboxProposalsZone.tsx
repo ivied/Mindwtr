@@ -15,7 +15,22 @@
  */
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Sparkles, Check, CheckCheck, X, MessageSquare, ChevronDown, ChevronUp, Loader2, RefreshCw } from 'lucide-react';
+import {
+    Sparkles,
+    Check,
+    CheckCheck,
+    X,
+    MessageSquare,
+    ChevronDown,
+    ChevronUp,
+    Loader2,
+    RefreshCw,
+    Zap,
+    Search,
+    Pencil,
+    VolumeX,
+    Trash2,
+} from 'lucide-react';
 import { useTaskStore, type Task } from '@mindwtr/core';
 import {
     isProposalsAvailable,
@@ -26,7 +41,12 @@ import {
     commentOnProposal,
     startDoneAudit,
     getDoneAuditStatus,
+    checkProposalDone,
+    listMuteRules,
+    deleteMuteRule,
     type DoneAuditStatus,
+    type DoneCheckVerdict,
+    type MuteRule,
     type ProposalSummary,
     type ProposalDetail,
 } from '../lib/proposals-client';
@@ -104,6 +124,86 @@ export function InboxProposalsZone() {
         }
     }, [refresh]);
 
+    // --- Keyboard triage ---
+    // j/k (or arrows) move focus between cards; single keys fire the focused
+    // card's actions via the API each card registers on mount. Ignored while
+    // typing in any input/textarea so the reject-reason and comment fields
+    // keep normal typing.
+    const [focusedId, setFocusedId] = useState<string | null>(null);
+    const cardApis = useRef(new Map<string, ProposalCardApi>());
+    const sortedIdsRef = useRef<string[]>([]);
+    const registerCardApi = useCallback((id: string, api: ProposalCardApi | null) => {
+        if (api) cardApis.current.set(id, api);
+        else cardApis.current.delete(id);
+    }, []);
+
+    useEffect(() => {
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.metaKey || e.ctrlKey || e.altKey) return;
+            const target = e.target as HTMLElement | null;
+            if (
+                target &&
+                (target.tagName === 'INPUT' ||
+                    target.tagName === 'TEXTAREA' ||
+                    target.tagName === 'SELECT' ||
+                    target.isContentEditable)
+            ) {
+                return;
+            }
+            const ids = sortedIdsRef.current;
+            if (ids.length === 0) return;
+            const key = e.key.toLowerCase();
+            if (key === 'j' || key === 'k' || e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                const dir = key === 'j' || e.key === 'ArrowDown' ? 1 : -1;
+                setFocusedId((prev) => {
+                    const idx = prev ? ids.indexOf(prev) : -1;
+                    const next = idx < 0 ? (dir > 0 ? 0 : ids.length - 1) : Math.min(Math.max(idx + dir, 0), ids.length - 1);
+                    return ids[next] ?? null;
+                });
+                return;
+            }
+            if (!focusedId) return;
+            const api = cardApis.current.get(focusedId);
+            if (!api) return;
+            const actions: Record<string, (() => void) | undefined> = {
+                a: api.approve,
+                q: api.didIt,
+                d: api.alreadyDone,
+                c: api.check,
+                e: api.edit,
+                x: api.reject,
+                m: api.mute,
+                ' ': api.toggleExpand,
+            };
+            const action = actions[key === ' ' ? ' ' : key];
+            if (action) {
+                e.preventDefault();
+                action();
+            }
+        };
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [focusedId]);
+
+    // --- Mute rules footer ("не предлагай такое" management) ---
+    const [muteRules, setMuteRules] = useState<MuteRule[] | null>(null);
+    const [muteRulesOpen, setMuteRulesOpen] = useState(false);
+    useEffect(() => {
+        if (!muteRulesOpen) return;
+        let cancelled = false;
+        listMuteRules()
+            .then((items) => {
+                if (!cancelled) setMuteRules(items);
+            })
+            .catch(() => {
+                if (!cancelled) setMuteRules([]);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [muteRulesOpen, refreshKey]);
+
     if (!available) return null;
 
     // Quiet when nothing to show — zero visual footprint.
@@ -158,28 +258,98 @@ export function InboxProposalsZone() {
             ) : (
                 <div className="divide-y divide-violet-500/15">
                     {/* Flagged-as-done cards float to the top — they take one click to clear. Sort is stable, so the rest keep server order (newest first). */}
-                    {[...proposals]
-                        .sort((a, b) => Number(b.doneFlagged ?? false) - Number(a.doneFlagged ?? false))
-                        .map((p) => (
+                    {(() => {
+                        const sorted = [...proposals].sort(
+                            (a, b) => Number(b.doneFlagged ?? false) - Number(a.doneFlagged ?? false)
+                        );
+                        sortedIdsRef.current = sorted.map((p) => p.id);
+                        return sorted.map((p) => (
                             <ProposalCard
                                 key={p.id}
                                 summary={p}
                                 startExpanded={expandedId === p.id}
+                                focused={focusedId === p.id}
+                                onFocus={() => setFocusedId(p.id)}
+                                registerApi={registerCardApi}
                                 onResolved={() => {
                                     if (expandedId === p.id) setExpandedId(null);
                                     refresh();
                                 }}
                             />
-                        ))}
+                        ));
+                    })()}
                 </div>
             )}
+
+            <footer className="border-t border-violet-500/20 px-3 py-1.5">
+                <button
+                    type="button"
+                    onClick={() => setMuteRulesOpen((v) => !v)}
+                    className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground"
+                    title='Rules created via "не предлагай такое" — matching future suggestions are silently skipped'
+                >
+                    <VolumeX className="h-3 w-3" />
+                    Muted rules{muteRules ? ` (${muteRules.length})` : ''}
+                    {muteRulesOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                </button>
+                {muteRulesOpen ? (
+                    muteRules === null ? (
+                        <div className="py-1 text-[10px] text-muted-foreground">Loading…</div>
+                    ) : muteRules.length === 0 ? (
+                        <div className="py-1 text-[10px] text-muted-foreground">
+                            No rules — reject a card via ✗ ▾ → "Не предлагай такое" to add one.
+                        </div>
+                    ) : (
+                        <ul className="mt-1 space-y-0.5">
+                            {muteRules.map((r) => (
+                                <li key={r.id} className="flex items-center gap-2 text-[10px]">
+                                    <span className="truncate">
+                                        {r.sampleTitle}
+                                        {r.sourceChannel ? (
+                                            <span className="text-muted-foreground"> · {r.sourceChannel}</span>
+                                        ) : null}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            void deleteMuteRule(r.id).then(() =>
+                                                setMuteRules((prev) => prev?.filter((x) => x.id !== r.id) ?? prev)
+                                            );
+                                        }}
+                                        className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-destructive"
+                                        title="Delete rule"
+                                    >
+                                        <Trash2 className="h-3 w-3" />
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
+                    )
+                ) : null}
+            </footer>
         </div>
     );
+}
+
+/** Imperative actions a card exposes for the zone-level keyboard triage. */
+interface ProposalCardApi {
+    approve: () => void;
+    didIt: () => void;
+    alreadyDone: () => void;
+    check: () => void;
+    edit: () => void;
+    reject: () => void;
+    mute: () => void;
+    toggleExpand: () => void;
 }
 
 interface CardProps {
     summary: ProposalSummary;
     startExpanded: boolean;
+    /** Keyboard-triage focus (j/k) — highlighted ring, action keys target this card. */
+    focused: boolean;
+    onFocus: () => void;
+    registerApi: (id: string, api: ProposalCardApi | null) => void;
     onResolved: () => void;
 }
 
@@ -262,7 +432,7 @@ function PersonBadge({ slug, name }: { slug: string; name: string }) {
     );
 }
 
-function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
+function ProposalCard({ summary, startExpanded, focused, onFocus, registerApi, onResolved }: CardProps) {
     const [expanded, setExpanded] = useState(startExpanded);
     const [detail, setDetail] = useState<ProposalDetail | null>(null);
     const [busy, setBusy] = useState(false);
@@ -270,6 +440,31 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
     const [rejectMode, setRejectMode] = useState(false);
     const [rejectReason, setRejectReason] = useState('');
     const [error, setError] = useState<string | null>(null);
+    // ✏️ edit-then-approve
+    const [editMode, setEditMode] = useState(false);
+    const [editTitle, setEditTitle] = useState('');
+    // 🔍 per-card done-check
+    const [checking, setChecking] = useState(false);
+    const [checkVerdict, setCheckVerdict] = useState<DoneCheckVerdict | null>(null);
+    const [checkHintMode, setCheckHintMode] = useState(false);
+    const [checkHint, setCheckHint] = useState('');
+    // ✗ split-button dropdown + instant-reject undo window
+    const [xMenuOpen, setXMenuOpen] = useState(false);
+    const [pendingReject, setPendingReject] = useState(false);
+    const rejectTimerRef = useRef<number | null>(null);
+    const rootRef = useRef<HTMLDivElement | null>(null);
+
+    useEffect(() => {
+        return () => {
+            if (rejectTimerRef.current !== null) window.clearTimeout(rejectTimerRef.current);
+        };
+    }, []);
+
+    useEffect(() => {
+        if (focused && rootRef.current) {
+            rootRef.current.scrollIntoView({ block: 'nearest' });
+        }
+    }, [focused]);
 
     useEffect(() => {
         if (!expanded) return;
@@ -317,43 +512,53 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
     const whoTo = (payload?.task?.metadata?.ai_who_to as string | undefined) ?? '';
     const whoToSlug = (payload?.task?.metadata?.ai_who_to_slug as string | undefined) ?? '';
 
-    const onApprove = useCallback(async () => {
-        setBusy(true);
-        setError(null);
-        try {
-            const result = await approveProposal(summary.id);
-            if (!result.ok) {
-                setError(`${result.reason}: ${result.details ?? ''}`);
-                return;
-            }
-            // Apply created the Mindwtr task in cloud. Two things need to
-            // happen in the local store for the user to actually see it in
-            // their inbox:
-            //   1) Inject the task directly with the cloud-returned id so the
-            //      web (non-Tauri) store, which has no continuous cloud-sync,
-            //      doesn't lag behind.
-            //   2) Best-effort SyncService.performSync() so that in Tauri /
-            //      properly-synced contexts the rest of the cloud state
-            //      (other concurrent edits) also lands.
-            const appliedTaskIds = result.appliedTaskIds ?? [];
-            injectCreatedTaskLocally(summary, appliedTaskIds);
+    const onApproveWith = useCallback(
+        async (overrides?: { status?: 'done'; title?: string }) => {
+            setBusy(true);
+            setError(null);
             try {
-                await SyncService.performSync();
-            } catch (syncErr) {
-                console.warn('[proposals] post-approve sync failed:', (syncErr as Error).message);
+                const result = await approveProposal(summary.id, overrides ? { overrides } : {});
+                if (!result.ok) {
+                    setError(`${result.reason}: ${result.details ?? ''}`);
+                    return;
+                }
+                // Apply created the Mindwtr task in cloud. Two things need to
+                // happen in the local store for the user to actually see it in
+                // their inbox:
+                //   1) Inject the task directly with the cloud-returned id so the
+                //      web (non-Tauri) store, which has no continuous cloud-sync,
+                //      doesn't lag behind.
+                //   2) Best-effort SyncService.performSync() so that in Tauri /
+                //      properly-synced contexts the rest of the cloud state
+                //      (other concurrent edits) also lands.
+                const appliedTaskIds = result.appliedTaskIds ?? [];
+                injectCreatedTaskLocally(summary, appliedTaskIds, overrides);
+                try {
+                    await SyncService.performSync();
+                } catch (syncErr) {
+                    console.warn('[proposals] post-approve sync failed:', (syncErr as Error).message);
+                }
+                onResolved();
+            } catch (err) {
+                setError((err as Error).message);
+            } finally {
+                setBusy(false);
+                setEditMode(false);
             }
-            onResolved();
-        } catch (err) {
-            setError((err as Error).message);
-        } finally {
-            setBusy(false);
-        }
-    }, [summary.id, onResolved, summary]);
+        },
+        [summary.id, onResolved, summary]
+    );
 
-    const onRejectClick = useCallback(() => {
+    const onApprove = useCallback(() => void onApproveWith(), [onApproveWith]);
+    // ⚡ "Сделал" — did it just now thanks to the card: create the task
+    // already completed so it lands in the done log, not the inbox.
+    const onDidIt = useCallback(() => void onApproveWith({ status: 'done' }), [onApproveWith]);
+
+    const onRejectWithReasonClick = useCallback(() => {
         // Open the inline reject form inside the card; actual reject happens
         // when the user confirms via the form below. Native window.prompt
         // looked alien against Mindwtr's styled UI.
+        setXMenuOpen(false);
         setRejectMode(true);
         setExpanded(true);
         setError(null);
@@ -362,15 +567,17 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
     const performReject = useCallback(
         async (
             reason: string | undefined,
-            kind: 'rejected' | 'already-done' | 'not-applicable' = 'rejected'
+            kind: 'rejected' | 'already-done' | 'not-applicable' = 'rejected',
+            options: { mute?: boolean } = {}
         ) => {
             setBusy(true);
             setError(null);
             try {
-                await rejectProposal(summary.id, reason, kind);
+                await rejectProposal(summary.id, reason, kind, options);
                 onResolved();
             } catch (err) {
                 setError((err as Error).message);
+                setPendingReject(false);
             } finally {
                 setBusy(false);
                 setRejectMode(false);
@@ -379,6 +586,32 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
         },
         [summary.id, onResolved]
     );
+
+    // ✗ body click — instant reject with a 5s undo window: the card collapses
+    // to an "Отменить" row and the actual API call fires when the timer runs
+    // out. Undo just cancels the timer; nothing was sent yet.
+    const onInstantReject = useCallback(() => {
+        setXMenuOpen(false);
+        setPendingReject(true);
+        rejectTimerRef.current = window.setTimeout(() => {
+            rejectTimerRef.current = null;
+            void performReject(undefined, 'rejected');
+        }, 5000);
+    }, [performReject]);
+
+    const onUndoReject = useCallback(() => {
+        if (rejectTimerRef.current !== null) {
+            window.clearTimeout(rejectTimerRef.current);
+            rejectTimerRef.current = null;
+        }
+        setPendingReject(false);
+    }, []);
+
+    // 🔇 "Не предлагай такое" — reject + mute rule so similar proposals are skipped.
+    const onMute = useCallback(() => {
+        setXMenuOpen(false);
+        void performReject(undefined, 'rejected', { mute: true });
+    }, [performReject]);
 
     const onConfirmReject = useCallback(
         () => performReject(rejectReason.trim() || undefined, 'rejected'),
@@ -393,6 +626,45 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
         setRejectMode(false);
         setRejectReason('');
     }, []);
+
+    // 🔍 per-card "did I already do this?" check (optionally with a user hint).
+    const onCheck = useCallback(
+        async (hint?: string) => {
+            setChecking(true);
+            setCheckVerdict(null);
+            setCheckHintMode(false);
+            setError(null);
+            try {
+                const verdict = await checkProposalDone(summary.id, hint);
+                setCheckVerdict(verdict);
+            } catch (err) {
+                setError((err as Error).message);
+            } finally {
+                setChecking(false);
+            }
+        },
+        [summary.id]
+    );
+
+    const onEditClick = useCallback(() => {
+        setEditTitle((summary.currentPayload as { task?: { title?: string } })?.task?.title ?? '');
+        setEditMode(true);
+    }, [summary.currentPayload]);
+
+    // Register keyboard-triage API for the zone-level j/k handler.
+    useEffect(() => {
+        registerApi(summary.id, {
+            approve: onApprove,
+            didIt: onDidIt,
+            alreadyDone: () => void onAlreadyDone(),
+            check: () => void onCheck(),
+            edit: onEditClick,
+            reject: onInstantReject,
+            mute: onMute,
+            toggleExpand: () => setExpanded((v) => !v),
+        });
+        return () => registerApi(summary.id, null);
+    }, [summary.id, registerApi, onApprove, onDidIt, onAlreadyDone, onCheck, onEditClick, onInstantReject, onMute]);
 
     const onSendComment = useCallback(async () => {
         const text = comment.trim();
@@ -410,17 +682,77 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
         }
     }, [summary.id, comment]);
 
+    if (pendingReject) {
+        return (
+            <div className="flex items-center justify-between px-3 py-2 text-xs text-muted-foreground">
+                <span className="truncate">
+                    Rejected: <span className="line-through">{title}</span>
+                </span>
+                <button
+                    type="button"
+                    onClick={onUndoReject}
+                    className="shrink-0 rounded border border-border px-2 py-0.5 hover:bg-muted"
+                >
+                    Отменить
+                </button>
+            </div>
+        );
+    }
+
     return (
-        <div className="px-3 py-2 text-sm">
+        <div
+            ref={rootRef}
+            onClick={onFocus}
+            className={`px-3 py-2 text-sm ${focused ? 'bg-violet-500/10 ring-1 ring-inset ring-violet-500/50' : ''}`}
+        >
             <div className="flex items-start gap-2">
                 <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-violet-600 dark:text-violet-300" />
                 <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5 font-medium">
-                        <span className="truncate">{title}</span>
+                        {editMode ? (
+                            <span className="flex min-w-0 flex-1 items-center gap-1">
+                                <input
+                                    autoFocus
+                                    value={editTitle}
+                                    onChange={(e) => setEditTitle(e.target.value)}
+                                    disabled={busy}
+                                    className="min-w-0 flex-1 rounded border bg-background px-1.5 py-0.5 text-sm"
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && editTitle.trim()) {
+                                            e.preventDefault();
+                                            void onApproveWith({ title: editTitle.trim() });
+                                        } else if (e.key === 'Escape') {
+                                            e.preventDefault();
+                                            setEditMode(false);
+                                        }
+                                    }}
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => void onApproveWith({ title: editTitle.trim() })}
+                                    disabled={busy || !editTitle.trim()}
+                                    title="Approve with the edited title (Enter)"
+                                    className="shrink-0 rounded bg-emerald-600 p-1 text-white hover:bg-emerald-700 disabled:opacity-50"
+                                >
+                                    <Check className="h-3 w-3" />
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setEditMode(false)}
+                                    disabled={busy}
+                                    title="Cancel (Esc)"
+                                    className="shrink-0 rounded border border-border p-1 hover:bg-muted"
+                                >
+                                    <X className="h-3 w-3" />
+                                </button>
+                            </span>
+                        ) : (
+                            <span className="truncate">{title}</span>
+                        )}
                         {summary.doneFlagged ? (
                             <span
                                 className="shrink-0 rounded-full bg-yellow-500/20 px-1.5 py-0.5 text-[10px] font-medium text-yellow-700 dark:text-yellow-300"
-                                title="AI saw evidence this is already done — expand the card for the quote, then 'Already done' closes it"
+                                title="AI saw evidence this is already done — expand the card for the quote, then 'Done' closes it"
                             >
                                 🟡 looks done
                             </span>
@@ -447,38 +779,196 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
                     type="button"
                     onClick={onApprove}
                     disabled={busy}
+                    title="Create the task in your inbox (a)"
                     className="inline-flex items-center gap-0.5 rounded bg-emerald-600 px-2 py-0.5 text-xs text-white hover:bg-emerald-700 disabled:opacity-50"
                 >
                     <Check className="h-3 w-3" /> Approve
                 </button>
                 <button
                     type="button"
-                    onClick={onAlreadyDone}
+                    onClick={onDidIt}
                     disabled={busy}
-                    title="AI was right but you already did this. Resolves the proposal without applying it; audit keeps the 'already-done' signal."
-                    className="inline-flex items-center gap-0.5 rounded border border-sky-500/40 bg-sky-500/5 px-2 py-0.5 text-xs text-sky-700 hover:bg-sky-500/10 disabled:opacity-50 dark:text-sky-300"
+                    title="Сделал прямо сейчас: approve + record the task as completed (q)"
+                    className="inline-flex items-center gap-0.5 rounded bg-teal-600 px-2 py-0.5 text-xs text-white hover:bg-teal-700 disabled:opacity-50"
                 >
-                    <Check className="h-3 w-3" /> Already done
+                    <Zap className="h-3 w-3" /> Сделал
                 </button>
                 <button
                     type="button"
-                    onClick={onRejectClick}
+                    onClick={onAlreadyDone}
                     disabled={busy}
-                    className="inline-flex items-center gap-0.5 rounded border border-border px-2 py-0.5 text-xs hover:bg-muted disabled:opacity-50"
+                    title="Уже было сделано раньше / неактуально — resolves without creating a task; audit keeps the 'already-done' signal (d)"
+                    className="inline-flex items-center gap-0.5 rounded border border-sky-500/40 bg-sky-500/5 px-2 py-0.5 text-xs text-sky-700 hover:bg-sky-500/10 disabled:opacity-50 dark:text-sky-300"
                 >
-                    <X className="h-3 w-3" /> Reject
+                    <CheckCheck className="h-3 w-3" /> Done
                 </button>
+                <span className="inline-flex">
+                    <button
+                        type="button"
+                        onClick={() => void onCheck()}
+                        disabled={busy || checking}
+                        title="Проверь сам: judge captures recorded after this card — did I already do it? (c)"
+                        className="inline-flex items-center gap-0.5 rounded-l border border-yellow-500/40 bg-yellow-500/5 px-2 py-0.5 text-xs text-yellow-700 hover:bg-yellow-500/10 disabled:opacity-50 dark:text-yellow-300"
+                    >
+                        {checking ? <Loader2 className="h-3 w-3 animate-spin" /> : <Search className="h-3 w-3" />}
+                        Проверь
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setCheckHintMode((v) => !v)}
+                        disabled={busy || checking}
+                        title="Проверить с подсказкой — скажи, где/как смотреть"
+                        className="inline-flex items-center rounded-r border border-l-0 border-yellow-500/40 bg-yellow-500/5 px-0.5 py-0.5 text-yellow-700 hover:bg-yellow-500/10 disabled:opacity-50 dark:text-yellow-300"
+                    >
+                        <ChevronDown className="h-3 w-3" />
+                    </button>
+                </span>
+                <button
+                    type="button"
+                    onClick={onEditClick}
+                    disabled={busy || editMode}
+                    title="Поправить заголовок и сразу approve (e)"
+                    className="inline-flex items-center rounded border border-border px-1.5 py-0.5 text-xs hover:bg-muted disabled:opacity-50"
+                >
+                    <Pencil className="h-3 w-3" />
+                </button>
+                <span className="relative inline-flex">
+                    <button
+                        type="button"
+                        onClick={onInstantReject}
+                        disabled={busy}
+                        title="Reject сразу, без диалога — 5 секунд на «Отменить» (x)"
+                        className="inline-flex items-center rounded-l border border-border px-1.5 py-0.5 text-xs hover:bg-muted disabled:opacity-50"
+                    >
+                        <X className="h-3 w-3" />
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setXMenuOpen((v) => !v)}
+                        disabled={busy}
+                        title="Ещё варианты reject"
+                        className="inline-flex items-center rounded-r border border-l-0 border-border px-0.5 py-0.5 hover:bg-muted disabled:opacity-50"
+                    >
+                        <ChevronDown className="h-3 w-3" />
+                    </button>
+                    {xMenuOpen ? (
+                        <span className="absolute right-0 top-full z-10 mt-1 w-48 rounded border border-border bg-background py-1 shadow-md">
+                            <button
+                                type="button"
+                                onClick={onRejectWithReasonClick}
+                                className="block w-full px-2 py-1 text-left text-xs hover:bg-muted"
+                            >
+                                Reject с причиной…
+                            </button>
+                            <button
+                                type="button"
+                                onClick={onMute}
+                                title="Reject + правило: похожие предложения из этого канала больше не создаются (m)"
+                                className="flex w-full items-center gap-1 px-2 py-1 text-left text-xs hover:bg-muted"
+                            >
+                                <VolumeX className="h-3 w-3" /> Не предлагай такое
+                            </button>
+                        </span>
+                    ) : null}
+                </span>
                 <button
                     type="button"
                     onClick={() => setExpanded((v) => !v)}
                     className="rounded p-0.5 hover:bg-muted"
-                    title={expanded ? 'Collapse' : 'Expand'}
+                    title={expanded ? 'Collapse (space)' : 'Expand (space)'}
                 >
                     {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                 </button>
             </div>
 
             {error ? <div className="ml-5 mt-1 text-xs text-destructive">{error}</div> : null}
+
+            {checkHintMode ? (
+                <div className="ml-5 mt-1.5 flex items-center gap-1">
+                    <input
+                        autoFocus
+                        value={checkHint}
+                        onChange={(e) => setCheckHint(e.target.value)}
+                        disabled={checking}
+                        placeholder="Подскажи, где смотреть — «оплатил через сайт час назад»"
+                        className="flex-1 rounded border bg-background px-2 py-1 text-xs"
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter' && checkHint.trim()) {
+                                e.preventDefault();
+                                void onCheck(checkHint.trim());
+                            } else if (e.key === 'Escape') {
+                                e.preventDefault();
+                                setCheckHintMode(false);
+                            }
+                        }}
+                    />
+                    <button
+                        type="button"
+                        onClick={() => void onCheck(checkHint.trim() || undefined)}
+                        disabled={checking}
+                        className="shrink-0 rounded border border-yellow-500/40 bg-yellow-500/5 px-2 py-1 text-xs text-yellow-700 hover:bg-yellow-500/10 disabled:opacity-50 dark:text-yellow-300"
+                    >
+                        Проверить
+                    </button>
+                </div>
+            ) : null}
+
+            {checkVerdict ? (
+                <div
+                    className={`ml-5 mt-1.5 rounded border p-2 text-xs ${
+                        checkVerdict.verdict === 'done'
+                            ? 'border-emerald-500/40 bg-emerald-500/5'
+                            : 'border-border bg-muted/30'
+                    }`}
+                >
+                    {checkVerdict.verdict === 'done' ? (
+                        <>
+                            <div className="font-medium text-emerald-700 dark:text-emerald-300">
+                                🟢 Похоже сделано ({(checkVerdict.confidence * 100).toFixed(0)}%)
+                                {checkVerdict.evidence ? (
+                                    <span className="font-normal"> — «{checkVerdict.evidence}»</span>
+                                ) : null}
+                            </div>
+                            {checkVerdict.reasoning ? (
+                                <div className="mt-0.5 text-muted-foreground">{checkVerdict.reasoning}</div>
+                            ) : null}
+                            <div className="mt-1 flex gap-1">
+                                <button
+                                    type="button"
+                                    onClick={onAlreadyDone}
+                                    disabled={busy}
+                                    className="rounded bg-sky-600 px-2 py-0.5 text-white hover:bg-sky-700 disabled:opacity-50"
+                                >
+                                    <CheckCheck className="mr-0.5 inline h-3 w-3" /> Done
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setCheckVerdict(null)}
+                                    disabled={busy}
+                                    className="rounded border border-border px-2 py-0.5 hover:bg-muted disabled:opacity-50"
+                                >
+                                    Нет, оставить
+                                </button>
+                            </div>
+                        </>
+                    ) : (
+                        <div className="text-muted-foreground">
+                            {checkVerdict.verdict === 'no-evidence'
+                                ? '⚪ Свидетельств не нашёл — в captures после карточки по этой теме пусто.'
+                                : checkVerdict.verdict === 'not_done'
+                                  ? `⭕ Похоже ещё НЕ сделано${checkVerdict.reasoning ? ` — ${checkVerdict.reasoning}` : ''}`
+                                  : `❔ Неясно${checkVerdict.reasoning ? ` — ${checkVerdict.reasoning}` : ''}`}
+                            <button
+                                type="button"
+                                onClick={() => setCheckVerdict(null)}
+                                className="ml-2 rounded border border-border px-1.5 py-0 hover:bg-muted"
+                            >
+                                ok
+                            </button>
+                        </div>
+                    )}
+                </div>
+            ) : null}
 
             {expanded ? (
                 <div className="ml-5 mt-2 space-y-2 border-t border-violet-500/20 pt-2">
@@ -641,7 +1131,11 @@ function ProposalCard({ summary, startExpanded, onResolved }: CardProps) {
  * Uses the cloud-returned task id so we don't duplicate on the next
  * bootstrap from cloud.
  */
-function injectCreatedTaskLocally(summary: ProposalSummary, appliedTaskIds: string[]): void {
+function injectCreatedTaskLocally(
+    summary: ProposalSummary,
+    appliedTaskIds: string[],
+    overrides?: { status?: 'done'; title?: string }
+): void {
     if (appliedTaskIds.length === 0) return;
     const payload = summary.currentPayload as
         | {
@@ -659,16 +1153,19 @@ function injectCreatedTaskLocally(summary: ProposalSummary, appliedTaskIds: stri
     const id = appliedTaskIds[0]!;
     const t = payload.task;
     const now = new Date().toISOString();
+    const status = (overrides?.status ?? t.status ?? 'inbox') as Task['status'];
     const task: Task = {
         id,
-        title: t.title ?? '',
-        status: (t.status as Task['status']) ?? 'inbox',
+        title: overrides?.title ?? t.title ?? '',
+        status,
         tags: Array.isArray(t.tags) ? t.tags.filter((x): x is string => typeof x === 'string') : [],
         contexts: [],
         description: typeof t.description === 'string' ? t.description : '',
         metadata: t.metadata && typeof t.metadata === 'object' ? t.metadata : undefined,
         createdAt: now,
         updatedAt: now,
+        // Mirrors cloud behavior: status done/archived gets completedAt stamped.
+        ...(status === 'done' ? { completedAt: now } : {}),
     };
     useTaskStore.setState((state) => {
         // Guard against double-injection (e.g. if sync raced ahead and the
