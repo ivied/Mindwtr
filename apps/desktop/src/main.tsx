@@ -8,7 +8,7 @@ import { type AppData, consoleLogger, setLogger, setStorageAdapter, SQLITE_SCHEM
 import { LanguageProvider } from './contexts/language-context';
 import { isTauriRuntime } from './lib/runtime';
 import { reportError } from './lib/report-error';
-import { webStorage } from './lib/storage-adapter-web';
+import { idbGet, webStorage } from './lib/storage-adapter-web';
 import { isDiagnosticsEnabled, logError, logInfo, logWarn, setupGlobalErrorLogging } from './lib/app-log';
 import {
     THEME_STORAGE_KEY,
@@ -95,8 +95,8 @@ const getStartupLoggingEnabled = async (): Promise<boolean> => {
         }
     }
     try {
-        const data = await webStorage.getData();
-        return data.settings.diagnostics?.loggingEnabled === true;
+        const data = await idbGet();
+        return data?.settings?.diagnostics?.loggingEnabled === true;
     } catch {
         return false;
     }
@@ -213,13 +213,14 @@ async function bootstrap() {
     await initStorage();
     setupGlobalErrorLogging();
     if (!isQuickAddWindow) {
-        await logDesktopStartupContext().catch(() => undefined);
+        // Diagnostics must never delay the first render, even if local storage stalls.
+        void logDesktopStartupContext().catch(() => undefined);
         await restoreFullscreenState();
         await restoreWebviewZoomState();
     }
 
     if (!isQuickAddWindow && !isTauriRuntime() && 'serviceWorker' in navigator) {
-        navigator.serviceWorker.register('/sw.js').catch(() => undefined);
+        navigator.serviceWorker.register('/sw.js?v=2', { updateViaCache: 'none' }).catch(() => undefined);
     }
 
     const RootApp = isQuickAddWindow ? QuickAddWindowApp : App;

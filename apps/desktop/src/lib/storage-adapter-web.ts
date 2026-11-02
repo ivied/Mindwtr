@@ -38,40 +38,77 @@ export const openDb = (): Promise<IDBDatabase> => {
     // leave the DB existing but without the object store, which makes every
     // transaction fail with "object stores was not found" forever. If the store
     // is missing, bump the version to force onupgradeneeded and create it.
-    dbPromise = openDbAtVersion(DB_VERSION).then((db) => {
-        if (db.objectStoreNames.contains(STORE_NAME)) return db;
-        const nextVersion = db.version + 1;
-        db.close();
-        return openDbAtVersion(nextVersion);
+    dbPromise = openDbAtVersion(DB_VERSION)
+        .then((db) => {
+            if (db.objectStoreNames.contains(STORE_NAME)) return db;
+            const nextVersion = db.version + 1;
+            db.close();
+            return openDbAtVersion(nextVersion);
+        })
+        .then((db) => {
+            // The browser can close a connection on its own (storage pressure,
+            // versionchange from another tab, backgrounded tab eviction). A
+            // cached dead handle makes every transaction() throw "The database
+            // connection is closing" forever — drop the cache so the next call
+            // reopens.
+            db.onclose = () => {
+                if (dbPromise === promise) dbPromise = null;
+            };
+            db.onversionchange = () => {
+                db.close();
+                if (dbPromise === promise) dbPromise = null;
+            };
+            return db;
+        });
+    const promise = dbPromise;
+    promise.catch(() => {
+        if (dbPromise === promise) dbPromise = null;
     });
-    dbPromise.catch(() => {
+    return promise;
+};
+
+/** True for the InvalidStateError thrown when transaction() is called on a
+ *  connection the browser already closed behind our back. */
+const isStaleConnectionError = (error: unknown): boolean =>
+    error instanceof DOMException &&
+    (error.name === 'InvalidStateError' || /closing/i.test(error.message));
+
+/** Run an IDB operation; on a stale cached connection, reopen once and retry. */
+const withDb = async <T>(op: (db: IDBDatabase) => Promise<T>): Promise<T> => {
+    const db = await openDb();
+    try {
+        return await op(db);
+    } catch (error) {
+        if (!isStaleConnectionError(error)) throw error;
         dbPromise = null;
-    });
-    return dbPromise;
+        return op(await openDb());
+    }
 };
 
-export const idbGet = async (): Promise<AppData | null> => {
-    const db = await openDb();
-    return new Promise<AppData | null>((resolvePromise, rejectPromise) => {
-        const tx = db.transaction(STORE_NAME, 'readonly');
-        const store = tx.objectStore(STORE_NAME);
-        const req = store.get(RECORD_KEY);
-        req.onsuccess = () => resolvePromise((req.result as AppData | undefined) ?? null);
-        req.onerror = () => rejectPromise(req.error ?? new Error('IndexedDB read failed'));
-    });
-};
+export const idbGet = async (): Promise<AppData | null> =>
+    withDb(
+        (db) =>
+            new Promise<AppData | null>((resolvePromise, rejectPromise) => {
+                const tx = db.transaction(STORE_NAME, 'readonly');
+                const store = tx.objectStore(STORE_NAME);
+                const req = store.get(RECORD_KEY);
+                req.onsuccess = () => resolvePromise((req.result as AppData | undefined) ?? null);
+                req.onerror = () => rejectPromise(req.error ?? new Error('IndexedDB read failed'));
+            })
+    );
 
-export const idbPut = async (data: AppData): Promise<void> => {
-    const db = await openDb();
-    return new Promise<void>((resolvePromise, rejectPromise) => {
-        const tx = db.transaction(STORE_NAME, 'readwrite');
-        const store = tx.objectStore(STORE_NAME);
-        store.put(data, RECORD_KEY);
-        tx.oncomplete = () => resolvePromise();
-        tx.onerror = () => rejectPromise(tx.error ?? new Error('IndexedDB write failed'));
-        tx.onabort = () => rejectPromise(tx.error ?? new Error('IndexedDB write aborted'));
-    });
-};
+export const idbPut = async (data: AppData): Promise<void> =>
+    withDb(
+        (db) =>
+            new Promise<void>((resolvePromise, rejectPromise) => {
+                const tx = db.transaction(STORE_NAME, 'readwrite');
+                const store = tx.objectStore(STORE_NAME);
+                store.put(data, RECORD_KEY);
+                tx.oncomplete = () => resolvePromise();
+                tx.onerror = () => rejectPromise(tx.error ?? new Error('IndexedDB write failed'));
+                tx.onabort = () => rejectPromise(tx.error ?? new Error('IndexedDB write aborted'));
+            })
+    );
 
 const setCloudToken = (token: string): void => {
     if (typeof sessionStorage !== 'undefined') {

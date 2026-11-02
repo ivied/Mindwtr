@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mindwtr-pwa-v1';
+const CACHE_NAME = 'mindwtr-pwa-v2';
 const PRECACHE_URLS = ['/', '/index.html', '/manifest.webmanifest', '/icon.png', '/logo.png'];
 
 self.addEventListener('install', (event) => {
@@ -10,9 +10,10 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches
-      .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))))
+    caches.keys()
+      .then((keys) => Promise.all(keys
+        .filter((key) => key.startsWith('mindwtr-pwa-') && key !== CACHE_NAME)
+        .map((key) => caches.delete(key))))
       .then(() => self.clients.claim()),
   );
 });
@@ -20,29 +21,32 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
-
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
   const isNavigation = req.mode === 'navigate';
+  const isShell = PRECACHE_URLS.includes(url.pathname);
+  const isAsset = url.pathname.startsWith('/assets/');
+  if (!isNavigation && !isShell && !isAsset) return;
 
-  event.respondWith(
-    caches.match(req).then((cached) => {
+  event.respondWith((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    // Only hashed build assets are immutable. Cached HTML can reference
+    // chunks removed by a deployment, leaving installed PWAs blank forever.
+    if (isAsset) {
+      const cached = await cache.match(req);
       if (cached) return cached;
-
-      return fetch(req)
-        .then((res) => {
-          const clone = res.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(req, clone)).catch(() => undefined);
-          return res;
-        })
-        .catch(async () => {
-          if (isNavigation) {
-            const fallback = await caches.match('/index.html');
-            if (fallback) return fallback;
-          }
-          return Response.error();
-        });
-    }),
-  );
+    }
+    try {
+      const res = await fetch(req);
+      const isHtml = (res.headers.get('content-type') || '').includes('text/html');
+      if (res.ok && !(isAsset && isHtml)) {
+        await cache.put(isNavigation ? '/index.html' : req, res.clone()).catch(() => undefined);
+      }
+      return res;
+    } catch {
+      const cached = await cache.match(isNavigation ? '/index.html' : req);
+      return cached || Response.error();
+    }
+  })());
 });
