@@ -310,6 +310,8 @@ export interface GtdSettings {
     timeEstimatePresets?: TimeEstimate[];
     taskEditor?: TaskEditorSettings;
     autoArchiveDays?: number;
+    /** Days to keep archived tasks in synced data before dropping them entirely (default 180; <= 0 keeps forever). */
+    archivedRetentionDays?: number;
     defaultCaptureMethod?: 'text' | 'audio';
     defaultAreaMode?: DefaultTaskAreaMode;
     defaultAreaId?: string | null;

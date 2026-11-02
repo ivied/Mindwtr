@@ -5,6 +5,32 @@ const DEFAULT_TOMBSTONE_RETENTION_DAYS = 90;
 const MIN_TOMBSTONE_RETENTION_DAYS = 1;
 const MAX_TOMBSTONE_RETENTION_DAYS = 3650;
 
+// Archived tasks older than this are dropped from the synced payload entirely.
+// Without a cap the blob grows unbounded (observed: 9.9k archived tasks = 94%
+// of a 9.8MB payload → slow fetches and "Storage request timed out").
+// Configurable via settings.gtd.archivedRetentionDays; <= 0 disables pruning.
+const DEFAULT_ARCHIVED_RETENTION_DAYS = 180;
+
+const resolveArchivedRetentionDays = (value?: number): number => {
+    if (!Number.isFinite(value)) return DEFAULT_ARCHIVED_RETENTION_DAYS;
+    return Math.min(MAX_TOMBSTONE_RETENTION_DAYS, Math.floor(value as number));
+};
+
+const parseTimestampOrNaN = (value?: string): number => {
+    if (!value) return Number.NaN;
+    return Date.parse(value);
+};
+
+/** Age of an archived task = its completion date (updatedAt as fallback).
+ *  Deliberately NOT max(completedAt, updatedAt): bulk migrations / rev bumps
+ *  touch updatedAt on thousands of archived tasks at once (observed 9.4k tasks
+ *  all stamped the same day), which would immortalize the whole archive. */
+const getArchivedActivityTimestamp = (task: Task): number => {
+    const completedMs = parseTimestampOrNaN(task.completedAt);
+    if (Number.isFinite(completedMs)) return completedMs;
+    return parseTimestampOrNaN(task.updatedAt);
+};
+
 const resolveTombstoneRetentionDays = (value?: number): number => {
     if (!Number.isFinite(value)) return DEFAULT_TOMBSTONE_RETENTION_DAYS;
     const rounded = Math.floor(value as number);
@@ -87,6 +113,7 @@ export const purgeExpiredTombstones = (
     removedAttachmentTombstones: number;
     removedSavedFilterTombstones: number;
     removedPendingRemoteDeletes: number;
+    removedArchivedTasks: number;
 } => {
     const nowMs = Date.parse(nowIso);
     if (!Number.isFinite(nowMs)) {
@@ -100,11 +127,17 @@ export const purgeExpiredTombstones = (
             removedAttachmentTombstones: 0,
             removedSavedFilterTombstones: 0,
             removedPendingRemoteDeletes: 0,
+            removedArchivedTasks: 0,
         };
     }
     const keepDays = resolveTombstoneRetentionDays(retentionDays);
     const cutoffMs = nowMs - keepDays * 24 * 60 * 60 * 1000;
+    const archivedKeepDays = resolveArchivedRetentionDays(data.settings.gtd?.archivedRetentionDays);
+    const archivedCutoffMs = archivedKeepDays > 0
+        ? nowMs - archivedKeepDays * 24 * 60 * 60 * 1000
+        : Number.NEGATIVE_INFINITY;
 
+    let removedArchivedTasks = 0;
     let removedTaskTombstones = 0;
     let removedProjectTombstones = 0;
     let removedSectionTombstones = 0;
@@ -118,6 +151,13 @@ export const purgeExpiredTombstones = (
         if (task.deletedAt && tombstoneAt <= cutoffMs) {
             removedTaskTombstones += 1;
             continue;
+        }
+        if (!task.deletedAt && task.status === 'archived') {
+            const activityMs = getArchivedActivityTimestamp(task);
+            if (Number.isFinite(activityMs) && activityMs <= archivedCutoffMs) {
+                removedArchivedTasks += 1;
+                continue;
+            }
         }
         const pruned = pruneAttachmentTombstones(task.attachments, cutoffMs);
         removedAttachmentTombstones += pruned.removed;
@@ -212,5 +252,6 @@ export const purgeExpiredTombstones = (
         removedAttachmentTombstones,
         removedSavedFilterTombstones,
         removedPendingRemoteDeletes,
+        removedArchivedTasks,
     };
 };
