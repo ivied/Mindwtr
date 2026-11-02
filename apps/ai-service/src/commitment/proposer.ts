@@ -547,7 +547,11 @@ export class Proposer {
       tools: [PROPOSER_TOOL],
       tool_choice: 'required',
       temperature: 0.1,
-      max_tokens: 800,
+      // Gemini-family models on the router count thinking tokens inside
+      // max_tokens (observed since ~2026-08-22: reasoning_tokens ate a 800
+      // budget → finish_reason=max_tokens, no tool call, 0 proposals).
+      // Budget must cover reasoning + the full structured tool call.
+      max_tokens: 20000,
       model: this.model,
     })
 
