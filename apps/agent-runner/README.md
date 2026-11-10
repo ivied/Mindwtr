@@ -76,6 +76,34 @@ up by a second kind of run.
 - Task agents cannot change MCP servers, skills, Claude settings or the secrets
   file (`accessConfigReason` in `src/guard.ts`); that guard is never lifted.
 
+### Telegram
+
+The user's personal Telegram account needs no provisioning: ai-service already
+keeps its client connected, so it registers the `telegram` access itself at
+startup and serves it over HTTP (`apps/ai-service/src/agent-runs/telegram-routes.ts`):
+
+| Route | What it does |
+|---|---|
+| `GET /v1/telegram/chats?q=&limit=` | dialogs, newest first; `q` filters by title or username |
+| `GET /v1/telegram/chats/:chat/messages?limit=&before=` | history of one chat (reading marks nothing as read) |
+| `GET /v1/telegram/search?q=&chat=&limit=` | Telegram's full-text search, everywhere or in one chat |
+| `POST /v1/telegram/send` `{ runId, chat, text, replyTo? }` | send plain text as the user |
+
+`:chat` is the id from the chat list, an `@username`, or `me`.
+
+Sending is checked on the server, not only by the guard. ai-service remembers
+the confirmation the user approved for the turn in flight, and the send route
+goes through only when `runId` (the agent gets it as `$AGENT_RUN_ID`) names such
+a run, `text` is the approved draft and the chat is the one named in the
+approved target (by id, `@username` or title). One approval sends one message;
+anything else is a 403 that tells the agent to ask again.
+
+The registry row is the switch: "Отозвать" closes every route, read scope keeps
+reading and refuses sending, and asking for "Telegram" again (from a task or
+from "Доступы агентов") turns it back on at once, without a provisioning run.
+The skill ships with the runner (`skills/telegram/SKILL.md`) and is copied to
+`~/.claude/skills/telegram/` while the access is active.
+
 ## Run
 
 ```bash

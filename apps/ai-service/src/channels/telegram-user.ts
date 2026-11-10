@@ -10,10 +10,15 @@
  * Auth is a one-time interactive login (scripts/telegram-login.ts) that
  * persists an MTProto session in DATA_DIR; this adapter only ever reuses it
  * and never prompts.
+ *
+ * The same client also serves the inbox agents (see
+ * ../agent-runs/telegram-routes.ts): listing chats, reading history, searching
+ * and — behind a user confirmation checked there — sending a message. Reading
+ * through it never marks anything as read.
  */
 
 import { TelegramClient } from '@mtcute/bun'
-import type { Message } from '@mtcute/bun'
+import type { Dialog, Message, Peer } from '@mtcute/bun'
 import type { Channel, CaptureSink } from './types'
 import type { CapturedItem } from '../capture/normalizer'
 
@@ -25,6 +30,96 @@ export interface TelegramUserConfig {
   /** Capture the user's own outgoing messages (fromSelf=true). Default true. */
   captureOutgoing?: boolean
 }
+
+export type TelegramChatType = 'user' | 'bot' | 'group' | 'supergroup' | 'channel'
+
+export interface TelegramChatInfo {
+  /** Telegram's marked id: positive for people, negative for groups and channels. */
+  id: number
+  type: TelegramChatType
+  title: string
+  username: string | null
+}
+
+export interface TelegramMessageInfo {
+  id: number
+  date: string
+  chatId: number
+  chatTitle: string
+  from: string
+  fromId: number
+  /** Written by the account owner. */
+  outgoing: boolean
+  text: string
+  replyTo: number | null
+  /** Kind of attachment (photo, document, voice…), when there is one. */
+  media: string | null
+}
+
+export interface TelegramDialogInfo extends TelegramChatInfo {
+  unread: number
+  muted: boolean
+  archived: boolean
+  lastMessage: TelegramMessageInfo | null
+}
+
+/** A chat as callers name it: marked id, username, or 'me' (Saved Messages). */
+export type TelegramChatRef = number | string
+
+export class TelegramChatNotFoundError extends Error {
+  constructor(ref: TelegramChatRef) {
+    super(`чат «${ref}» не найден среди известных аккаунту`)
+    this.name = 'TelegramChatNotFoundError'
+  }
+}
+
+/** `-100123`, `123`, `@name`, `name`, `me` → what the client can resolve; null for anything else. */
+export function parseChatRef(raw: string): TelegramChatRef | null {
+  const s = raw.trim()
+  if (/^-?\d{1,20}$/.test(s)) return Number(s)
+  if (s === 'me' || s === 'self') return 'me'
+  const m = /^@?([A-Za-z][A-Za-z0-9_]{3,31})$/.exec(s)
+  return m ? m[1]! : null
+}
+
+export function toChatInfo(peer: Peer): TelegramChatInfo {
+  if (peer.type === 'user') {
+    return { id: peer.id, type: peer.isBot ? 'bot' : 'user', title: peer.displayName, username: peer.username }
+  }
+  const type = peer.chatType === 'group' || peer.chatType === 'supergroup' ? peer.chatType : 'channel'
+  return { id: peer.id, type, title: peer.title, username: peer.username }
+}
+
+export function toMessageInfo(msg: Message): TelegramMessageInfo {
+  const chat = toChatInfo(msg.chat)
+  const media = (msg.media as { type?: string } | null)?.type ?? null
+  return {
+    id: msg.id,
+    date: msg.date.toISOString(),
+    chatId: chat.id,
+    chatTitle: chat.title,
+    from: msg.sender.displayName,
+    fromId: msg.sender.id,
+    outgoing: msg.isOutgoing,
+    text: msg.text,
+    replyTo: (msg.replyToMessage as { id?: number | null } | null)?.id ?? null,
+    media,
+  }
+}
+
+export function toDialogInfo(dialog: Dialog): TelegramDialogInfo {
+  const last = dialog.lastMessage
+  return {
+    ...toChatInfo(dialog.peer),
+    unread: dialog.unreadCount,
+    muted: dialog.isMuted === true,
+    archived: dialog.isArchived,
+    lastMessage: last && !last.isService ? toMessageInfo(last) : null,
+  }
+}
+
+/** How many dialogs a title search looks through (newest first). */
+const DIALOG_SCAN = 500
 
 export class TelegramUserChannel implements Channel {
   readonly name = 'telegram-user'
@@ -71,6 +166,72 @@ export class TelegramUserChannel implements Channel {
     if (this.started) this.tg.stopUpdatesLoop()
     await this.tg.destroy()
     this.started = false
+  }
+
+  // ── For the inbox agents ──────────────────────────────────────────────────
+
+  /** False until a valid session connected: the calls below would fail. */
+  get ready(): boolean {
+    return this.started
+  }
+
+  private async resolved<T>(ref: TelegramChatRef, call: () => Promise<T>): Promise<T> {
+    try {
+      return await call()
+    } catch (err) {
+      const e = err as { name?: string; text?: string; message?: string }
+      const unknownPeer =
+        e.name === 'MtPeerNotFoundError' ||
+        /PEER_ID_INVALID|USERNAME_NOT_OCCUPIED|USERNAME_INVALID|CHANNEL_INVALID|CHAT_ID_INVALID/.test(`${e.text ?? ''} ${e.message ?? ''}`)
+      if (unknownPeer) throw new TelegramChatNotFoundError(ref)
+      throw err
+    }
+  }
+
+  /** Dialogs, newest first; `query` keeps those whose title or username contains it. */
+  async listChats(opts: { query?: string; limit?: number } = {}): Promise<TelegramDialogInfo[]> {
+    const limit = opts.limit ?? 30
+    const needle = (opts.query ?? '').trim().toLowerCase().replace(/^@/, '')
+    const out: TelegramDialogInfo[] = []
+    for await (const dialog of this.tg.iterDialogs({ limit: needle ? DIALOG_SCAN : limit, archived: 'keep' })) {
+      const info = toDialogInfo(dialog)
+      if (needle && !info.title.toLowerCase().includes(needle) && !(info.username ?? '').toLowerCase().includes(needle)) continue
+      out.push(info)
+      if (out.length >= limit) break
+    }
+    return out
+  }
+
+  chatInfo(ref: TelegramChatRef): Promise<TelegramChatInfo> {
+    return this.resolved(ref, async () => toChatInfo(await this.tg.getPeer(ref)))
+  }
+
+  /** Messages of one chat, newest first; `beforeId` pages further back. */
+  history(ref: TelegramChatRef, opts: { limit?: number; beforeId?: number } = {}): Promise<TelegramMessageInfo[]> {
+    return this.resolved(ref, async () => {
+      const page = await this.tg.getHistory(ref, {
+        limit: opts.limit ?? 30,
+        ...(opts.beforeId ? { offset: { id: opts.beforeId, date: 0 } } : {}),
+      })
+      return page.filter((m) => !m.isService).map(toMessageInfo)
+    })
+  }
+
+  /** Full-text search in one chat, or across all of them when `chat` is omitted. */
+  search(opts: { query: string; chat?: TelegramChatRef; limit?: number }): Promise<TelegramMessageInfo[]> {
+    const limit = opts.limit ?? 20
+    const chat = opts.chat
+    if (chat === undefined) {
+      return this.tg.searchGlobal({ query: opts.query, limit }).then((page) => page.map(toMessageInfo))
+    }
+    return this.resolved(chat, async () =>
+      (await this.tg.searchMessages({ query: opts.query, chatId: chat, limit })).map(toMessageInfo)
+    )
+  }
+
+  /** Send plain text as the account owner. Callers are responsible for the user's consent. */
+  send(ref: TelegramChatRef, text: string, replyTo?: number): Promise<TelegramMessageInfo> {
+    return this.resolved(ref, async () => toMessageInfo(await this.tg.sendText(ref, text, replyTo ? { replyTo } : {})))
   }
 
   private async handleMessage(msg: Message): Promise<void> {

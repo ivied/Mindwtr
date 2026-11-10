@@ -9,6 +9,7 @@
 import type { Hono } from 'hono'
 import type { CreateTaskParams, Task } from '../api/mindwtr-client'
 import type { AgentRunStore } from './store'
+import { TELEGRAM_ACCESS, mountTelegramRoutes, type TelegramAgentApi } from './telegram-routes'
 import {
   stateOfPending,
   type AccessSpec,
@@ -55,6 +56,12 @@ export interface AgentRunsHttpDeps {
   memory?: AgentRunsMemory
   /** Public address of this server; browser sign-ins are sent back to `<publicUrl>/oauth/callback`. */
   publicUrl?: string
+  /**
+   * The user's Telegram account, when it is connected. Mounts /v1/telegram/*
+   * and makes `telegram` an access that is switched on without a provisioning
+   * run (there is nothing to set up: the client lives in this process).
+   */
+  telegram?: TelegramAgentApi
   now?: () => Date
   log?: (msg: string) => void
 }
@@ -278,6 +285,17 @@ export function mountAgentRunsRoutes(app: Hono, deps: AgentRunsHttpDeps): void {
       .filter(Boolean)
       .join('\n')
 
+  /**
+   * Accesses this server provides itself. Asking for one switches its registry
+   * row on at once instead of starting a provisioning run.
+   */
+  const builtinAccess = (service: string): AccessSpec | null =>
+    deps.telegram && /^(личный\s+)?(telegram|телеграмм?|tg)$/i.test(service.replace(/\(.*\)/, '').trim()) ? TELEGRAM_ACCESS : null
+  const connectedText = (access: AccessSpec): string =>
+    `Доступ «${access.name}» подключён (${access.scope === 'write' ? 'чтение и запись' : 'только чтение'}). ${access.notes}`.trim()
+
+  if (deps.telegram) mountTelegramRoutes(app, { store, telegram: deps.telegram, log: deps.log })
+
   /** A provisioning run ended: tell every task run that was waiting for it. */
   const wakeParent = (child: AgentRunRecord, access: AccessSpec | null, why = ''): void => {
     for (const parent of store.list()) {
@@ -286,10 +304,7 @@ export function mountAgentRunsRoutes(app: Hono, deps: AgentRunsHttpDeps): void {
       store.reply(
         parent.id,
         access
-          ? {
-              kind: 'answer',
-              text: `Доступ «${access.name}» подключён (${access.scope === 'write' ? 'чтение и запись' : 'только чтение'}). ${access.notes}`.trim(),
-            }
+          ? { kind: 'answer', text: connectedText(access) }
           : { kind: 'reject', text: `Доступ не подключён${why ? `: ${why}` : ''}. Продолжай без него.` }
       )
     }
@@ -412,6 +427,12 @@ export function mountAgentRunsRoutes(app: Hono, deps: AgentRunsHttpDeps): void {
       const service = str(p.service, 120).trim()
       if (!service) return c.json({ error: 'provision.service required' }, 400)
       const scope = p.scope === 'write' ? 'write' : 'read'
+      const builtin = builtinAccess(service)
+      if (builtin) {
+        const access = store.upsertAccess({ ...builtin, scope }, null)
+        log(`access "${access.name}" switched on (${access.scope})`)
+        return c.json({ enqueued: 0, items: [], access })
+      }
       const { run, created } = store.enqueue({
         kind: 'provision',
         taskId: `access:${slugify(service) || 'service'}`,
@@ -497,6 +518,12 @@ export function mountAgentRunsRoutes(app: Hono, deps: AgentRunsHttpDeps): void {
     if (pending.provisionRunId) return c.json({ run: view(run), provision: store.get(pending.provisionRunId) })
     // The user may narrow what the agent asked for, never widen it silently.
     const scope = body.scope === 'read' || body.scope === 'write' ? body.scope : pending.scope
+    const builtin = builtinAccess(pending.service)
+    if (builtin) {
+      const access = store.upsertAccess({ ...builtin, scope }, null)
+      log(`access "${access.name}" switched on (${access.scope}) for ${run.id.slice(0, 8)}`)
+      return c.json({ run: view(store.reply(run.id, { kind: 'answer', text: connectedText(access) })!) })
+    }
     const { run: provision } = store.enqueue({
       kind: 'provision',
       parentRunId: run.id,

@@ -22,7 +22,7 @@ import { z } from 'zod'
 import type { RunsApi } from './client'
 import { filterOrphanResults, mapMessage, type SdkMessageLike } from './events'
 import { execFile } from 'node:child_process'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -389,6 +389,47 @@ export async function revokeOnHost(
   }
 }
 
+/** Skills that ship with the runner, for accesses ai-service provides itself (Telegram). */
+export const BUNDLED_SKILLS_DIR = join(import.meta.dir, '..', 'skills')
+const SKILLS_DIR = join(homedir(), '.claude', 'skills')
+
+/**
+ * Put the bundled skill of every active access where the agents find it.
+ * `installed` remembers what this process already checked; an access that
+ * stops being active is forgotten, so granting it again installs the skill
+ * anew (revoking removes it, see revokeOnHost).
+ */
+export function installBundledSkills(
+  accesses: AccessRecord[],
+  installed: Set<string>,
+  log: Log = () => {},
+  skillsDir = SKILLS_DIR,
+  bundledDir = BUNDLED_SKILLS_DIR
+): void {
+  for (const a of accesses) {
+    if (!/^[A-Za-z0-9._-]+$/.test(a.skill) || a.skill.startsWith('.')) continue
+    if (a.status !== 'active') {
+      installed.delete(a.skill)
+      continue
+    }
+    if (installed.has(a.skill)) continue
+    installed.add(a.skill)
+    const source = join(bundledDir, a.skill, 'SKILL.md')
+    if (!existsSync(source)) continue
+    try {
+      const body = readFileSync(source, 'utf8')
+      const target = join(skillsDir, a.skill, 'SKILL.md')
+      if (existsSync(target) && readFileSync(target, 'utf8') === body) continue
+      mkdirSync(join(skillsDir, a.skill), { recursive: true })
+      writeFileSync(target, body)
+      log(`skill "${a.skill}" installed`)
+    } catch (err) {
+      installed.delete(a.skill)
+      log(`skill "${a.skill}" not installed: ${(err as Error).message}`)
+    }
+  }
+}
+
 /** Run one turn of a claimed run to completion and report it. Never throws. */
 const IMAGE_EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' }
 
@@ -540,7 +581,9 @@ export async function executeTurn(
         },
         // Same switch as `claude --chrome`; the SDK runs the Claude Code binary.
         ...(cfg.chrome ? { extraArgs: { chrome: null } } : {}),
-        env: { ...cfg.env, ...secretValues },
+        // The run id lets server-side actions (sending a Telegram message) be
+        // tied to the confirmation the user approved for this very run.
+        env: { ...cfg.env, ...secretValues, AGENT_RUN_ID: run.id },
       }
 
       for await (const msg of queryFn({ prompt, options })) {
@@ -619,6 +662,7 @@ export function startRunner(api: RunsApi, cfg: RunnerConfig, log: Log = (m) => c
   let wasOverBudget = false
   const secrets = new SecretsFile(cfg.secretsFile)
   const revoking = new Set<string>()
+  const installedSkills = new Set<string>()
   const quota = cfg.quota === false ? undefined : new QuotaMeterImpl()
   const vault = new OAuthVault(cfg.oauthDir)
   const proxy = new OAuthProxy(vault)
@@ -644,6 +688,7 @@ export function startRunner(api: RunsApi, cfg: RunnerConfig, log: Log = (m) => c
       // Claim even at zero capacity: it is also the "runner is alive" ping.
       const { items, overBudget, accesses = [], publicUrl = '' } = await api.claim(cfg.name, Math.max(0, cfg.concurrency - active.size))
       for (const a of accesses) if (a.status === 'revoking') void revoke(a)
+      installBundledSkills(accesses, installedSkills, log)
       if (overBudget !== wasOverBudget) {
         log(overBudget ? 'daily limit reached — new runs are on hold' : 'daily limit lifted')
         wasOverBudget = overBudget

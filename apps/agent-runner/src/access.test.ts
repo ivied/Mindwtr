@@ -7,7 +7,7 @@ import type { RunsApi } from './client'
 import { accessConfigReason, outwardReason, secretsFileReason } from './guard'
 import { accessesBlock, buildFirstPrompt, buildProvisionPrompt } from './prompt'
 import type { AccessRecord, ClaimedRun, FinishBody, RunEventInput } from './protocol'
-import { decideOutcome, executeTurn, guardContextOf, revokeOnHost, type QueryFn, type RunnerConfig } from './runner'
+import { decideOutcome, executeTurn, guardContextOf, installBundledSkills, revokeOnHost, type QueryFn, type RunnerConfig } from './runner'
 import { SecretsFile, parseSecrets, redact } from './secrets'
 
 let dir: string
@@ -203,5 +203,36 @@ describe('revoking on the host', () => {
     await revokeOnHost(access({ skill: '..', envVars: [] }), secrets, exec, skills)
     expect(readFileSync(join(dir, 'keep.txt'), 'utf8')).toBe('x')
     expect(existsSync(skills)).toBe(true)
+  })
+})
+
+describe('an access ai-service provides itself (Telegram)', () => {
+  const telegram = access({ name: 'telegram', scope: 'write', hosts: [], envVars: [], skill: 'telegram' })
+  const sendCmd = 'curl -s -X POST -H "Authorization: Bearer $AI_SERVICE_TOKEN" --data-binary @- "$AI_SERVICE_URL/v1/telegram/send"'
+
+  it('holds sending back even though the host is local and the access is write', () => {
+    const ctx = guardContextOf([telegram])
+    expect(outwardReason('Bash', { command: sendCmd }, ctx)).toContain('Telegram')
+    expect(outwardReason('Bash', { command: 'curl -s "$AI_SERVICE_URL/v1/telegram/chats?limit=30"' }, ctx)).toBeNull()
+    expect(outwardReason('Bash', { command: 'curl -s -G "$AI_SERVICE_URL/v1/telegram/search" --data-urlencode "q=счёт"' }, ctx)).toBeNull()
+  })
+
+  it('installs the bundled skill while the access is active, and again after a re-grant', async () => {
+    const skills = join(dir, 'skills')
+    const installed = new Set<string>()
+    installBundledSkills([telegram, access()], installed, undefined, skills)
+    const file = join(skills, 'telegram', 'SKILL.md')
+    expect(readFileSync(file, 'utf8')).toContain('name: telegram')
+    // An access without a bundled skill is left to its provisioning run.
+    expect(existsSync(join(skills, 'remote'))).toBe(false)
+
+    await revokeOnHost({ ...telegram, status: 'revoking' }, secrets, async () => {}, skills)
+    installBundledSkills([{ ...telegram, status: 'revoking' }], installed, undefined, skills)
+    expect(existsSync(file)).toBe(false)
+    installBundledSkills([telegram], installed, undefined, skills)
+    expect(existsSync(file)).toBe(true)
+    // A name that is really a path is ignored.
+    installBundledSkills([{ ...telegram, skill: '../x' }], installed, undefined, skills)
+    expect(existsSync(join(dir, 'x'))).toBe(false)
   })
 })

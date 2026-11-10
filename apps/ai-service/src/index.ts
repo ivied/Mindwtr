@@ -35,6 +35,7 @@ import { CommitmentBatcher } from './commitment/batcher'
 import { denyConfigFromEnv } from './commitment/source-deny'
 import { MindwtrInboxTitles } from './commitment/inbox-titles'
 import { AgentRunStore } from './agent-runs/store'
+import { TELEGRAM_ACCESS } from './agent-runs/telegram-routes'
 import { WikiPersonsProvider } from './wiki/persons-reader'
 import { WikiGlossaryProvider, MemoryExpansionSource } from './wiki/glossary-reader'
 import { GlossaryStore, GlossaryStoreSource } from './wiki/glossary-store'
@@ -848,7 +849,7 @@ if (process.env.AI_AGENT_WATCHDOG !== 'false') {
   )
 }
 
-function buildChannels(): { channels: Channel[]; slack: SlackChannel | null } {
+function buildChannels(): { channels: Channel[]; slack: SlackChannel | null; telegramUser: TelegramUserChannel | null } {
   const channels: Channel[] = []
   let slack: SlackChannel | null = null
 
@@ -883,18 +884,18 @@ function buildChannels(): { channels: Channel[]; slack: SlackChannel | null } {
     )
   }
 
+  let telegramUser: TelegramUserChannel | null = null
   if (TELEGRAM_API_ID && TELEGRAM_API_HASH) {
-    channels.push(
-      new TelegramUserChannel(
-        {
-          apiId: TELEGRAM_API_ID,
-          apiHash: TELEGRAM_API_HASH,
-          sessionPath: join(DATA_DIR, 'telegram-user-session'),
-          captureOutgoing,
-        },
-        (item) => capture(item)
-      )
+    telegramUser = new TelegramUserChannel(
+      {
+        apiId: TELEGRAM_API_ID,
+        apiHash: TELEGRAM_API_HASH,
+        sessionPath: join(DATA_DIR, 'telegram-user-session'),
+        captureOutgoing,
+      },
+      (item) => capture(item)
     )
+    channels.push(telegramUser)
     console.log(
       `📨 Telegram user channel enabled (MTProto, DMs + groups; outgoing ${captureOutgoing ? 'on' : 'off'})`
     )
@@ -912,7 +913,7 @@ function buildChannels(): { channels: Channel[]; slack: SlackChannel | null } {
     console.log(`📝 Notion channel enabled (poll every ${NOTION_POLL_INTERVAL_MS}ms)`)
   }
 
-  return { channels, slack }
+  return { channels, slack, telegramUser }
 }
 
 async function main() {
@@ -975,7 +976,7 @@ async function main() {
     ])
 
   // Start additional channels
-  const { channels, slack: slackChannel } = buildChannels()
+  const { channels, slack: slackChannel, telegramUser } = buildChannels()
   for (const ch of channels) {
     try {
       await withTimeout(ch.start(), 15000, `channel ${ch.name} start`)
@@ -983,6 +984,15 @@ async function main() {
     } catch (err) {
       console.error(`Failed to start ${ch.name}:`, err)
     }
+  }
+
+  // The connected personal account is an access the inbox agents can use
+  // (read chats; send only behind a confirmation). A revoked row stays revoked.
+  if (telegramUser?.ready) {
+    const access = agentRunStore.seedAccess(TELEGRAM_ACCESS)
+    console.log(`🤖 agents: Telegram access is ${access.status} (${access.scope})`)
+  } else if (telegramUser) {
+    console.warn('🤖 agents: Telegram access not offered — the user-account client did not start')
   }
 
   // Restore session workspaces pushed by the browser extension on a previous
@@ -1144,7 +1154,7 @@ async function main() {
           }
         : null,
       agentConfig,
-      agentRuns: { store: agentRunStore, mindwtr, dailyBudgetUsd: AGENT_RUNS_DAILY_BUDGET_USD, dailyQuotaPct: AGENT_RUNS_DAILY_QUOTA_PCT, publicUrl: process.env.AI_SERVICE_PUBLIC_URL?.trim() || undefined, memory: agentRunsMemory, runnerToken: process.env.AGENT_RUNNER_TOKEN?.trim() || undefined },
+      agentRuns: { store: agentRunStore, mindwtr, dailyBudgetUsd: AGENT_RUNS_DAILY_BUDGET_USD, dailyQuotaPct: AGENT_RUNS_DAILY_QUOTA_PCT, publicUrl: process.env.AI_SERVICE_PUBLIC_URL?.trim() || undefined, memory: agentRunsMemory, runnerToken: process.env.AGENT_RUNNER_TOKEN?.trim() || undefined, telegram: telegramUser ?? undefined },
     })
     http = server.serve()
     console.log(

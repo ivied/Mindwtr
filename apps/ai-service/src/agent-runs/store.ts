@@ -17,6 +17,7 @@ import {
   type AgentRunState,
   type ClaimedRun,
   type FinishInput,
+  type PendingConfirm,
   type PendingRequest,
   type RunEventInput,
   type RunImageRef,
@@ -110,6 +111,8 @@ CREATE INDEX IF NOT EXISTS agent_quota_usage_ts ON agent_quota_usage (ts);
 const RUN_COLUMNS_ADDED: Array<[string, string]> = [
   ['kind', "TEXT NOT NULL DEFAULT 'task'"],
   ['parent_run_id', 'TEXT'],
+  // The confirmation the user approved for the turn in flight (see approvedConfirm).
+  ['approved', 'TEXT'],
 ]
 
 interface AccessRow {
@@ -139,6 +142,7 @@ interface RunRow {
   cwd: string | null
   pending: string | null
   result: string | null
+  approved?: string | null
   reply: string | null
   mid_messages: string
   stop_requested: number
@@ -490,7 +494,8 @@ export class AgentRunStore {
     this.db.run(
       `UPDATE agent_runs SET state = ?, pending = ?, result = COALESCE(?, result),
          session_id = COALESCE(?, session_id), cwd = COALESCE(?, cwd), cost_usd = MAX(cost_usd, ?),
-         duration_ms = duration_ms + ?, turn_started_at = NULL, stop_requested = 0, error = ?, updated_at = ?
+         duration_ms = duration_ms + ?, turn_started_at = NULL, stop_requested = 0, approved = NULL,
+         error = ?, updated_at = ?
        WHERE id = ? AND state = 'running'`,
       [
         input.state,
@@ -547,12 +552,45 @@ export class AgentRunStore {
         runId,
       ])
     } else if (WAITING_STATES.has(r.state as AgentRunState)) {
+      // Approving a confirmation is remembered for the turn it starts, word for
+      // word as the user saw it; any other reply approves nothing.
+      const pending = parseJson<PendingRequest | null>(r.pending, null)
+      const approved = reply.kind === 'approve' && r.state === 'confirm' && pending?.kind === 'confirm' ? r.pending : null
       this.db.run(
-        `UPDATE agent_runs SET state = 'queued', reply = ?, updated_at = ? WHERE id = ? AND state = ?`,
-        [JSON.stringify(reply), ts, runId, r.state]
+        `UPDATE agent_runs SET state = 'queued', reply = ?, approved = ?, updated_at = ? WHERE id = ? AND state = ?`,
+        [JSON.stringify(reply), approved, ts, runId, r.state]
       )
     }
     return this.get(runId)
+  }
+
+  /**
+   * What the user approved for the turn now running, or null. Server-side
+   * actions that must not happen without consent (sending a Telegram message)
+   * check against this instead of trusting the agent. It lasts one turn.
+   */
+  approvedConfirm(runId: string): PendingConfirm | null {
+    const r = this.row(runId)
+    if (!r || r.state !== 'running') return null
+    const p = parseJson<PendingRequest | null>(r.approved ?? null, null)
+    return p?.kind === 'confirm' ? p : null
+  }
+
+  /** Use the approval up: one confirmation covers one action. False when it is already gone. */
+  takeApproval(runId: string): boolean {
+    const res = this.db.run(
+      "UPDATE agent_runs SET approved = NULL WHERE id = ? AND state = 'running' AND approved IS NOT NULL",
+      [runId]
+    )
+    return res.changes > 0
+  }
+
+  /** Give a taken approval back when the action it covered did not happen. */
+  restoreApproval(runId: string, confirm: PendingConfirm): void {
+    this.db.run("UPDATE agent_runs SET approved = ? WHERE id = ? AND state = 'running' AND approved IS NULL", [
+      JSON.stringify(confirm),
+      runId,
+    ])
   }
 
   /** Stop: a running turn is interrupted on its next heartbeat; a queued run parks at once. */
@@ -626,6 +664,19 @@ export class AgentRunStore {
       ]
     )
     return this.getAccess(spec.name)!
+  }
+
+  /**
+   * Make sure an access that ships with the service is in the registry. A new
+   * one is added as active and an active one gets the current description; one
+   * the user revoked stays revoked.
+   */
+  seedAccess(spec: AccessSpec): AccessRecord {
+    const existing = this.getAccess(spec.name)
+    if (!existing) return this.upsertAccess(spec, null)
+    if (existing.status !== 'active') return existing
+    // Keep the scope the user chose (they may have narrowed it to read).
+    return this.upsertAccess({ ...spec, scope: existing.scope }, existing.runId)
   }
 
   /** active → revoking (the runner removes it from the host) → revoked. */

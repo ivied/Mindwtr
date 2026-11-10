@@ -25,6 +25,9 @@ const SHELL_RULES: ShellRule[] = [
   { re: /\brm\s+(-[a-zA-Z]*\s+)*-[a-zA-Z]*[rR][a-zA-Z]*\b/, why: 'рекурсивное удаление' },
   { re: /\b(chat\.postMessage|chat\.update|chat\.delete|conversations\.(invite|kick|archive))\b/, why: 'запись в Slack' },
   { re: /api\.telegram\.org\/bot[^/\s]*\/(send|delete|edit|forward)/i, why: 'отправка в Telegram' },
+  // The user's own account through ai-service. The server checks the approval
+  // itself; this only tells the agent so before it tries.
+  { re: /\/v1\/telegram\/send\b/, why: 'отправка сообщения в Telegram от имени пользователя' },
   { re: /\b(sendmail|mail\s+-s|msmtp)\b/, why: 'отправка письма' },
   { re: /\bosascript\b[\s\S]*\b(send|make new outgoing message)\b/i, why: 'отправка через приложение macOS' },
   { re: /\b(npm|bun|pnpm|yarn)\s+publish\b/, why: 'публикация пакета' },
