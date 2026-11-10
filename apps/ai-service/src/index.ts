@@ -36,6 +36,7 @@ import { denyConfigFromEnv } from './commitment/source-deny'
 import { MindwtrInboxTitles } from './commitment/inbox-titles'
 import { AgentRunStore } from './agent-runs/store'
 import { TELEGRAM_ACCESS } from './agent-runs/telegram-routes'
+import { assistantAccess, assistantChat } from './agent-runs/assistant-routes'
 import { WikiPersonsProvider } from './wiki/persons-reader'
 import { WikiGlossaryProvider, MemoryExpansionSource } from './wiki/glossary-reader'
 import { GlossaryStore, GlossaryStoreSource } from './wiki/glossary-store'
@@ -805,6 +806,7 @@ const capture = createCaptureSink({
 // so we can wire handlers + notifier before main() spins up.
 const bot = createBot(TELEGRAM_BOT_TOKEN, capture, {
   proposals: { store: proposalStore, webBaseUrl: MINDWTR_WEB_URL },
+  silentChatId: () => assistantChat(agentRunStore)?.chatId ?? null,
 })
 
 const proposalNotifier = new ProposalNotifier({
@@ -994,6 +996,11 @@ async function main() {
   } else if (telegramUser) {
     console.warn('🤖 agents: Telegram access not offered — the user-account client did not start')
   }
+  const assistantGroup = assistantChat(agentRunStore)
+  if (assistantGroup) {
+    const access = agentRunStore.seedAccess(assistantAccess(assistantGroup))
+    console.log(`🤖 agents: assistant chat "${assistantGroup.title}" is ${access.status}`)
+  }
 
   // Restore session workspaces pushed by the browser extension on a previous
   // run, so a restart doesn't require re-extracting. Best-effort per record:
@@ -1154,7 +1161,17 @@ async function main() {
           }
         : null,
       agentConfig,
-      agentRuns: { store: agentRunStore, mindwtr, dailyBudgetUsd: AGENT_RUNS_DAILY_BUDGET_USD, dailyQuotaPct: AGENT_RUNS_DAILY_QUOTA_PCT, publicUrl: process.env.AI_SERVICE_PUBLIC_URL?.trim() || undefined, memory: agentRunsMemory, runnerToken: process.env.AGENT_RUNNER_TOKEN?.trim() || undefined, telegram: telegramUser ?? undefined },
+      agentRuns: { store: agentRunStore, mindwtr, dailyBudgetUsd: AGENT_RUNS_DAILY_BUDGET_USD, dailyQuotaPct: AGENT_RUNS_DAILY_QUOTA_PCT, publicUrl: process.env.AI_SERVICE_PUBLIC_URL?.trim() || undefined, memory: agentRunsMemory, runnerToken: process.env.AGENT_RUNNER_TOKEN?.trim() || undefined, telegram: telegramUser ?? undefined,
+        assistant: telegramUser
+          ? {
+              account: telegramUser,
+              bot: {
+                username: async () => (await bot.api.getMe()).username,
+                send: async (chatId, text) => ({ messageId: (await bot.api.sendMessage(chatId, text)).message_id }),
+              },
+            }
+          : undefined,
+      },
     })
     http = server.serve()
     console.log(

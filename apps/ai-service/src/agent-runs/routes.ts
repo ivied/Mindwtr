@@ -10,6 +10,7 @@ import type { Hono } from 'hono'
 import type { CreateTaskParams, Task } from '../api/mindwtr-client'
 import type { AgentRunStore } from './store'
 import { TELEGRAM_ACCESS, mountTelegramRoutes, type TelegramAgentApi } from './telegram-routes'
+import { mountAssistantRoutes, type AssistantRoutesDeps } from './assistant-routes'
 import {
   stateOfPending,
   type AccessSpec,
@@ -62,6 +63,8 @@ export interface AgentRunsHttpDeps {
    * run (there is nothing to set up: the client lives in this process).
    */
   telegram?: TelegramAgentApi
+  /** The group where agents ask the user's human assistant. Mounts /v1/assistant/*. */
+  assistant?: Pick<AssistantRoutesDeps, 'bot' | 'account'>
   now?: () => Date
   log?: (msg: string) => void
 }
@@ -295,6 +298,7 @@ export function mountAgentRunsRoutes(app: Hono, deps: AgentRunsHttpDeps): void {
     `Доступ «${access.name}» подключён (${access.scope === 'write' ? 'чтение и запись' : 'только чтение'}). ${access.notes}`.trim()
 
   if (deps.telegram) mountTelegramRoutes(app, { store, telegram: deps.telegram, log: deps.log })
+  if (deps.assistant) mountAssistantRoutes(app, { store, ...deps.assistant, runnerToken: deps.runnerToken, log: deps.log })
 
   /** A provisioning run ended: tell every task run that was waiting for it. */
   const wakeParent = (child: AgentRunRecord, access: AccessSpec | null, why = ''): void => {

@@ -104,6 +104,25 @@ from "Доступы агентов") turns it back on at once, without a provis
 The skill ships with the runner (`skills/telegram/SKILL.md`) and is copied to
 `~/.claude/skills/telegram/` while the access is active.
 
+### The assistant chat
+
+A Telegram group of the user, their human assistant and the bot, where agents
+ask the assistant for data or for an action in a service they cannot reach
+(`apps/ai-service/src/agent-runs/assistant-routes.ts`):
+
+| Route | What it does |
+|---|---|
+| `POST /v1/assistant/setup` `{ title, about }` or `{ chatId, about }` | operator only (`x-runner-token`): create the group from the user's account with the bot in it, or bind an existing one; registers the `assistant` access |
+| `POST /v1/assistant/ask` `{ runId, text }` | post a question as the bot |
+| `GET /v1/assistant/messages?limit=` | recent messages of the group |
+
+Asking needs no confirmation — that is the point of the group. It stays narrow
+because the chat is fixed on the server, the message goes out as the bot, only
+a task run that is running may post, and a run gets five messages. The agent
+does not wait: it asks, reports the task as `waiting` and ends. The answer is
+read with `GET` by a later run and also reaches captured context through the
+user's own account. The bot ignores whatever is written in that group.
+
 ## Run
 
 ```bash
