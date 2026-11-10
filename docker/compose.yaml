@@ -141,6 +141,13 @@ services:
       # To read the DB safely: `docker exec ai-service ...`, never open the
       # underlying file from macOS while the container is running.
       - ai-service-data:/app/data
+      # Sources come from the working tree, not from the image: bun runs the
+      # TypeScript as is, so a code change is deployed with
+      # `docker compose restart ai-service` (seconds) and the image is rebuilt
+      # only when dependencies change (package.json / bun.lock). Set
+      # AI_SERVICE_SRC_HOST_DIR / CORE_SRC_HOST_DIR to run another checkout.
+      - ${AI_SERVICE_SRC_HOST_DIR:-../apps/ai-service/src}:/app/apps/ai-service/src:ro
+      - ${CORE_SRC_HOST_DIR:-../packages/core/src}:/app/packages/core/src:ro
       # Read-only mount of the capture-wiki root so the Proposer can read
       # wiki/entities/*.md for the KNOWN_PERSONS registry. Path is the user's
       # local wiki dir; override WIKI_HOST_DIR when the wiki lives elsewhere.

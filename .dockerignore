@@ -50,3 +50,8 @@ yarn-error.log*
 
 .env
 .env.*
+
+# Not needed by any image; keeps the build context small.
+mockups
+e2e
+docker/cloud-data-backups

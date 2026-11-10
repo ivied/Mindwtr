@@ -36,16 +36,38 @@ SSH from anywhere with the user's `~/.ssh/config` alias: `ssh openclaw`. User: `
 
 ### Mode A — code change to ai-service / mindwtr-cloud / mindwtr-app
 
-Push to GitHub from wherever you edit. Then:
+Push to GitHub from wherever you edit, then `git pull --ff-only` in the makurdi checkout (or work in it directly). What you do next depends on the service.
+
+**ai-service — restart, do not build (since 2026-11-10).** Its container runs the TypeScript straight from the checkout: `apps/ai-service/src` and `packages/core/src` are bind-mounted read-only (see `volumes` in `docker/compose.yaml`). A code change is live after:
 
 ```bash
 ssh openclaw 'eval "$(/opt/homebrew/bin/brew shellenv)"; cd ~/Projects/GTD_mindwtr && \
-  git pull --ff-only origin main && \
+  docker compose -f docker/compose.yaml --env-file docker/.env restart ai-service'
+```
+
+That takes about half a minute. Rebuild the image **only** when dependencies changed (`package.json` of ai-service or core, `bun.lock`) or `docker/ai-service/Dockerfile` did:
+
+```bash
+docker compose -f docker/compose.yaml --env-file docker/.env build ai-service && \
+docker compose -f docker/compose.yaml --env-file docker/.env up -d ai-service
+```
+
+Because the container reads the working tree, whatever is in the checkout at restart time is what runs — committed or not. Do not leave half-done edits to `apps/ai-service/src` in the makurdi checkout, and do not restart ai-service while someone else's edits are in progress there. After changing `volumes` or `environment` in compose, use `up -d ai-service` (a plain `restart` does not pick those up).
+
+**mindwtr-cloud / mindwtr-app — build, then recreate:**
+
+```bash
+ssh openclaw 'eval "$(/opt/homebrew/bin/brew shellenv)"; cd ~/Projects/GTD_mindwtr && \
   docker compose -f docker/compose.yaml --env-file docker/.env build <service> && \
   docker compose -f docker/compose.yaml --env-file docker/.env up -d --force-recreate <service>'
 ```
 
-Replace `<service>` with one of: `ai-service`, `mindwtr-cloud`, `mindwtr-app`. For multiple, repeat or use the `--profile cf` variant below.
+**Rules for any build on makurdi** (8 GB Mac, 6 GB Colima VM):
+
+- One image at a time, with nothing else heavy running (no local test stand, browser automation or second build). A parallel build has crashed the VM and taken GTD down.
+- Builds starve ai-service: agent runs in flight get marked "runner lost". Check that no run is `running`/`queued` first, or accept that they will need a resume.
+- Builds use BuildKit (`docker buildx`, installed 2026-11-10 as a CLI plugin in `~/.docker/cli-plugins`). Measured for ai-service: nothing changed — ~10 s; source-only change — ~2 min; cold cache — ~8 min. If `docker buildx version` fails, reinstall it (`brew install docker-buildx` and symlink the plugin) rather than falling back to the legacy builder.
+- If Docker stops answering: `colima stop --force && colima start`.
 
 **Smoke check** after restart (wait ~5 s):
 
@@ -141,14 +163,14 @@ Editing capture-agent on makurdi without this dance does nothing — there is no
 ## 7. Failure modes — when to STOP
 
 - SSH to openclaw fails 2 times in a row → check Tailscale is up, ask user.
-- `docker compose build` fails with a TypeScript error → don't ship a broken build; ask user. (CI doesn't catch all of these because ai-service has no docker CI workflow.)
+- `docker compose build` fails with a TypeScript error → don't ship a broken build; ask user. For ai-service nothing compiles at deploy time any more (it is restarted from the checkout), so run `bunx tsc --noEmit` and `bun test` in `apps/ai-service` before restarting it.
 - `git pull` reports diverged branches on makurdi → ask user before resetting; the other agent (a Cursor Composer session) sometimes commits directly on makurdi without pushing.
 
 ## 8. Hand-off checklist
 
 - [ ] Code change committed and pushed to `ivied/Mindwtr` `main`
 - [ ] `ssh openclaw` from your host works without prompt
-- [ ] `docker compose build <service>` succeeded
+- [ ] `docker compose build <service>` succeeded (ai-service: typecheck + tests passed, then `restart`)
 - [ ] `docker compose up -d --force-recreate <service>` succeeded
 - [ ] Smoke logs show no GrammyError 409 (no laptop revival), no `Unable to connect` from extractors
 - [ ] If capture-agent change: `launchctl kickstart -k gui/$UID/uk.kurdy.gtd-capture` ran and PID rotated
@@ -191,4 +213,5 @@ A full agent per inbox item, with its work visible in the Inbox view. Separate f
 - The UI shows "раннер не на связи" when the runner has not polled for 30 s. A run whose runner dies is parked as `stopped` after 3 min and can be resumed from the UI.
 - **Accesses** (2026-11-10): agents ask for access to external services (`request_access`); granting starts a provisioning run that connects it and registers it in `agent_accesses`. Keys go UI → ai-service (held until claimed) → runner → `~/.config/gtd-agents/secrets.env` on makurdi. List / revoke: "Доступы агентов" in the Inbox zone. Details: `apps/agent-runner/README.md`.
 - `AGENT_RUNNER_TOKEN` in `docker/.env` (generated by the installer) protects the runner endpoints; ai-service and the runner must share it — after it changes, recreate `ai-service` and rerun the installer.
-- Deploy order for changes here: `ai-service` (Mode A) → `mindwtr-app` (Mode A) → `launchctl kickstart -k gui/$(id -u)/uk.kurdy.gtd-agent-runner`.
+- **Telegram and the assistant chat** (2026-11-10): ai-service serves the user's personal Telegram to agents (`/v1/telegram/*`; sending only with an approved confirmation, checked on the server) and a group where agents ask the user's human assistant through the bot (`/v1/assistant/*`, no confirmation). Both are rows in `agent_accesses` (`telegram`, `assistant`) with skills shipped in `apps/agent-runner/skills/`. The assistant group is created or rebound with `POST /v1/assistant/setup` (needs `x-runner-token`). Details: `apps/agent-runner/README.md`.
+- Deploy order for changes here: `ai-service` (Mode A: restart) → `mindwtr-app` (Mode A: build) → `launchctl kickstart -k gui/$(id -u)/uk.kurdy.gtd-agent-runner`. Restart the runner only when no run is `running` or `queued` (check and restart in one command) — a restart kills the turns in flight.
