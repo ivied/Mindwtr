@@ -35,6 +35,7 @@ import { InboxProcessor } from './InboxProcessor';
 import { MindSweepLauncher } from '../MindSweepModal';
 import { TaskBulkOrganizeModal } from './list/TaskBulkOrganizeModal';
 import { InboxProposalsZone } from '../InboxProposalsZone';
+import { InboxAgentRunsZone } from '../agent-runs/InboxAgentRunsZone';
 import { useLanguage } from '../../contexts/language-context';
 import { useKeybindings } from '../../contexts/keybinding-context';
 import { useListCopilot } from './list/useListCopilot';
@@ -1000,6 +1001,8 @@ export const ListView = memo(function ListView({ title, statusFilter, assignedTo
                     onOpenProject={handleOpenProject}
                     onReactivateProject={handleReactivateProject}
                     inboxProcessor={(
+                        <>
+                        {isInbox ? <InboxAgentRunsZone /> : null}
                         <InboxProcessor
                             t={t}
                             isInbox={isInbox}
@@ -1016,6 +1019,7 @@ export const ListView = memo(function ListView({ title, statusFilter, assignedTo
                             isProcessing={isProcessing}
                             setIsProcessing={setIsProcessing}
                         />
+                        </>
                     )}
                     showViewFilterInput={showViewFilterInput}
                     searchQuery={searchQuery}

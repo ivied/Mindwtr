@@ -471,6 +471,14 @@ function recordMigration(db: DB, version: number): void {
  */
 function applyAdditiveMigrations(db: DB): void {
   // v5: procedural_chunks gains applies_to + reliability_score + classified_by + classified_at.
+  // facts.origin — 'user' marks a fact the user stated or confirmed. Those are
+  // never superseded or expired by anything inferred from captured events.
+  const factCols = db
+    .query<{ name: string }, []>('PRAGMA table_info(facts)')
+    .all()
+    .map((c) => c.name)
+  if (factCols.length && !factCols.includes('origin')) db.run('ALTER TABLE facts ADD COLUMN origin TEXT')
+
   const cols = db
     .query<{ name: string }, []>("PRAGMA table_info(procedural_chunks)")
     .all()

@@ -34,6 +34,7 @@ import type { DuplicateOfExistingHook } from './commitment/pipeline'
 import { CommitmentBatcher } from './commitment/batcher'
 import { denyConfigFromEnv } from './commitment/source-deny'
 import { MindwtrInboxTitles } from './commitment/inbox-titles'
+import { AgentRunStore } from './agent-runs/store'
 import { WikiPersonsProvider } from './wiki/persons-reader'
 import { WikiGlossaryProvider, MemoryExpansionSource } from './wiki/glossary-reader'
 import { GlossaryStore, GlossaryStoreSource } from './wiki/glossary-store'
@@ -52,6 +53,8 @@ import {
 } from './memory'
 import { SlugCanonicalizer } from './memory/slug-canonicalizer'
 import { EntityRegistryStore } from './memory/entity-registry-store'
+import { TaskContextAssembler, entitiesInText, renderTaskContext, slugOf, type KnownEntity } from './memory/task-context'
+import type { AgentRunsMemory } from './agent-runs/types'
 import { EntityRegistrar } from './memory/entity-registrar'
 import { EntityPipeline } from './memory/entity-pipeline'
 import { LlmPublisher } from './status/llm-publisher'
@@ -214,6 +217,35 @@ console.log(
 // Proposal Store shares the same SQLite handle as Context Store so that
 // proposal creation can reference capture rows transactionally.
 const proposalStore = new ProposalStore(contextStore.rawDb)
+
+// Agent runs: a full agent per inbox item, executed by apps/agent-runner on the
+// host. ai-service only keeps the record and serves the API. With
+// INBOX_AGENT_AUTORUN=true a new inbox task gets an agent run INSTEAD of the
+// Enricher suggestion; otherwise runs start only from the UI.
+const agentRunStore = new AgentRunStore(contextStore.rawDb)
+const INBOX_AGENT_AUTORUN = process.env.INBOX_AGENT_AUTORUN === 'true'
+// The daily cap is a share of the weekly subscription quota (the runner measures
+// it per turn). Empty/unset → 10%; explicit 0 = no cap.
+const AGENT_RUNS_DAILY_QUOTA_PCT = (() => {
+  const raw = (process.env.AGENT_RUNS_DAILY_QUOTA_PCT ?? '').trim()
+  const n = raw === '' ? 10 : Number(raw)
+  return Number.isFinite(n) && n >= 0 ? n : 10
+})()
+// Dollar backstop for when the quota cannot be measured (the estimate the agent
+// reports, not real spend on a subscription). Empty/unset → $100; 0 = no cap.
+const AGENT_RUNS_DAILY_BUDGET_USD = (() => {
+  const raw = (process.env.AGENT_RUNS_DAILY_BUDGET_USD ?? '').trim()
+  const n = raw === '' ? 100 : Number(raw)
+  return Number.isFinite(n) && n >= 0 ? n : 100
+})()
+/** Queue an agent run for a fresh inbox task. Returns true when autorun took it. */
+const autorunAgent = (taskId: string, title: string, description: string, status?: string): boolean => {
+  if (!INBOX_AGENT_AUTORUN) return false
+  if (status && status !== 'inbox') return false
+  if (!title.trim()) return false
+  agentRunStore.enqueue({ taskId, taskTitle: title, taskDescription: description })
+  return true
+}
 const proposalApplier = new ProposalApplier(proposalStore, mindwtr)
 const taskChangeProcessor = new TaskChangeProcessor(proposalStore)
 // "Не предлагай такое" rules: written via reject {mute:true}, consulted by
@@ -234,6 +266,46 @@ const memoryStore = new MemoryStore({
   vecAvailable: contextStore.hasVectorSearch,
 })
 const memoryRetriever = new HybridRetriever(memoryStore, embeddings)
+
+// Memory as agent runs see it: facts picked for a task, plus the facts the
+// user confirmed (which outrank everything inferred from captured events).
+const agentRunsMemory: AgentRunsMemory = (() => {
+  const registry = new EntityRegistryStore(contextStore.rawDb)
+  let cache: { at: number; entities: KnownEntity[] } = { at: 0, entities: [] }
+  const entities = (): KnownEntity[] => {
+    if (Date.now() - cache.at > 60_000) {
+      cache = {
+        at: Date.now(),
+        entities: registry.list(0, 10_000).map((e) => ({ slug: e.slug, name: e.name, type: e.type, aliases: e.aliases, mentionCount: e.mentionCount })),
+      }
+    }
+    return cache.entities
+  }
+  const assembler = new TaskContextAssembler({
+    store: memoryStore,
+    entities,
+    searchEvents: (query, limit, withinDays) => memoryRetriever.retrieve({ query, limit, withinDays }),
+  })
+  const item = (f: { id: number; statement: string; entitySlug: string | null; createdAt: string }) => ({
+    id: f.id,
+    statement: f.statement,
+    entity: f.entitySlug,
+    createdAt: f.createdAt,
+  })
+  return {
+    taskContext: async (text) => renderTaskContext(await assembler.assemble(text)),
+    list: () => memoryStore.allVerifiedFacts().map(item),
+    save: (statement, entity) => {
+      // File it under the entity the registry already knows by that name, so
+      // it surfaces whichever spelling a later task uses.
+      const slug = entity ? (entitiesInText(entity, entities())[0]?.slug ?? slugOf(entity)) : null
+      return item(
+        memoryStore.insertFact({ statement, entitySlug: slug || null, factType: 'rule', validFrom: new Date().toISOString(), confidence: 1, origin: 'user' })
+      )
+    },
+    remove: (id) => memoryStore.closeFact(id, new Date().toISOString()),
+  }
+})()
 // Glossary decoder ring — non-person entities (project codenames, acronyms,
 // internal terms) from the capture-wiki, decoded via the memory module's
 // active facts. Feeds a KNOWN_GLOSSARY block into Proposer + Enricher so
@@ -668,6 +740,7 @@ if (LLM_BASE_URL && LLM_API_KEY) {
         | null
       if (!payload || payload.kind !== 'create' || !payload.task) return
       const task = payload.task
+      if (autorunAgent(taskId, task.title ?? '', task.description ?? '')) return
       const text = (task.title ?? '') + (task.description ? '\n' + task.description : '')
       void enricherForApplier
         .run({
@@ -996,8 +1069,11 @@ async function main() {
             onTaskEdited: reviewNotifier
               ? (taskId, fields) => void reviewNotifier!.onTaskEdit(taskId, fields)
               : undefined,
-            onTaskCreated: enricherPipeline
+            onTaskCreated: enricherPipeline || INBOX_AGENT_AUTORUN
               ? (taskId, fields) => {
+                  const status = typeof fields.status === 'string' ? fields.status : undefined
+                  if (autorunAgent(taskId, fields.title ?? '', fields.description ?? '', status)) return
+                  if (!enricherPipeline) return
                   const text = (fields.title ?? '') + (fields.description ? '\n' + fields.description : '')
                   void enricherPipeline!
                     .run({
@@ -1068,6 +1144,7 @@ async function main() {
           }
         : null,
       agentConfig,
+      agentRuns: { store: agentRunStore, mindwtr, dailyBudgetUsd: AGENT_RUNS_DAILY_BUDGET_USD, dailyQuotaPct: AGENT_RUNS_DAILY_QUOTA_PCT, publicUrl: process.env.AI_SERVICE_PUBLIC_URL?.trim() || undefined, memory: agentRunsMemory, runnerToken: process.env.AGENT_RUNNER_TOKEN?.trim() || undefined },
     })
     http = server.serve()
     console.log(

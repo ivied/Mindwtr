@@ -8,7 +8,7 @@ interface MindwtrClientConfig {
   authToken: string
 }
 
-interface CreateTaskParams {
+export interface CreateTaskParams {
   title: string
   status?: string
   contexts?: string[]

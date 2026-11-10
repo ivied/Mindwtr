@@ -120,3 +120,6 @@ productivity-plugin.zip
 
 # Brainstorming/implementation working files (decisions distilled to docs/adr/)
 docs/superpowers/
+
+# Backups of docker/.env made before deploys (contain secrets)
+.env.bak-*

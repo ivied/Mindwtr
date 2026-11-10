@@ -51,6 +51,7 @@ interface FactRow {
   source_event_id: string | null
   confidence: number | null
   created_at: string
+  origin?: string | null
 }
 
 interface DailySummaryRow {
@@ -226,15 +227,16 @@ export class MemoryStore {
              SET valid_to = ?
            WHERE entity_slug = ?
              AND fact_type = ?
-             AND valid_to IS NULL`
+             AND valid_to IS NULL
+             AND origin IS NULL`
         )
         .run(input.validFrom, input.entitySlug, input.factType)
     }
 
     const inserted = this.db
-      .query<{ id: number }, [string, string | null, string | null, string, string | null, number | null, string]>(
-        `INSERT INTO facts (statement, entity_slug, fact_type, valid_from, source_event_id, confidence, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+      .query<{ id: number }, [string, string | null, string | null, string, string | null, number | null, string, string | null]>(
+        `INSERT INTO facts (statement, entity_slug, fact_type, valid_from, source_event_id, confidence, created_at, origin)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING id`
       )
       .get(
@@ -244,7 +246,8 @@ export class MemoryStore {
         input.validFrom,
         input.sourceEventId ?? null,
         input.confidence ?? null,
-        createdAt
+        createdAt,
+        input.origin ?? null
       )
     if (!inserted) throw new Error('insertFact: RETURNING returned nothing')
 
@@ -258,7 +261,58 @@ export class MemoryStore {
       sourceEventId: input.sourceEventId ?? null,
       confidence: input.confidence ?? null,
       createdAt,
+      origin: input.origin ?? null,
     }
+  }
+
+  /** Facts the user stated or confirmed, newest first: for the given slugs, or the ones tied to no entity. */
+  verifiedFacts(slugs: string[] | null, limit = 60): Fact[] {
+    if (slugs && slugs.length === 0) return []
+    const where = slugs ? `entity_slug IN (${slugs.map(() => '?').join(',')})` : 'entity_slug IS NULL'
+    return this.db
+      .query<FactRow, (string | number)[]>(
+        `SELECT * FROM facts WHERE origin = 'user' AND valid_to IS NULL AND ${where} ORDER BY valid_from DESC LIMIT ?`
+      )
+      .all(...(slugs ?? []), limit)
+      .map(rowToFact)
+  }
+
+  /** Every active fact the user stated or confirmed, newest first. */
+  allVerifiedFacts(limit = 500): Fact[] {
+    return this.db
+      .query<FactRow, [number]>(`SELECT * FROM facts WHERE origin = 'user' AND valid_to IS NULL ORDER BY valid_from DESC LIMIT ?`)
+      .all(limit)
+      .map(rowToFact)
+  }
+
+  /** Distinct entity slugs that carry user-confirmed facts. */
+  verifiedSlugs(): string[] {
+    return this.db
+      .query<{ entity_slug: string }, []>(
+        `SELECT DISTINCT entity_slug FROM facts WHERE origin = 'user' AND valid_to IS NULL AND entity_slug IS NOT NULL`
+      )
+      .all()
+      .map((r) => r.entity_slug)
+  }
+
+  /** Inferred facts for a set of slugs, newest first. */
+  inferredFactsFor(slugs: string[], sinceIso: string, limit = 400): Fact[] {
+    if (slugs.length === 0) return []
+    return this.db
+      .query<FactRow, (string | number)[]>(
+        `SELECT * FROM facts
+          WHERE origin IS NULL AND valid_to IS NULL AND valid_from >= ?
+            AND entity_slug IN (${slugs.map(() => '?').join(',')})
+          ORDER BY valid_from DESC LIMIT ?`
+      )
+      .all(sinceIso, ...slugs, limit)
+      .map(rowToFact)
+  }
+
+  /** Retire one fact (the user removed it). Returns false when it was not active. */
+  closeFact(id: number, nowIso: string): boolean {
+    const res = this.db.query('UPDATE facts SET valid_to = ? WHERE id = ? AND valid_to IS NULL').run(nowIso, id)
+    return Number((res as unknown as { changes?: number }).changes ?? 0) > 0
   }
 
   /**
@@ -272,7 +326,8 @@ export class MemoryStore {
         `UPDATE facts
            SET valid_to = ?
          WHERE entity_slug = ?
-           AND valid_to IS NULL`
+           AND valid_to IS NULL
+           AND origin IS NULL`
       )
       .run(nowIso, entitySlug)
     return Number((res as unknown as { changes?: number }).changes ?? 0)
@@ -393,6 +448,7 @@ function rowToFact(row: FactRow): Fact {
     sourceEventId: row.source_event_id,
     confidence: row.confidence,
     createdAt: row.created_at,
+    origin: row.origin ?? null,
   }
 }
 

@@ -90,6 +90,15 @@ services:
       - NOTION_API_KEY=${NOTION_API_KEY:-}
       - NOTION_DATABASE_ID=${NOTION_DATABASE_ID:-}
       - NOTION_POLL_INTERVAL_MS=${NOTION_POLL_INTERVAL_MS:-300000}
+      # Agent runs (apps/agent-runner on the host executes them). AUTORUN=true
+      # gives every new inbox task a full agent run instead of an Enricher
+      # suggestion; the budget caps how much fresh runs may spend per day.
+      - INBOX_AGENT_AUTORUN=${INBOX_AGENT_AUTORUN:-false}
+      - AI_SERVICE_PUBLIC_URL=${AI_SERVICE_PUBLIC_URL:-${VITE_AI_SERVICE_URL:-https://ai.kurdy.uk}}
+      - AGENT_RUNS_DAILY_QUOTA_PCT=${AGENT_RUNS_DAILY_QUOTA_PCT:-10}
+      - AGENT_RUNS_DAILY_BUDGET_USD=${AGENT_RUNS_DAILY_BUDGET_USD:-100}
+      # Runner-only token (written to docker/.env by apps/agent-runner/install-launchd.sh).
+      - AGENT_RUNNER_TOKEN=${AGENT_RUNNER_TOKEN:-}
       - HTTP_PORT=${HTTP_PORT:-3030}
       - HTTP_AUTH_TOKEN=${HTTP_AUTH_TOKEN:-}
       - HTTP_CORS_ORIGINS=${HTTP_CORS_ORIGINS:-http://localhost:5173}

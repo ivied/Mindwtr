@@ -43,6 +43,7 @@ import type { GlossaryKind } from '../wiki/glossary-reader'
 import type { OnboardingExtractor } from '../memory/onboarding-extractor'
 import type { MindwtrClient } from '../api/mindwtr-client'
 import { getThreadRegistry } from '../threads/registry'
+import { mountAgentRunsRoutes, type AgentRunsHttpDeps } from '../agent-runs/routes'
 import type { RecordingSessionStore } from '../recording/store'
 import type { HealthReport } from '../status/health'
 import type { FocusContextAssembler, MemoryStore, HybridRetriever, IngestService } from '../memory'
@@ -190,6 +191,9 @@ export interface HttpServerConfig {
     enqueue(record: CaptureRecord): void
     pending(): number
   } | null
+  /** Optional agent runs (full agent per inbox item) — exposes /v1/agent-runs/*
+   *  for the Inbox UI and for the host runner (apps/agent-runner). */
+  agentRuns?: AgentRunsHttpDeps | null
 }
 
 export function createHttpServer(config: HttpServerConfig) {
@@ -336,6 +340,8 @@ export function createHttpServer(config: HttpServerConfig) {
       return c.json(ac.setCapturePaused(body.capturePaused))
     })
   }
+
+  if (config.agentRuns) mountAgentRunsRoutes(app, config.agentRuns)
 
   app.post('/v1/capture', async (c) => {
     let payload: CapturePayload
