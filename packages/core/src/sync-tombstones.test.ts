@@ -273,3 +273,74 @@ describe('purgeExpiredTombstones', () => {
         expect(result.data.settings.savedFilters?.map((filter) => filter.id)).toEqual(['filter-recent', 'filter-active']);
     });
 });
+
+describe('purgeExpiredTombstones — archived task retention', () => {
+    const makeTask = (id: string, overrides: Partial<AppData['tasks'][number]>): AppData['tasks'][number] => ({
+        id,
+        title: id,
+        status: 'archived',
+        tags: [],
+        contexts: [],
+        createdAt: '2025-01-01T00:00:00.000Z',
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        ...overrides,
+    });
+
+    const baseData = (tasks: AppData['tasks'], settings: AppData['settings'] = {}): AppData => ({
+        tasks,
+        projects: [],
+        sections: [],
+        areas: [],
+        settings,
+    });
+
+    it('drops archived tasks older than the default 180-day retention and keeps recent ones', () => {
+        const data = baseData([
+            makeTask('archived-old', { completedAt: '2025-06-01T00:00:00.000Z', updatedAt: '2025-06-01T00:00:00.000Z' }),
+            makeTask('archived-recent', { completedAt: '2026-03-01T00:00:00.000Z', updatedAt: '2026-03-01T00:00:00.000Z' }),
+            makeTask('active-old', { status: 'next', updatedAt: '2025-01-01T00:00:00.000Z' }),
+        ]);
+
+        const result = purgeExpiredTombstones(data, nowIso);
+
+        expect(result.removedArchivedTasks).toBe(1);
+        expect(result.data.tasks.map((task) => task.id)).toEqual(['archived-recent', 'active-old']);
+    });
+
+    it('prunes by completedAt even when updatedAt was bumped recently (bulk migrations)', () => {
+        const data = baseData([
+            makeTask('touched-by-migration', { completedAt: '2025-01-01T00:00:00.000Z', updatedAt: '2026-04-01T00:00:00.000Z' }),
+        ]);
+
+        const result = purgeExpiredTombstones(data, nowIso);
+
+        expect(result.removedArchivedTasks).toBe(1);
+        expect(result.data.tasks).toHaveLength(0);
+    });
+
+    it('respects settings.gtd.archivedRetentionDays and disables pruning when <= 0', () => {
+        const oldTask = () => makeTask('archived-old', { completedAt: '2026-02-01T00:00:00.000Z', updatedAt: '2026-02-01T00:00:00.000Z' });
+
+        const shortRetention = purgeExpiredTombstones(baseData([oldTask()], { gtd: { archivedRetentionDays: 30 } }), nowIso);
+        expect(shortRetention.removedArchivedTasks).toBe(1);
+
+        const disabled = purgeExpiredTombstones(baseData([oldTask()], { gtd: { archivedRetentionDays: 0 } }), nowIso);
+        expect(disabled.removedArchivedTasks).toBe(0);
+        expect(disabled.data.tasks).toHaveLength(1);
+    });
+
+    it('does not treat archived tombstones as archived prunes', () => {
+        const data = baseData([
+            makeTask('deleted-archived', {
+                completedAt: '2025-06-01T00:00:00.000Z',
+                deletedAt: '2026-04-01T00:00:00.000Z',
+            }),
+        ]);
+
+        const result = purgeExpiredTombstones(data, nowIso);
+
+        expect(result.removedArchivedTasks).toBe(0);
+        expect(result.removedTaskTombstones).toBe(0);
+        expect(result.data.tasks).toHaveLength(1);
+    });
+});

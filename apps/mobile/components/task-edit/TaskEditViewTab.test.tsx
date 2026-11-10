@@ -1,6 +1,6 @@
 import React from 'react';
 import renderer from 'react-test-renderer';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { TaskEditViewTab } from './TaskEditViewTab';
 import { styles as taskEditStyles } from './task-edit-modal.styles';
@@ -29,6 +29,10 @@ const flattenStyle = (value: any): Record<string, unknown> => (
 );
 
 describe('TaskEditViewTab', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('lets preview metadata values wrap across the full row width', () => {
     expect(flattenStyle(taskEditStyles.viewRow)).toMatchObject({
       alignItems: 'flex-start',
@@ -174,6 +178,10 @@ describe('TaskEditViewTab', () => {
   });
 
   it('shows the projected recurrence date in the read-only preview', () => {
+    // The preview is the next occurrence after "now": pin the clock, or the
+    // expected date goes stale once the real calendar passes it.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-06-01T12:00:00Z'));
     let tree!: renderer.ReactTestRenderer;
     renderer.act(() => {
       tree = renderer.create(

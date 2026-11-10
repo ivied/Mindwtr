@@ -1151,6 +1151,7 @@ async function performSyncCycleUnlocked(io: SyncCycleIO): Promise<SyncCycleResul
         || pruned.removedAttachmentTombstones > 0
         || pruned.removedSavedFilterTombstones > 0
         || pruned.removedPendingRemoteDeletes > 0
+        || pruned.removedArchivedTasks > 0
     ) {
         logWarn('Purged expired sync tombstones', {
             scope: 'sync',
@@ -1163,6 +1164,7 @@ async function performSyncCycleUnlocked(io: SyncCycleIO): Promise<SyncCycleResul
                 removedAttachmentTombstones: pruned.removedAttachmentTombstones,
                 removedSavedFilterTombstones: pruned.removedSavedFilterTombstones,
                 removedPendingRemoteDeletes: pruned.removedPendingRemoteDeletes,
+                removedArchivedTasks: pruned.removedArchivedTasks,
             },
         });
     }

@@ -287,23 +287,36 @@ SLACK / chat attribution (look in the Capture context block):
 Messages from chat channels include structured identity fields. Trust these
 over guessing from the text:
 - authorName: the resolved display name of who WROTE this message.
-- fromSelf: bool. The user's own messages are already filtered out, so this
-  is false for captured chat messages — the author is always someone else.
+- fromSelf: bool. True when THE USER wrote this message (their own outgoing
+  message, captured deliberately); false when someone else wrote it.
 - mentionsSelf: bool. True when the message explicitly addresses/@-mentions
-  THE USER (the configured identity, also given as selfName).
+  THE USER (the configured identity, also given as selfName). Always false
+  when fromSelf=true.
 - selfName: the user's display name in this workspace.
+- recipientName (outgoing DMs only): who the user sent this message to.
 
 Apply:
-1. mentionsSelf=true → someone is addressing/asking the user directly. An
+1. fromSelf=true → the user's OWN message. Read it for exactly two signals:
+   a. COMPLETION EVIDENCE: the message shows an open item was carried out —
+      the reply/deliverable itself (the user answering recipientName is what
+      "Reply to <recipientName>" means), or a past-tense report ("отправил",
+      "оплатил", "sent it", "готово"). Match it against RECENT_USER_ITEMS →
+      set completes_title to that item's title, is_actionable=false.
+   b. The user's own promise ("сделаю завтра", "I'll send the draft") → a
+      real commitment BY the user → is_actionable=true, who_owes=user.
+   Anything else the user wrote is ambient — is_actionable=false. NEVER
+   treat the user's own message as a request FOR the user, and never set
+   who_owes=other for it.
+2. mentionsSelf=true → someone is addressing/asking the user directly. An
    imperative like "@<user> please release" or "can you update X" is a
    request FOR the user → who_owes=user, recipient=unclear,
    suggested_category=next (or two_minute if trivial). This is NOT a
    delegation and NOT "waiting" — the user is the one who must act.
    Do NOT set who_owes=other just because someone else typed it.
-2. mentionsSelf=false → a general channel message not directed at the user.
+3. mentionsSelf=false → a general channel message not directed at the user.
    Mark is_actionable=true only if it clearly creates an obligation for the
    user (e.g. names a project the user owns); otherwise skip as ambient.
-3. Only set suggested_category=waiting when the user is genuinely blocked on
+4. Only set suggested_category=waiting when the user is genuinely blocked on
    someone else (the author promised something to the user), not when the
    author is asking the user to do something.
 
@@ -405,6 +418,11 @@ RECENT_USER_ITEMS entry (same deliverable, same counterparty), set:
 - reasoning mentions the completion, e.g. "Status report says the cost proposal was
   already sent — flags pending item as likely done"
 
+An OUTGOING message (fromSelf=true) can BE the completion, not just report it:
+the user's substantive reply to recipientName IS "Reply to <recipientName> …"
+being done — no past-tense wording needed. Same deliverable, same counterparty
+still applies (a one-word "ok" doesn't complete "Reply to X about the contract").
+
 Examples (DO set completes_title):
 - Capture: "Littlehub — ответы и стоимость отправлены, фаза 1 сдана"
   + item "Reply to katja about the Littlehub cost proposal" [pending AI review]
@@ -413,6 +431,9 @@ Examples (DO set completes_title):
   + item "Pay invoice #0459" [in inbox] → completes_title = "Pay invoice #0459"
 - Capture: "Сделал свой VPN, теперь все работает" + item "Set up VPN for Health
   Metrics" [pending AI review] → completes_title = that item's title
+- Capture (fromSelf=true, recipientName="Amir Red"): a paragraph answering Amir's
+  voice-message question + item "Send Amir Red more details on voice-message
+  requirements" [pending AI review] → completes_title = that item's title
 
 DON'T set completes_title:
 - The completion is about a DIFFERENT deliverable or counterparty than the item.
@@ -526,7 +547,11 @@ export class Proposer {
       tools: [PROPOSER_TOOL],
       tool_choice: 'required',
       temperature: 0.1,
-      max_tokens: 800,
+      // Gemini-family models on the router count thinking tokens inside
+      // max_tokens (observed since ~2026-08-22: reasoning_tokens ate a 800
+      // budget → finish_reason=max_tokens, no tool call, 0 proposals).
+      // Budget must cover reasoning + the full structured tool call.
+      max_tokens: 20000,
       model: this.model,
     })
 

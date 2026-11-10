@@ -1683,6 +1683,10 @@ describe('TaskStore', () => {
     });
 
     it('clears project archive metadata from deleted task tombstones during fetch', async () => {
+        // Tombstones are purged once they pass the retention window: pin the
+        // clock near the fixture dates, or the task is gone before we look at it.
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date('2026-05-12T00:00:00.000Z'));
         const archivedAt = '2026-05-10T00:00:00.000Z';
         mockStorage.getData = vi.fn().mockResolvedValue({
             tasks: [
@@ -1725,6 +1729,7 @@ describe('TaskStore', () => {
         const lastSaved = saveCalls[saveCalls.length - 1]?.[0];
         expect(lastSaved?.tasks?.[0]?.projectArchivedAt).toBeUndefined();
         expect(lastSaved?.tasks?.[0]?.statusBeforeProjectArchive).toBeUndefined();
+        vi.useRealTimers();
     });
 
     it('promotes scheduled tasks to next when scheduled date is reached', async () => {

@@ -25,10 +25,24 @@ ARG VITE_CLOUD_TOKEN=""
 ENV VITE_CLOUD_URL=$VITE_CLOUD_URL
 ENV VITE_CLOUD_TOKEN=$VITE_CLOUD_TOKEN
 
-COPY --chown=1000:1000 . .
-RUN chown bun:bun /app
+# Dependencies first, sources after: an edit to app code then reuses the
+# installed node_modules layer instead of reinstalling everything.
+# packages/core goes in whole because the desktop app depends on it as a
+# `file:` package, which bun copies into node_modules at install time.
+COPY --chown=1000:1000 package.json bun.lock ./
+COPY --chown=1000:1000 apps/agent-runner/package.json apps/agent-runner/
+COPY --chown=1000:1000 apps/ai-service/package.json apps/ai-service/
+COPY --chown=1000:1000 apps/capture-agent/package.json apps/capture-agent/
+COPY --chown=1000:1000 apps/cloud/package.json apps/cloud/
+COPY --chown=1000:1000 apps/desktop/package.json apps/desktop/
+COPY --chown=1000:1000 apps/mcp-server/package.json apps/mcp-server/
+COPY --chown=1000:1000 apps/mobile/package.json apps/mobile/
+COPY --chown=1000:1000 packages/core/ packages/core/
+RUN chown -R bun:bun /app
 USER bun
 RUN bun install --ignore-scripts
+
+COPY --chown=1000:1000 . .
 # Skip tsc (upstream type errors with current Bun) — Vite transpiles without strict checks.
 RUN cd apps/desktop && bun run vite build
 

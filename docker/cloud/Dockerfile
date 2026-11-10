@@ -2,16 +2,14 @@ FROM oven/bun:1.3.3-alpine@sha256:d2bc1fbc3afcd3d70afc2bb2544235bf559caae2a3084e
 WORKDIR /app
 
 FROM base AS deps
-RUN apk add --no-cache python3 make g++
-ENV CXXFLAGS="-std=c++20"
-ENV npm_config_cxxstd=gnu++20
-ENV npm_config_target="22.21.1"
-ENV npm_config_disturl="https://nodejs.org/dist"
-
 COPY --chown=1000:1000 . .
 RUN chown bun:bun /app
 USER bun
-RUN bun install --production
+# --ignore-scripts: the only native postinstall in the workspace is
+# better-sqlite3 (apps/mcp-server, not run in this image), and its node-gyp
+# header download hangs forever inside the Colima VM network. Skipping
+# scripts also drops the python3/make/g++ toolchain from the build.
+RUN bun install --production --ignore-scripts
 
 FROM base AS cloud
 RUN apk add --no-cache curl

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import type { Message } from '@mtcute/bun'
-import { toCapturedItem } from './telegram-user'
+import { parseChatRef, toCapturedItem, toChatInfo, toMessageInfo } from './telegram-user'
 
 interface StubOpts {
   text?: string
@@ -8,13 +8,14 @@ interface StubOpts {
   isService?: boolean
   isMention?: boolean
   senderIsBot?: boolean
+  chatIsBot?: boolean
   chatType?: 'user' | 'group' | 'supergroup' | 'channel'
 }
 
 function stubMessage(opts: StubOpts = {}): Message {
   const chatIsUser = (opts.chatType ?? 'user') === 'user'
   const chat = chatIsUser
-    ? { type: 'user', id: 111, displayName: 'Alice' }
+    ? { type: 'user', id: 111, displayName: 'Alice', isBot: opts.chatIsBot ?? false }
     : { type: 'chat', id: 222, chatType: opts.chatType, title: 'Work Group' }
   return {
     id: 42,
@@ -56,10 +57,72 @@ describe('toCapturedItem (telegram-user)', () => {
     expect(toCapturedItem(stubMessage({ chatType: 'channel' }))).toBeNull()
   })
 
-  it('skips own outgoing, service, bot and empty messages', () => {
-    expect(toCapturedItem(stubMessage({ isOutgoing: true }))).toBeNull()
+  it('skips service, bot and empty messages', () => {
     expect(toCapturedItem(stubMessage({ isService: true }))).toBeNull()
     expect(toCapturedItem(stubMessage({ senderIsBot: true }))).toBeNull()
     expect(toCapturedItem(stubMessage({ text: '   ' }))).toBeNull()
+  })
+
+  it('captures own outgoing DM as fromSelf with the peer as recipient', () => {
+    const item = toCapturedItem(
+      stubMessage({ isOutgoing: true, text: 'отправил договор, посмотри' })
+    )
+    expect(item).not.toBeNull()
+    expect(item!.sourceMeta).toMatchObject({
+      fromSelf: true,
+      mentionsSelf: false,
+      isDm: true,
+      recipientName: 'Alice',
+    })
+  })
+
+  it('outgoing group message gets fromSelf but no recipientName', () => {
+    const item = toCapturedItem(stubMessage({ isOutgoing: true, chatType: 'supergroup' }))
+    expect(item!.sourceMeta!.fromSelf).toBe(true)
+    expect(item!.sourceMeta!.recipientName).toBeUndefined()
+  })
+
+  it('skips outgoing when captureOutgoing=false and always skips outgoing DMs to bots', () => {
+    expect(toCapturedItem(stubMessage({ isOutgoing: true }), false)).toBeNull()
+    expect(toCapturedItem(stubMessage({ isOutgoing: true, chatIsBot: true }))).toBeNull()
+    // Incoming from a human still passes regardless of the toggle.
+    expect(toCapturedItem(stubMessage(), false)).not.toBeNull()
+  })
+})
+
+describe('agent-facing views (telegram-user)', () => {
+  it('parses the ways a chat can be named', () => {
+    expect(parseChatRef('123456789')).toBe(123456789)
+    expect(parseChatRef(' -1001234567890 ')).toBe(-1001234567890)
+    expect(parseChatRef('@some_user')).toBe('some_user')
+    expect(parseChatRef('me')).toBe('me')
+    // Phone numbers, links and free text are not chat references.
+    expect(parseChatRef('+79990000000')).toBeNull()
+    expect(parseChatRef('https://t.me/some_user')).toBeNull()
+    expect(parseChatRef('Work Group')).toBeNull()
+    expect(parseChatRef('')).toBeNull()
+  })
+
+  it('describes people, bots, groups and channels', () => {
+    const user = stubMessage().chat
+    expect(toChatInfo({ ...user, username: 'alice' } as never)).toEqual({ id: 111, type: 'user', title: 'Alice', username: 'alice' })
+    expect(toChatInfo(stubMessage({ chatIsBot: true }).chat as never).type).toBe('bot')
+    expect(toChatInfo(stubMessage({ chatType: 'supergroup' }).chat as never)).toMatchObject({ id: 222, type: 'supergroup', title: 'Work Group' })
+    expect(toChatInfo(stubMessage({ chatType: 'channel' }).chat as never).type).toBe('channel')
+  })
+
+  it('flattens a message, with what it replies to and the attachment kind', () => {
+    const msg = { ...stubMessage({ isOutgoing: true }), replyToMessage: { id: 40 }, media: { type: 'photo' } } as never
+    expect(toMessageInfo(msg)).toMatchObject({
+      id: 42,
+      date: '2026-07-01T12:00:00.000Z',
+      chatId: 111,
+      chatTitle: 'Alice',
+      from: 'Alice',
+      outgoing: true,
+      replyTo: 40,
+      media: 'photo',
+    })
+    expect(toMessageInfo(stubMessage())).toMatchObject({ replyTo: null, media: null })
   })
 })

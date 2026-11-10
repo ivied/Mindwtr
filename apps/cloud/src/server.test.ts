@@ -1698,8 +1698,10 @@ describe('cloud server api', () => {
     });
 
     test('purges deleted REST projects with refcounted remote attachment cleanup', async () => {
-        const iso = '2026-01-01T00:00:00.000Z';
-        const purgeIso = '2026-01-02T00:00:00.000Z';
+        // Recent timestamps: tombstones older than the retention window are now
+        // purged server-side on PUT, which would erase the fixture entirely.
+        const iso = new Date(Date.now() - 172_800_000).toISOString();
+        const purgeIso = new Date(Date.now() - 86_400_000).toISOString();
         const projectOnlyCloudKey = 'attachments/project-only.bin';
         const sharedCloudKey = 'attachments/shared.bin';
         const attachmentBase = {
@@ -2794,6 +2796,10 @@ describe('cloud server api', () => {
     test('keeps a nearby legacy delete during /v1/data merge', async () => {
         const base = { projects: [], sections: [], areas: [], settings: {} };
         const taskId = 'merge-race-live-wins';
+        // Recent timestamps: tombstones older than the retention window are now
+        // purged server-side on PUT, which would erase the fixture entirely.
+        const baseIso = new Date(Date.now() - 120_000).toISOString();
+        const laterIso = new Date(Date.parse(baseIso) + 100).toISOString();
 
         const seed = await fetch(`${baseUrl}/v1/data`, {
             method: 'PUT',
@@ -2807,8 +2813,8 @@ describe('cloud server api', () => {
                     id: taskId,
                     title: 'Live task',
                     status: 'inbox',
-                    createdAt: '2026-01-01T00:00:00.000Z',
-                    updatedAt: '2026-01-01T00:00:00.100Z',
+                    createdAt: baseIso,
+                    updatedAt: laterIso,
                 }],
             }),
         });
@@ -2826,9 +2832,9 @@ describe('cloud server api', () => {
                     id: taskId,
                     title: 'Live task',
                     status: 'inbox',
-                    createdAt: '2026-01-01T00:00:00.000Z',
-                    updatedAt: '2026-01-01T00:00:00.000Z',
-                    deletedAt: '2026-01-01T00:00:00.000Z',
+                    createdAt: baseIso,
+                    updatedAt: baseIso,
+                    deletedAt: baseIso,
                 }],
             }),
         });
@@ -2841,13 +2847,15 @@ describe('cloud server api', () => {
         const body = await getResponse.json();
         const mergedTask = (body.tasks as Array<{ id: string; updatedAt: string; deletedAt?: string }>).find((task) => task.id === taskId);
         expect(mergedTask).toBeTruthy();
-        expect(mergedTask?.deletedAt).toBe('2026-01-01T00:00:00.000Z');
-        expect(mergedTask?.updatedAt).toBe('2026-01-01T00:00:00.000Z');
+        expect(mergedTask?.deletedAt).toBe(baseIso);
+        expect(mergedTask?.updatedAt).toBe(baseIso);
     });
 
     test('keeps a slightly newer legacy delete during /v1/data merge', async () => {
         const base = { projects: [], sections: [], areas: [], settings: {} };
         const taskId = 'merge-race-delete-wins';
+        const baseIso = new Date(Date.now() - 120_000).toISOString();
+        const laterIso = new Date(Date.parse(baseIso) + 100).toISOString();
 
         const seed = await fetch(`${baseUrl}/v1/data`, {
             method: 'PUT',
@@ -2861,9 +2869,9 @@ describe('cloud server api', () => {
                     id: taskId,
                     title: 'Task deleted later',
                     status: 'inbox',
-                    createdAt: '2026-01-01T00:00:00.000Z',
-                    updatedAt: '2026-01-01T00:00:00.100Z',
-                    deletedAt: '2026-01-01T00:00:00.100Z',
+                    createdAt: baseIso,
+                    updatedAt: laterIso,
+                    deletedAt: laterIso,
                 }],
             }),
         });
@@ -2881,8 +2889,8 @@ describe('cloud server api', () => {
                     id: taskId,
                     title: 'Task deleted later',
                     status: 'inbox',
-                    createdAt: '2026-01-01T00:00:00.000Z',
-                    updatedAt: '2026-01-01T00:00:00.000Z',
+                    createdAt: baseIso,
+                    updatedAt: baseIso,
                 }],
             }),
         });
@@ -2895,7 +2903,7 @@ describe('cloud server api', () => {
         const body = await getResponse.json();
         const mergedTask = (body.tasks as Array<{ id: string; updatedAt: string; deletedAt?: string }>).find((task) => task.id === taskId);
         expect(mergedTask).toBeTruthy();
-        expect(mergedTask?.deletedAt).toBe('2026-01-01T00:00:00.100Z');
-        expect(mergedTask?.updatedAt).toBe('2026-01-01T00:00:00.100Z');
+        expect(mergedTask?.deletedAt).toBe(laterIso);
+        expect(mergedTask?.updatedAt).toBe(laterIso);
     });
 });

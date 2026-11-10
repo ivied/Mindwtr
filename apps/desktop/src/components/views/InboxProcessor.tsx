@@ -4,6 +4,7 @@ import type { AppData, Area, Project, Task } from '@mindwtr/core';
 import { InboxProcessingQuickPanel } from '../InboxProcessingQuickPanel';
 import { InboxProcessingWizard } from '../InboxProcessingWizard';
 import { MindSweepLauncher } from '../MindSweepModal';
+import { TwoMinuteTimer } from '../TwoMinuteTimer';
 import { useInboxProcessingController } from './inbox/useInboxProcessingController';
 
 type InboxProcessorProps = {
@@ -74,6 +75,9 @@ export function InboxProcessor({
                         {t('process.btn')} ({inboxCount})
                     </button>
                     <MindSweepLauncher t={t} addTask={addTask} variant="secondary" />
+                    <div className="shrink-0 flex items-center rounded-lg border border-border bg-card px-3 py-2">
+                        <TwoMinuteTimer t={t} resetKey="inbox-standalone" />
+                    </div>
                 </div>
             )}
 

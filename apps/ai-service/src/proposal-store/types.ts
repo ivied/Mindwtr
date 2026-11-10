@@ -20,6 +20,15 @@ export type ProposalAuthor = 'agent' | 'user'
 
 export type MessageRole = 'user' | 'agent'
 
+/**
+ * Stable prefix on the agent's "looks already done" nudge message. Shared by
+ * everything that posts or detects the flag: SuggestionRefresher (live nudge),
+ * DoneSweeper (on-demand sweep), and ProposalStore.listPending (the
+ * `doneFlagged` list column the UI badges on). Do not reword casually —
+ * existing messages in the DB carry this exact prefix.
+ */
+export const DONE_FLAG_PREFIX = '🟡 Похоже, это уже выполнено.'
+
 export type AuditEvent =
   | 'created'
   | 'revised'
@@ -45,6 +54,12 @@ export interface ProposalRecord {
   createdAt: string
   resolvedAt: string | null
   resolvedBy: string | null
+  /**
+   * True when the latest agent message is the 🟡 "looks already done" nudge.
+   * Only populated by listPending() (the list UI badges on it); absent on
+   * single-record reads.
+   */
+  doneFlagged?: boolean
 }
 
 export interface ProposalVersionRecord {

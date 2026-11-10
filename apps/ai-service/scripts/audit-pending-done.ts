@@ -2,16 +2,12 @@
 /**
  * Read-only audit: which pending create-suggestions look ALREADY DONE?
  *
- * The live "looks already done" nudge only fires on a fresh capture that the
- * Proposer explicitly links to a pending card. It was dead for weeks (empty
- * titles broke the title-keyed match), so nothing re-checked the backlog. This
- * script does that sweep retroactively: for each pending card it pulls the
- * captures recorded AFTER the card was created and asks the LLM whether that
- * evidence says the action is finished.
- *
- * Writes nothing — it prints a verdict table. Resolving is a separate,
- * deliberate step (the user decides, per the same rule the nudge follows: a
- * false "done" silently loses a real task).
+ * CLI wrapper around the shared judgement core in
+ * src/proposal-store/done-audit.ts. The same core powers the on-demand sweep
+ * behind POST /v1/proposals/audit-done — which, unlike this script, also
+ * posts the 🟡 nudge on done-verdicts. This script writes nothing — it prints
+ * a verdict table. Resolving is a separate, deliberate step (the user
+ * decides: a false "done" silently loses a real task).
  *
  * Note: captures live under CONTEXT_STORE_TTL_DAYS (7 by default), so cards
  * older than that window have no evidence left to judge — they come back as
@@ -31,71 +27,7 @@ import { ContextStore } from '../src/context-store/store'
 import { OpenAIEmbeddings } from '../src/context-store/embeddings'
 import { ProposalStore } from '../src/proposal-store/store'
 import { LLMClient } from '../src/ai/client'
-import type { CreatePayload } from '../src/proposal-store/payloads'
-
-type Verdict = 'done' | 'not_done' | 'unclear'
-
-interface CardVerdict {
-  id: string
-  title: string
-  createdAt: string
-  verdict: Verdict | 'no-evidence'
-  confidence: number
-  evidence: string
-  reasoning: string
-}
-
-// No property named `title` / `format` / `default` — the LLM router silently
-// drops those (see proposer.ts).
-const AUDIT_TOOL = {
-  type: 'function',
-  function: {
-    name: 'judge_completion',
-    description:
-      'Decide whether the captured evidence shows that a pending task has ALREADY been completed.',
-    parameters: {
-      type: 'object',
-      properties: {
-        verdict: {
-          type: 'string',
-          enum: ['done', 'not_done', 'unclear'],
-          description:
-            'done = the evidence states the action was carried out (past-tense completion, a sent/paid/shipped report, the deliverable itself). not_done = the evidence is about the task but shows it is still open. unclear = the evidence does not settle it. Be conservative: prefer unclear over done.',
-        },
-        confidence: {
-          type: 'number',
-          minimum: 0,
-          maximum: 1,
-          description: 'Confidence 0..1 in the verdict.',
-        },
-        evidence_quote: {
-          type: 'string',
-          description:
-            'Verbatim quote (≤200 chars) from the evidence that settles it. Empty string when verdict is unclear.',
-        },
-        reasoning: {
-          type: 'string',
-          description: 'One sentence explaining the verdict.',
-        },
-      },
-      required: ['verdict', 'confidence', 'evidence_quote', 'reasoning'],
-    },
-  },
-} as const
-
-const SYSTEM_PROMPT = `You check whether a pending to-do has already been done.
-
-You get the task and a set of screen/audio/chat captures recorded AFTER the task
-was noticed. Decide if those captures REPORT the task as completed.
-
-Rules:
-- "done" needs an actual completion signal: past-tense statement about THIS
-  action ("отправил", "оплатил", "sent it", "готово"), a status report, or the
-  deliverable itself appearing. Same deliverable, same counterparty.
-- Merely mentioning or discussing the topic again is NOT completion.
-- Planning to do it ("сделаю завтра") is NOT completion.
-- When the captures are about something else, or too thin to tell, say unclear.
-- A false "done" makes the user lose a real task. When in doubt: unclear.`
+import { judgeProposalDone, type CardVerdict } from '../src/proposal-store/done-audit'
 
 interface CliFlags {
   topK: number
@@ -134,6 +66,8 @@ async function main(): Promise<void> {
     {
       opus: process.env.LLM_MODEL_OPUS ?? '',
       sonnet: process.env.LLM_MODEL_SONNET ?? '',
+      fallbackOpus: process.env.LLM_MODEL_OPUS_FALLBACK || undefined,
+      fallbackSonnet: process.env.LLM_MODEL_SONNET_FALLBACK || undefined,
     }
   )
 
@@ -162,82 +96,37 @@ async function main(): Promise<void> {
   const results: CardVerdict[] = []
 
   for (const p of pending) {
-    const payload = p.currentPayload as CreatePayload | null
-    if (!payload || payload.kind !== 'create') continue
-    const meta = (payload.task.metadata ?? {}) as Record<string, unknown>
-    const title = payload.task.title || String(meta.ai_what ?? '')
-    const what = typeof meta.ai_what === 'string' ? meta.ai_what : ''
-
-    const hits = await contextStore.retrieve(`${title}\n${what}`, { topK: flags.topK })
-    // Only evidence recorded after the card appeared can report it as finished.
-    const after = hits.filter((h) => h.capture.capturedAt > p.createdAt)
-
-    if (after.length === 0) {
-      results.push({
-        id: p.id,
-        title,
-        createdAt: p.createdAt,
-        verdict: 'no-evidence',
-        confidence: 0,
-        evidence: '',
-        reasoning: 'no captures recorded after this card matched the task',
-      })
-      if (!flags.json) {
-        console.log(`➖ no-evi  ${p.id.slice(0, 8)}  "${title.slice(0, 70)}"`)
-      }
-      continue
-    }
-
-    const evidenceBlock = after
-      .map(
-        (h, i) =>
-          `[${i + 1}] ${h.capture.capturedAt} · ${h.capture.sourceChannel}\n${h.capture.text.slice(0, 700)}`
-      )
-      .join('\n\n')
-
-    const response = await llm.chatCompletion({
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        {
-          role: 'user',
-          content: `TASK (noticed ${p.createdAt}):\n${title}\n${what}\n\nEVIDENCE captured afterwards:\n${evidenceBlock}`,
-        },
-      ],
-      tools: [AUDIT_TOOL],
-      tool_choice: 'required',
-      max_tokens: 1200,
-    })
-
-    const args = response.choices[0]?.message?.tool_calls?.[0]?.function.arguments
-    let parsed: Record<string, unknown> = {}
+    // One retry after a short backoff (router 429s say "reset after 2s"), then
+    // skip the card — a single rate-limit must not kill a 70-card sweep.
+    let verdict: CardVerdict | null
     try {
-      parsed = args ? JSON.parse(args) : {}
+      verdict = await judgeProposalDone({ contextStore, llm }, p, flags.topK)
     } catch {
-      /* leave empty — falls through to unclear */
+      await new Promise((r) => setTimeout(r, 3000))
+      try {
+        verdict = await judgeProposalDone({ contextStore, llm }, p, flags.topK)
+      } catch (err) {
+        console.error(`[audit-done] skip ${p.id.slice(0, 8)}: ${(err as Error).message.slice(0, 120)}`)
+        continue
+      }
     }
-
-    const verdict = (['done', 'not_done', 'unclear'] as const).includes(parsed.verdict as Verdict)
-      ? (parsed.verdict as Verdict)
-      : 'unclear'
-
-    results.push({
-      id: p.id,
-      title,
-      createdAt: p.createdAt,
-      verdict,
-      confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0,
-      evidence: typeof parsed.evidence_quote === 'string' ? parsed.evidence_quote : '',
-      reasoning: typeof parsed.reasoning === 'string' ? parsed.reasoning : '',
-    })
+    if (!verdict) continue
+    results.push(verdict)
 
     if (!flags.json) {
       const mark =
-        verdict === 'done' ? '✅ DONE   ' : verdict === 'not_done' ? '⬜ open   ' : '❔ unclear'
-      console.log(`${mark} ${p.id.slice(0, 8)}  "${title.slice(0, 70)}"`)
-      if (verdict === 'done') {
-        console.log(`            conf ${results[results.length - 1].confidence.toFixed(2)} · ${parsed.reasoning}`)
-        if (results[results.length - 1].evidence) {
-          console.log(`            ▸ "${results[results.length - 1].evidence.slice(0, 160)}"`)
+        verdict.verdict === 'done'
+          ? '✅ DONE   '
+          : verdict.verdict === 'not_done'
+            ? '⬜ open   '
+            : verdict.verdict === 'no-evidence'
+              ? '➖ no-evi '
+              : '❔ unclear'
+      console.log(`${mark} ${verdict.id.slice(0, 8)}  "${verdict.title.slice(0, 70)}"`)
+      if (verdict.verdict === 'done') {
+        console.log(`            conf ${verdict.confidence.toFixed(2)} · ${verdict.reasoning}`)
+        if (verdict.evidence) {
+          console.log(`            ▸ "${verdict.evidence.slice(0, 160)}"`)
         }
       }
     }

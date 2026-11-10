@@ -8,6 +8,7 @@ import {
     type InboxProcessingScheduleFieldKey,
     type InboxProcessingScheduleFieldsControls,
 } from './InboxProcessingScheduleFields';
+import { AssignedToPicker } from './AssignedToPicker';
 import { TokenAutocompleteInput } from './Task/TokenAutocompleteInput';
 import { ProjectSelector } from './ui/ProjectSelector';
 import { QuickDateChips } from './QuickDateChips';
@@ -816,12 +817,12 @@ export const InboxProcessingWizard = memo(function InboxProcessingWizard({
                                     <div className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">
                                         {t('taskEdit.assignedTo')}
                                     </div>
-                                    <input
-                                        aria-label={t('taskEdit.assignedTo')}
+                                    <AssignedToPicker
+                                        ariaLabel={t('taskEdit.assignedTo')}
                                         value={selectedAssignedTo}
-                                        onChange={(event) => setSelectedAssignedTo(event.target.value)}
+                                        onChange={setSelectedAssignedTo}
                                         placeholder={t('taskEdit.assignedToPlaceholder')}
-                                        className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-primary/40 focus:outline-none"
+                                        className="bg-muted border border-border rounded-lg [&>input]:bg-transparent [&>input]:border-0 [&>input]:px-3 [&>input]:py-2"
                                     />
                                 </div>
                             )}

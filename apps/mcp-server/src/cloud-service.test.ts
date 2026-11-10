@@ -115,12 +115,12 @@ const cloudData: AppData = {
 describe('cloud-backed MCP service', () => {
   test('reads and filters self-hosted Cloud data through /v1/data', async () => {
     const requests: Array<{ url: string; authorization: string | null }> = [];
-    const fetcher: typeof fetch = async (input, init) => {
+    const fetcher = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const headers = new Headers(init?.headers);
       requests.push({ url, authorization: headers.get('authorization') });
       return new Response(JSON.stringify(cloudData), { status: 200 });
-    };
+    }) as unknown as typeof fetch;
     const service = createCloudService({
       url: 'https://mindwtr.example.com',
       token: 'cloud-token',
@@ -160,7 +160,7 @@ describe('cloud-backed MCP service', () => {
     const service = createCloudService({
       url: 'https://mindwtr.example.com',
       token: 'cloud-token',
-      fetcher: async () => new Response(JSON.stringify(cloudData), { status: 200 }),
+      fetcher: (async () => new Response(JSON.stringify(cloudData), { status: 200 })) as unknown as typeof fetch,
     });
 
     await expect(service.addTask({ title: 'Write' })).rejects.toThrow('Cloud MCP mode is read-only');

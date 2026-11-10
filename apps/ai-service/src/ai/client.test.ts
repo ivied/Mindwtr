@@ -97,11 +97,9 @@ describe('LLMClient model tiers + fallback', () => {
 
     calls.length = 0
     await client.chatCompletion({ ...baseReq, model: 'ag/gemini-3.5-flash-low' })
-    expect(calls).toEqual([
-      'ag/gemini-3.5-flash-low',
-      'ag/gemini-3-flash-agent',
-      'cx/gpt-5.4-mini',
-    ])
+    // The ag/* 429s put both primaries on cooldown — the second call skips
+    // them and goes straight to the fallback provider.
+    expect(calls).toEqual(['cx/gpt-5.4-mini'])
   })
 
   it('throws the last error when the whole chain fails', async () => {
@@ -135,5 +133,71 @@ describe('LLMClient model tiers + fallback', () => {
 
     await expect(client.chatCompletion(baseReq)).rejects.toThrow('LLM request failed: 503')
     expect(calls).toEqual(['cc/legacy'])
+  })
+})
+
+import { rateLimitCooldownMs } from './client'
+
+describe('rateLimitCooldownMs', () => {
+  it('parses the router reset hint with minutes and seconds', () => {
+    expect(
+      rateLimitCooldownMs(
+        'LLM request failed: 503 {"error":{"message":"[codex/gpt-5.6-sol] [429]: {\\"detail\\":\\"Rate limit exceeded\\"} (reset after 17m 39s)"}}'
+      )
+    ).toBe((17 * 60 + 39) * 1000)
+  })
+
+  it('parses seconds-only reset hints and quota 403s', () => {
+    expect(
+      rateLimitCooldownMs('[antigravity/gemini-3.8-flash] [403]: HTTP 403 (reset after 96s)')
+    ).toBe(96_000)
+  })
+
+  it('defaults to 60s for rate-limit errors without a reset hint', () => {
+    expect(rateLimitCooldownMs('429 Too Many Requests: rate limit exceeded')).toBe(60_000)
+    expect(rateLimitCooldownMs('Insufficient balance or no resource package')).toBe(60_000)
+  })
+
+  it('returns 0 for non-rate-limit errors', () => {
+    expect(rateLimitCooldownMs('LLM request failed: 500 internal error')).toBe(0)
+    expect(rateLimitCooldownMs('LLM (x) returned no tool call (finish_reason=max_tokens)')).toBe(0)
+  })
+
+  it('caps the cooldown at 30 minutes', () => {
+    expect(rateLimitCooldownMs('[429]: rate limit (reset after 120m 0s)')).toBe(30 * 60_000)
+  })
+})
+
+describe('LLMClient cooldown', () => {
+  it('skips a cooling model and uses the next in chain', async () => {
+    const calls: string[] = []
+    const fetchMock = mock(async (_url: string, init: { body: string }) => {
+      const model = JSON.parse(init.body.toString()).model as string
+      calls.push(model)
+      if (model === 'primary') {
+        return new Response(
+          JSON.stringify({ error: { message: `[${model}] [429]: rate limit (reset after 5m 0s)` } }),
+          { status: 503 }
+        )
+      }
+      return new Response(
+        JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] }),
+        { status: 200 }
+      )
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+
+    const client = new LLMClient('http://router.test', 'key', {
+      opus: 'primary',
+      sonnet: 'secondary',
+    })
+
+    await client.chatCompletion({ messages: [{ role: 'user', content: 'hi' }] })
+    expect(calls).toEqual(['primary', 'secondary'])
+
+    calls.length = 0
+    await client.chatCompletion({ messages: [{ role: 'user', content: 'hi' }] })
+    // primary is cooling down — not called again
+    expect(calls).toEqual(['secondary'])
   })
 })

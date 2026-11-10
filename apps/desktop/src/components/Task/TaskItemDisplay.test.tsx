@@ -37,6 +37,7 @@ describe('TaskItemDisplay', () => {
     });
 
     afterEach(() => {
+        vi.useRealTimers();
         vi.unstubAllGlobals();
     });
 
@@ -181,6 +182,10 @@ describe('TaskItemDisplay', () => {
     });
 
     it('shows the projected recurrence date in task preview metadata', () => {
+        // The preview is the next occurrence after "now": pin the clock, or the
+        // expected date goes stale as soon as the real calendar passes it.
+        vi.useFakeTimers({ toFake: ['Date'] });
+        vi.setSystemTime(new Date('2026-06-01T12:00:00Z'));
         const { getByText } = render(
             <LanguageProvider>
                 <TaskItemDisplay

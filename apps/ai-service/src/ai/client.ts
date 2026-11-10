@@ -52,6 +52,27 @@ interface ChatCompletionResponse {
   }
 }
 
+/**
+ * Cooldown duration for a rate-limit / quota error, 0 when the error is not
+ * one. The router wraps provider errors as 503 with messages like
+ * "[codex/gpt-5.6-sol] [429]: Rate limit exceeded (reset after 17m 39s)" or
+ * "[antigravity/...] [403]: HTTP 403 (reset after 1m 36s)". Honour the reset
+ * hint (capped at 30 min), default to 60s when the hint is missing.
+ */
+export function rateLimitCooldownMs(message: string): number {
+  const isRateLimit =
+    /\[429\]|\[403\]|rate limit|quota|insufficient balance/i.test(message)
+  if (!isRateLimit) return 0
+  const reset = /reset after (?:(\d+)m\s*)?(\d+)s/i.exec(message)
+  if (reset) {
+    const minutes = Number(reset[1] ?? 0)
+    const seconds = Number(reset[2] ?? 0)
+    const ms = (minutes * 60 + seconds) * 1000
+    return Math.min(ms, 30 * 60_000)
+  }
+  return 60_000
+}
+
 export class LLMClient {
   private readonly defaultModel: string
   /** Maps a model to the ordered list of models to try (itself first). */
@@ -98,17 +119,48 @@ export class LLMClient {
     }
   }
 
+  /** Models currently rate-limited / quota-exhausted → epoch ms when to retry.
+   *  Prevents hammering dead providers: observed 1200+ failed pipeline runs in
+   *  6h, each burning a request on all 4 chain models and keeping the 429
+   *  window permanently open. */
+  private readonly cooldownUntil = new Map<string, number>()
+
   async chatCompletion(
     request: Omit<ChatCompletionRequest, 'model'> & { model?: string }
   ): Promise<ChatCompletionResponse> {
     const primary = request.model ?? this.defaultModel
     const chain = this.chainOf.get(primary) ?? [primary]
     let lastErr: unknown
+    const now = Date.now()
     for (const model of chain) {
+      const coolUntil = this.cooldownUntil.get(model) ?? 0
+      if (coolUntil > now) {
+        lastErr ??= new Error(
+          `LLM (${model}) cooling down after rate limit (retry in ${Math.ceil((coolUntil - now) / 1000)}s)`
+        )
+        continue
+      }
       try {
-        return await this.send(request, model)
+        const res = await this.send(request, model)
+        // tool_choice=required but no tool call back (e.g. Gemini burning the
+        // whole max_tokens budget on thinking → finish_reason=max_tokens with
+        // partial text). HTTP 200, so without this check the fallback chain
+        // never fires and the caller just gets a useless response.
+        if (
+          request.tool_choice === 'required' &&
+          !res.choices?.[0]?.message?.tool_calls?.length
+        ) {
+          throw new Error(
+            `LLM (${model}) returned no tool call (finish_reason=${res.choices?.[0]?.finish_reason})`
+          )
+        }
+        return res
       } catch (err) {
         lastErr = err
+        const cooldownMs = rateLimitCooldownMs((err as Error).message ?? '')
+        if (cooldownMs > 0) {
+          this.cooldownUntil.set(model, Date.now() + cooldownMs)
+        }
       }
     }
     throw lastErr

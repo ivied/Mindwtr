@@ -9,6 +9,7 @@ import {
     generateUUID,
     mergeAppDataWithStats,
     parseQuickAdd,
+    purgeExpiredTombstones,
     repairMergedSyncReferences,
     searchAll,
     validateAttachmentForUpload,
@@ -1568,7 +1569,12 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                                 nowIso: mergeTimestamp,
                             });
                             throwIfRequestAborted(requestAbortController.signal);
-                            writeCloudData(filePath, mergeResult.data);
+                            // The server merge keeps anything present in the existing file,
+                            // so client-side purges (expired tombstones, old archived tasks)
+                            // would silently resurrect here and the blob would grow forever.
+                            // Apply the same retention rules before persisting.
+                            const prunedResult = purgeExpiredTombstones(mergeResult.data, mergeTimestamp);
+                            writeCloudData(filePath, prunedResult.data);
 
                             // Fire 'create' webhook for tasks that appear in the merged
                             // snapshot but weren't there before. That's how desktop UI's
@@ -1579,7 +1585,7 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                                 for (const t of existingData.tasks ?? []) {
                                     if (t && typeof t.id === 'string') priorTaskIds.add(t.id);
                                 }
-                                for (const task of mergeResult.data.tasks ?? []) {
+                                for (const task of prunedResult.data.tasks ?? []) {
                                     if (!task || typeof task.id !== 'string') continue;
                                     if (task.deletedAt) continue;
                                     if (priorTaskIds.has(task.id)) continue;
@@ -1607,7 +1613,7 @@ export async function startCloudServer(options: CloudServerOptions = {}): Promis
                                 people: [],
                                 settings: {},
                             }, incomingData, { nowIso: mergeTimestamp });
-                            const serverMergedRemoteData = !areSyncPayloadsEqual(mergeResult.data, incomingOnlyMerge.data);
+                            const serverMergedRemoteData = !areSyncPayloadsEqual(prunedResult.data, incomingOnlyMerge.data);
                             return jsonResponse({
                                 ok: true,
                                 stats: mergeResult.stats,

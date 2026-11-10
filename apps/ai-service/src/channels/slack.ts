@@ -72,6 +72,12 @@ export interface SlackConfig {
    * Empty/undefined = allow all (back-compat).
    */
   teamAllowlist?: Set<string>
+  /**
+   * Capture the user's own outgoing messages (fromSelf=true). They are
+   * completion evidence ("sent it", "оплатил" about an open item) and
+   * first-person commitments. Default true.
+   */
+  captureOutgoing?: boolean
 }
 
 interface ConversationCursorStore {
@@ -180,6 +186,7 @@ export class SlackChannel implements Channel {
   private readonly historyBudget: number
   private readonly pacingMs: number
   private readonly teamAllowlist: Set<string>
+  private readonly captureOutgoing: boolean
 
   constructor(
     config: SlackConfig,
@@ -190,10 +197,20 @@ export class SlackChannel implements Channel {
     this.historyBudget = config.historyBudgetPerMin ?? DEFAULT_HISTORY_BUDGET_PER_MIN
     this.pacingMs = config.pacingMs ?? DEFAULT_PACING_MS
     this.teamAllowlist = config.teamAllowlist ?? new Set()
+    this.captureOutgoing = config.captureOutgoing ?? true
     this.sink = sink
     this.cursors = cursors
     this.workspaces = config.workspaces.map(
-      (ws) => new SlackWorkspace(ws.token, ws.cookie, sink, cursors, this.historyBudget, this.pacingMs)
+      (ws) =>
+        new SlackWorkspace(
+          ws.token,
+          ws.cookie,
+          sink,
+          cursors,
+          this.historyBudget,
+          this.pacingMs,
+          this.captureOutgoing
+        )
     )
   }
 
@@ -211,7 +228,15 @@ export class SlackChannel implements Channel {
    * Throws on auth failure so the caller can surface invalid_auth.
    */
   async upsertSessionWorkspace(token: string, cookie: string): Promise<{ teamId: string; teamName: string; allowed: boolean }> {
-    const ws = new SlackWorkspace(token, cookie, this.sink, this.cursors, this.historyBudget, this.pacingMs)
+    const ws = new SlackWorkspace(
+      token,
+      cookie,
+      this.sink,
+      this.cursors,
+      this.historyBudget,
+      this.pacingMs,
+      this.captureOutgoing
+    )
     await ws.init() // throws on bad credential — caller maps to 401
     // Auth succeeded so the caller can persist the (valid) credential, but we
     // only register non-allowlisted teams' identity — they won't be polled.
@@ -312,7 +337,8 @@ class SlackWorkspace {
     private sink: CaptureSink,
     private cursors: ConversationCursorStore,
     historyBudgetPerMin: number,
-    private pacingMs: number
+    private pacingMs: number,
+    private captureOutgoing = true
   ) {
     // xoxc session tokens need the `d` cookie + browser-like headers so Slack
     // treats the traffic like the tab the token was lifted from. xoxp tokens
@@ -605,13 +631,14 @@ class SlackWorkspace {
   private async matchToCapturedItem(match: SearchMatch): Promise<CapturedItem | null> {
     if (!match.ts || !match.channel?.id) return null
     if (!match.user) return null
-    if (match.user === this.selfUserId) return null
+    const fromSelf = match.user === this.selfUserId
+    if (fromSelf && !this.captureOutgoing) return null
     const rawText = match.text?.trim()
     if (!rawText) return null
 
     const ch = match.channel
     const isDm = !!ch.is_im || !!ch.is_mpim
-    const mentionsSelf = rawText.includes(`<@${this.selfUserId}>`)
+    const mentionsSelf = !fromSelf && rawText.includes(`<@${this.selfUserId}>`)
     const authorName = match.username || (await this.userName(match.user))
     const text = await this.resolveMentions(rawText)
 
@@ -627,14 +654,19 @@ class SlackWorkspace {
         channelName: ch.name,
         userId: match.user,
         authorName,
-        // Identity signals for the Proposer: this message is from someone else
-        // (own messages are dropped above). mentionsSelf=true means the user is
-        // being addressed/asked — a request FOR the user, not a delegation.
-        fromSelf: false,
+        // Identity signals for the Proposer. fromSelf=true → the USER wrote
+        // this (outgoing): completion evidence for open items or a
+        // first-person commitment. fromSelf=false + mentionsSelf=true → the
+        // user is being addressed/asked — a request FOR the user.
+        fromSelf,
         mentionsSelf,
         selfName: this.selfName,
         ts: match.ts,
         isDm,
+        // For an outgoing DM, search's channel.name is the DM counterparty's
+        // username — the closest thing to a recipient without an extra
+        // conversations.info round-trip per message.
+        ...(fromSelf && isDm && ch.name ? { recipientName: ch.name } : {}),
       },
     }
   }
@@ -646,16 +678,13 @@ class SlackWorkspace {
     // Skip system messages (joins, topic changes, etc.) and any bot output.
     if (msg.subtype) return null
     if (msg.bot_id) return null
-    if (msg.user && msg.user === this.selfUserId) {
-      // Own messages are noise for "what others want from me" — drop them.
-      // (Mentions of self authored by others still pass; that's the signal.)
-      return null
-    }
+    const fromSelf = !!msg.user && msg.user === this.selfUserId
+    if (fromSelf && !this.captureOutgoing) return null
     const rawText = msg.text?.trim()
     if (!rawText) return null
 
     const isDm = !!conv.is_im || !!conv.is_mpim
-    const mentionsSelf = rawText.includes(`<@${this.selfUserId}>`)
+    const mentionsSelf = !fromSelf && rawText.includes(`<@${this.selfUserId}>`)
     const authorName = await this.userName(msg.user)
     const text = await this.resolveMentions(rawText)
 
@@ -671,14 +700,19 @@ class SlackWorkspace {
         channelName: conv.name,
         userId: msg.user,
         authorName,
-        // Identity signals for the Proposer: this message is from someone else
-        // (own messages are dropped above). mentionsSelf=true means the user is
-        // being addressed/asked — a request FOR the user, not a delegation.
-        fromSelf: false,
+        // Identity signals for the Proposer. fromSelf=true → the USER wrote
+        // this (outgoing): completion evidence for open items or a
+        // first-person commitment. fromSelf=false + mentionsSelf=true → the
+        // user is being addressed/asked — a request FOR the user.
+        fromSelf,
         mentionsSelf,
         selfName: this.selfName,
         ts: msg.ts,
         isDm,
+        // For an outgoing DM the conversation peer IS the recipient.
+        ...(fromSelf && !!conv.is_im && conv.user
+          ? { recipientName: await this.userName(conv.user) }
+          : {}),
       },
     }
   }

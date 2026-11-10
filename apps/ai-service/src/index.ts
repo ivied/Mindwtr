@@ -17,6 +17,9 @@ import { ProposalApplier } from './proposal-store/apply'
 import { CommentHandler } from './proposal-store/comment-handler'
 import { TaskChangeProcessor } from './proposal-store/task-change-processor'
 import { ProposalExpiryJob } from './proposal-store/expiry'
+import { DoneSweeper, judgeProposalDone, type CardVerdict } from './proposal-store/done-audit'
+import { MuteRuleStore } from './proposal-store/mute-rules'
+import type { ProposalRecord } from './proposal-store/types'
 import { Proposer } from './commitment/proposer'
 import { Enricher } from './commitment/enricher'
 import { EnricherPipeline } from './commitment/enricher-pipeline'
@@ -31,6 +34,8 @@ import type { DuplicateOfExistingHook } from './commitment/pipeline'
 import { CommitmentBatcher } from './commitment/batcher'
 import { denyConfigFromEnv } from './commitment/source-deny'
 import { MindwtrInboxTitles } from './commitment/inbox-titles'
+import { AgentRunStore } from './agent-runs/store'
+import { TELEGRAM_ACCESS } from './agent-runs/telegram-routes'
 import { WikiPersonsProvider } from './wiki/persons-reader'
 import { WikiGlossaryProvider, MemoryExpansionSource } from './wiki/glossary-reader'
 import { GlossaryStore, GlossaryStoreSource } from './wiki/glossary-store'
@@ -49,6 +54,8 @@ import {
 } from './memory'
 import { SlugCanonicalizer } from './memory/slug-canonicalizer'
 import { EntityRegistryStore } from './memory/entity-registry-store'
+import { TaskContextAssembler, entitiesInText, renderTaskContext, slugOf, type KnownEntity } from './memory/task-context'
+import type { AgentRunsMemory } from './agent-runs/types'
 import { EntityRegistrar } from './memory/entity-registrar'
 import { EntityPipeline } from './memory/entity-pipeline'
 import { LlmPublisher } from './status/llm-publisher'
@@ -75,8 +82,8 @@ const LLM_API_KEY = process.env.LLM_API_KEY ?? ''
 // classify/select/extract/summarize nodes use SONNET. LLM_MODEL stays as the
 // opus alias for backward-compatible deployments. The LLMClient falls one tier
 // back to the other when its primary model errors on the proxy.
-const LLM_MODEL_OPUS = process.env.LLM_MODEL_OPUS ?? process.env.LLM_MODEL ?? 'cx/gpt-5.5'
-const LLM_MODEL_SONNET = process.env.LLM_MODEL_SONNET ?? 'cx/gpt-5.4-mini'
+const LLM_MODEL_OPUS = process.env.LLM_MODEL_OPUS ?? process.env.LLM_MODEL ?? 'cx/gpt-5.6-sol'
+const LLM_MODEL_SONNET = process.env.LLM_MODEL_SONNET ?? 'cx/gpt-5.6-luna'
 // Cross-provider safety net: tried after both primary tiers fail (e.g. the
 // primary provider's shared quota pool is exhausted). Empty = disabled.
 const LLM_MODEL_OPUS_FALLBACK = process.env.LLM_MODEL_OPUS_FALLBACK ?? ''
@@ -211,8 +218,40 @@ console.log(
 // Proposal Store shares the same SQLite handle as Context Store so that
 // proposal creation can reference capture rows transactionally.
 const proposalStore = new ProposalStore(contextStore.rawDb)
+
+// Agent runs: a full agent per inbox item, executed by apps/agent-runner on the
+// host. ai-service only keeps the record and serves the API. With
+// INBOX_AGENT_AUTORUN=true a new inbox task gets an agent run INSTEAD of the
+// Enricher suggestion; otherwise runs start only from the UI.
+const agentRunStore = new AgentRunStore(contextStore.rawDb)
+const INBOX_AGENT_AUTORUN = process.env.INBOX_AGENT_AUTORUN === 'true'
+// The daily cap is a share of the weekly subscription quota (the runner measures
+// it per turn). Empty/unset → 10%; explicit 0 = no cap.
+const AGENT_RUNS_DAILY_QUOTA_PCT = (() => {
+  const raw = (process.env.AGENT_RUNS_DAILY_QUOTA_PCT ?? '').trim()
+  const n = raw === '' ? 10 : Number(raw)
+  return Number.isFinite(n) && n >= 0 ? n : 10
+})()
+// Dollar backstop for when the quota cannot be measured (the estimate the agent
+// reports, not real spend on a subscription). Empty/unset → $100; 0 = no cap.
+const AGENT_RUNS_DAILY_BUDGET_USD = (() => {
+  const raw = (process.env.AGENT_RUNS_DAILY_BUDGET_USD ?? '').trim()
+  const n = raw === '' ? 100 : Number(raw)
+  return Number.isFinite(n) && n >= 0 ? n : 100
+})()
+/** Queue an agent run for a fresh inbox task. Returns true when autorun took it. */
+const autorunAgent = (taskId: string, title: string, description: string, status?: string): boolean => {
+  if (!INBOX_AGENT_AUTORUN) return false
+  if (status && status !== 'inbox') return false
+  if (!title.trim()) return false
+  agentRunStore.enqueue({ taskId, taskTitle: title, taskDescription: description })
+  return true
+}
 const proposalApplier = new ProposalApplier(proposalStore, mindwtr)
 const taskChangeProcessor = new TaskChangeProcessor(proposalStore)
+// "Не предлагай такое" rules: written via reject {mute:true}, consulted by
+// the commitment pipeline before creating proposals.
+const muteRuleStore = new MuteRuleStore(contextStore.rawDb)
 
 // Persons registry — single shared instance: Proposer pipeline reads it
 // for who_to canonicalization, HTTP server exposes it at GET /v1/persons
@@ -228,6 +267,46 @@ const memoryStore = new MemoryStore({
   vecAvailable: contextStore.hasVectorSearch,
 })
 const memoryRetriever = new HybridRetriever(memoryStore, embeddings)
+
+// Memory as agent runs see it: facts picked for a task, plus the facts the
+// user confirmed (which outrank everything inferred from captured events).
+const agentRunsMemory: AgentRunsMemory = (() => {
+  const registry = new EntityRegistryStore(contextStore.rawDb)
+  let cache: { at: number; entities: KnownEntity[] } = { at: 0, entities: [] }
+  const entities = (): KnownEntity[] => {
+    if (Date.now() - cache.at > 60_000) {
+      cache = {
+        at: Date.now(),
+        entities: registry.list(0, 10_000).map((e) => ({ slug: e.slug, name: e.name, type: e.type, aliases: e.aliases, mentionCount: e.mentionCount })),
+      }
+    }
+    return cache.entities
+  }
+  const assembler = new TaskContextAssembler({
+    store: memoryStore,
+    entities,
+    searchEvents: (query, limit, withinDays) => memoryRetriever.retrieve({ query, limit, withinDays }),
+  })
+  const item = (f: { id: number; statement: string; entitySlug: string | null; createdAt: string }) => ({
+    id: f.id,
+    statement: f.statement,
+    entity: f.entitySlug,
+    createdAt: f.createdAt,
+  })
+  return {
+    taskContext: async (text) => renderTaskContext(await assembler.assemble(text)),
+    list: () => memoryStore.allVerifiedFacts().map(item),
+    save: (statement, entity) => {
+      // File it under the entity the registry already knows by that name, so
+      // it surfaces whichever spelling a later task uses.
+      const slug = entity ? (entitiesInText(entity, entities())[0]?.slug ?? slugOf(entity)) : null
+      return item(
+        memoryStore.insertFact({ statement, entitySlug: slug || null, factType: 'rule', validFrom: new Date().toISOString(), confidence: 1, origin: 'user' })
+      )
+    },
+    remove: (id) => memoryStore.closeFact(id, new Date().toISOString()),
+  }
+})()
 // Glossary decoder ring — non-person entities (project codenames, acronyms,
 // internal terms) from the capture-wiki, decoded via the memory module's
 // active facts. Feeds a KNOWN_GLOSSARY block into Proposer + Enricher so
@@ -282,6 +361,8 @@ let enricherPipeline: EnricherPipeline | null = null
 let commitmentPipeline: CommitmentPipeline | null = null
 let commentHandler: CommentHandler | null = null
 let onboardingExtractor: OnboardingExtractor | null = null
+let doneSweeper: DoneSweeper | null = null
+let doneJudge: ((p: ProposalRecord, hint?: string) => Promise<CardVerdict | null>) | null = null
 if (LLM_BASE_URL && LLM_API_KEY) {
   const llm = new LLMClient(LLM_BASE_URL, LLM_API_KEY, {
     opus: LLM_MODEL_OPUS,
@@ -336,6 +417,15 @@ if (LLM_BASE_URL && LLM_API_KEY) {
     reviser,
     contextStore,
   })
+  // On-demand "which pending suggestions look already done" sweep, behind
+  // POST /v1/proposals/audit-done. The live completes_title nudge only fires
+  // when a fresh capture happens to match a card by title — this lets the
+  // user re-check the whole backlog with one click instead.
+  doneSweeper = new DoneSweeper({ store: proposalStore, contextStore, llm })
+  // Per-card synchronous variant of the same judge, for the UI's "проверь сам"
+  // button (POST /v1/proposals/:id/check-done, optional user hint).
+  doneJudge = (p, hint) => judgeProposalDone({ contextStore, llm }, p, 8, hint)
+  commitmentPipeline.setMuteRules(muteRuleStore)
   commitmentPipeline.setDuplicateOfExistingHook((info) => {
     void (async () => {
       try {
@@ -651,6 +741,7 @@ if (LLM_BASE_URL && LLM_API_KEY) {
         | null
       if (!payload || payload.kind !== 'create' || !payload.task) return
       const task = payload.task
+      if (autorunAgent(taskId, task.title ?? '', task.description ?? '')) return
       const text = (task.title ?? '') + (task.description ? '\n' + task.description : '')
       void enricherForApplier
         .run({
@@ -758,9 +849,14 @@ if (process.env.AI_AGENT_WATCHDOG !== 'false') {
   )
 }
 
-function buildChannels(): { channels: Channel[]; slack: SlackChannel | null } {
+function buildChannels(): { channels: Channel[]; slack: SlackChannel | null; telegramUser: TelegramUserChannel | null } {
   const channels: Channel[] = []
   let slack: SlackChannel | null = null
+
+  // Own outgoing messages are completion evidence ("отправил", the reply
+  // itself) and first-person commitments. Kill-switch in case the doubled
+  // capture volume or self-capture noise becomes a problem.
+  const captureOutgoing = process.env.CAPTURE_OUTGOING_MESSAGES !== 'false'
 
   const slackWorkspaces = [
     ...SLACK_USER_TOKENS.map((token) => ({ token })),
@@ -776,6 +872,7 @@ function buildChannels(): { channels: Channel[]; slack: SlackChannel | null } {
         workspaces: slackWorkspaces,
         pollIntervalMs: SLACK_POLL_INTERVAL_MS,
         teamAllowlist: SLACK_TEAM_ALLOWLIST,
+        captureOutgoing,
       },
       (item) => capture(item),
       state
@@ -783,22 +880,25 @@ function buildChannels(): { channels: Channel[]; slack: SlackChannel | null } {
     channels.push(slack)
     const allowDesc = SLACK_TEAM_ALLOWLIST.size > 0 ? `${SLACK_TEAM_ALLOWLIST.size} allowlisted` : 'all teams'
     console.log(
-      `💬 Slack channel enabled (${SLACK_USER_TOKENS.length} oauth + ${SLACK_SESSION_TOKENS.length} session env, ${allowDesc}, poll every ${SLACK_POLL_INTERVAL_MS}ms; extension push ${HTTP_AUTH_TOKEN ? 'on' : 'off'})`
+      `💬 Slack channel enabled (${SLACK_USER_TOKENS.length} oauth + ${SLACK_SESSION_TOKENS.length} session env, ${allowDesc}, poll every ${SLACK_POLL_INTERVAL_MS}ms; extension push ${HTTP_AUTH_TOKEN ? 'on' : 'off'}; outgoing ${captureOutgoing ? 'on' : 'off'})`
     )
   }
 
+  let telegramUser: TelegramUserChannel | null = null
   if (TELEGRAM_API_ID && TELEGRAM_API_HASH) {
-    channels.push(
-      new TelegramUserChannel(
-        {
-          apiId: TELEGRAM_API_ID,
-          apiHash: TELEGRAM_API_HASH,
-          sessionPath: join(DATA_DIR, 'telegram-user-session'),
-        },
-        (item) => capture(item)
-      )
+    telegramUser = new TelegramUserChannel(
+      {
+        apiId: TELEGRAM_API_ID,
+        apiHash: TELEGRAM_API_HASH,
+        sessionPath: join(DATA_DIR, 'telegram-user-session'),
+        captureOutgoing,
+      },
+      (item) => capture(item)
     )
-    console.log('📨 Telegram user channel enabled (MTProto, DMs + groups)')
+    channels.push(telegramUser)
+    console.log(
+      `📨 Telegram user channel enabled (MTProto, DMs + groups; outgoing ${captureOutgoing ? 'on' : 'off'})`
+    )
   }
 
   if (NOTION_API_KEY && NOTION_DATABASE_ID) {
@@ -813,7 +913,7 @@ function buildChannels(): { channels: Channel[]; slack: SlackChannel | null } {
     console.log(`📝 Notion channel enabled (poll every ${NOTION_POLL_INTERVAL_MS}ms)`)
   }
 
-  return { channels, slack }
+  return { channels, slack, telegramUser }
 }
 
 async function main() {
@@ -876,7 +976,7 @@ async function main() {
     ])
 
   // Start additional channels
-  const { channels, slack: slackChannel } = buildChannels()
+  const { channels, slack: slackChannel, telegramUser } = buildChannels()
   for (const ch of channels) {
     try {
       await withTimeout(ch.start(), 15000, `channel ${ch.name} start`)
@@ -884,6 +984,15 @@ async function main() {
     } catch (err) {
       console.error(`Failed to start ${ch.name}:`, err)
     }
+  }
+
+  // The connected personal account is an access the inbox agents can use
+  // (read chats; send only behind a confirmation). A revoked row stays revoked.
+  if (telegramUser?.ready) {
+    const access = agentRunStore.seedAccess(TELEGRAM_ACCESS)
+    console.log(`🤖 agents: Telegram access is ${access.status} (${access.scope})`)
+  } else if (telegramUser) {
+    console.warn('🤖 agents: Telegram access not offered — the user-account client did not start')
   }
 
   // Restore session workspaces pushed by the browser extension on a previous
@@ -930,6 +1039,15 @@ async function main() {
       contextStore,
       healthMonitor,
       corsOrigins: HTTP_CORS_ORIGINS,
+      backfill:
+        contextStore && commitmentBatcher
+          ? {
+              listUnproposed: (fromIso, toIso) =>
+                contextStore.listUnproposedPullCaptures(fromIso, toIso),
+              enqueue: (record) => commitmentBatcher.enqueueLow(record),
+              pending: () => commitmentBatcher.pending,
+            }
+          : null,
       slackSession: slackChannel
         ? {
             upsert: async (token, cookie) => {
@@ -961,8 +1079,11 @@ async function main() {
             onTaskEdited: reviewNotifier
               ? (taskId, fields) => void reviewNotifier!.onTaskEdit(taskId, fields)
               : undefined,
-            onTaskCreated: enricherPipeline
+            onTaskCreated: enricherPipeline || INBOX_AGENT_AUTORUN
               ? (taskId, fields) => {
+                  const status = typeof fields.status === 'string' ? fields.status : undefined
+                  if (autorunAgent(taskId, fields.title ?? '', fields.description ?? '', status)) return
+                  if (!enricherPipeline) return
                   const text = (fields.title ?? '') + (fields.description ? '\n' + fields.description : '')
                   void enricherPipeline!
                     .run({
@@ -984,6 +1105,9 @@ async function main() {
             // FR89: approve/reject routes push reliability signal to the
             // cited playbook chunks. null when procedural memory is off.
             proceduralFeedback: proceduralStore ?? undefined,
+            doneAudit: doneSweeper ?? undefined,
+            doneJudge: doneJudge ?? undefined,
+            muteRules: muteRuleStore,
           }
         : null,
       persons: personsProvider,
@@ -1030,6 +1154,7 @@ async function main() {
           }
         : null,
       agentConfig,
+      agentRuns: { store: agentRunStore, mindwtr, dailyBudgetUsd: AGENT_RUNS_DAILY_BUDGET_USD, dailyQuotaPct: AGENT_RUNS_DAILY_QUOTA_PCT, publicUrl: process.env.AI_SERVICE_PUBLIC_URL?.trim() || undefined, memory: agentRunsMemory, runnerToken: process.env.AGENT_RUNNER_TOKEN?.trim() || undefined, telegram: telegramUser ?? undefined },
     })
     http = server.serve()
     console.log(

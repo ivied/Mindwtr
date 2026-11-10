@@ -50,6 +50,8 @@ export interface Fact {
   sourceEventId: string | null
   confidence: number | null
   createdAt: string
+  /** 'user' = stated or confirmed by the user; null = inferred from captured events. */
+  origin: string | null
 }
 
 export interface NewFactInput {
@@ -59,6 +61,7 @@ export interface NewFactInput {
   validFrom: string
   sourceEventId?: string | null
   confidence?: number | null
+  origin?: string | null
 }
 
 export interface DailySummary {

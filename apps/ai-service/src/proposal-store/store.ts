@@ -26,6 +26,7 @@ import type {
   ProposalVersionRecord,
   MessageRole,
 } from './types'
+import { DONE_FLAG_PREFIX } from './types'
 
 interface ProposalRow {
   id: string
@@ -40,6 +41,8 @@ interface ProposalRow {
   created_at: string
   resolved_at: string | null
   resolved_by: string | null
+  /** Only selected by listPending(): 1 when the latest agent message is the 🟡 done-nudge. */
+  done_flagged?: 0 | 1 | null
 }
 
 interface VersionRow {
@@ -412,9 +415,15 @@ export class ProposalStore {
 
     const limit = filter.limit ?? 100
     // Order by rowid DESC (newest insert first) — robust against same-ms created_at.
+    // done_flagged: latest agent message is the 🟡 done-nudge — the list UI
+    // badges on it without fetching each card's detail.
     const sql = `SELECT id, type, target_task_ids, source_capture_id, source_agent, status,
                         current_payload, current_version, origin_snapshot, created_at,
-                        resolved_at, resolved_by
+                        resolved_at, resolved_by,
+                        (SELECT CASE WHEN m.text LIKE ? THEN 1 ELSE 0 END
+                           FROM proposal_messages m
+                          WHERE m.proposal_id = proposals.id AND m.role = 'agent'
+                          ORDER BY m.rowid DESC LIMIT 1) AS done_flagged
                  FROM proposals
                  WHERE ${where.join(' AND ')}
                  ORDER BY rowid DESC
@@ -423,7 +432,7 @@ export class ProposalStore {
 
     return this.db
       .query<ProposalRow, (string | number)[]>(sql)
-      .all(...params)
+      .all(DONE_FLAG_PREFIX + '%', ...params)
       .map(proposalRowToRecord)
   }
 
@@ -481,7 +490,7 @@ function statusToEvent(status: ProposalStatus): AuditEvent {
 }
 
 function proposalRowToRecord(row: ProposalRow): ProposalRecord {
-  return {
+  const record: ProposalRecord = {
     id: row.id,
     type: row.type as ProposalType,
     targetTaskIds: parseJsonArray(row.target_task_ids),
@@ -495,6 +504,10 @@ function proposalRowToRecord(row: ProposalRow): ProposalRecord {
     resolvedAt: row.resolved_at,
     resolvedBy: row.resolved_by,
   }
+  // Only listPending() selects done_flagged; leave the field absent elsewhere
+  // so single-record reads don't report a misleading `false`.
+  if (row.done_flagged !== undefined) record.doneFlagged = row.done_flagged === 1
+  return record
 }
 
 function versionRowToRecord(row: VersionRow): ProposalVersionRecord {

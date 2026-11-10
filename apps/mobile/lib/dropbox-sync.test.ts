@@ -35,7 +35,7 @@ const buildResponse = (
 describe('dropbox-sync', () => {
     it('treats 409 download as first-sync empty remote', async () => {
         const fetcher = async () => buildResponse(409, '{"error_summary":"path/not_found/.."}');
-        const result = await downloadDropboxAppData('token', fetcher as typeof fetch);
+        const result = await downloadDropboxAppData('token', fetcher as unknown as typeof fetch);
         expect(result.data).toBeNull();
         expect(result.rev).toBeNull();
     });
@@ -47,7 +47,7 @@ describe('dropbox-sync', () => {
             JSON.stringify(payload),
             { 'dropbox-api-result': '{"rev":"0153abc"}' }
         );
-        const result = await downloadDropboxAppData('token', fetcher as typeof fetch);
+        const result = await downloadDropboxAppData('token', fetcher as unknown as typeof fetch);
         expect(result.data).toEqual(payload);
         expect(result.rev).toBe('0153abc');
     });
@@ -55,32 +55,32 @@ describe('dropbox-sync', () => {
     it('throws conflict error when upload returns 409', async () => {
         const fetcher = async () => buildResponse(409, '{"error":{".tag":"path"}}');
         await expect(
-            uploadDropboxAppData('token', { tasks: [], projects: [], sections: [], areas: [], settings: {} }, 'rev-1', fetcher as typeof fetch)
+            uploadDropboxAppData('token', { tasks: [], projects: [], sections: [], areas: [], settings: {} }, 'rev-1', fetcher as unknown as typeof fetch)
         ).rejects.toBeInstanceOf(DropboxConflictError);
     });
 
     it('throws conflict error when upload returns nested path/conflict', async () => {
         const fetcher = async () => buildResponse(409, '{"error":{".tag":"path","path":{".tag":"conflict"}}}');
         await expect(
-            uploadDropboxAppData('token', { tasks: [], projects: [], sections: [], areas: [], settings: {} }, 'rev-1', fetcher as typeof fetch)
+            uploadDropboxAppData('token', { tasks: [], projects: [], sections: [], areas: [], settings: {} }, 'rev-1', fetcher as unknown as typeof fetch)
         ).rejects.toBeInstanceOf(DropboxConflictError);
     });
 
     it('does not classify path/not_found as conflict', async () => {
         const fetcher = async () => buildResponse(409, '{"error":{".tag":"path","path":{".tag":"not_found"}}}');
         await expect(
-            uploadDropboxAppData('token', { tasks: [], projects: [], sections: [], areas: [], settings: {} }, 'rev-1', fetcher as typeof fetch)
+            uploadDropboxAppData('token', { tasks: [], projects: [], sections: [], areas: [], settings: {} }, 'rev-1', fetcher as unknown as typeof fetch)
         ).rejects.toThrow('Dropbox upload failed: HTTP 409');
     });
 
     it('throws unauthorized error when account probe returns 401', async () => {
         const fetcher = async () => buildResponse(401, '{"error_summary":"expired_access_token/.."}');
-        await expect(testDropboxAccess('token', fetcher as typeof fetch)).rejects.toBeInstanceOf(DropboxUnauthorizedError);
+        await expect(testDropboxAccess('token', fetcher as unknown as typeof fetch)).rejects.toBeInstanceOf(DropboxUnauthorizedError);
     });
 
     it('accepts 409 metadata response as valid auth for first sync', async () => {
         const fetcher = async () => buildResponse(409, '{"error_summary":"path/not_found/.."}');
-        await expect(testDropboxAccess('token', fetcher as typeof fetch)).resolves.toBeUndefined();
+        await expect(testDropboxAccess('token', fetcher as unknown as typeof fetch)).resolves.toBeUndefined();
     });
 
     it('reads metadata rev without downloading app data', async () => {
@@ -90,19 +90,19 @@ describe('dropbox-sync', () => {
             return buildResponse(200, '{"rev":"rev-fast"}');
         };
 
-        await expect(getDropboxAppDataMetadata('token', fetcher as typeof fetch)).resolves.toEqual({ rev: 'rev-fast' });
+        await expect(getDropboxAppDataMetadata('token', fetcher as unknown as typeof fetch)).resolves.toEqual({ rev: 'rev-fast' });
         expect(requestInit?.method).toBe('POST');
         expect(JSON.parse(String(requestInit?.body))).toMatchObject({ path: '/data.json' });
     });
 
     it('throws DropboxFileNotFoundError when attachment download returns 409', async () => {
         const fetcher = async () => buildResponse(409, '{"error_summary":"path/not_found/.."}');
-        await expect(downloadDropboxFile('token', '/attachments/a.bin', fetcher as typeof fetch)).rejects.toBeInstanceOf(DropboxFileNotFoundError);
+        await expect(downloadDropboxFile('token', '/attachments/a.bin', fetcher as unknown as typeof fetch)).rejects.toBeInstanceOf(DropboxFileNotFoundError);
     });
 
     it('uploads attachment file with overwrite mode', async () => {
         const fetcher = async () => buildResponse(200, '{"rev":"rev-file"}');
-        const result = await uploadDropboxFile('token', 'attachments/a.bin', new Uint8Array([1, 2, 3]), 'application/octet-stream', fetcher as typeof fetch);
+        const result = await uploadDropboxFile('token', 'attachments/a.bin', new Uint8Array([1, 2, 3]), 'application/octet-stream', fetcher as unknown as typeof fetch);
         expect(result.rev).toBe('rev-file');
     });
 
@@ -113,13 +113,13 @@ describe('dropbox-sync', () => {
             return buildResponse(200, '{"rev":"rev-file"}');
         };
 
-        await uploadDropboxFile('token', 'attachments/a.wav', new Uint8Array([1, 2, 3]), 'audio/wav', fetcher as typeof fetch);
+        await uploadDropboxFile('token', 'attachments/a.wav', new Uint8Array([1, 2, 3]), 'audio/wav', fetcher as unknown as typeof fetch);
 
         expect((requestInit?.headers as Record<string, string>)['Content-Type']).toBe('application/octet-stream');
     });
 
     it('treats delete 409 as success', async () => {
         const fetcher = async () => buildResponse(409, '{"error_summary":"path_lookup/not_found/.."}');
-        await expect(deleteDropboxFile('token', '/attachments/a.bin', fetcher as typeof fetch)).resolves.toBeUndefined();
+        await expect(deleteDropboxFile('token', '/attachments/a.bin', fetcher as unknown as typeof fetch)).resolves.toBeUndefined();
     });
 });
