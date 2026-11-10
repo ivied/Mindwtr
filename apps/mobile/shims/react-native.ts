@@ -148,23 +148,6 @@ export const PanResponder = {
   }),
 };
 
-export const PanResponder = {
-  create: (config: any) => ({
-    panHandlers: {
-      onStartShouldSetResponder: (event: any, gestureState: any) =>
-        config.onStartShouldSetPanResponder?.(event, gestureState) ?? false,
-      onMoveShouldSetResponder: (event: any, gestureState: any) =>
-        config.onMoveShouldSetPanResponder?.(event, gestureState) ?? false,
-      onResponderMove: (event: any, gestureState: any) =>
-        config.onPanResponderMove?.(event, gestureState),
-      onResponderRelease: (event: any, gestureState: any) =>
-        config.onPanResponderRelease?.(event, gestureState),
-      onResponderTerminate: (event: any, gestureState: any) =>
-        config.onPanResponderTerminate?.(event, gestureState),
-    },
-  }),
-};
-
 export const TurboModuleRegistry = {
   get: () => null,
 };

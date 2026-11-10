@@ -117,7 +117,7 @@ describe('ai settings whisper model helpers', () => {
         const logs: Array<{ event: string; details?: Record<string, unknown> }> = [];
         const resolved = await resolveWhisperModelDownloadUrl(
             'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin',
-            async (url, init) => {
+            (async (url: RequestInfo | URL, init?: RequestInit) => {
                 calls.push({ url: String(url), init: init as { method?: string; redirect?: string } });
                 return {
                     url: String(url),
@@ -127,7 +127,7 @@ describe('ai settings whisper model helpers', () => {
                             : null,
                     },
                 } as Response;
-            },
+            }) as unknown as typeof fetch,
             (event, details) => { logs.push({ event, details }); }
         );
 
