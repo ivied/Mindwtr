@@ -37,6 +37,7 @@ import { MindwtrInboxTitles } from './commitment/inbox-titles'
 import { AgentRunStore } from './agent-runs/store'
 import { TELEGRAM_ACCESS } from './agent-runs/telegram-routes'
 import { assistantAccess, assistantChat } from './agent-runs/assistant-routes'
+import { SessionStore } from './agent-runs/session-routes'
 import { WikiPersonsProvider } from './wiki/persons-reader'
 import { WikiGlossaryProvider, MemoryExpansionSource } from './wiki/glossary-reader'
 import { GlossaryStore, GlossaryStoreSource } from './wiki/glossary-store'
@@ -225,6 +226,7 @@ const proposalStore = new ProposalStore(contextStore.rawDb)
 // INBOX_AGENT_AUTORUN=true a new inbox task gets an agent run INSTEAD of the
 // Enricher suggestion; otherwise runs start only from the UI.
 const agentRunStore = new AgentRunStore(contextStore.rawDb)
+const agentSessionStore = new SessionStore(contextStore.rawDb)
 const INBOX_AGENT_AUTORUN = process.env.INBOX_AGENT_AUTORUN === 'true'
 // The daily cap is a share of the weekly subscription quota (the runner measures
 // it per turn). Empty/unset → 10%; explicit 0 = no cap.
@@ -1161,7 +1163,7 @@ async function main() {
           }
         : null,
       agentConfig,
-      agentRuns: { store: agentRunStore, mindwtr, dailyBudgetUsd: AGENT_RUNS_DAILY_BUDGET_USD, dailyQuotaPct: AGENT_RUNS_DAILY_QUOTA_PCT, publicUrl: process.env.AI_SERVICE_PUBLIC_URL?.trim() || undefined, memory: agentRunsMemory, runnerToken: process.env.AGENT_RUNNER_TOKEN?.trim() || undefined, telegram: telegramUser ?? undefined,
+      agentRuns: { store: agentRunStore, sessions: agentSessionStore, mindwtr, dailyBudgetUsd: AGENT_RUNS_DAILY_BUDGET_USD, dailyQuotaPct: AGENT_RUNS_DAILY_QUOTA_PCT, publicUrl: process.env.AI_SERVICE_PUBLIC_URL?.trim() || undefined, memory: agentRunsMemory, runnerToken: process.env.AGENT_RUNNER_TOKEN?.trim() || undefined, telegram: telegramUser ?? undefined,
         assistant: telegramUser
           ? {
               account: telegramUser,

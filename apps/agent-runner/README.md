@@ -123,6 +123,73 @@ does not wait: it asks, reports the task as `waiting` and ends. The answer is
 read with `GET` by a later run and also reaches captured context through the
 user's own account. The bot ignores whatever is written in that group.
 
+### Sessions on the user's other computers
+
+The user's own Claude Code sessions on another computer — each one in effect an
+agent for some line of work, with its history and its logins. An inbox agent
+that cannot do something itself finds the session that already deals with the
+matter, reads it, and hands it a goal (`apps/ai-service/src/agent-runs/session-routes.ts`):
+
+| Route | What it does |
+|---|---|
+| `GET /v1/sessions?q=&machine=&live=&limit=` | session cards, newest first; `q` filters by words and adds the user's prompts |
+| `GET /v1/sessions/:machine/:id` | one card in full (`:id` may be the first 8 characters) |
+| `GET /v1/sessions/:machine/:id/messages?limit=` | the latest messages, read from the computer at that moment |
+| `POST /v1/sessions/delegate` `{ runId, machine, sessionId, goal }` | hand a goal to a session |
+| `GET /v1/sessions/delegations/:id` | its state and, when it ended, the session's answer |
+
+A **dispatcher** on that computer (`src/session-dispatch.ts`, launchd agent
+`uk.kurdy.gtd-session-dispatch`) does the carrying. It builds a card per session
+from the files Claude Code keeps itself — title, folder, the user's first and
+latest prompts, tools used, whether the session is open — without calling a
+model, and keeps the server's copy current through one request that the server
+holds open until there is work (`POST /v1/sessions/sync`). Transcripts stay on
+the computer; the server stores only the cards, with things that look like keys
+and passwords masked before they leave.
+
+A goal reaches the session in one of two ways:
+
+- **an open session** gets it as a message from another session (Claude Code's
+  `SendMessage`, passed on by a short headless run, since there is no command
+  for it) as soon as it is idle — the user sees it arrive in their window;
+- **a closed session of the Claude desktop app** is first opened there
+  (`claude --resume <id> --desktop`) and then written to as an open one. Only
+  inside the app does it have its own tools — computer use, the built-in
+  browser, the app's connectors; resumed in the background it would wake up
+  without them;
+- **any other closed session** is resumed in the background (`claude -p --resume`).
+
+Either way the answer is read from the transcript, and the run that handed the
+goal over is resumed with it (six goals per run, not counting the ones that
+never reached a session; 90 minutes each).
+
+What this does **not** do: the session works under its own permission settings,
+and the runner's guard is not in it. The dispatcher appends rules to every goal
+(stay within it, return a result, end any message to a person with a line saying
+an agent sent it for the user — `AGENT_DISPATCH_SIGNATURE`), and the `sessions`
+skill tells the inbox agent to delegate an outward action in two steps — draft
+first, send only the text the user approved in the Inbox — but both are
+instructions, not checks.
+
+The `sessions` access registers itself when the first dispatcher reports in;
+"Отозвать" closes the agent routes and stops goals from being handed out, read
+scope keeps finding and reading and refuses delegation.
+
+Install or update, from the server host (the other computer needs SSH access,
+`bun` and a logged-in Claude Code):
+
+```bash
+bash apps/agent-runner/install-dispatcher.sh user@computer
+```
+
+It copies three dependency-free files to `~/.local/share/gtd-agents/dispatcher`
+there and starts them in the user's login session — from a plain SSH shell
+Claude Code cannot reach the keychain and is not signed in. Logs:
+`~/Library/Logs/gtd-session-dispatch/dispatch.log` on that computer. Settings:
+`AGENT_DISPATCH_MACHINE` (name on the server), `AGENT_DISPATCH_DAYS` (30:
+sessions untouched for longer are not offered), `AGENT_DISPATCH_PERMISSION_MODE`
+(`auto`: mode a closed session is resumed in), `AGENT_DISPATCH_SIGNATURE`.
+
 ## Run
 
 ```bash
