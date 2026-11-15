@@ -10,19 +10,26 @@ GTD service on the makurdi host). Upstream code lives in `apps/desktop`,
 The runbook is `docker/cloud-prod/AGENT_INSTRUCTIONS.md` — read it before you
 build, restart or deploy anything. The parts agents get wrong most often:
 
-- **ai-service: restart, do not build.** The container runs
-  `apps/ai-service/src` and `packages/core/src` from this checkout (bind
-  mounts). After a code change: `docker compose restart ai-service` in
-  `docker/`. Build its image only when dependencies or its Dockerfile changed.
-- The same mount means uncommitted edits to those folders go live on the next
-  restart. Finish or stash them before restarting.
+- **Production does not run from this checkout.** It runs from its own clone,
+  `~/gtd-prod`, and changes only when a commit is deployed there:
+  `scripts/prod-deploy.sh [ref]` (default: HEAD here). Uncommitted edits are
+  never deployed. Do not edit `~/gtd-prod` by hand.
+- The deploy script typechecks and tests what changed, restarts what needs it
+  and rolls the clone back if the checks fail. `--dry-run` shows the plan,
+  `--web` also rebuilds the web bundle.
+- ai-service is two containers on one database: `ai-worker` (the full
+  service) and `ai-service` (a gateway that answers the agent-runs routes
+  itself and forwards the rest). They run the sources bind-mounted from the
+  clone: a code change needs a restart of both, not an image build.
 - Any image build: one at a time, nothing else heavy alongside, and not while
   agent runs are `running` or `queued`. The host has 8 GB.
-- Restart the agent runner (`launchctl kickstart -k
-  gui/$(id -u)/uk.kurdy.gtd-agent-runner`) only when no run is `running` or
-  `queued`; it reads `apps/agent-runner` from this checkout too.
-- Never open `context.db` from the host while the container runs; use
-  `docker exec ai-service …`.
+- The agent runner (launchd `uk.kurdy.gtd-agent-runner`) also starts from the
+  clone; it is restarted only when no run is `running` or `queued`.
+- Secrets and production data live in the clone (`~/gtd-prod/docker/.env`,
+  `docker/data`, the backup folders). Do not run `docker compose` from this
+  checkout: it would recreate the production containers from these sources.
+- Never open `context.db` from the host while the containers run; use
+  `docker exec ai-worker …`.
 
 ## Conventions
 

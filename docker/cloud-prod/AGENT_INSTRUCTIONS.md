@@ -12,7 +12,7 @@ This runbook is your authoritative source. Follow it strictly.
 
 | | Where |
 |---|---|
-| `mindwtr-cloud`, `ai-service`, `mindwtr-app`, `cloudflared-gtd` | docker compose on makurdi, Colima VM (6 GB / 3 CPU / 20 GB) |
+| `mindwtr-cloud`, `ai-worker` + `ai-service` (gateway), `mindwtr-app`, `cloudflared-gtd` | docker compose on makurdi, run from `~/gtd-prod/docker`, Colima VM (6 GB / 3 CPU / 40 GB) |
 | OpenClaw runtime | native node on makurdi (NOT in docker) — **deprecated as GTD runner since 2026-06-11, see §9** |
 | **Hermes runtime** (GTD AI-agent runner) | native python on makurdi (NOT in docker), launchd `ai.hermes.gateway`, gateway on `:18789`. **Replaced OpenClaw as the bot that claims `@ai-agent` tasks** (2026-06-11) |
 | `neo4j` container | makurdi, used by OpenClaw, `restart=unless-stopped` |
@@ -20,7 +20,8 @@ This runbook is your authoritative source. Follow it strictly.
 | `capture-agent` | macOS launchd on the laptop, posts to `http://100.108.142.59:3030` (Tailscale magic IP) |
 | `wiki/`, `shared-memory/`, DB volumes | makurdi |
 | Sync OpenClaw MEMORY.md → ai-service | `crontab */5 * * * * sync-shared-memory.sh` on makurdi (reads local sqlite, no SSH) |
-| Source-of-truth secrets | `/Users/makurdi/Projects/GTD_mindwtr/docker/.env` on makurdi (chmod 600) |
+| Source-of-truth secrets | `/Users/makurdi/gtd-prod/docker/.env` on makurdi (chmod 600) |
+| Production checkout | `/Users/makurdi/gtd-prod` — a clone moved only by `scripts/prod-deploy.sh`; development happens in `~/projects/GTD_mindwtr` |
 
 SSH from anywhere with the user's `~/.ssh/config` alias: `ssh openclaw`. User: `makurdi`. IP: `100.108.142.59` (Tailscale).
 
@@ -34,32 +35,46 @@ SSH from anywhere with the user's `~/.ssh/config` alias: `ssh openclaw`. User: `
 
 ## 2. Deploy flow — three modes
 
-### Mode A — code change to ai-service / mindwtr-cloud / mindwtr-app
+### Mode A — code change to ai-service / agent-runner / mindwtr-cloud / mindwtr-app
 
-Push to GitHub from wherever you edit, then `git pull --ff-only` in the makurdi checkout (or work in it directly). What you do next depends on the service.
-
-**ai-service — restart, do not build (since 2026-11-10).** Its container runs the TypeScript straight from the checkout: `apps/ai-service/src` and `packages/core/src` are bind-mounted read-only (see `volumes` in `docker/compose.yaml`). A code change is live after:
+**Production runs from its own clone, `~/gtd-prod` on makurdi (since 2026-11-14), not from the checkout you edit.** The containers mount their sources from that clone and the agent runner starts from it. Edits in `~/projects/GTD_mindwtr` — committed or not — do not reach production until you deploy a commit:
 
 ```bash
-ssh openclaw 'eval "$(/opt/homebrew/bin/brew shellenv)"; cd ~/Projects/GTD_mindwtr && \
-  docker compose -f docker/compose.yaml --env-file docker/.env restart ai-service'
+cd ~/projects/GTD_mindwtr
+scripts/prod-deploy.sh            # HEAD of this checkout
+scripts/prod-deploy.sh main       # or a branch / tag / commit
+scripts/prod-deploy.sh --dry-run  # what would happen
+scripts/prod-deploy.sh --web      # also rebuild the web bundle (7–10 min)
 ```
 
-That takes about half a minute. Rebuild the image **only** when dependencies changed (`package.json` of ai-service or core, `bun.lock`) or `docker/ai-service/Dockerfile` did:
+The script moves the clone to the commit and does what the diff calls for: `bun install` when dependencies changed; typecheck + tests, then a restart of `ai-worker` and `ai-service`, when `apps/ai-service` or `packages/core` changed (`up -d` when `compose.yaml` did; an image build when dependencies or `docker/ai-service/` did); a runner restart when `apps/agent-runner` changed and no run is running or queued. A failed typecheck or test puts the clone back on the previous commit and restarts nothing. Uncommitted changes are never deployed. Never edit files in `~/gtd-prod` by hand — the script refuses to deploy over local edits there.
+
+Everything that belongs to production lives in the clone: `docker/.env` (secrets), `docker/data` (mindwtr-cloud's data), the backup folders, and the cron / launchd jobs point at it. Run `docker compose` for production from `~/gtd-prod/docker`.
+
+**ai-service is two containers from one image, on one database** (since 2026-11-14):
+
+| Container | What it is |
+|---|---|
+| `ai-worker` | the full service (`src/index.ts`): captures, LLM pipelines, Slack/Telegram, memory, every HTTP route. Not published. |
+| `ai-service` | the gateway (`src/gateway.ts`): the address everyone talks to (`:3030`, `ai.kurdy.uk`). Answers `/v1/agent-runs*`, `/v1/agent-knowledge*`, `/v1/sessions*`, `/oauth/callback` itself and forwards everything else to `ai-worker`. |
+
+The worker does heavy work on the thread that also answers HTTP; when it was the only process the agent runner's claims timed out behind it and runs were parked as "runner lost". Now a busy worker slows the proposals UI and capture intake, not the agents. `GET /healthz` is the liveness of whichever container you ask; `GET /health` on the gateway is the worker's report (503 with `components.worker` when it is silent). Logs: `docker logs ai-worker` for almost everything, `docker logs ai-service` for agent runs. Read the database with `docker exec ai-worker …`.
+
+Both run the TypeScript straight from the clone (`apps/ai-service/src` and `packages/core/src` are bind-mounted read-only), so a code change needs a restart, not a build — the deploy script does it. By hand:
 
 ```bash
-docker compose -f docker/compose.yaml --env-file docker/.env build ai-service && \
-docker compose -f docker/compose.yaml --env-file docker/.env up -d ai-service
+cd ~/gtd-prod/docker && docker compose restart ai-worker ai-service
 ```
 
-Because the container reads the working tree, whatever is in the checkout at restart time is what runs — committed or not. Do not leave half-done edits to `apps/ai-service/src` in the makurdi checkout, and do not restart ai-service while someone else's edits are in progress there. After changing `volumes` or `environment` in compose, use `up -d ai-service` (a plain `restart` does not pick those up).
+Rebuild the image **only** when dependencies changed (`package.json` of ai-service or core, `bun.lock`) or `docker/ai-service/Dockerfile` did (`scripts/prod-deploy.sh --build`, or `docker compose build ai-worker && docker compose up -d ai-worker ai-service`). After changing `volumes` or `environment` in compose, use `up -d` (a plain `restart` does not pick those up).
+
+**The database** (`context.db`, a Docker volume). Vector search is a brute-force scan, so the vector tables are kept small: embeddings are stored at 512 dimensions, event vectors older than 120 days are dropped (`EVENT_VECTOR_DAYS`; the events stay and remain searchable by text), and the worker rebuilds a vector table at start when most of its slots are dead. Scans run on a worker thread (`context-store/offthread.ts`). `[slow-sql]` / `[stuck-sql]` lines in the log name statements that take over a second. To compact the file after a big cleanup: stop both containers, `docker compose run --rm --no-deps ai-worker bun run apps/ai-service/src/context-store/maintenance-cli.ts`, start them again.
 
 **mindwtr-cloud / mindwtr-app — build, then recreate:**
 
 ```bash
-ssh openclaw 'eval "$(/opt/homebrew/bin/brew shellenv)"; cd ~/Projects/GTD_mindwtr && \
-  docker compose -f docker/compose.yaml --env-file docker/.env build <service> && \
-  docker compose -f docker/compose.yaml --env-file docker/.env up -d --force-recreate <service>'
+ssh openclaw 'eval "$(/opt/homebrew/bin/brew shellenv)"; cd ~/gtd-prod/docker && \
+  docker compose build <service> && docker compose up -d --force-recreate <service>'
 ```
 
 **Rules for any build on makurdi** (8 GB Mac, 6 GB Colima VM):
@@ -72,10 +87,10 @@ ssh openclaw 'eval "$(/opt/homebrew/bin/brew shellenv)"; cd ~/Projects/GTD_mindw
 **Smoke check** after restart (wait ~5 s):
 
 ```bash
-ssh openclaw 'eval "$(/opt/homebrew/bin/brew shellenv)"; docker logs ai-service --tail 6 2>&1 | grep -iE "listening|connected|bot|error"'
+ssh openclaw 'eval "$(/opt/homebrew/bin/brew shellenv)"; docker logs ai-worker --tail 6 2>&1 | grep -iE "listening|connected|bot|error"; docker logs ai-service --tail 2'
 ```
 
-Expect `📡 HTTP endpoint listening on :3030` + `🚀 Bot is running` + no `GrammyError 409` (409 means a parallel ai-service is running somewhere, e.g. Docker Desktop revived on the laptop — see §4).
+Expect `📡 HTTP endpoint listening on :3030` + `🚀 Bot is running` from the worker, `🚪 Gateway listening on :3030` from the gateway, and no `GrammyError 409` (409 means a parallel ai-service is running somewhere, e.g. Docker Desktop revived on the laptop — see §4).
 
 ### Mode B — capture-agent change (laptop, not docker)
 
@@ -94,7 +109,7 @@ Audio capture is a separate launchd app entry (`application.uk.kurdy.gtd.audio-c
 ### Mode C — full restart of the production stack
 
 ```bash
-ssh openclaw 'eval "$(/opt/homebrew/bin/brew shellenv)"; cd ~/Projects/GTD_mindwtr && \
+ssh openclaw 'eval "$(/opt/homebrew/bin/brew shellenv)"; cd ~/gtd-prod && \
   docker compose -f docker/compose.yaml --env-file docker/.env --profile cf up -d'
 ```
 
@@ -114,7 +129,7 @@ Halt and `ASK USER` for these — you cannot derive them:
 A second ai-service is connected to the Telegram bot. Most common cause: Docker Desktop on the laptop auto-started old `ai-service` container. Fix:
 ```bash
 # on laptop
-docker compose -f ~/Projects/GTD_mindwtr/docker/compose.yaml --profile cf down
+docker compose -f ~/gtd-prod/docker/compose.yaml --profile cf down
 ```
 Those containers should have been removed after the 2026-06-03 cutover. If they came back, run the down once more.
 
@@ -129,7 +144,7 @@ ssh openclaw 'mkdir -p ~/.docker/cli-plugins && ln -sf /opt/homebrew/lib/docker/
 ```bash
 REF='op://Private/22s4c7xumwgqmdszde7jkfigkq/password'  # item-id form, not human-readable
 TOKEN=$(op read "$REF" --account ivied 2>/dev/null)
-ssh openclaw 'cd ~/Projects/GTD_mindwtr/docker && grep -v "^CLOUDFLARE_TUNNEL_TOKEN" .env > .env.tmp && cat >> .env.tmp && mv .env.tmp .env' <<EOF
+ssh openclaw 'cd ~/gtd-prod/docker && grep -v "^CLOUDFLARE_TUNNEL_TOKEN" .env > .env.tmp && cat >> .env.tmp && mv .env.tmp .env' <<EOF
 CLOUDFLARE_TUNNEL_TOKEN=$TOKEN
 EOF
 ```
