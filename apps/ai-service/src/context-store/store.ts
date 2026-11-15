@@ -318,6 +318,11 @@ export class ContextStore {
   purgeExpired(): number {
     const now = new Date().toISOString()
     const before = this.size()
+    if (this.vecAvailable) {
+      // vec0 has no foreign keys: without this the vectors of purged captures
+      // stay, and every similarity scan keeps paying for them.
+      this.db.run('DELETE FROM captures_vec WHERE capture_id IN (SELECT id FROM captures WHERE ttl_at < ?)', [now])
+    }
     this.db.run('DELETE FROM captures WHERE ttl_at < ?', [now])
     const after = this.size()
     return before - after

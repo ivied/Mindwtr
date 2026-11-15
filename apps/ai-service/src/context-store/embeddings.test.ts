@@ -1,5 +1,5 @@
 import { describe, it, expect, mock } from 'bun:test'
-import { OpenAIEmbeddings, cosine, embeddingToBytes } from './embeddings'
+import { EMBEDDING_DIMS, OpenAIEmbeddings, cosine, embeddingToBytes, shortenEmbedding } from './embeddings'
 
 describe('OpenAIEmbeddings', () => {
   it('posts to /embeddings with bearer token', async () => {
@@ -15,8 +15,9 @@ describe('OpenAIEmbeddings', () => {
 
     const e = new OpenAIEmbeddings({ apiKey: 'sk-test', baseUrl: 'http://x/v1' })
     const v = await e.embed('hello')
-    expect(v.length).toBe(1536)
-    expect(v[0]).toBeCloseTo(0.1, 5)
+    // Shortened to the stored length and scaled back to unit length.
+    expect(v.length).toBe(EMBEDDING_DIMS)
+    expect(v[0]).toBeCloseTo(1 / Math.sqrt(EMBEDDING_DIMS), 5)
 
     const calls = (fetchMock as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls
     expect(calls[0][0]).toBe('http://x/v1/embeddings')
@@ -59,6 +60,17 @@ describe('OpenAIEmbeddings', () => {
     ) as unknown as typeof fetch
     const e = new OpenAIEmbeddings({ apiKey: 'sk-test' })
     await expect(e.embed('x')).rejects.toThrow('expected 1536-dim')
+  })
+})
+
+describe('shortenEmbedding', () => {
+  it('keeps the prefix and restores unit length', () => {
+    const v = shortenEmbedding([3, 4, 12, 99], 2)
+    expect(Array.from(v)).toEqual([Math.fround(0.6), Math.fround(0.8)])
+  })
+
+  it('leaves a zero vector alone', () => {
+    expect(Array.from(shortenEmbedding([0, 0, 0], 2))).toEqual([0, 0])
   })
 })
 

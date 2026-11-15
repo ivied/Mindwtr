@@ -194,10 +194,18 @@ export interface HttpServerConfig {
   /** Optional agent runs (full agent per inbox item) — exposes /v1/agent-runs/*
    *  for the Inbox UI and for the host runner (apps/agent-runner). */
   agentRuns?: AgentRunsHttpDeps | null
+  /**
+   * Gateway mode: serve /health and the agent-runs routes here and pass every
+   * other request to the full service at this address (see gateway.ts).
+   */
+  proxyTo?: string
 }
 
 export function createHttpServer(config: HttpServerConfig) {
   const app = new Hono()
+
+  // Liveness of this process alone; /health below also reports what it depends on.
+  app.get('/healthz', (c) => c.json({ ok: true }))
 
   app.get('/health', async (c) => {
     if (!config.healthMonitor) return c.json({ ok: true })
@@ -227,6 +235,12 @@ export function createHttpServer(config: HttpServerConfig) {
   )
 
   app.use('/v1/*', bearerAuth({ token: config.authToken }))
+
+  if (config.proxyTo) {
+    if (config.agentRuns) mountAgentRunsRoutes(app, config.agentRuns)
+    app.all('*', (c) => forward(c.req.raw, config.proxyTo!))
+    return finish()
+  }
 
   // Control Center dashboard aggregator (Phase 2). One read-only call that
   // bundles health + memory + procedural + recording + per-source arrivals so
@@ -500,17 +514,55 @@ export function createHttpServer(config: HttpServerConfig) {
     })
   }
 
-  return {
-    serve(): { stop: () => void } {
-      const server = Bun.serve({
-        port: config.port,
-        fetch: app.fetch,
-      })
-      return {
-        stop: () => server.stop(),
-      }
-    },
-    handler: app.fetch,
+  return finish()
+
+  function finish() {
+    return {
+      serve(): { stop: () => void } {
+        const server = Bun.serve({
+          port: config.port,
+          fetch: app.fetch,
+          // A forwarded request may wait on the full service for a while.
+          ...(config.proxyTo ? { idleTimeout: 150 } : {}),
+        })
+        return {
+          stop: () => server.stop(),
+        }
+      },
+      handler: app.fetch,
+    }
+  }
+}
+
+const FORWARD_TIMEOUT_MS = 120_000
+/** Headers that describe one hop, or that this server sets itself. */
+const HOP_HEADERS = ['connection', 'keep-alive', 'transfer-encoding', 'content-length', 'content-encoding', 'host']
+
+/** Pass a request to the full service and hand its answer back unchanged. */
+export async function forward(request: Request, target: string): Promise<Response> {
+  const from = new URL(request.url)
+  const headers = new Headers(request.headers)
+  for (const name of HOP_HEADERS) headers.delete(name)
+  const hasBody = request.method !== 'GET' && request.method !== 'HEAD'
+  try {
+    const answer = await fetch(`${target.replace(/\/$/, '')}${from.pathname}${from.search}`, {
+      method: request.method,
+      headers,
+      body: hasBody ? await request.arrayBuffer() : undefined,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(FORWARD_TIMEOUT_MS),
+    })
+    const out = new Headers(answer.headers)
+    for (const name of HOP_HEADERS) out.delete(name)
+    // CORS is answered here; two sets of these headers confuse browsers.
+    for (const name of [...out.keys()]) if (name.startsWith('access-control-')) out.delete(name)
+    return new Response(answer.body, { status: answer.status, headers: out })
+  } catch (err) {
+    const timedOut = (err as Error).name === 'TimeoutError'
+    return Response.json(
+      { error: timedOut ? 'the service did not answer in time' : 'the service is not reachable', detail: (err as Error).message },
+      { status: timedOut ? 504 : 502 }
+    )
   }
 }
 

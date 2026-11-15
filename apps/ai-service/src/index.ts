@@ -12,6 +12,7 @@ import { FileStateStore, channelStateFile } from './channels/state-store'
 import { SlackSessionStore, slackSessionFile } from './channels/slack-session-store'
 import { ContextStore } from './context-store/store'
 import { OpenAIEmbeddings } from './context-store/embeddings'
+import { pruneEventVectors } from './context-store/vec-maintenance'
 import { ProposalStore } from './proposal-store/store'
 import { ProposalApplier } from './proposal-store/apply'
 import { CommentHandler } from './proposal-store/comment-handler'
@@ -56,8 +57,7 @@ import {
 } from './memory'
 import { SlugCanonicalizer } from './memory/slug-canonicalizer'
 import { EntityRegistryStore } from './memory/entity-registry-store'
-import { TaskContextAssembler, entitiesInText, renderTaskContext, slugOf, type KnownEntity } from './memory/task-context'
-import type { AgentRunsMemory } from './agent-runs/types'
+import { buildAgentRunsMemory } from './agent-runs/memory-wiring'
 import { EntityRegistrar } from './memory/entity-registrar'
 import { EntityPipeline } from './memory/entity-pipeline'
 import { LlmPublisher } from './status/llm-publisher'
@@ -273,43 +273,11 @@ const memoryRetriever = new HybridRetriever(memoryStore, embeddings)
 
 // Memory as agent runs see it: facts picked for a task, plus the facts the
 // user confirmed (which outrank everything inferred from captured events).
-const agentRunsMemory: AgentRunsMemory = (() => {
-  const registry = new EntityRegistryStore(contextStore.rawDb)
-  let cache: { at: number; entities: KnownEntity[] } = { at: 0, entities: [] }
-  const entities = (): KnownEntity[] => {
-    if (Date.now() - cache.at > 60_000) {
-      cache = {
-        at: Date.now(),
-        entities: registry.list(0, 10_000).map((e) => ({ slug: e.slug, name: e.name, type: e.type, aliases: e.aliases, mentionCount: e.mentionCount })),
-      }
-    }
-    return cache.entities
-  }
-  const assembler = new TaskContextAssembler({
-    store: memoryStore,
-    entities,
-    searchEvents: (query, limit, withinDays) => memoryRetriever.retrieve({ query, limit, withinDays }),
-  })
-  const item = (f: { id: number; statement: string; entitySlug: string | null; createdAt: string }) => ({
-    id: f.id,
-    statement: f.statement,
-    entity: f.entitySlug,
-    createdAt: f.createdAt,
-  })
-  return {
-    taskContext: async (text) => renderTaskContext(await assembler.assemble(text)),
-    list: () => memoryStore.allVerifiedFacts().map(item),
-    save: (statement, entity) => {
-      // File it under the entity the registry already knows by that name, so
-      // it surfaces whichever spelling a later task uses.
-      const slug = entity ? (entitiesInText(entity, entities())[0]?.slug ?? slugOf(entity)) : null
-      return item(
-        memoryStore.insertFact({ statement, entitySlug: slug || null, factType: 'rule', validFrom: new Date().toISOString(), confidence: 1, origin: 'user' })
-      )
-    },
-    remove: (id) => memoryStore.closeFact(id, new Date().toISOString()),
-  }
-})()
+const agentRunsMemory = buildAgentRunsMemory({
+  db: contextStore.rawDb,
+  store: memoryStore,
+  searchEvents: (query, limit, withinDays) => memoryRetriever.retrieve({ query, limit, withinDays }),
+})
 // Glossary decoder ring — non-person entities (project codenames, acronyms,
 // internal terms) from the capture-wiki, decoded via the memory module's
 // active facts. Feeds a KNOWN_GLOSSARY block into Proposer + Enricher so
@@ -943,6 +911,10 @@ async function main() {
     try {
       const purged = contextStore.purgeExpired()
       if (purged > 0) console.log(`🧹 Context Store: purged ${purged} expired captures`)
+      if (contextStore.hasVectorSearch) {
+        const dropped = pruneEventVectors(contextStore.rawDb)
+        if (dropped > 0) console.log(`🧹 Memory: dropped ${dropped} event vectors past the retention window`)
+      }
     } catch (err) {
       console.error('[context-store] purge failed:', err)
     }

@@ -64,6 +64,11 @@ export interface AgentRunsHttpDeps {
    * run (there is nothing to set up: the client lives in this process).
    */
   telegram?: TelegramAgentApi
+  /**
+   * The Telegram account is connected, but its client lives in another
+   * process that serves /v1/telegram/* itself (see gateway.ts).
+   */
+  telegramElsewhere?: boolean
   /** The group where agents ask the user's human assistant. Mounts /v1/assistant/*. */
   assistant?: Pick<AssistantRoutesDeps, 'bot' | 'account'>
   /** Claude Code sessions on the user's other computers. Mounts /v1/sessions/*. */
@@ -297,7 +302,7 @@ export function mountAgentRunsRoutes(app: Hono, deps: AgentRunsHttpDeps): void {
    * row on at once instead of starting a provisioning run.
    */
   const builtinAccess = (service: string): AccessSpec | null =>
-    deps.telegram && /^(личный\s+)?(telegram|телеграмм?|tg)$/i.test(service.replace(/\(.*\)/, '').trim()) ? TELEGRAM_ACCESS : null
+    (deps.telegram || deps.telegramElsewhere) && /^(личный\s+)?(telegram|телеграмм?|tg)$/i.test(service.replace(/\(.*\)/, '').trim()) ? TELEGRAM_ACCESS : null
   const connectedText = (access: AccessSpec): string =>
     `Доступ «${access.name}» подключён (${access.scope === 'write' ? 'чтение и запись' : 'только чтение'}). ${access.notes}`.trim()
 

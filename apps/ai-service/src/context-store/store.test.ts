@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ContextStore } from './store'
 import type { CapturedItem } from '../capture/normalizer'
-import type { EmbeddingsProvider } from './embeddings'
+import { EMBEDDING_DIMS, type EmbeddingsProvider } from './embeddings'
 
 function makeItem(overrides: Partial<CapturedItem> = {}): CapturedItem {
   return {
@@ -17,7 +17,7 @@ function makeItem(overrides: Partial<CapturedItem> = {}): CapturedItem {
 }
 
 class StubEmbeddings implements EmbeddingsProvider {
-  readonly dimension = 1536
+  readonly dimension = EMBEDDING_DIMS
   constructor(
     /** Map of text → vector. Unknown text returns a deterministic random-ish vector */
     private map: Map<string, Float32Array> = new Map()

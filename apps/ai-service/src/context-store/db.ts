@@ -5,6 +5,8 @@
 
 import { Database } from 'bun:sqlite'
 import * as sqliteVec from 'sqlite-vec'
+import { EMBEDDING_DIMS } from './embeddings'
+import { maintainVecTables } from './vec-maintenance'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 
@@ -384,7 +386,7 @@ CREATE TABLE IF NOT EXISTS proposal_mute_rules (
 const VEC_SCHEMA_SQL = `
 CREATE VIRTUAL TABLE IF NOT EXISTS captures_vec USING vec0(
   capture_id TEXT PRIMARY KEY,
-  embedding FLOAT[1536]
+  embedding FLOAT[${EMBEDDING_DIMS}]
 );
 
 -- Memory module: parallel vec table for events. Keyed by events.id so
@@ -392,14 +394,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS captures_vec USING vec0(
 -- on application-level cleanup (events ON DELETE → also remove vec row).
 CREATE VIRTUAL TABLE IF NOT EXISTS events_vec USING vec0(
   event_id TEXT PRIMARY KEY,
-  embedding FLOAT[1536]
+  embedding FLOAT[${EMBEDDING_DIMS}]
 );
 
 -- And one over daily_summary.summary so weekly/monthly context lookups
 -- can pull summary rows by semantic similarity.
 CREATE VIRTUAL TABLE IF NOT EXISTS daily_summary_vec USING vec0(
   date TEXT PRIMARY KEY,
-  embedding FLOAT[1536]
+  embedding FLOAT[${EMBEDDING_DIMS}]
 );
 
 -- Procedural memory vector channel. Keyed by procedural_chunks.id so
@@ -407,7 +409,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS daily_summary_vec USING vec0(
 -- procedural_chunks → also DELETE the vec row).
 CREATE VIRTUAL TABLE IF NOT EXISTS procedural_chunks_vec USING vec0(
   chunk_id TEXT PRIMARY KEY,
-  embedding FLOAT[1536]
+  embedding FLOAT[${EMBEDDING_DIMS}]
 );
 `
 
@@ -484,7 +486,16 @@ function logSlowStatements(db: Database): void {
  * Open and initialize the context store DB. Returns the connection plus a flag
  * indicating whether sqlite-vec loaded (false → vector search disabled, FTS still works).
  */
-export function openDb(dbPath: string): OpenDbResult {
+export interface OpenDbOptions {
+  /**
+   * Rebuild the vector tables when they need it (default). A second process on
+   * the same file passes false: the rebuild is one long write, and only one of
+   * them should start it.
+   */
+  maintainVec?: boolean
+}
+
+export function openDb(dbPath: string, options: OpenDbOptions = {}): OpenDbResult {
   mkdirSync(dirname(dbPath), { recursive: true })
   // enableLoadExtension is required for sqlite-vec
   const db = new Database(dbPath, { create: true })
@@ -492,7 +503,7 @@ export function openDb(dbPath: string): OpenDbResult {
   db.exec('PRAGMA foreign_keys = ON')
   // Wait up to 5s for a competing writer instead of failing instantly with
   // SQLITE_BUSY. Cheap insurance against transient lock contention.
-  db.exec('PRAGMA busy_timeout = 5000')
+  db.exec(`PRAGMA busy_timeout = ${Math.max(1000, Number(process.env.SQLITE_BUSY_MS ?? 5000))}`)
   // synchronous=FULL: fsync the WAL on every commit. The default in WAL mode
   // is NORMAL, which can leave the DB inconsistent on an unclean stop. The DB
   // lives on a Docker volume backed by virtiofs (Colima), where mmap/fsync
@@ -518,6 +529,7 @@ export function openDb(dbPath: string): OpenDbResult {
   db.exec(SCHEMA_SQL)
   if (vecAvailable) {
     db.exec(VEC_SCHEMA_SQL)
+    if (options.maintainVec !== false) maintainVecTables(db)
   }
   applyAdditiveMigrations(db)
 
