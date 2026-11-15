@@ -9,6 +9,7 @@
  *   - purgeExpired()      — drop captures past ttl_at (called periodically)
  */
 
+import { offThreadAll } from './offthread'
 import { createHash, randomUUID } from 'node:crypto'
 import type { CapturedItem } from '../capture/normalizer'
 import { PULL_CHANNELS } from '../capture/normalizer'
@@ -95,7 +96,7 @@ export class ContextStore {
     if (this.embeddings && this.vecAvailable) {
       try {
         embedding = await this.embeddings.embed(text)
-        const dupL3 = this.findRecentBySimilarity(embedding, this.config.l2WindowMs, receivedAt)
+        const dupL3 = await this.findRecentBySimilarity(embedding, this.config.l2WindowMs, receivedAt)
         if (dupL3) {
           return { inserted: false, capture: dupL3 }
         }
@@ -163,13 +164,13 @@ export class ContextStore {
     const topK = opts.topK ?? 5
     const queryEmbedding = await this.embeddings.embed(query)
 
-    const rows = this.db
-      .query<{ capture_id: string; distance: number }, [Buffer, number]>(
-        `SELECT capture_id, distance FROM captures_vec
+    const rows = await offThreadAll<{ capture_id: string; distance: number }>(
+      this.db,
+      `SELECT capture_id, distance FROM captures_vec
          WHERE embedding MATCH ? AND k = ?
-         ORDER BY distance`
-      )
-      .all(embeddingToBytes(queryEmbedding), topK * 3)
+         ORDER BY distance`,
+      [embeddingToBytes(queryEmbedding), topK * 3]
+    )
 
     if (rows.length === 0) return []
 
@@ -350,21 +351,21 @@ export class ContextStore {
     )
   }
 
-  private findRecentBySimilarity(
+  private async findRecentBySimilarity(
     embedding: Float32Array,
     windowMs: number,
     nowIso: string
-  ): CaptureRecord | null {
+  ): Promise<CaptureRecord | null> {
     if (!this.vecAvailable) return null
     const since = new Date(Date.parse(nowIso) - windowMs).toISOString()
 
     // KNN over recent items only — limit pool to reduce cost
-    const candidates = this.db
-      .query<{ capture_id: string; distance: number }, [Buffer, number]>(
-        `SELECT capture_id, distance FROM captures_vec
-         WHERE embedding MATCH ? AND k = ?`
-      )
-      .all(embeddingToBytes(embedding), 5)
+    const candidates = await offThreadAll<{ capture_id: string; distance: number }>(
+      this.db,
+      `SELECT capture_id, distance FROM captures_vec
+         WHERE embedding MATCH ? AND k = ?`,
+      [embeddingToBytes(embedding), 5]
+    )
 
     for (const c of candidates) {
       const row = this.db

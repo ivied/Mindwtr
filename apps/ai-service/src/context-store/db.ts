@@ -417,6 +417,70 @@ export interface OpenDbResult {
 }
 
 /**
+ * bun:sqlite is synchronous: a slow statement stops every request. Log the
+ * ones that take long, and let a worker thread name the one that is still
+ * running, so a stall can be traced to its query.
+ */
+function logSlowStatements(db: Database): void {
+  const limitMs = Number(process.env.SQLITE_SLOW_MS ?? 1000)
+  if (!(limitMs > 0)) return
+  const probe = db.query('SELECT 1')
+  const proto = Object.getPrototypeOf(probe) as Record<string, unknown>
+  probe.finalize()
+  if ((proto as { __slowLogged?: boolean }).__slowLogged) return
+  Object.defineProperty(proto, '__slowLogged', { value: true })
+
+  const shared = new SharedArrayBuffer(16 + 480)
+  const started = new Float64Array(shared, 0, 1)
+  const length = new Int32Array(shared, 8, 1)
+  const text = new Uint8Array(shared, 16)
+  const encoder = new TextEncoder()
+  try {
+    const worker = new Worker(new URL('./sql-watchdog.worker.ts', import.meta.url).href)
+    worker.postMessage({ shared, limitMs: Math.max(5000, limitMs) })
+    ;(worker as { unref?: () => void }).unref?.()
+  } catch (err) {
+    console.warn('[context-store] sql watchdog not started:', (err as Error).message)
+  }
+
+  const sqlOf = (statement: unknown): string =>
+    String((statement as { toString?: () => string })?.toString?.() ?? '').replace(/\s+/g, ' ')
+  let depth = 0
+  const timed = <T>(label: string, sql: () => string, run: () => T): T => {
+    const outer = depth++ === 0
+    if (outer) {
+      length[0] = encoder.encodeInto(`${label}: ${sql()}`.slice(0, 470), text).written
+      started[0] = Date.now()
+    }
+    const t0 = performance.now()
+    try {
+      return run()
+    } finally {
+      depth--
+      if (outer) started[0] = 0
+      const ms = performance.now() - t0
+      if (ms >= limitMs) console.warn(`[slow-sql] ${Math.round(ms)}ms ${label}: ${sql().slice(0, 300)}`)
+    }
+  }
+
+  for (const method of ['all', 'get', 'run', 'values']) {
+    const original = proto[method] as ((...a: unknown[]) => unknown) | undefined
+    if (typeof original !== 'function') continue
+    proto[method] = function (this: unknown, ...args: unknown[]) {
+      return timed(method, () => sqlOf(this), () => original.apply(this, args))
+    }
+  }
+  const dbProto = Object.getPrototypeOf(db) as Record<string, unknown>
+  for (const method of ['exec', 'run']) {
+    const original = dbProto[method] as ((...a: unknown[]) => unknown) | undefined
+    if (typeof original !== 'function') continue
+    dbProto[method] = function (this: unknown, ...args: unknown[]) {
+      return timed(`db.${method}`, () => String(args[0] ?? '').replace(/\s+/g, ' '), () => original.apply(this, args))
+    }
+  }
+}
+
+/**
  * Open and initialize the context store DB. Returns the connection plus a flag
  * indicating whether sqlite-vec loaded (false → vector search disabled, FTS still works).
  */
@@ -434,6 +498,11 @@ export function openDb(dbPath: string): OpenDbResult {
   // lives on a Docker volume backed by virtiofs (Colima), where mmap/fsync
   // semantics are weaker — FULL trades a little write throughput for durability.
   db.exec('PRAGMA synchronous = FULL')
+  // The default page cache is 2 MB, far too small for a DB of several GB.
+  // Vector scans (the event vectors alone are ~2 GB) do not run on this
+  // connection at all: see offthread.ts.
+  db.exec(`PRAGMA cache_size = -${Math.max(2000, Number(process.env.SQLITE_CACHE_KB ?? 400_000))}`)
+  logSlowStatements(db)
 
   let vecAvailable = false
   try {
