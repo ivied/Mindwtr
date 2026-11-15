@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM oven/bun:1 AS builder
 WORKDIR /app
 
@@ -9,7 +10,9 @@ COPY apps/desktop/package.json apps/desktop/
 COPY apps/mcp-server/package.json apps/mcp-server/
 COPY apps/ai-service/package.json apps/ai-service/
 
-RUN bun install --ignore-scripts
+# The download cache outlives the layer (BuildKit): a changed lockfile re-links
+# packages instead of fetching them all again.
+RUN --mount=type=cache,target=/root/.bun/install/cache bun install --ignore-scripts
 
 COPY apps/ai-service/ apps/ai-service/
 COPY packages/core/ packages/core/

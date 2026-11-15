@@ -51,19 +51,38 @@ services:
     ports:
       - 5173:5173
 
-  ai-service:
+  # ai-service runs as two processes from one image, on one database:
+  #
+  #   ai-worker   the full service: captures, LLM pipelines, Slack/Telegram,
+  #               memory, and every HTTP route. Not published.
+  #   ai-service  the gateway (src/gateway.ts): the address everyone talks to.
+  #               It answers the agent-runs routes itself and passes the rest
+  #               to ai-worker.
+  #
+  # The worker does heavy work on the same thread that answers HTTP; when it
+  # was the only process, the agent runner's requests timed out behind it.
+  # After a code change restart both: `docker compose restart ai-worker ai-service`.
+  ai-worker:
     build:
       context: ..
       dockerfile: docker/ai-service/Dockerfile
-    container_name: ai-service
-    hostname: ai-service
+    image: docker-ai-service
+    container_name: ai-worker
+    hostname: ai-worker
     restart: always
-    cpus: "1.0"
-    mem_limit: 512m
+    cpus: "2.0"
+    mem_limit: 2500m
     depends_on:
       mindwtr-cloud:
         condition: service_healthy
-    environment:
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:3030/healthz'); process.exit(r.ok ? 0 : 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      # The first start after a long break may rebuild the vector tables.
+      start_period: 15m
+    environment: &ai-env
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN must be set}
       - MINDWTR_CLOUD_URL=http://mindwtr-cloud:8787
       - MINDWTR_AUTH_TOKEN=${MINDWTR_CLOUD_AUTH_TOKENS}
@@ -130,17 +149,22 @@ services:
       # Pipeline-status: writes last LLM verdicts to a file consumed by the
       # macOS widget. Disabled when LLM_STATUS_FILE is unset.
       - LLM_STATUS_FILE=${LLM_STATUS_FILE:-/app/widget-status/.gtd-pipeline-llm.json}
-    ports:
-      - "${HTTP_PORT:-3030}:3030"
-    volumes:
+    volumes: &ai-volumes
       # context.db lives in a Docker named volume (ext4 inside the Colima VM),
       # NOT a host bind-mount. SQLite WAL uses mmap + file locks that are
       # unreliable across the virtiofs VM↔host boundary — concurrent access
       # (e.g. inspecting the DB from the host while the container writes) has
       # corrupted the DB twice. The volume keeps WAL on a real Linux fs.
-      # To read the DB safely: `docker exec ai-service ...`, never open the
+      # To read the DB safely: `docker exec ai-worker ...`, never open the
       # underlying file from macOS while the container is running.
       - ai-service-data:/app/data
+      # Sources come from the working tree, not from the image: bun runs the
+      # TypeScript as is, so a code change is deployed with
+      # `docker compose restart ai-worker ai-service` (seconds) and the image is rebuilt
+      # only when dependencies change (package.json / bun.lock). Set
+      # AI_SERVICE_SRC_HOST_DIR / CORE_SRC_HOST_DIR to run another checkout.
+      - ${AI_SERVICE_SRC_HOST_DIR:-../apps/ai-service/src}:/app/apps/ai-service/src:ro
+      - ${CORE_SRC_HOST_DIR:-../packages/core/src}:/app/packages/core/src:ro
       # Read-only mount of the capture-wiki root so the Proposer can read
       # wiki/entities/*.md for the KNOWN_PERSONS registry. Path is the user's
       # local wiki dir; override WIKI_HOST_DIR when the wiki lives elsewhere.
@@ -159,6 +183,30 @@ services:
       # this container. Empty/missing subdirs are fine — reader silently
       # no-ops until they appear.
       - ${SHARED_MEMORY_HOST_DIR:-/Users/sergeykurdyuk/shared-memory}:/app/shared-memory
+
+  ai-service:
+    image: docker-ai-service
+    container_name: ai-service
+    hostname: ai-service
+    restart: always
+    cpus: "1.0"
+    mem_limit: 1500m
+    command: ["bun", "run", "apps/ai-service/src/gateway.ts"]
+    depends_on:
+      ai-worker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bun", "-e", "const r = await fetch('http://127.0.0.1:3030/healthz'); process.exit(r.ok ? 0 : 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    # Same settings and mounts as the worker; the gateway reads the few it needs
+    # and finds the worker at http://ai-worker:3030 (AI_WORKER_URL to override).
+    environment: *ai-env
+    ports:
+      - "${HTTP_PORT:-3030}:3030"
+    volumes: *ai-volumes
 
   # Cloudflare Tunnel — outbound-only connector to CF edge. Routes
   # configured in CF dashboard at one.dash.cloudflare.com → Zero Trust →
@@ -187,7 +235,7 @@ services:
     command: tunnel --no-autoupdate run --protocol auto --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
 
 volumes:
-  # ai-service context.db (captures, proposals, memory events/facts, vec/FTS).
+  # ai-worker / ai-service context.db (captures, proposals, memory events/facts, vec/FTS).
   # Named volume on the VM's ext4 — see the mount note on ai-service above.
   # Explicit `name:` so it isn't prefixed with the compose project ("docker_"),
   # keeping backup/restore commands stable. Back up with predeploy-backup.sh.

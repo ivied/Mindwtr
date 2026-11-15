@@ -10,6 +10,8 @@ import type { Hono } from 'hono'
 import type { CreateTaskParams, Task } from '../api/mindwtr-client'
 import type { AgentRunStore } from './store'
 import { TELEGRAM_ACCESS, mountTelegramRoutes, type TelegramAgentApi } from './telegram-routes'
+import { mountAssistantRoutes, type AssistantRoutesDeps } from './assistant-routes'
+import { mountSessionRoutes, type SessionStore } from './session-routes'
 import {
   stateOfPending,
   type AccessSpec,
@@ -62,10 +64,20 @@ export interface AgentRunsHttpDeps {
    * run (there is nothing to set up: the client lives in this process).
    */
   telegram?: TelegramAgentApi
+  /**
+   * The Telegram account is connected, but its client lives in another
+   * process that serves /v1/telegram/* itself (see gateway.ts).
+   */
+  telegramElsewhere?: boolean
+  /** The group where agents ask the user's human assistant. Mounts /v1/assistant/*. */
+  assistant?: Pick<AssistantRoutesDeps, 'bot' | 'account'>
+  /** Claude Code sessions on the user's other computers. Mounts /v1/sessions/*. */
+  sessions?: SessionStore
   now?: () => Date
   log?: (msg: string) => void
 }
 
+const CLAIM_CONTEXT_TIMEOUT_MS = 8000
 const REPLY_KINDS: ReadonlySet<string> = new Set(['answer', 'approve', 'reject', 'message', 'resume'])
 const EVENT_KINDS: ReadonlySet<string> = new Set(['say', 'tool', 'tool_result', 'user', 'done', 'error'])
 const FINISH_STATES: ReadonlySet<string> = new Set(['question', 'confirm', 'done', 'stopped', 'error'])
@@ -290,11 +302,13 @@ export function mountAgentRunsRoutes(app: Hono, deps: AgentRunsHttpDeps): void {
    * row on at once instead of starting a provisioning run.
    */
   const builtinAccess = (service: string): AccessSpec | null =>
-    deps.telegram && /^(личный\s+)?(telegram|телеграмм?|tg)$/i.test(service.replace(/\(.*\)/, '').trim()) ? TELEGRAM_ACCESS : null
+    (deps.telegram || deps.telegramElsewhere) && /^(личный\s+)?(telegram|телеграмм?|tg)$/i.test(service.replace(/\(.*\)/, '').trim()) ? TELEGRAM_ACCESS : null
   const connectedText = (access: AccessSpec): string =>
     `Доступ «${access.name}» подключён (${access.scope === 'write' ? 'чтение и запись' : 'только чтение'}). ${access.notes}`.trim()
 
   if (deps.telegram) mountTelegramRoutes(app, { store, telegram: deps.telegram, log: deps.log })
+  if (deps.assistant) mountAssistantRoutes(app, { store, ...deps.assistant, runnerToken: deps.runnerToken, log: deps.log })
+  if (deps.sessions) mountSessionRoutes(app, { store, sessions: deps.sessions, runnerToken: deps.runnerToken, now: deps.now, log: deps.log })
 
   /** A provisioning run ended: tell every task run that was waiting for it. */
   const wakeParent = (child: AgentRunRecord, access: AccessSpec | null, why = ''): void => {
@@ -664,7 +678,12 @@ export function mountAgentRunsRoutes(app: Hono, deps: AgentRunsHttpDeps): void {
       for (const item of claimed) {
         if (item.run.kind !== 'task' || item.run.sessionId) continue
         try {
-          const context = await deps.memory.taskContext(`${item.run.taskTitle}\n${item.run.taskDescription}`)
+          // Bounded: the runner gives a claim 20 seconds, and a run claimed into a reply it never
+          // receives is lost ("runner lost"). Better to start without the context than not to start.
+          const context = await Promise.race([
+            deps.memory.taskContext(`${item.run.taskTitle}\n${item.run.taskDescription}`),
+            new Promise<string>((_, reject) => setTimeout(() => reject(new Error('timed out')), CLAIM_CONTEXT_TIMEOUT_MS)),
+          ])
           if (context) item.context = context
         } catch (err) {
           log(`memory context failed for ${item.run.id.slice(0, 8)}: ${(err as Error).message}`)

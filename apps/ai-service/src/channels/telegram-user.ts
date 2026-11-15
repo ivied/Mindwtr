@@ -234,6 +234,17 @@ export class TelegramUserChannel implements Channel {
     return this.resolved(ref, async () => toMessageInfo(await this.tg.sendText(ref, text, replyTo ? { replyTo } : {})))
   }
 
+  /** Create a plain group owned by the account, with these members (a bot's @username works). */
+  async createGroup(title: string, users: TelegramChatRef[]): Promise<TelegramChatInfo> {
+    const { chat } = await this.tg.createGroup({ title, users })
+    return toChatInfo(chat)
+  }
+
+  /** Invite link of a group the account administers. */
+  async inviteLink(ref: TelegramChatRef): Promise<string> {
+    return (await this.tg.exportInviteLink(ref)).link
+  }
+
   private async handleMessage(msg: Message): Promise<void> {
     const item = toCapturedItem(msg, this.config.captureOutgoing ?? true)
     if (!item) return

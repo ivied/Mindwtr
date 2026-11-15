@@ -12,6 +12,7 @@ import { FileStateStore, channelStateFile } from './channels/state-store'
 import { SlackSessionStore, slackSessionFile } from './channels/slack-session-store'
 import { ContextStore } from './context-store/store'
 import { OpenAIEmbeddings } from './context-store/embeddings'
+import { pruneEventVectors } from './context-store/vec-maintenance'
 import { ProposalStore } from './proposal-store/store'
 import { ProposalApplier } from './proposal-store/apply'
 import { CommentHandler } from './proposal-store/comment-handler'
@@ -36,6 +37,8 @@ import { denyConfigFromEnv } from './commitment/source-deny'
 import { MindwtrInboxTitles } from './commitment/inbox-titles'
 import { AgentRunStore } from './agent-runs/store'
 import { TELEGRAM_ACCESS } from './agent-runs/telegram-routes'
+import { assistantAccess, assistantChat } from './agent-runs/assistant-routes'
+import { SessionStore } from './agent-runs/session-routes'
 import { WikiPersonsProvider } from './wiki/persons-reader'
 import { WikiGlossaryProvider, MemoryExpansionSource } from './wiki/glossary-reader'
 import { GlossaryStore, GlossaryStoreSource } from './wiki/glossary-store'
@@ -54,8 +57,7 @@ import {
 } from './memory'
 import { SlugCanonicalizer } from './memory/slug-canonicalizer'
 import { EntityRegistryStore } from './memory/entity-registry-store'
-import { TaskContextAssembler, entitiesInText, renderTaskContext, slugOf, type KnownEntity } from './memory/task-context'
-import type { AgentRunsMemory } from './agent-runs/types'
+import { buildAgentRunsMemory } from './agent-runs/memory-wiring'
 import { EntityRegistrar } from './memory/entity-registrar'
 import { EntityPipeline } from './memory/entity-pipeline'
 import { LlmPublisher } from './status/llm-publisher'
@@ -224,6 +226,7 @@ const proposalStore = new ProposalStore(contextStore.rawDb)
 // INBOX_AGENT_AUTORUN=true a new inbox task gets an agent run INSTEAD of the
 // Enricher suggestion; otherwise runs start only from the UI.
 const agentRunStore = new AgentRunStore(contextStore.rawDb)
+const agentSessionStore = new SessionStore(contextStore.rawDb)
 const INBOX_AGENT_AUTORUN = process.env.INBOX_AGENT_AUTORUN === 'true'
 // The daily cap is a share of the weekly subscription quota (the runner measures
 // it per turn). Empty/unset → 10%; explicit 0 = no cap.
@@ -270,43 +273,11 @@ const memoryRetriever = new HybridRetriever(memoryStore, embeddings)
 
 // Memory as agent runs see it: facts picked for a task, plus the facts the
 // user confirmed (which outrank everything inferred from captured events).
-const agentRunsMemory: AgentRunsMemory = (() => {
-  const registry = new EntityRegistryStore(contextStore.rawDb)
-  let cache: { at: number; entities: KnownEntity[] } = { at: 0, entities: [] }
-  const entities = (): KnownEntity[] => {
-    if (Date.now() - cache.at > 60_000) {
-      cache = {
-        at: Date.now(),
-        entities: registry.list(0, 10_000).map((e) => ({ slug: e.slug, name: e.name, type: e.type, aliases: e.aliases, mentionCount: e.mentionCount })),
-      }
-    }
-    return cache.entities
-  }
-  const assembler = new TaskContextAssembler({
-    store: memoryStore,
-    entities,
-    searchEvents: (query, limit, withinDays) => memoryRetriever.retrieve({ query, limit, withinDays }),
-  })
-  const item = (f: { id: number; statement: string; entitySlug: string | null; createdAt: string }) => ({
-    id: f.id,
-    statement: f.statement,
-    entity: f.entitySlug,
-    createdAt: f.createdAt,
-  })
-  return {
-    taskContext: async (text) => renderTaskContext(await assembler.assemble(text)),
-    list: () => memoryStore.allVerifiedFacts().map(item),
-    save: (statement, entity) => {
-      // File it under the entity the registry already knows by that name, so
-      // it surfaces whichever spelling a later task uses.
-      const slug = entity ? (entitiesInText(entity, entities())[0]?.slug ?? slugOf(entity)) : null
-      return item(
-        memoryStore.insertFact({ statement, entitySlug: slug || null, factType: 'rule', validFrom: new Date().toISOString(), confidence: 1, origin: 'user' })
-      )
-    },
-    remove: (id) => memoryStore.closeFact(id, new Date().toISOString()),
-  }
-})()
+const agentRunsMemory = buildAgentRunsMemory({
+  db: contextStore.rawDb,
+  store: memoryStore,
+  searchEvents: (query, limit, withinDays) => memoryRetriever.retrieve({ query, limit, withinDays }),
+})
 // Glossary decoder ring — non-person entities (project codenames, acronyms,
 // internal terms) from the capture-wiki, decoded via the memory module's
 // active facts. Feeds a KNOWN_GLOSSARY block into Proposer + Enricher so
@@ -805,6 +776,7 @@ const capture = createCaptureSink({
 // so we can wire handlers + notifier before main() spins up.
 const bot = createBot(TELEGRAM_BOT_TOKEN, capture, {
   proposals: { store: proposalStore, webBaseUrl: MINDWTR_WEB_URL },
+  silentChatId: () => assistantChat(agentRunStore)?.chatId ?? null,
 })
 
 const proposalNotifier = new ProposalNotifier({
@@ -939,6 +911,10 @@ async function main() {
     try {
       const purged = contextStore.purgeExpired()
       if (purged > 0) console.log(`🧹 Context Store: purged ${purged} expired captures`)
+      if (contextStore.hasVectorSearch) {
+        const dropped = pruneEventVectors(contextStore.rawDb)
+        if (dropped > 0) console.log(`🧹 Memory: dropped ${dropped} event vectors past the retention window`)
+      }
     } catch (err) {
       console.error('[context-store] purge failed:', err)
     }
@@ -993,6 +969,11 @@ async function main() {
     console.log(`🤖 agents: Telegram access is ${access.status} (${access.scope})`)
   } else if (telegramUser) {
     console.warn('🤖 agents: Telegram access not offered — the user-account client did not start')
+  }
+  const assistantGroup = assistantChat(agentRunStore)
+  if (assistantGroup) {
+    const access = agentRunStore.seedAccess(assistantAccess(assistantGroup))
+    console.log(`🤖 agents: assistant chat "${assistantGroup.title}" is ${access.status}`)
   }
 
   // Restore session workspaces pushed by the browser extension on a previous
@@ -1154,7 +1135,17 @@ async function main() {
           }
         : null,
       agentConfig,
-      agentRuns: { store: agentRunStore, mindwtr, dailyBudgetUsd: AGENT_RUNS_DAILY_BUDGET_USD, dailyQuotaPct: AGENT_RUNS_DAILY_QUOTA_PCT, publicUrl: process.env.AI_SERVICE_PUBLIC_URL?.trim() || undefined, memory: agentRunsMemory, runnerToken: process.env.AGENT_RUNNER_TOKEN?.trim() || undefined, telegram: telegramUser ?? undefined },
+      agentRuns: { store: agentRunStore, sessions: agentSessionStore, mindwtr, dailyBudgetUsd: AGENT_RUNS_DAILY_BUDGET_USD, dailyQuotaPct: AGENT_RUNS_DAILY_QUOTA_PCT, publicUrl: process.env.AI_SERVICE_PUBLIC_URL?.trim() || undefined, memory: agentRunsMemory, runnerToken: process.env.AGENT_RUNNER_TOKEN?.trim() || undefined, telegram: telegramUser ?? undefined,
+        assistant: telegramUser
+          ? {
+              account: telegramUser,
+              bot: {
+                username: async () => (await bot.api.getMe()).username,
+                send: async (chatId, text) => ({ messageId: (await bot.api.sendMessage(chatId, text)).message_id }),
+              },
+            }
+          : undefined,
+      },
     })
     http = server.serve()
     console.log(

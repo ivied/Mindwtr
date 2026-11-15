@@ -29,19 +29,21 @@ export class RunsClient implements RunsApi {
     }
   }
 
-  private async post<T>(path: string, body: unknown): Promise<T> {
+  private async post<T>(path: string, body: unknown, timeoutMs = 20_000): Promise<T> {
     const res = await fetch(`${this.base}${path}`, {
       method: 'POST',
       headers: this.headers,
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(20_000),
+      signal: AbortSignal.timeout(timeoutMs),
     })
     if (!res.ok) throw new Error(`POST ${path} → ${res.status} ${(await res.text()).slice(0, 200)}`)
     return (await res.json()) as T
   }
 
   claim(runner: string, capacity: number) {
-    return this.post<ClaimResult>('/v1/agent-runs/claim', { runner, capacity })
+    // Generous: the server marks a run as claimed before it answers, so a claim that times out here
+    // leaves the run with nobody working on it until it is reaped as "runner lost".
+    return this.post<ClaimResult>('/v1/agent-runs/claim', { runner, capacity }, 60_000)
   }
 
   sendEvents(

@@ -12,6 +12,7 @@
  * FTS-only ranks (which is still useful).
  */
 
+import { offThreadAll } from '../context-store/offthread'
 import type { Database } from 'bun:sqlite'
 import { embeddingToBytes, type EmbeddingsProvider } from '../context-store/embeddings'
 import type { MemoryStore } from './store'
@@ -172,9 +173,7 @@ async function vecSearch(
   params.push(perChannel)
 
   try {
-    return db
-      .query<{ id: string; rank: number }, (string | number | Uint8Array)[]>(sql)
-      .all(...params)
+    return await offThreadAll<{ id: string; rank: number }>(db, sql, params)
   } catch (err) {
     console.warn('[memory:retrieve] vec query failed:', (err as Error).message)
     return []

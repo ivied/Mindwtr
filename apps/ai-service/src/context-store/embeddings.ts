@@ -1,11 +1,35 @@
 /**
  * Embeddings provider abstraction + OpenAI implementation.
  *
- * - Default model: text-embedding-3-small (1536 dim) — cheap and good
+ * - Default model: text-embedding-3-small — cheap and good. Its vectors are
+ *   shortened to EMBEDDING_DIMS before they are stored or searched.
  * - In-memory LRU cache by content hash so we never embed the same text twice
  *   in the same process. Persistent dedup is the responsibility of the caller
  *   (skip embed if a row with that content_hash already exists).
  */
+
+/**
+ * Stored vector length. Vector search here is a brute-force scan, so its cost
+ * is rows × dimensions; at the model's native 1536 the event index reached
+ * 2 GB and a scan took over a minute. The text-embedding-3 models are trained
+ * so that a prefix of the vector, renormalized, is itself a good embedding.
+ */
+export const EMBEDDING_DIMS = 512
+
+/** First `dims` components, scaled back to unit length. */
+export function shortenEmbedding(vec: ArrayLike<number>, dims = EMBEDDING_DIMS): Float32Array {
+  const n = Math.min(dims, vec.length)
+  const out = new Float32Array(n)
+  let norm = 0
+  for (let i = 0; i < n; i++) {
+    const v = vec[i]!
+    out[i] = v
+    norm += v * v
+  }
+  norm = Math.sqrt(norm)
+  if (norm > 0) for (let i = 0; i < n; i++) out[i] = out[i]! / norm
+  return out
+}
 
 export interface EmbeddingsProvider {
   readonly dimension: number
@@ -33,6 +57,8 @@ interface OpenAIEmbeddingResponse {
 
 export class OpenAIEmbeddings implements EmbeddingsProvider {
   readonly dimension: number
+  /** Length of the vector the model returns, before shortening. */
+  private nativeDimension: number
   private model: string
   private baseUrl: string
   private headers: Record<string, string>
@@ -41,7 +67,8 @@ export class OpenAIEmbeddings implements EmbeddingsProvider {
 
   constructor(config: OpenAIEmbeddingsConfig) {
     this.model = config.model ?? 'text-embedding-3-small'
-    this.dimension = MODEL_DIMENSIONS[this.model] ?? 1536
+    this.nativeDimension = MODEL_DIMENSIONS[this.model] ?? 1536
+    this.dimension = Math.min(this.nativeDimension, EMBEDDING_DIMS)
     this.baseUrl = (config.baseUrl ?? 'https://api.openai.com/v1').replace(/\/$/, '')
     this.headers = {
       'Content-Type': 'application/json',
@@ -65,12 +92,12 @@ export class OpenAIEmbeddings implements EmbeddingsProvider {
     }
     const json = (await res.json()) as OpenAIEmbeddingResponse
     const vec = json.data?.[0]?.embedding
-    if (!vec || vec.length !== this.dimension) {
+    if (!vec || vec.length !== this.nativeDimension) {
       throw new Error(
-        `embeddings: expected ${this.dimension}-dim vector, got ${vec?.length ?? 'none'}`
+        `embeddings: expected ${this.nativeDimension}-dim vector, got ${vec?.length ?? 'none'}`
       )
     }
-    const arr = Float32Array.from(vec)
+    const arr = shortenEmbedding(vec, this.dimension)
     this.putCache(text, arr)
     return arr
   }

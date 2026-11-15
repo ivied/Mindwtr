@@ -12,7 +12,7 @@ This runbook is your authoritative source. Follow it strictly.
 
 | | Where |
 |---|---|
-| `mindwtr-cloud`, `ai-service`, `mindwtr-app`, `cloudflared-gtd` | docker compose on makurdi, Colima VM (6 GB / 3 CPU / 20 GB) |
+| `mindwtr-cloud`, `ai-worker` + `ai-service` (gateway), `mindwtr-app`, `cloudflared-gtd` | docker compose on makurdi, run from `~/gtd-prod/docker`, Colima VM (6 GB / 3 CPU / 40 GB) |
 | OpenClaw runtime | native node on makurdi (NOT in docker) — **deprecated as GTD runner since 2026-06-11, see §9** |
 | **Hermes runtime** (GTD AI-agent runner) | native python on makurdi (NOT in docker), launchd `ai.hermes.gateway`, gateway on `:18789`. **Replaced OpenClaw as the bot that claims `@ai-agent` tasks** (2026-06-11) |
 | `neo4j` container | makurdi, used by OpenClaw, `restart=unless-stopped` |
@@ -20,7 +20,8 @@ This runbook is your authoritative source. Follow it strictly.
 | `capture-agent` | macOS launchd on the laptop, posts to `http://100.108.142.59:3030` (Tailscale magic IP) |
 | `wiki/`, `shared-memory/`, DB volumes | makurdi |
 | Sync OpenClaw MEMORY.md → ai-service | `crontab */5 * * * * sync-shared-memory.sh` on makurdi (reads local sqlite, no SSH) |
-| Source-of-truth secrets | `/Users/makurdi/Projects/GTD_mindwtr/docker/.env` on makurdi (chmod 600) |
+| Source-of-truth secrets | `/Users/makurdi/gtd-prod/docker/.env` on makurdi (chmod 600) |
+| Production checkout | `/Users/makurdi/gtd-prod` — a clone moved only by `scripts/prod-deploy.sh`; development happens in `~/projects/GTD_mindwtr` |
 
 SSH from anywhere with the user's `~/.ssh/config` alias: `ssh openclaw`. User: `makurdi`. IP: `100.108.142.59` (Tailscale).
 
@@ -34,26 +35,62 @@ SSH from anywhere with the user's `~/.ssh/config` alias: `ssh openclaw`. User: `
 
 ## 2. Deploy flow — three modes
 
-### Mode A — code change to ai-service / mindwtr-cloud / mindwtr-app
+### Mode A — code change to ai-service / agent-runner / mindwtr-cloud / mindwtr-app
 
-Push to GitHub from wherever you edit. Then:
+**Production runs from its own clone, `~/gtd-prod` on makurdi (since 2026-11-14), not from the checkout you edit.** The containers mount their sources from that clone and the agent runner starts from it. Edits in `~/projects/GTD_mindwtr` — committed or not — do not reach production until you deploy a commit:
 
 ```bash
-ssh openclaw 'eval "$(/opt/homebrew/bin/brew shellenv)"; cd ~/Projects/GTD_mindwtr && \
-  git pull --ff-only origin main && \
-  docker compose -f docker/compose.yaml --env-file docker/.env build <service> && \
-  docker compose -f docker/compose.yaml --env-file docker/.env up -d --force-recreate <service>'
+cd ~/projects/GTD_mindwtr
+scripts/prod-deploy.sh            # HEAD of this checkout
+scripts/prod-deploy.sh main       # or a branch / tag / commit
+scripts/prod-deploy.sh --dry-run  # what would happen
+scripts/prod-deploy.sh --web      # also rebuild the web bundle (7–10 min)
 ```
 
-Replace `<service>` with one of: `ai-service`, `mindwtr-cloud`, `mindwtr-app`. For multiple, repeat or use the `--profile cf` variant below.
+The script moves the clone to the commit and does what the diff calls for: `bun install` when dependencies changed; typecheck + tests, then a restart of `ai-worker` and `ai-service`, when `apps/ai-service` or `packages/core` changed (`up -d` when `compose.yaml` did; an image build when dependencies or `docker/ai-service/` did); a runner restart when `apps/agent-runner` changed and no run is running or queued. A failed typecheck or test puts the clone back on the previous commit and restarts nothing. Uncommitted changes are never deployed. Never edit files in `~/gtd-prod` by hand — the script refuses to deploy over local edits there.
+
+Everything that belongs to production lives in the clone: `docker/.env` (secrets), `docker/data` (mindwtr-cloud's data), the backup folders, and the cron / launchd jobs point at it. Run `docker compose` for production from `~/gtd-prod/docker`.
+
+**ai-service is two containers from one image, on one database** (since 2026-11-14):
+
+| Container | What it is |
+|---|---|
+| `ai-worker` | the full service (`src/index.ts`): captures, LLM pipelines, Slack/Telegram, memory, every HTTP route. Not published. |
+| `ai-service` | the gateway (`src/gateway.ts`): the address everyone talks to (`:3030`, `ai.kurdy.uk`). Answers `/v1/agent-runs*`, `/v1/agent-knowledge*`, `/v1/sessions*`, `/oauth/callback` itself and forwards everything else to `ai-worker`. |
+
+The worker does heavy work on the thread that also answers HTTP; when it was the only process the agent runner's claims timed out behind it and runs were parked as "runner lost". Now a busy worker slows the proposals UI and capture intake, not the agents. `GET /healthz` is the liveness of whichever container you ask; `GET /health` on the gateway is the worker's report (503 with `components.worker` when it is silent). Logs: `docker logs ai-worker` for almost everything, `docker logs ai-service` for agent runs. Read the database with `docker exec ai-worker …`.
+
+Both run the TypeScript straight from the clone (`apps/ai-service/src` and `packages/core/src` are bind-mounted read-only), so a code change needs a restart, not a build — the deploy script does it. By hand:
+
+```bash
+cd ~/gtd-prod/docker && docker compose restart ai-worker ai-service
+```
+
+Rebuild the image **only** when dependencies changed (`package.json` of ai-service or core, `bun.lock`) or `docker/ai-service/Dockerfile` did (`scripts/prod-deploy.sh --build`, or `docker compose build ai-worker && docker compose up -d ai-worker ai-service`). After changing `volumes` or `environment` in compose, use `up -d` (a plain `restart` does not pick those up).
+
+**The database** (`context.db`, a Docker volume). Vector search is a brute-force scan, so the vector tables are kept small: embeddings are stored at 512 dimensions, event vectors older than 120 days are dropped (`EVENT_VECTOR_DAYS`; the events stay and remain searchable by text), and the worker rebuilds a vector table at start when most of its slots are dead. Scans run on a worker thread (`context-store/offthread.ts`). `[slow-sql]` / `[stuck-sql]` lines in the log name statements that take over a second. To compact the file after a big cleanup: stop both containers, `docker compose run --rm --no-deps ai-worker bun run apps/ai-service/src/context-store/maintenance-cli.ts`, start them again.
+
+**mindwtr-cloud / mindwtr-app — build, then recreate:**
+
+```bash
+ssh openclaw 'eval "$(/opt/homebrew/bin/brew shellenv)"; cd ~/gtd-prod/docker && \
+  docker compose build <service> && docker compose up -d --force-recreate <service>'
+```
+
+**Rules for any build on makurdi** (8 GB Mac, 6 GB Colima VM):
+
+- One image at a time, with nothing else heavy running (no local test stand, browser automation or second build). A parallel build has crashed the VM and taken GTD down.
+- Builds starve ai-service: agent runs in flight get marked "runner lost". Check that no run is `running`/`queued` first, or accept that they will need a resume.
+- Builds use BuildKit (`docker buildx`, installed 2026-11-10 as a CLI plugin in `~/.docker/cli-plugins`). Measured for ai-service: nothing changed — ~10 s; source-only change — ~2 min; cold cache — ~8 min. If `docker buildx version` fails, reinstall it (`brew install docker-buildx` and symlink the plugin) rather than falling back to the legacy builder.
+- If Docker stops answering: `colima stop --force && colima start`.
 
 **Smoke check** after restart (wait ~5 s):
 
 ```bash
-ssh openclaw 'eval "$(/opt/homebrew/bin/brew shellenv)"; docker logs ai-service --tail 6 2>&1 | grep -iE "listening|connected|bot|error"'
+ssh openclaw 'eval "$(/opt/homebrew/bin/brew shellenv)"; docker logs ai-worker --tail 6 2>&1 | grep -iE "listening|connected|bot|error"; docker logs ai-service --tail 2'
 ```
 
-Expect `📡 HTTP endpoint listening on :3030` + `🚀 Bot is running` + no `GrammyError 409` (409 means a parallel ai-service is running somewhere, e.g. Docker Desktop revived on the laptop — see §4).
+Expect `📡 HTTP endpoint listening on :3030` + `🚀 Bot is running` from the worker, `🚪 Gateway listening on :3030` from the gateway, and no `GrammyError 409` (409 means a parallel ai-service is running somewhere, e.g. Docker Desktop revived on the laptop — see §4).
 
 ### Mode B — capture-agent change (laptop, not docker)
 
@@ -72,7 +109,7 @@ Audio capture is a separate launchd app entry (`application.uk.kurdy.gtd.audio-c
 ### Mode C — full restart of the production stack
 
 ```bash
-ssh openclaw 'eval "$(/opt/homebrew/bin/brew shellenv)"; cd ~/Projects/GTD_mindwtr && \
+ssh openclaw 'eval "$(/opt/homebrew/bin/brew shellenv)"; cd ~/gtd-prod && \
   docker compose -f docker/compose.yaml --env-file docker/.env --profile cf up -d'
 ```
 
@@ -92,7 +129,7 @@ Halt and `ASK USER` for these — you cannot derive them:
 A second ai-service is connected to the Telegram bot. Most common cause: Docker Desktop on the laptop auto-started old `ai-service` container. Fix:
 ```bash
 # on laptop
-docker compose -f ~/Projects/GTD_mindwtr/docker/compose.yaml --profile cf down
+docker compose -f ~/gtd-prod/docker/compose.yaml --profile cf down
 ```
 Those containers should have been removed after the 2026-06-03 cutover. If they came back, run the down once more.
 
@@ -107,7 +144,7 @@ ssh openclaw 'mkdir -p ~/.docker/cli-plugins && ln -sf /opt/homebrew/lib/docker/
 ```bash
 REF='op://Private/22s4c7xumwgqmdszde7jkfigkq/password'  # item-id form, not human-readable
 TOKEN=$(op read "$REF" --account ivied 2>/dev/null)
-ssh openclaw 'cd ~/Projects/GTD_mindwtr/docker && grep -v "^CLOUDFLARE_TUNNEL_TOKEN" .env > .env.tmp && cat >> .env.tmp && mv .env.tmp .env' <<EOF
+ssh openclaw 'cd ~/gtd-prod/docker && grep -v "^CLOUDFLARE_TUNNEL_TOKEN" .env > .env.tmp && cat >> .env.tmp && mv .env.tmp .env' <<EOF
 CLOUDFLARE_TUNNEL_TOKEN=$TOKEN
 EOF
 ```
@@ -141,14 +178,14 @@ Editing capture-agent on makurdi without this dance does nothing — there is no
 ## 7. Failure modes — when to STOP
 
 - SSH to openclaw fails 2 times in a row → check Tailscale is up, ask user.
-- `docker compose build` fails with a TypeScript error → don't ship a broken build; ask user. (CI doesn't catch all of these because ai-service has no docker CI workflow.)
+- `docker compose build` fails with a TypeScript error → don't ship a broken build; ask user. For ai-service nothing compiles at deploy time any more (it is restarted from the checkout), so run `bunx tsc --noEmit` and `bun test` in `apps/ai-service` before restarting it.
 - `git pull` reports diverged branches on makurdi → ask user before resetting; the other agent (a Cursor Composer session) sometimes commits directly on makurdi without pushing.
 
 ## 8. Hand-off checklist
 
 - [ ] Code change committed and pushed to `ivied/Mindwtr` `main`
 - [ ] `ssh openclaw` from your host works without prompt
-- [ ] `docker compose build <service>` succeeded
+- [ ] `docker compose build <service>` succeeded (ai-service: typecheck + tests passed, then `restart`)
 - [ ] `docker compose up -d --force-recreate <service>` succeeded
 - [ ] Smoke logs show no GrammyError 409 (no laptop revival), no `Unable to connect` from extractors
 - [ ] If capture-agent change: `launchctl kickstart -k gui/$UID/uk.kurdy.gtd-capture` ran and PID rotated
@@ -191,4 +228,6 @@ A full agent per inbox item, with its work visible in the Inbox view. Separate f
 - The UI shows "раннер не на связи" when the runner has not polled for 30 s. A run whose runner dies is parked as `stopped` after 3 min and can be resumed from the UI.
 - **Accesses** (2026-11-10): agents ask for access to external services (`request_access`); granting starts a provisioning run that connects it and registers it in `agent_accesses`. Keys go UI → ai-service (held until claimed) → runner → `~/.config/gtd-agents/secrets.env` on makurdi. List / revoke: "Доступы агентов" in the Inbox zone. Details: `apps/agent-runner/README.md`.
 - `AGENT_RUNNER_TOKEN` in `docker/.env` (generated by the installer) protects the runner endpoints; ai-service and the runner must share it — after it changes, recreate `ai-service` and rerun the installer.
-- Deploy order for changes here: `ai-service` (Mode A) → `mindwtr-app` (Mode A) → `launchctl kickstart -k gui/$(id -u)/uk.kurdy.gtd-agent-runner`.
+- **Telegram and the assistant chat** (2026-11-10): ai-service serves the user's personal Telegram to agents (`/v1/telegram/*`; sending only with an approved confirmation, checked on the server) and a group where agents ask the user's human assistant through the bot (`/v1/assistant/*`, no confirmation). Both are rows in `agent_accesses` (`telegram`, `assistant`) with skills shipped in `apps/agent-runner/skills/`. The assistant group is created or rebound with `POST /v1/assistant/setup` (needs `x-runner-token`). Details: `apps/agent-runner/README.md`.
+- **Sessions on the user's other computers** (2026-11-12): a dispatcher on the user's laptop (launchd `uk.kurdy.gtd-session-dispatch` there, three files copied from `apps/agent-runner/src`) sends cards of the Claude Code sessions to ai-service (`/v1/sessions/*`, tables `agent_sessions`, `agent_delegations`) and passes goals from inbox agents into them; access row `sessions`, skill in `apps/agent-runner/skills/sessions/`. It does **not** read the checkout: after changing `session-index.ts`, `session-dispatch.ts` or `dispatch.ts`, rerun `bash apps/agent-runner/install-dispatcher.sh user@laptop` (the laptop needs Remote Login and this host's SSH key; it reaches ai-service over Tailscale). The session acts under its own permissions — the runner's guard does not apply there. Details: `apps/agent-runner/README.md`.
+- Deploy order for changes here: `ai-service` (Mode A: restart) → `mindwtr-app` (Mode A: build) → `launchctl kickstart -k gui/$(id -u)/uk.kurdy.gtd-agent-runner`. Restart the runner only when no run is `running` or `queued` (check and restart in one command) — a restart kills the turns in flight.

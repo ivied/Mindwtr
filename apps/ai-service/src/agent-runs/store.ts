@@ -388,6 +388,19 @@ export class AgentRunStore {
     return r?.v ?? null
   }
 
+  /** Small settings that belong to the agents and must survive restarts. */
+  getMeta(key: string): string | null {
+    return this.db.query<{ v: string }, [string]>('SELECT value AS v FROM agent_run_meta WHERE key = ?').get(key)?.v ?? null
+  }
+
+  setMeta(key: string, value: string): void {
+    this.db.run(
+      `INSERT INTO agent_run_meta (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      [key, value]
+    )
+  }
+
   touchRunner(): void {
     this.db.run(
       `INSERT INTO agent_run_meta (key, value) VALUES ('runner_seen_at', ?)
